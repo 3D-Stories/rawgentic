@@ -354,21 +354,18 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
 <section class="priority">
   <div class="priorityInner">
     <div>
-      <h2>UAT-3 has two things left. Its launch path is already proven.</h2>
+      <h2>Prefer the plain step-by-step list.</h2>
       <p>
-        Everything herdr-side was verified by driving <b>HerdrBackend</b> directly, plus the config-gate
-        decision in isolation. <b>No real build-seat model dispatch has ever gone through the gate under
-        herdr.</b> That is the gap this page cannot close for you: it needs a session inside a herdr
-        pane with the config flipped. If UAT-3 fails, the backend is not ready no matter how green
-        everything else looks.
+        This console records your verdicts, but if you just want to <b>do</b> the UAT, the markdown
+        plan is one flat numbered list — <b>steps 1 to 17, straight down</b>, every command inline,
+        no jumping between sections:
+        <a href="https://rawgentic-epic-635-uat.vercel.app">rawgentic-epic-635-uat.vercel.app</a>
       </p>
-      <p class="reissue">
-        <b>Redeploy the plugin before you run it.</b> #647 (merged <code>6ef34c5</code>, v3.97.2) is what
-        makes <code>status</code> trustworthy for a herdr-backed job — and the installed cache is still
-        <b>3.97.2</b> as of 2026-07-27, so this is ready to run — just make sure your session was
-        started AFTER that reinstall, since a session keeps the plugin version it booted with.
-        Exit every session using rawgentic hooks, then
-        <code>claude plugin remove rawgentic@rawgentic &amp;&amp; claude plugin install rawgentic@rawgentic</code>.
+      <p>
+        Either way: <b>these are terminal commands</b>, not things to paste into Claude. Run them in
+        <code>/home/rocky00717/rawgentic/projects/rawgentic</code>. Order is
+        <b>UAT-2 → UAT-4 → UAT-3</b>; UAT-3 must be run from a terminal inside a herdr pane, in a
+        session started after the 3.97.2 reinstall.
       </p>
       <button class="jump" data-jump="uat3">Go to UAT-3 →</button>
     </div>
@@ -524,29 +521,33 @@ const CHECKS = [
     id:"uat2", uid:"UAT-2", name:"Is #637's park-then-reset contract what you want?",
     tags:[["owner","Owner only"],["","Read &amp; decide · ~5 min"]],
     why:[
-      "#637 shipped <code>park_and_reset</code> and its AC5 says the <i>contract</i> is documented in skill prose. AC5 is satisfied by <b>documentation only</b> — so the acceptance question is whether that documented behaviour is the behaviour you want. Nothing to run against the daemon, no config changes.",
-      "<b>Correction to this page's own earlier wording.</b> It used to say \"the WF2 <b>(and WF3)</b> skill prose\". That was wrong and would have sent you hunting for something that does not exist: <code>skills/fix-bug/</code> (WF3) has <b>zero</b> <code>park</code>, <b>zero</b> <code>worktree</code> and <b>zero</b> build-seat references. WF3 never puts a build seat in a worktree, so it has nothing to park — its design-flaw path hands off to WF2 (<code>skills/fix-bug/references/steps.md:227</code>). <b>Read WF2 only.</b> #637's AC5 text overstates it; a wording defect in the AC, not a missing implementation."
+      "<b>Do this one first.</b> Nothing here changes any config or touches the herdr daemon — you are printing two passages and deciding whether the behaviour they describe is the behaviour you want.",
+      "#637 shipped <code>park_and_reset</code>. Its AC5 is satisfied by <b>documentation only</b>, so the acceptance question is about the contract, not the code.",
+      "<b>Correction to this page's own earlier wording:</b> it used to say \"the WF2 <b>(and WF3)</b> skill prose\". That was wrong — <code>skills/fix-bug/</code> (WF3) has <b>zero</b> <code>park</code>, <code>worktree</code> and build-seat references. WF3 never puts a build seat in a worktree, so it has nothing to park; its design-flaw path hands off to WF2. <b>Read WF2 only.</b>"
     ],
     steps:[
-      "Put the two passages on screen (command 1). There are exactly <b>two</b> sites, both in <code>skills/implement-feature/references/steps.md</code>: Step 8's \"Design flaw discovery\" (the primary statement) and Step 11 item 6 (the same contract, referenced from the review loop-back).",
-      "Read it as <b>six plain claims</b> — the prose is dense with code identifiers, so the panel on the right restates what it actually commits the orchestrator to. Check each against your intent; that restatement is what you are accepting.",
-      "Decide the two questions in the pass condition. <b>Note GAP-1 (now #661) while you read: nothing invokes <code>park_and_reset</code>.</b> The primitive is implemented and tested, but no code path calls it at a live loop-back — so today a real design loop-back would NOT actually park. You are accepting the contract's <i>intent</i>, not a running behaviour.",
-      "If it is not what you want, say which of the six claims is wrong — that makes it a change to #661's scope, not a defect in #637."
+      "<b>Open a terminal</b> (not Claude) and go to the project directory. Everything in UAT-2 runs here:",
+      "Print the <b>primary</b> statement of the contract — Step 8's \"Design flaw discovery\" in the WF2 steps reference:",
+      "Print the <b>second</b> site — Step 11 item 6, which references the same contract from the review loop-back:",
+      "<i>Optional.</i> Satisfy yourself that WF3 really has none of this, so you are not left wondering whether you missed a file:",
+      "<b>Now decide.</b> Read the six plain claims in the panel to the right — that is the dense prose restated so you can judge it without decoding code identifiers. Then answer the two questions in the pass condition below, and record your verdict."
     ],
     cmds:[
-      {label:"1 — the two passages, both in WF2 (read WF3 nowhere)", text:'cd /home/rocky00717/rawgentic/projects/rawgentic\n\n# site 1 — Step 8, "Design flaw discovery" (primary statement of the contract)\nawk \'/\\*\\*Design flaw discovery:\\*\\*/{f=1} f&&c++<24\' skills/implement-feature/references/steps.md\n\n# site 2 — Step 11, item 6 (same contract, from the review loop-back)\ngrep -n \'park-then-reset the build seat\' skills/implement-feature/references/steps.md'},
-      {label:"2 — confirm for yourself that WF3 genuinely has none of this", text:'grep -rc \'park\' skills/fix-bug/ | grep -v \':0\' || echo "0 park references in WF3 — correct, nothing to park there"'}
+      {step:1, label:"go to the project", text:'cd /home/rocky00717/rawgentic/projects/rawgentic'},
+      {step:2, label:"site 1 of 2 — the primary statement", text:'awk \'/\\*\\*Design flaw discovery:\\*\\*/{f=1} f&&c++<24\' skills/implement-feature/references/steps.md'},
+      {step:3, label:"site 2 of 2 — the review loop-back reference", text:'grep -n \'park-then-reset the build seat\' skills/implement-feature/references/steps.md'},
+      {step:4, label:"optional — prove WF3 has none of it", text:'grep -rc \'park\' skills/fix-bug/ | grep -v \':0\' || echo "0 park references in WF3 — correct, nothing to park there"'}
     ],
-    pass:"Both: (1) <b>the split is right</b> — a same-design retry throws the work away, a design change parks it recoverably; that asymmetry is the whole design. (2) <b>\"park before reset, verified by stash OID\" is the safety level you want</b> for work a design change just invalidated, rather than something cheaper. Fails if the described behaviour is not what you want — name which claim is wrong.",
-    see:{title:"the contract, as six plain claims", cap:"Restated from the two WF2 passages so you can judge the behaviour without decoding a 20-line paragraph of code identifiers. Read the real prose with command 1; this is the summary you are actually accepting or rejecting.", lines:[
+    pass:"Both: (1) <b>the split is right</b> — a same-design retry throws the work away, a design change parks it recoverably; that asymmetry is the whole design. (2) <b>\"park before reset, verified by stash identity\" is the safety level you want</b> for work a design change just invalidated. Fails if it is not what you want — name which of the six claims is wrong, and it becomes a change to #661's scope rather than a defect in #637.",
+    see:{title:"the contract, as six plain claims", cap:"The two WF2 passages restated so you can judge the behaviour without decoding a 20-line paragraph of code identifiers. Steps 2 and 3 print the real prose; this is the summary you are accepting or rejecting.", lines:[
       ["g","1  A design-level flaw INVALIDATES the current diff — treated differently from"],
       ["o","   an ordinary failed attempt, because what the work was built against changed."],
       ["a","2  A SAME-DESIGN retry does NOT park. It discards outright: reset --hard +"],
       ["o","   clean -fd, no stash — the design is still valid."],
       ["g","3  A DESIGN-LEVEL loop-back DOES park, stashed recoverably and tagged"],
       ["o","   rawgentic-parked:<run_id>:<design_version>:<task_id>"],
-      ["g","4  Park strictly BEFORE reset, never the reverse — and the park is verified by"],
-      ["o","   the stash OID actually changing, not by trusting rc == 0."],
+      ["g","4  Park strictly BEFORE reset, never the reverse — confirmed by the stash"],
+      ["o","   really existing, never by trusting rc == 0."],
       ["g","5  The prior build worker must be CONFIRMED DEAD first."],
       ["g","6  The stash OID is written to the run's audit log, so parked work is findable."],
       ["o","   The OID matters: two loop-backs on one run+task share the same stash NAME."],
@@ -554,84 +555,39 @@ const CHECKS = [
       ["o","Failure clause: if the reset fails AFTER a confirmed park, the audit record is"],
       ["o","still written before the error propagates — a parked diff is never orphaned."],
       ["o",""],
+      ["g","VERIFIED FOR YOU 2026-07-27 — the prose matches the code:"],
+      ["g","  worktree.py:585-593  park before reset; park failure raises, reset NEVER runs"],
+      ["g","  worktree.py:585-589  confirmed via the refs/stash reflog BY MESSAGE, not rc==0"],
+      ["g","  worktree.py:596-599  failure after park still audits (ParkThenResetError)"],
+      ["o",""],
       ["r","GAP-1 / #661: NOTHING INVOKES park_and_reset. You are accepting intent here,"],
       ["r","not a running behaviour. That is exactly why it is filed."]
     ]}
   },
   {
-    id:"uat3", uid:"UAT-3", name:"A build seat doing REAL work under herdr", priority:true,
-    tags:[["owner","Owner only"],["","Two things left"],["evidenced","Launch path already proven"]],
-    why:[
-      "<b>The plumbing is no longer in question.</b> On 2026-07-27 the launch path was driven twice through the real entry path (<code>dispatch --seat build</code>, gate flipped to herdr): both exited 0 <code>\"state\":\"completed\"</code>, the registry row showed <code>terminal_backend: \"herdr\"</code> with <code>run_socket: \"w1\"</code> (a herdr <i>workspace id</i>, not a tmux socket), a watcher caught the labelled pane <code>w1:pAK</code>, <code>status --run</code> reported <code>probe_error: null</code>, and 0 panes were left behind.",
-      "That drill used a <b>no-op brief</b> and ran ~10 seconds, which deliberately avoided the two things that matter most — so those two, and only those two, are what is left for you.",
-      "<b>3a — a build seat that actually CHANGES FILES.</b> A real build mutates its isolated worktree and runs for minutes. Nothing has watched a herdr-hosted worker do that.<br><b>3b — the live negative.</b> That a review seat still goes to tmux was confirmed by reading <code>supervisor.resolve_backend</code>, <i>not</i> by watching one launch.",
-      "<b>Plugin already redeployed</b> — the cache is at <b>3.97.2</b> (verified 2026-07-27). #647 is what makes <code>status</code> trustworthy here, so just confirm this session was started AFTER that reinstall: a session keeps the plugin version it booted with."
-    ],
-    steps:[
-      "<b>Prereqs.</b> Inside a herdr pane (<code>echo \"$HERDR_PANE_ID $HERDR_WORKSPACE_ID\"</code> prints two non-empty values); plugin redeployed; <code>cd</code> to the project root.",
-      "Create the plan and — the one deliberate difference from the proven drill — a brief that does <b>real work</b> (command 1).",
-      "Mint the gate and declare the run (command 2). Unchanged from the verified sequence.",
-      "Flip the gate (command 3): a <b>top-level</b> key in <code>.rawgentic.json</code>. Tracked by git — do not commit; teardown puts it back.",
-      "Start the watcher in a SECOND pane (command 4) before dispatching. A real build runs for minutes, so this time you should get a good look at the pane rather than a 10-second flash.",
-      "<b>3a</b> — dispatch the real build (command 5), then read the worktree it was given (command 6). The worktree containing the new file IS the check: a herdr-hosted worker really mutated its isolated checkout, and the main checkout stayed clean.",
-      "<b>3b</b> — with the gate STILL flipped, dispatch a review seat in the same run (command 7). <code>--author-provider anthropic</code> is required; omit it and enforcement fails closed with <code>pre_check_denied: author_provider_missing</code>. Then compare both rows (command 8): the build row herdr-backed, the review row not — that contrast in one run is the whole point.",
-      "<b>Teardown (command 9), always</b>, even if either half failed."
-    ],
-    cmds:[
-      {label:"1 — plan + a brief that does REAL work (the one difference)", text:'mkdir -p /tmp/uat3 && cat > /tmp/uat3/plan.md <<\'EOF\'\n### Task 1: create a scratch note file with three lines of content\n- riskLevel: standard\n- files: docs/planning/UAT3-REALWORK-SCRATCH.md\nEOF\ncat > /tmp/uat3/brief.md <<\'EOF\'\nCreate the file docs/planning/UAT3-REALWORK-SCRATCH.md with exactly three lines:\n\n  # UAT-3 real-work probe\n  Written by a build seat running under the herdr terminal backend.\n  If you are reading this in a worktree, the worker really did work.\n\nThen stop. Do not commit. Do not touch any other file.\nEOF'},
-      {label:"2 — mint the gate, declare the run", text:'python3 hooks/executor_routing_lib.py mint-gate \\\n  --plan-file /tmp/uat3/plan.md --issue-complexity trivial --plan-est-lines 5 \\\n  --out /tmp/uat3/gate.json\npython3 hooks/executor_routing_lib.py begin-run --run-id uat3-real \\\n  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic'},
-      {label:"3 — flip the gate (top level of .rawgentic.json)", text:'"executorTerminalBackend": { "version": 1, "build": "herdr" }'},
-      {label:"4 — watcher, SECOND pane, started BEFORE the dispatch", text:'for i in $(seq 1 600); do\n  herdr pane list --workspace "$HERDR_WORKSPACE_ID" \\\n  | python3 -c "import sys,json;[print(p[\'pane_id\'],\'|\',p.get(\'label\',\'\')) for p in json.load(sys.stdin)[\'result\'][\'panes\'] if \'uat3-real\' in (p.get(\'label\') or \'\')]"\n  sleep 0.5\ndone | sort -u'},
-      {label:"5 — 3a: dispatch the REAL build", text:'python3 hooks/executor_routing_lib.py dispatch --seat build \\\n  --prompt-file /tmp/uat3/brief.md --run-id uat3-real \\\n  --gate-file /tmp/uat3/gate.json --plan-file /tmp/uat3/plan.md \\\n  --correlation-id uat3-real-1 --timeout 900 \\\n  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic'},
-      {label:"6 — 3a: did the worker really mutate its worktree?", text:'python3 hooks/executor_routing_lib.py status --run uat3-real \\\n  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic\n# take worktree_path from the output, then:\ngit -C <worktree_path> status --porcelain\ngit -C <worktree_path> diff -- docs/planning/UAT3-REALWORK-SCRATCH.md\n# and the main checkout must be untouched:\ngit status --porcelain'},
-      {label:"7 — 3b: a review seat, gate still flipped", text:'printf \'Reply with the single word OK.\\n\' > /tmp/uat3/review-brief.md\npython3 hooks/executor_routing_lib.py dispatch --seat review \\\n  --prompt-file /tmp/uat3/review-brief.md --run-id uat3-real \\\n  --correlation-id uat3-real-review --author-provider anthropic --timeout 300 \\\n  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic'},
-      {label:"8 — 3b: compare the two rows in one run", text:'python3 -c "import json;[print({k:r.get(k) for k in (\'session_name\',\'terminal_backend\',\'run_socket\')}) for r in json.load(open(\'.rawgentic/runtime/registry/jobs.json\')).values() if \'uat3-real\' in json.dumps(r)]"'},
-      {label:"9 — teardown, always", text:'python3 -c "\nimport json; p=\'.rawgentic.json\'; d=json.load(open(p)); d.pop(\'executorTerminalBackend\',None)\njson.dump(d,open(p,\'w\'),indent=2); open(p,\'a\').write(chr(10))"\ngit status --porcelain .rawgentic.json          # must print NOTHING\nfor w in $(git worktree list --porcelain | grep \'^worktree \' | cut -d\' \' -f2- | grep uat3-real); do\n  git worktree remove --force "$w"; done\ngit worktree prune\nrm -rf .rawgentic/runs/uat3-real .rawgentic/runtime/worktrees/uat3-real-* \\\n       .rawgentic/runtime/worktrees/.meta/uat3-real-*.json'}
-    ],
-    pass:"<b>3a:</b> the watcher showed the labelled pane running for the duration (not a flash); <code>git -C &lt;worktree_path&gt; status --porcelain</code> shows the new file — a herdr-hosted worker really mutated its isolated worktree; the main checkout stayed clean; <code>status --run</code> says <code>\"state\":\"completed\"</code> with <code>\"probe_error\":null</code>; no pane left behind. <b>3b:</b> in the same run, the build row is herdr-backed (<code>run_socket: 'w1'</code>) and the review row is NOT — and no herdr pane appeared for the review seat. Paste the command-8 output into your note: it shows both rows at once.",
-    see:{title:"the launch path, as it actually ran here (2026-07-27) — this part is done", cap:"Captured from the two verification runs of this exact sequence on herdr 0.7.5. This is the half you do NOT need to repeat; 3a and 3b are the parts nobody has run. The pane line came from the watcher — without it the pane is gone before you look, which is the single most misleading thing about this check.", lines:[
-      ["p","$ python3 hooks/executor_routing_lib.py mint-gate --plan-file /tmp/uat3/plan.md …"],
-      ["g",'{"ok":true,"action":"mint-gate","decision":false,"reason_codes":[]}'],
-      ["p","$ python3 hooks/executor_routing_lib.py begin-run --run-id uat3-drill …"],
-      ["g",'{"run_id":"uat3-drill","architecture":"executor"}'],
-      ["o",""],
-      ["p","# watcher, running in a second pane during the dispatch"],
-      ["g","w1:pAK | rg-uat3-drill-3eab3245-c5830e1d-build-44575cf5-0-e14e5728-229c44fb"],
-      ["o","   … and it self-closed the moment the worker exited"],
-      ["o",""],
-      ["p","$ dispatch --seat build … --run-id uat3-drill"],
-      ["g",'{"ok":true,"action":"executor_supervised","seat":"build","state":"completed"}'],
-      ["a",'   model: gpt-5.6-terra  (codex chain entry, not the anthropic primary — expected)'],
-      ["a",'   "parse_status":"no_response"   (no-op brief — expected; a REAL brief will differ)'],
-      ["o",""],
-      ["g",'registry:  {"terminal_backend": "herdr", "run_socket": "w1"}'],
-      ["g",'status:    {"state":"completed","probe_error":null}'],
-      ["g","0 panes left behind"],
-      ["o",""],
-      ["r","NOT YET RUN BY ANYONE:  3a real-work worktree mutation  ·  3b live review-seat negative"]
-    ]},
-    schem:true
-  },
-  {
     id:"uat4", uid:"UAT-4", name:"Are the four accepted risks the ones you accepted?",
-    tags:[["owner","Owner only"],["","Read &amp; decide · ~5 min"],["evidenced","All four verified accurate vs code"]],
+    tags:[["owner","Owner only"],["","Read &amp; decide · ~5 min"],["evidenced","4/4 verified accurate vs code"]],
     why:[
-      "#638's AC6 requires the named risks to be encoded at the call site rather than living only in a review thread. You ruled on these on 2026-07-24; this confirms the code records what you actually agreed.",
-      "<b>Already done for you:</b> each of the four risks was checked against the code on 2026-07-27 and all four are <b>accurate descriptions</b> of what the module really does (see the panel). So you are not checking whether the description is true — only whether the decision it records is yours."
+      "<b>Do this one second.</b> Like UAT-2 it changes nothing — you print one docstring and decide whether the decisions it records are yours.",
+      "#638's AC6 requires the named risks to be encoded at the call site rather than living only in a review thread. You ruled on these on 2026-07-24.",
+      "<b>Already done for you:</b> all four risks were checked against the code on 2026-07-27 and every one is an <b>accurate</b> description of what the module does (file:line in the panel). So you are not checking whether the description is true — only whether the decision it records is yours."
     ],
     steps:[
-      "Print the docstring (command 1). It is 76 lines at the top of one file; this saves opening an editor.",
-      "Check <b>risk 1 — pane_env is visible to <code>ps</code></b>. herdr has no private per-run env channel; the only mechanism is <code>pane split --env KEY=VALUE</code>, passed as CLI args to a <b>host-wide shared daemon</b>. Are <b>host-local + ephemeral + non-credential</b> the conditions you set? The code carries the standing guard \"this backend must never be handed anything credential-bearing\" — today only <code>PYTHONPATH</code> goes through.",
-      "Check <b>risk 2 — malformed-split pane leak, accepted and NOT fixed</b>. If <code>pane split</code> returns rc=0 with an unparseable body, a real pane may exist but the code has no <code>pane_id</code> to close it — the id lives in the very body that failed to parse. Do you accept an unlabeled pane leaking on that narrow path? The stated reason not to fix: recovering the id needs a list-diff-by-timing heuristic, which is racy and could close a concurrently-created pane.",
-      "Check <b>risk 3 — three calls, not atomic</b>. <code>new_session</code> is split → rename → run…exec. Safe only single-threaded per spawn. Do you accept \"never parallelize split+run against one target pane\"? A failure after split (including a runner timeout) now best-effort closes the orphaned pane via <code>try/finally</code>.",
-      "Check <b>risk 4 — <code>exec</code>-injection is herdr-undocumented</b>. A future herdr release could wrap rather than exec-replace, and every PID the supervisor holds would name the wrong process. Do you accept this with <b>#639's gate as the compensating control</b> — a manual pre-upgrade check, nothing automatic? (That is GAP-4; the \"remembering to run it\" half is now #659.)"
+      "<b>In a terminal</b>, go to the project directory (skip if you are still there from UAT-2):",
+      "Print the 76-line module docstring. This is the whole reading — no editor needed:",
+      "<b>Risk 1 — <code>pane_env</code> is visible to <code>ps</code>.</b> herdr has no private per-run env channel; the only mechanism is <code>pane split --env KEY=VALUE</code>, passed as CLI args to a <b>host-wide shared daemon</b>. <i>Your call:</i> are <b>host-local + ephemeral + non-credential</b> the conditions you set? Optional — see the mechanism yourself:",
+      "<b>Risk 2 — malformed-split pane leak, accepted and NOT fixed.</b> If <code>pane split</code> returns rc=0 with an unparseable body, a real pane may exist but the code has no <code>pane_id</code> to close it — the id lives in the very body that failed to parse. <i>Your call:</i> do you accept an unlabeled pane leaking on that narrow path? (Not fixed because recovering the id needs a racy list-diff-by-timing heuristic.)",
+      "<b>Risk 3 — three calls, not atomic.</b> <code>new_session</code> is split → rename → run…exec. <i>Your call:</i> do you accept \"never parallelize split+run against one target pane\"?",
+      "<b>Risk 4 — <code>exec</code>-injection is herdr-undocumented.</b> A future herdr release could wrap rather than exec-replace, and every PID the supervisor holds would name the wrong process. <i>Your call:</i> do you accept this with <b>#639's gate as the compensating control</b> — a manual pre-upgrade check, nothing automatic? (That is GAP-4; the \"remembering to run it\" half is now #659.)",
+      "<b>Record your verdict</b> below."
     ],
     cmds:[
-      {label:"1 — print the 76-line docstring, no editor needed", text:'cd /home/rocky00717/rawgentic/projects/rawgentic\npython3 -c "import ast;print(ast.get_docstring(ast.parse(open(\'phase_executor/src/phase_executor/herdr_backend.py\').read())))"'},
-      {label:"2 — optional: see the risk-1 mechanism in the code itself", text:'grep -n \'\\-\\-env\' phase_executor/src/phase_executor/herdr_backend.py'}
+      {step:1, label:"go to the project", text:'cd /home/rocky00717/rawgentic/projects/rawgentic'},
+      {step:2, label:"print the docstring — this is the whole reading", text:'python3 -c "import ast;print(ast.get_docstring(ast.parse(open(\'phase_executor/src/phase_executor/herdr_backend.py\').read())))"'},
+      {step:3, label:"optional — see the risk-1 mechanism in the code", text:'grep -n \'\\-\\-env\' phase_executor/src/phase_executor/herdr_backend.py'}
     ],
-    pass:"All three: (1) the four risks are ones you knowingly accepted, with the same conditions attached; (2) risk 1's conditions in the code — <b>host-local, ephemeral, never credential-bearing</b> — are the conditions you actually set on 2026-07-24; (3) you are content that risks 2 and 4 are <b>documented and accepted rather than fixed</b>, and that #639's manual gate is what stands behind risk 4. Fails if any risk is recorded with conditions you did not agree to, or one you rejected is recorded as accepted — name it and it becomes a follow-up; the code change is small, the point is that the record matches the decision.",
-    see:{title:"all four risks verified accurate against the code (2026-07-27)", cap:"Each recorded risk was checked against the module on 2026-07-27 — every one is an accurate description of what the code really does, with the file:line that proves it. This is the reading burden removed; the acceptance decision is still yours.", lines:[
+    pass:"All three: (1) the four risks are ones you knowingly accepted, with the same conditions attached; (2) risk 1's conditions in the code — <b>host-local, ephemeral, never credential-bearing</b> — are the conditions you actually set on 2026-07-24; (3) you are content that risks 2 and 4 are <b>documented and accepted rather than fixed</b>, and that #639's manual gate is what stands behind risk 4. Fails if any risk is recorded with conditions you did not agree to — name it and it becomes a follow-up.",
+    see:{title:"all four risks verified accurate against the code (2026-07-27)", cap:"Each recorded risk was checked against the module — every one accurately describes what the code really does, with the file:line that proves it. The reading burden is removed; the acceptance decision is still yours.", lines:[
       ["p","risk 1 — pane_env visible to ps"],
       ["g","  herdr_backend.py:149   ('--env', f'{k}={v}')  -> CLI arg to a shared daemon"],
       ["g","  herdr_backend.py:128   comment states the ps-visibility explicitly"],
@@ -639,7 +595,6 @@ const CHECKS = [
       ["o",""],
       ["p","risk 2 — malformed split leaks an unlabeled pane"],
       ["g","  herdr_backend.py:389-394  returns BEFORE any pane_id exists"],
-      ["a",'  "unparseable/empty response despite rc=0" · "no pane_id in result"'],
       ["o","  -> nothing to close; confirmed structural, not an oversight"],
       ["o",""],
       ["p","risk 3 — three calls, not atomic"],
@@ -654,6 +609,61 @@ const CHECKS = [
       ["g","VERDICT: 4/4 recorded risks are accurate. Only the acceptance is yours."]
     ]}
   },
+  {
+    id:"uat3", uid:"UAT-3", name:"A build seat doing REAL work under herdr", priority:true,
+    tags:[["owner","Owner only"],["","Do this LAST · ~20 min"],["evidenced","Launch path already proven"]],
+    why:[
+      "<b>Do this one last</b>, and only from a terminal that is <b>inside a herdr pane</b> — <code>pane split --current</code> resolves the calling process's own pane, so a plain terminal cannot host the launch.",
+      "<b>The plumbing is not in question.</b> On 2026-07-27 the launch path was driven twice through the real entry path: both exited 0 <code>state: completed</code>, the registry showed <code>terminal_backend: \"herdr\"</code> with <code>run_socket: \"w1\"</code>, a watcher caught pane <code>w1:pAK</code>, and 0 panes were left behind.",
+      "That drill used a <b>no-op brief</b> and ran ~10 seconds. <b>3a</b> (a build seat that actually CHANGES FILES) and <b>3b</b> (watching a review seat still go to tmux) are the two things nobody has run — and they are all that is left."
+    ],
+    steps:[
+      "<b>Terminal 1 — must be inside a herdr pane.</b> Go to the project and confirm the pane resolves. If either value prints empty, stop: you are not in a herdr pane and the launch cannot work.",
+      "Create the throwaway plan and a brief that does <b>real work</b>. The <code>- riskLevel:</code> line is mandatory — the plan parser fails closed without it:",
+      "Mint the gate and declare the run. A build seat requires an authenticated gate bound to that exact plan by digest:",
+      "Flip the gate to herdr. <b>This edits a git-tracked file</b> — the command does it for you so you do not hand-edit JSON, and the last step puts it back:",
+      "<b>Terminal 2 — open a SECOND terminal now and leave this running.</b> A real build runs for minutes, so you should get a good look at the pane. (The plumbing drill's pane vanished in 10 seconds, which is why a watcher is required rather than optional.)",
+      "<b>Back in Terminal 1 — 3a: dispatch the real build.</b> Expect exit 0 and <code>\"state\":\"completed\"</code>. Two things look wrong but are not: it routes to <b>codex / gpt-5.6-terra</b> (the build seat's anthropic primary falls through to its cross-model chain entry), and a real brief will report a real <code>parse_status</code>:",
+      "<b>3a evidence.</b> Print the run's status, take <code>worktree_path</code> from the output, then check that worktree contains the new file <i>and</i> that your main checkout is untouched. That contrast is the point of 3a:",
+      "<b>3b — with the gate STILL flipped</b>, dispatch a review seat in the same run. <code>--author-provider anthropic</code> is required; omit it and enforcement fails closed with <code>pre_check_denied: author_provider_missing</code>:",
+      "<b>3b evidence.</b> Print both registry rows at once: the <b>build</b> row should be herdr-backed (<code>run_socket: 'w1'</code>) and the <b>review</b> row should not. That contrast in a single run is the whole negative test:",
+      "<b>Teardown — run this even if either half failed.</b> It restores the config, removes the worktrees through git, and clears the run directory:"
+    ],
+    cmds:[
+      {step:1, label:"Terminal 1 — go to the project and confirm you are in a herdr pane", text:'cd /home/rocky00717/rawgentic/projects/rawgentic\necho "pane=$HERDR_PANE_ID workspace=$HERDR_WORKSPACE_ID"\n# both must be non-empty, e.g.  pane=w1:p1 workspace=w1'},
+      {step:2, label:"create the plan + a brief that does REAL work", text:'mkdir -p /tmp/uat3 && cat > /tmp/uat3/plan.md <<\'EOF\'\n### Task 1: create a scratch note file with three lines of content\n- riskLevel: standard\n- files: docs/planning/UAT3-REALWORK-SCRATCH.md\nEOF\ncat > /tmp/uat3/brief.md <<\'EOF\'\nCreate the file docs/planning/UAT3-REALWORK-SCRATCH.md with exactly three lines:\n\n  # UAT-3 real-work probe\n  Written by a build seat running under the herdr terminal backend.\n  If you are reading this in a worktree, the worker really did work.\n\nThen stop. Do not commit. Do not touch any other file.\nEOF'},
+      {step:3, label:"mint the gate, then declare the run", text:'python3 hooks/executor_routing_lib.py mint-gate \\\n  --plan-file /tmp/uat3/plan.md --issue-complexity trivial --plan-est-lines 5 \\\n  --out /tmp/uat3/gate.json\n\npython3 hooks/executor_routing_lib.py begin-run --run-id uat3-real \\\n  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic'},
+      {step:4, label:"flip the gate to herdr (no hand-editing)", text:'python3 -c "\nimport json; p=\'.rawgentic.json\'; d=json.load(open(p))\nd[\'executorTerminalBackend\']={\'version\':1,\'build\':\'herdr\'}\njson.dump(d,open(p,\'w\'),indent=2); open(p,\'a\').write(chr(10))\nprint(\'gate now:\', d[\'executorTerminalBackend\'])"'},
+      {step:5, label:"Terminal 2 — start the watcher and LEAVE IT RUNNING", text:'cd /home/rocky00717/rawgentic/projects/rawgentic\nfor i in $(seq 1 600); do\n  herdr pane list --workspace "$HERDR_WORKSPACE_ID" \\\n  | python3 -c "import sys,json;[print(p[\'pane_id\'],\'|\',p.get(\'label\',\'\')) for p in json.load(sys.stdin)[\'result\'][\'panes\'] if \'uat3-real\' in (p.get(\'label\') or \'\')]"\n  sleep 0.5\ndone | sort -u'},
+      {step:6, label:"Terminal 1 — 3a: dispatch the REAL build", text:'python3 hooks/executor_routing_lib.py dispatch --seat build \\\n  --prompt-file /tmp/uat3/brief.md --run-id uat3-real \\\n  --gate-file /tmp/uat3/gate.json --plan-file /tmp/uat3/plan.md \\\n  --correlation-id uat3-real-1 --timeout 900 \\\n  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic'},
+      {step:7, label:"3a evidence — did the worker really mutate its worktree?", text:'python3 hooks/executor_routing_lib.py status --run uat3-real \\\n  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic\n\n# copy worktree_path out of that JSON, then:\ngit -C <worktree_path> status --porcelain\ngit -C <worktree_path> diff -- docs/planning/UAT3-REALWORK-SCRATCH.md\n\n# and your MAIN checkout must still be clean:\ngit status --porcelain'},
+      {step:8, label:"3b — dispatch a review seat, gate still flipped", text:'printf \'Reply with the single word OK.\\n\' > /tmp/uat3/review-brief.md\n\npython3 hooks/executor_routing_lib.py dispatch --seat review \\\n  --prompt-file /tmp/uat3/review-brief.md --run-id uat3-real \\\n  --correlation-id uat3-real-review --author-provider anthropic --timeout 300 \\\n  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic'},
+      {step:9, label:"3b evidence — both rows, one run", text:'python3 -c "import json;[print({k:r.get(k) for k in (\'session_name\',\'terminal_backend\',\'run_socket\')}) for r in json.load(open(\'.rawgentic/runtime/registry/jobs.json\')).values() if \'uat3-real\' in json.dumps(r)]"'},
+      {step:10, label:"teardown — ALWAYS run this", text:'python3 -c "\nimport json; p=\'.rawgentic.json\'; d=json.load(open(p)); d.pop(\'executorTerminalBackend\',None)\njson.dump(d,open(p,\'w\'),indent=2); open(p,\'a\').write(chr(10))"\ngit status --porcelain .rawgentic.json    # must print NOTHING\n\nfor w in $(git worktree list --porcelain | grep \'^worktree \' | cut -d\' \' -f2- | grep uat3-real); do\n  git worktree remove --force "$w"; done\ngit worktree prune\n\nrm -rf .rawgentic/runs/uat3-real .rawgentic/runtime/worktrees/uat3-real-* \\\n       .rawgentic/runtime/worktrees/.meta/uat3-real-*.json'}
+    ],
+    pass:"<b>3a:</b> the watcher showed a pane labelled <code>rg-uat3-real-…-build-…</code> running for the duration; <code>git -C &lt;worktree_path&gt; status --porcelain</code> shows the new file; your main checkout stayed clean; <code>status --run</code> says <code>\"state\":\"completed\"</code> with <code>\"probe_error\":null</code>; no pane left behind. <b>3b:</b> in the same run the build row is herdr-backed (<code>run_socket: 'w1'</code>) and the review row is NOT, and no herdr pane appeared for the review seat. Paste the step-9 output into your note — it shows both rows at once.",
+    see:{title:"the launch path, as it actually ran here (2026-07-27) — this part is done", cap:"Captured from the two verification runs on herdr 0.7.5. This is the half you do NOT need to repeat; 3a and 3b are the parts nobody has run.", lines:[
+      ["p","$ python3 hooks/executor_routing_lib.py mint-gate --plan-file /tmp/uat3/plan.md …"],
+      ["g",'{"ok":true,"action":"mint-gate","decision":false,"reason_codes":[]}'],
+      ["p","$ python3 hooks/executor_routing_lib.py begin-run --run-id uat3-drill …"],
+      ["g",'{"run_id":"uat3-drill","architecture":"executor"}'],
+      ["o",""],
+      ["p","# watcher, running in the second terminal during the dispatch"],
+      ["g","w1:pAK | rg-uat3-drill-3eab3245-c5830e1d-build-44575cf5-0-e14e5728-229c44fb"],
+      ["o","   … and it self-closed the moment the worker exited"],
+      ["o",""],
+      ["p","$ dispatch --seat build … --run-id uat3-drill"],
+      ["g",'{"ok":true,"action":"executor_supervised","seat":"build","state":"completed"}'],
+      ["a",'   model: gpt-5.6-terra  (codex chain entry, not the anthropic primary — expected)'],
+      ["o",""],
+      ["g",'registry:  {"terminal_backend": "herdr", "run_socket": "w1"}'],
+      ["g",'status:    {"state":"completed","probe_error":null}'],
+      ["g","0 panes left behind"],
+      ["o",""],
+      ["r","NOT YET RUN BY ANYONE:  3a real-work worktree mutation  ·  3b live review-seat negative"]
+    ]},
+    schem:true
+  }
 ];
 
 /* =========================================================================
@@ -835,8 +845,19 @@ CHECKS.forEach((c, i) => {
     <div class="grid2">
       <div>
         <div class="why">${c.why.map(p => `<p>${p}</p>`).join("")}</div>
-        <ol class="steps">${c.steps.map(s => `<li>${s}</li>`).join("")}</ol>
-        ${(c.cmds||[]).map((cm, ci) => `
+        <ol class="steps">${c.steps.map((s, si) => {
+          /* Each step owns its command INLINE. Referring to "command 1" from prose and
+             rendering the box further down forced the reader to scroll and match numbers
+             by hand — owner feedback 2026-07-27, the defect this layout exists to fix. */
+          const own = (c.cmds||[]).map((cm, ci) => [cm, ci]).filter(([cm]) => cm.step === si + 1);
+          const boxes = own.map(([cm, ci]) => `
+            <div class="cmd" data-ci="${ci}">
+              <button class="copy" type="button">copy</button>
+              <pre></pre>
+            </div>`).join("");
+          return `<li>${s}${boxes}</li>`;
+        }).join("")}</ol>
+        ${(c.cmds||[]).map((cm, ci) => cm.step ? "" : `
           <div class="cmd" data-ci="${ci}">
             <button class="copy" type="button">copy</button>
             <pre></pre>

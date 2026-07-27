@@ -37,24 +37,17 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-27 13:52 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-27 14:07 MDT</div>
 <h1>Epic #635 — UAT plan</h1>
 
 </header>
 <main>
 <h1>Epic #635 — UAT plan (AC-derived)</h1>
 <p><strong>Epic:</strong> #635 &quot;herdr build-seat launch backend&quot; <strong>Children:</strong> #636 (TerminalBackend seam) · #637 (worktree park-then-reset) · #638 (HerdrBackend + config-gate) · #639 (PID-identity regression check) <strong>Author:</strong> generated during the epic auto-run, 2026-07-24 · <strong>Last refreshed:</strong> 2026-07-27 <strong>Status:</strong> all four children MERGED (2026-07-25). Epic <strong>#635 is CLOSED</strong> (2026-07-27); owner-side UAT moved to tracker <strong>#656</strong>.</p>
-<p><strong>THREE items need you — in this order:</strong></p>
-<table>
-<thead><tr><th>Item</th><th>What it is</th><th>Effort</th></tr></thead>
-<tbody>
-<tr><td><strong>[UAT-2](#uat-2--is-637s-park-then-reset-contract-what-you-actually-want)</strong></td><td>Read-and-decide: is #637&#x27;s park-then-reset contract the behaviour you want?</td><td>~5 min, nothing to run</td></tr>
-<tr><td><strong>[UAT-4](#uat-4--are-the-four-accepted-risks-the-ones-you-accepted)</strong></td><td>Read-and-decide: do the four recorded risks match what you accepted on 2026-07-24?</td><td>~5 min, nothing to run</td></tr>
-<tr><td><strong>[UAT-3](#uat-3--a-build-seat-doing-real-work-under-herdr--two-things-left)</strong></td><td>The real work: a build seat doing <strong>real work</strong> under herdr, plus the live negative</td><td>~20 min, drives the daemon</td></tr>
-</tbody>
-</table>
-<p>For UAT-2 and UAT-4 the <strong>factual claims were verified against the code on 2026-07-27</strong> — you are not checking whether the descriptions are true, only whether you agree with the decisions they record. UAT-1 and UAT-5 are evidenced (confirm, don&#x27;t re-run) and UAT-6 is <strong>closed</strong> by owner decision; everything retired is preserved in [§ Retired UAT items](#retired-uat-items--evidence-recorded-no-owner-action) so nothing is lost.</p>
-<p><strong>Run it from the visual console:</strong> https://rawgentic-epic-635-uat-console.vercel.app — the same three open checks with an interactive checklist that remembers your verdicts and emits a markdown report for issue #635. Source: <code>docs/planning/2026-07-24-635-epic-uat-console/index.html</code> (committed; three.js vendored beside it, so it needs no network). This markdown file stays the source of truth.</p>
+<p><strong>Everything you need to do is ONE numbered list: [the UAT session](#the-uat-session--one-list-top-to-bottom), steps 1 to 17.</strong></p>
+<p>They are <strong>terminal commands</strong> — copy each box, paste it into a terminal, press Enter. Step 1 puts you in the right directory and you stay there. Work straight down; do not skip or reorder. Steps 1–4 are UAT-2, steps 5–6 are UAT-4, steps 7–17 are UAT-3. About 30 minutes total.</p>
+<p>UAT-1 and UAT-5 are already evidenced and UAT-6 is closed by owner decision — all three are in [§ Retired UAT items](#retired-uat-items--evidence-recorded-no-owner-action) with their evidence, and none of them needs anything from you.</p>
+<p><strong>This markdown file is the source of truth and the easiest thing to follow.</strong> There is also a visual console at https://rawgentic-epic-635-uat-console.vercel.app which records your verdicts and emits a report for issue #656 — same steps, same commands, just with checkboxes. Source: <code>docs/planning/2026-07-24-635-epic-uat-console/index.html</code> (committed; three.js vendored beside it, so it needs no network).</p>
 <h2>How UAT works for this epic</h2>
 <p>Owner directive (2026-07-24): *&quot;All issues should be tested and verified working through CI and smoketesting. UAT should be conducted with user with a UAT plan created based on ACs. UAT can be done at the conclusion of the epic unless there are items that need to be verified after an issue that the next issue heavily relies on.&quot;*</p>
 <p>So:</p>
@@ -160,83 +153,50 @@ kill_session -&gt; /proc/623128 gone               &lt;-- genuinely terminated</
 <h3>Review history for #638 (why the evidence tier above is worth trusting)</h3>
 <p>ELEVEN Step-11 review passes ran on this PR; the first ten EACH found real defects in the fix that preceded them, all of one class — *an operational failure being read as a definitive answer*, which in this subsystem means killing a healthy job. Sequence: per-pass yield <code>4H / 4 / 3H / 2H+2M / 2H+1M / 3H+2M+1L / 3H+1L / 3H+2M+1L / 2H+1M+1L / 2H / 1H</code> — flat, not converging, which is what drove the owner&#x27;s scope decision to split the remaining permit-vs-process-death invariant into <strong>#648</strong>. Several findings were defects introduced BY the fix for the previous round. Mocked tests never caught any of them; every one needed either the real binary or a hand-traced call chain. Two of the findings were defects the author introduced *while fixing* the previous round. That history is the argument for UAT-3 being run for real rather than trusted.</p>
 <p>---</p>
-<h2>The UAT session — what the owner actually does</h2>
-<p><strong>Three items, and only one of them is real work.</strong> Everything already evidenced has been moved to [§ Retired UAT items](#retired-uat-items--evidence-recorded-no-owner-action) so this section asks you for nothing you have already effectively done.</p>
-<h3>UAT-2 — is #637&#x27;s park-then-reset contract what you actually want?</h3>
-<p><strong>Why:</strong> #637 shipped <code>park_and_reset</code> and #637&#x27;s AC5 says the *contract* is documented in skill prose. AC5 is satisfied by documentation only — so the acceptance question is whether that documented behaviour is the behaviour you want. This is a <strong>read-and-decide</strong>, ~5 minutes. No config changes, nothing to run against the daemon.</p>
-<blockquote><strong>Correction to this plan&#x27;s own earlier wording.</strong> It used to say &quot;the WF2 <strong>(and WF3)</strong> skill</blockquote>
-<blockquote>prose&quot;. That was wrong and would have sent you hunting for something that does not exist:</blockquote>
-<blockquote><code>skills/fix-bug/</code> (WF3) contains <strong>zero</strong> <code>park</code> references, <strong>zero</strong> <code>worktree</code> references and</blockquote>
-<blockquote><strong>zero</strong> build-seat dispatches. WF3 never puts a build seat in a worktree, so it has nothing to</blockquote>
-<blockquote>park — its design-flaw path hands off to WF2 instead</blockquote>
-<blockquote>(<code>skills/fix-bug/references/steps.md:227</code>, *&quot;Root cause is in a design flaw (not a code bug) →</blockquote>
-<blockquote>suggest WF2 for redesign&quot;*). <strong>Read WF2 only.</strong> #637&#x27;s AC5 text (&quot;WF2/WF3 skill prose&quot;)</blockquote>
-<blockquote>overstates it; that is a wording defect in the AC, not a missing implementation.</blockquote>
-<h4>Step 1 — put the two passages on screen</h4>
-<p>There are exactly <strong>two</strong> sites, both in <code>skills/implement-feature/references/steps.md</code>:</p>
-<pre><code>cd /home/rocky00717/rawgentic/projects/rawgentic
-
-# site 1 — Step 8, &quot;Design flaw discovery&quot; (the primary statement of the contract)
-awk &#x27;/\*\*Design flaw discovery:\*\*/{f=1} f&amp;&amp;c++&lt;24&#x27; skills/implement-feature/references/steps.md
-
-# site 2 — Step 11, item 6 (the same contract, referenced from the review loop-back)
-grep -n &#x27;park-then-reset the build seat&#x27; skills/implement-feature/references/steps.md</code></pre>
-<h4>Step 2 — read it as six plain claims</h4>
-<p>The prose is dense with code identifiers, so here is what it actually commits the orchestrator to. <strong>Check each against your intent</strong> — this restatement is what you are accepting:</p>
-<p>1. <strong>A design-level flaw invalidates the current diff.</strong> It is treated differently from an    ordinary failed attempt, because the thing the work was built against has changed. 2. **A *same-design* retry does NOT park.<strong> It discards the attempt outright — a bare    <code>reset --hard</code> + <code>clean -fd</code>, no stash — because the design is still valid. 3. </strong>A *design-level* loop-back DOES park.<strong> The work is stashed recoverably first, tagged    <code>rawgentic-parked:&lt;run_id&gt;:&lt;design_version&gt;:&lt;task_id&gt;</code>. 4. </strong>Park strictly before reset, never the reverse<strong>, and the park is verified by checking the    stash OID actually changed — not by trusting <code>rc == 0</code>. 5. </strong>The prior build worker must be confirmed dead first<strong>, before any of this. 6. </strong>The stash OID is written to the run&#x27;s audit log** (<code>RoutingAuditLog.append_park</code>), so parked    work is discoverable later. The OID matters because two loop-backs on the same run and task    share the same human-readable stash name.</p>
-<p>There is also a failure clause worth a moment: if the reset fails *after* a confirmed park, the audit record is still written before the error propagates — so a parked diff is never orphaned silently.</p>
-<h4>Already verified for you (2026-07-27) — the prose matches the code</h4>
-<p>You do not need to check whether the description is *true*; that was checked. Only whether you agree with the policy.</p>
-<table>
-<thead><tr><th>Claim</th><th>Verified against</th><th>Result</th></tr></thead>
-<tbody>
-<tr><td>Park strictly <strong>before</strong> reset</td><td><code>worktree.py:585-593</code></td><td>✅ &quot;before reset/clean ever runs&quot;; a park failure &quot;raises immediately and reset is <strong>NEVER</strong> attempted&quot;</td></tr>
-<tr><td>Verified by stash identity, never <code>rc == 0</code></td><td><code>worktree.py:585-589</code></td><td>✅ — and <strong>stricter than the prose says</strong>: the code resolves its own stash out of the <code>refs/stash</code> reflog <strong>by message</strong>, because a positional read is unsafe under concurrency. <code>steps.md</code> describes the older &quot;OID change&quot; wording. Directionally right, mechanism understated.</td></tr>
-<tr><td>Failure after park still audits</td><td><code>worktree.py:596-599</code></td><td>✅ <code>ParkThenResetError</code> carries <code>stash_oid</code>, so the parked diff stays recoverable</td></tr>
-</tbody>
-</table>
-<h4>Step 3 — decide, and note the gap</h4>
-<p><strong>UAT-2 passes when you can answer yes to both:</strong></p>
+<h2>The UAT session — one list, top to bottom</h2>
+<p><strong>Read this first, it answers the three questions people ask:</strong></p>
 <ul>
-<li>[ ] <strong>Is the split right?</strong> Same-design retry throws the work away; design change parks it</li>
+<li><strong>Where do I type these?</strong> A <strong>terminal</strong>. Not Claude, not this page. Every box below is a</li>
 </ul>
-<p>      recoverably. That asymmetry is the whole design — do you want it?</p>
+<p>  shell command — copy it, paste it into your terminal, press Enter.</p>
 <ul>
-<li>[ ] <strong>Is &quot;park before reset, verified by OID&quot; the safety level you want</strong> for work that a</li>
+<li><strong>Which directory?</strong> <code>/home/rocky00717/rawgentic/projects/rawgentic</code>. Step 1 puts you there and</li>
 </ul>
-<p>      design change just invalidated, versus something cheaper?</p>
-<p><strong>Note while you read — this is GAP-1, now filed as [#661](https://github.com/3D-Stories/rawgentic/issues/661):</strong> <strong>nothing invokes <code>park_and_reset</code>.</strong> The primitive is implemented and tested, but no code path calls it at a live loop-back; WF2&#x27;s loop-backs are prose-orchestrated, so today a real design loop-back would <strong>not</strong> actually park. You are accepting the contract&#x27;s *intent* here, not a running behaviour. That is exactly why it is filed.</p>
-<p><strong>Fails if:</strong> the described behaviour is not what you want — in which case say which of the six claims is wrong, and it becomes a change to #661&#x27;s scope rather than a defect in #637.</p>
-<h3>UAT-3 — a build seat doing REAL work under herdr — <strong>two things left</strong></h3>
-<p><strong>Why:</strong> GAP-2. This is the only item that exercises the production entry path.</p>
-<h4>Already proven on 2026-07-27 — do NOT re-run this part</h4>
-<p>The <strong>launch path</strong> was driven twice on this host through the real entry path (<code>executor_routing_lib dispatch --seat build</code>, gate flipped to herdr). Both runs exited 0 with <code>&quot;state&quot;:&quot;completed&quot;</code>, and:</p>
-<table>
-<thead><tr><th>Proven</th><th>Evidence</th></tr></thead>
-<tbody>
-<tr><td>The herdr backend actually engages</td><td>registry row <code>terminal_backend: &quot;herdr&quot;</code>, <code>run_socket: &quot;w1&quot;</code> — a herdr *workspace id*, not a tmux socket path</td></tr>
-<tr><td>A labelled pane is really created</td><td>watcher caught `w1:pAK</td><td>rg-uat3-drill-…-build-…`</td></tr>
-<tr><td><code>status</code> tells the truth about it</td><td><code>status --run</code> → <code>&quot;state&quot;:&quot;completed&quot;</code>, <code>&quot;probe_error&quot;:null</code> — #647&#x27;s fix reading a real herdr-backed record</td></tr>
-<tr><td>Nothing is left behind</td><td>pane self-closes on worker exit; 0 panes remaining</td></tr>
-</tbody>
-</table>
-<p><strong>So the plumbing is not in question.</strong> What follows is only the part that plumbing test could not cover.</p>
-<h4>What is still untested — exactly two things</h4>
-<p>The drill above used a <strong>no-op brief</strong> (&quot;print a line, change nothing&quot;) and ran for ~10 seconds. That deliberately avoided the two things that matter most:</p>
+<p>  you stay there for the whole run.</p>
 <ul>
-<li><strong>3a — a build seat that actually CHANGES FILES.</strong> A real build mutates its isolated worktree</li>
+<li><strong>What order?</strong> Straight down, step 1 to step 17. Do not skip and do not reorder. Steps 1–4 are</li>
 </ul>
-<p>  and runs for minutes, not seconds. Nothing has yet watched a herdr-hosted worker do that.</p>
+<p>  UAT-2, steps 5–6 are UAT-4, steps 7–17 are UAT-3.</p>
+<p><strong>One prerequisite.</strong> Steps 7–17 must be run from a terminal that is <strong>inside a herdr pane</strong>, and from a session started <strong>after</strong> the 3.97.2 plugin reinstall. Step 7 checks the pane for you.</p>
+<p>Total: about 30 minutes, most of it waiting on step 12.</p>
+<p>---</p>
+<h3>Step 1 — open a terminal and go to the project</h3>
+<pre><code>cd /home/rocky00717/rawgentic/projects/rawgentic</code></pre>
+<h3>Step 2 — print the first of two passages (UAT-2)</h3>
+<pre><code>awk &#x27;/\*\*Design flaw discovery:\*\*/{f=1} f&amp;&amp;c++&lt;24&#x27; skills/implement-feature/references/steps.md</code></pre>
+<h3>Step 3 — print the second passage</h3>
+<pre><code>grep -n &#x27;park-then-reset the build seat&#x27; skills/implement-feature/references/steps.md</code></pre>
+<h3>Step 4 — decide UAT-2, then write down PASS or FAIL</h3>
+<p>What you just printed, said plainly. <strong>These six claims are what you are accepting:</strong></p>
+<p>1. A design-level flaw <strong>invalidates</strong> the current diff — treated differently from an ordinary    failed attempt, because what the work was built against has changed. 2. A <strong>same-design retry does NOT park.</strong> It discards the work outright (<code>reset --hard</code> +    <code>clean -fd</code>, no stash) because the design is still valid. 3. A <strong>design-level loop-back DOES park.</strong> The work is stashed recoverably first, tagged    <code>rawgentic-parked:&lt;run_id&gt;:&lt;design_version&gt;:&lt;task_id&gt;</code>. 4. <strong>Park strictly before reset</strong>, never the reverse — and the park is confirmed by the stash    really existing, never by trusting <code>rc == 0</code>. 5. The <strong>prior build worker must be confirmed dead</strong> first. 6. The <strong>stash OID goes into the run&#x27;s audit log</strong>, so parked work is findable. The OID matters    because two loop-backs on the same run and task share the same human-readable stash name.</p>
+<p><strong>Decide these two:</strong></p>
 <ul>
-<li><strong>3b — the live negative.</strong> That a review/analysis seat in the same run still goes to <strong>tmux</strong></li>
+<li>Is the split right — same-design retry discards, design change parks?</li>
+<li>Is &quot;park before reset, confirmed by the stash existing&quot; the safety level you want?</li>
 </ul>
-<p>  was confirmed by reading <code>supervisor.resolve_backend</code> (it maps <code>tmux</code>/absent → TmuxBackend, and   the gate names only <code>build</code>) — <strong>not</strong> by watching a review seat launch.</p>
-<blockquote><strong>Plugin already redeployed</strong> — cache is at <strong>3.97.2</strong> (verified 2026-07-27: <code>liveness_unknown</code>,</blockquote>
-<blockquote><code>status_live_verdict</code>, and <code>resolve_backend</code> all present in the installed copy). #647 is what makes</blockquote>
-<blockquote><code>status</code> trustworthy here, so just make sure this is a session started *after* that reinstall.</blockquote>
-<h4>Setup — identical to the proven drill, except the brief</h4>
-<p>Steps 1–5 below are the <strong>verified</strong> sequence; only the brief&#x27;s contents change. Prereqs: you are inside a herdr pane (<code>echo &quot;$HERDR_PANE_ID $HERDR_WORKSPACE_ID&quot;</code> prints two non-empty values), and you are in <code>/home/rocky00717/rawgentic/projects/rawgentic</code>.</p>
-<p><strong>1. Plan + a brief that does REAL work</strong> — this is the one deliberate difference:</p>
+<p><strong>Already checked for you (you do not need to verify this):</strong> the prose matches the code — <code>worktree.py:585-593</code> (park before reset; a park failure raises and reset never runs), <code>worktree.py:585-589</code> (confirmed via the <code>refs/stash</code> reflog by message, not <code>rc==0</code>), <code>worktree.py:596-599</code> (a failure after park still writes the audit record).</p>
+<p><strong>Know this while deciding:</strong> nothing currently calls <code>park_and_reset</code>. You are accepting the *intent*, not a running behaviour — that gap is filed as [#661](https://github.com/3D-Stories/rawgentic/issues/661).</p>
+<p>→ <strong>Write down: UAT-2 = PASS or FAIL.</strong> If FAIL, say which of the six claims is wrong.</p>
+<h3>Step 5 — print the docstring (UAT-4)</h3>
+<pre><code>python3 -c &quot;import ast;print(ast.get_docstring(ast.parse(open(&#x27;phase_executor/src/phase_executor/herdr_backend.py&#x27;).read())))&quot;</code></pre>
+<h3>Step 6 — decide UAT-4, then write down PASS or FAIL</h3>
+<p>Four risks are recorded there. <strong>All four were checked against the code on 2026-07-27 and are accurate</strong> — so you are only deciding whether these are the decisions you made on 2026-07-24.</p>
+<p>1. <strong><code>pane_env</code> is visible to <code>ps</code>.</strong> herdr has no private per-run env channel; the only mechanism    is <code>pane split --env KEY=VALUE</code>, passed as CLI args to a <strong>host-wide shared daemon</strong>.    *Your call:* were <strong>host-local + ephemeral + non-credential</strong> the conditions you set?    (<code>herdr_backend.py:149</code>, comment at <code>:128</code>. Only <code>PYTHONPATH</code> goes through today.) 2. <strong>Malformed-split pane leak — accepted, not fixed.</strong> If <code>pane split</code> returns <code>rc=0</code> with an    unparseable body, a real pane may exist but the code has no <code>pane_id</code> to close it.    *Your call:* do you accept that leak on that narrow path? (<code>herdr_backend.py:389-394</code>.) 3. <strong>Three calls, not atomic</strong> — split → rename → run…exec. *Your call:* do you accept &quot;never    parallelize split+run against one target pane&quot;? (<code>herdr_backend.py:380, 418, 422</code>.) 4. <strong><code>exec</code>-injection is herdr-undocumented.</strong> A future herdr release could wrap instead of    exec-replace, and every PID the supervisor holds would name the wrong process. *Your call:* do    you accept this with <strong>#639&#x27;s manual pre-upgrade gate</strong> as the only compensating control?    (<code>herdr_backend.py:422</code>.)</p>
+<p>→ <strong>Write down: UAT-4 = PASS or FAIL.</strong> If FAIL, name the risk whose conditions are wrong.</p>
+<h3>Step 7 — confirm this terminal is inside a herdr pane (UAT-3 starts here)</h3>
+<pre><code>echo &quot;pane=$HERDR_PANE_ID workspace=$HERDR_WORKSPACE_ID&quot;</code></pre>
+<p>Both must be non-empty — e.g. <code>pane=w1:p1 workspace=w1</code>. <strong>If either is empty, stop.</strong> You are not in a herdr pane and the launch cannot work; open a terminal inside one and start again from step 1.</p>
+<h3>Step 8 — create the throwaway plan and brief</h3>
 <pre><code>mkdir -p /tmp/uat3 &amp;&amp; cat &gt; /tmp/uat3/plan.md &lt;&lt;&#x27;EOF&#x27;
 ### Task 1: create a scratch note file with three lines of content
 - riskLevel: standard
@@ -251,121 +211,85 @@ Create the file docs/planning/UAT3-REALWORK-SCRATCH.md with exactly three lines:
 
 Then stop. Do not commit. Do not touch any other file.
 EOF</code></pre>
-<p><strong>2–4. Mint the gate, declare the run, flip the gate</strong> — unchanged from the proven drill:</p>
+<h3>Step 9 — mint the gate and declare the run</h3>
 <pre><code>python3 hooks/executor_routing_lib.py mint-gate \
   --plan-file /tmp/uat3/plan.md --issue-complexity trivial --plan-est-lines 5 \
   --out /tmp/uat3/gate.json
+
 python3 hooks/executor_routing_lib.py begin-run --run-id uat3-real \
   --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic</code></pre>
-<p>Then add at the <strong>top level</strong> of <code>.rawgentic.json</code> (tracked by git — do not commit; teardown puts it back):</p>
-<pre><code>&quot;executorTerminalBackend&quot;: { &quot;version&quot;: 1, &quot;build&quot;: &quot;herdr&quot; }</code></pre>
-<p><strong>5. Start the watcher in a SECOND pane, before dispatching.</strong> Still required — but a real build runs for minutes, so this time you should get a good look at the pane rather than a 10-second flash:</p>
-<pre><code>for i in $(seq 1 600); do
+<p>Expect <code>&quot;ok&quot;:true</code> from the first and <code>&quot;architecture&quot;:&quot;executor&quot;</code> from the second.</p>
+<h3>Step 10 — flip the gate to herdr</h3>
+<p>This edits a git-tracked file. The command does it for you so you never hand-edit JSON, and <strong>step 17 puts it back</strong>.</p>
+<pre><code>python3 -c &quot;
+import json; p=&#x27;.rawgentic.json&#x27;; d=json.load(open(p))
+d[&#x27;executorTerminalBackend&#x27;]={&#x27;version&#x27;:1,&#x27;build&#x27;:&#x27;herdr&#x27;}
+json.dump(d,open(p,&#x27;w&#x27;),indent=2); open(p,&#x27;a&#x27;).write(chr(10))
+print(&#x27;gate now:&#x27;, d[&#x27;executorTerminalBackend&#x27;])&quot;</code></pre>
+<h3>Step 11 — open a SECOND terminal and start the watcher</h3>
+<p><strong>Open a new terminal now.</strong> Paste this and leave it running for the rest of the procedure. The pane herdr creates would otherwise be gone before you could look at it.</p>
+<pre><code>cd /home/rocky00717/rawgentic/projects/rawgentic
+for i in $(seq 1 600); do
   herdr pane list --workspace &quot;$HERDR_WORKSPACE_ID&quot; \
   | python3 -c &quot;import sys,json;[print(p[&#x27;pane_id&#x27;],&#x27;|&#x27;,p.get(&#x27;label&#x27;,&#x27;&#x27;)) for p in json.load(sys.stdin)[&#x27;result&#x27;][&#x27;panes&#x27;] if &#x27;uat3-real&#x27; in (p.get(&#x27;label&#x27;) or &#x27;&#x27;)]&quot;
   sleep 0.5
 done | sort -u</code></pre>
-<h4>3a — dispatch the real build and check the worktree</h4>
+<h3>Step 12 — back in the FIRST terminal, dispatch the real build</h3>
 <pre><code>python3 hooks/executor_routing_lib.py dispatch --seat build \
   --prompt-file /tmp/uat3/brief.md --run-id uat3-real \
   --gate-file /tmp/uat3/gate.json --plan-file /tmp/uat3/plan.md \
   --correlation-id uat3-real-1 --timeout 900 \
   --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic</code></pre>
-<p>Then read the worktree the seat was given — <code>status</code> prints its path:</p>
+<p>Expect exit 0 and <code>&quot;state&quot;:&quot;completed&quot;</code>. This takes minutes. <strong>One thing looks wrong and is not:</strong> it routes to <strong>codex / <code>gpt-5.6-terra</code></strong> — the build seat&#x27;s anthropic primary falls through to its cross-model chain entry. That is expected.</p>
+<h3>Step 13 — check the worktree the build seat was given</h3>
 <pre><code>python3 hooks/executor_routing_lib.py status --run uat3-real \
-  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic
-# take worktree_path from the output, then:
-git -C &lt;worktree_path&gt; status --porcelain
-git -C &lt;worktree_path&gt; diff -- docs/planning/UAT3-REALWORK-SCRATCH.md</code></pre>
-<p><strong>3a passes when:</strong></p>
-<ul>
-<li>[ ] The watcher showed the labelled pane, and you could see it <strong>running for the duration</strong> —</li>
-</ul>
-<p>      not a flash.</p>
-<ul>
-<li>[ ] <code>git -C &lt;worktree_path&gt; status --porcelain</code> shows the new file. <strong>This is the point of 3a:</strong></li>
-</ul>
-<p>      a herdr-hosted worker really mutated its isolated worktree.</p>
-<ul>
-<li>[ ] The change is <strong>only</strong> in that worktree — <code>git status</code> in the main checkout is clean.</li>
-<li>[ ] <code>status --run</code> reports <code>&quot;state&quot;:&quot;completed&quot;</code> with <code>&quot;probe_error&quot;:null</code>.</li>
-<li>[ ] Afterwards, no labelled pane is left behind.</li>
-</ul>
-<p>*Optional follow-on:* promoting that work product is a separate audited step, <code>executor_routing_lib.py collect-work-product --run-id … --session-name … --target-ref … --expected-target-sha … [--kind code|review|design|docs]</code>. Not required for UAT-3 — the worktree check above already answers &quot;did the worker really do work under herdr&quot;.</p>
-<h4>3b — the live negative: a review seat must still go to tmux</h4>
-<p>With the gate <strong>still flipped</strong>, dispatch a review seat in the same run:</p>
+  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic</code></pre>
+<p>Copy <code>worktree_path</code> out of that JSON, then run these three:</p>
+<pre><code>git -C &lt;worktree_path&gt; status --porcelain
+git -C &lt;worktree_path&gt; diff -- docs/planning/UAT3-REALWORK-SCRATCH.md
+git status --porcelain</code></pre>
+<p>The first two must show the <strong>new file</strong>. The third — your main checkout — must print <strong>nothing</strong>.</p>
+<h3>Step 14 — dispatch a review seat, gate still flipped</h3>
 <pre><code>printf &#x27;Reply with the single word OK.\n&#x27; &gt; /tmp/uat3/review-brief.md
+
 python3 hooks/executor_routing_lib.py dispatch --seat review \
   --prompt-file /tmp/uat3/review-brief.md --run-id uat3-real \
   --correlation-id uat3-real-review --author-provider anthropic --timeout 300 \
   --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic</code></pre>
-<p><code>--author-provider anthropic</code> is <strong>required</strong> on a review seat — omit it and enforcement fails closed with <code>pre_check_denied: author_provider_missing</code>.</p>
-<p><strong>3b passes when:</strong></p>
-<ul>
-<li>[ ] The review seat&#x27;s registry row shows <code>terminal_backend</code> <strong>tmux</strong> (or absent), <strong>not</strong> herdr:</li>
-</ul>
-<pre><code>      python3 -c &quot;import json;[print({k:r.get(k) for k in (&#x27;session_name&#x27;,&#x27;terminal_backend&#x27;,&#x27;run_socket&#x27;)}) for r in json.load(open(&#x27;.rawgentic/runtime/registry/jobs.json&#x27;)).values() if &#x27;uat3-real&#x27; in json.dumps(r)]&quot;</code></pre>
-<p>      You should see the <strong>build</strong> row herdr-backed (<code>run_socket: &#x27;w1&#x27;</code>) and the <strong>review</strong> row       not — that contrast in one run is the whole point.</p>
-<ul>
-<li>[ ] No herdr pane appeared for the review seat.</li>
-</ul>
-<h4>Teardown — always, even if either half failed</h4>
-<pre><code># 1. config back — absent means tmux
-python3 -c &quot;
+<p><code>--author-provider anthropic</code> is <strong>required</strong> — omit it and this fails closed with <code>pre_check_denied: author_provider_missing</code>.</p>
+<h3>Step 15 — print both registry rows at once</h3>
+<pre><code>python3 -c &quot;import json;[print({k:r.get(k) for k in (&#x27;session_name&#x27;,&#x27;terminal_backend&#x27;,&#x27;run_socket&#x27;)}) for r in json.load(open(&#x27;.rawgentic/runtime/registry/jobs.json&#x27;)).values() if &#x27;uat3-real&#x27; in json.dumps(r)]&quot;</code></pre>
+<p>The <strong>build</strong> row should show <code>terminal_backend: &#x27;herdr&#x27;</code> and <code>run_socket: &#x27;w1&#x27;</code>. The <strong>review</strong> row should <strong>not</strong>. That contrast in one run is the whole negative test.</p>
+<h3>Step 16 — check your watcher terminal</h3>
+<p>It should have printed a line like:</p>
+<pre><code>w1:pAK | rg-uat3-real-…-build-…</code></pre>
+<p>A pane labelled with the run&#x27;s session name. And it should be <strong>gone now</strong> — panes close themselves when the worker exits.</p>
+<h3>Step 17 — teardown (run this even if something failed)</h3>
+<pre><code>python3 -c &quot;
 import json; p=&#x27;.rawgentic.json&#x27;; d=json.load(open(p)); d.pop(&#x27;executorTerminalBackend&#x27;,None)
-json.dump(d,open(p,&#x27;w&#x27;),indent=2); open(p,&#x27;a&#x27;).write(&#x27;\n&#x27;)&quot;
-git status --porcelain .rawgentic.json          # must print NOTHING
+json.dump(d,open(p,&#x27;w&#x27;),indent=2); open(p,&#x27;a&#x27;).write(chr(10))&quot;
+git status --porcelain .rawgentic.json
 
-# 2. worktrees through git, never rm -rf first
 for w in $(git worktree list --porcelain | grep &#x27;^worktree &#x27; | cut -d&#x27; &#x27; -f2- | grep uat3-real); do
   git worktree remove --force &quot;$w&quot;; done
 git worktree prune
 
-# 3. run dir + meta
 rm -rf .rawgentic/runs/uat3-real .rawgentic/runtime/worktrees/uat3-real-* \
        .rawgentic/runtime/worktrees/.meta/uat3-real-*.json</code></pre>
-<p><strong>Rollback:</strong> removing the <code>executorTerminalBackend</code> key is the entire rollback — absent means tmux.</p>
-<p><strong>Honesty note on these instructions.</strong> Steps 1–5 and the teardown are the sequence that was run twice here, so they are known-good. The <strong>3a worktree checks and the whole of 3b were not executed by me</strong> — 3a&#x27;s real-work brief and 3b&#x27;s review dispatch are exactly the parts left for you, so the commands for them are written from the verified skeleton and the CLI&#x27;s own argument list, not from a run I watched.</p>
-<h3>UAT-4 — are the four accepted risks the ones you accepted?</h3>
-<p><strong>Why:</strong> #638&#x27;s AC6 requires the named risks to be encoded at the call site rather than living only in a review thread. You ruled on these on 2026-07-24; this confirms the code records what you actually agreed. <strong>Read-and-decide, ~5 minutes.</strong></p>
-<h4>Step 1 — print the docstring</h4>
-<p>It is 76 lines at the top of one file. This prints it without you having to open an editor:</p>
-<pre><code>cd /home/rocky00717/rawgentic/projects/rawgentic
-python3 -c &quot;import ast;print(ast.get_docstring(ast.parse(open(&#x27;phase_executor/src/phase_executor/herdr_backend.py&#x27;).read())))&quot;</code></pre>
-<h4>Step 2 — check each risk against what you accepted</h4>
-<table>
-<thead><tr><th>#</th><th>Risk as recorded</th><th>The check</th></tr></thead>
-<tbody>
-<tr><td>1</td><td><strong><code>pane_env</code> is visible to <code>ps</code>.</strong> herdr has no private per-run env channel — the only mechanism is <code>pane split --env KEY=VALUE</code>, passed as CLI args to a <strong>host-wide shared daemon</strong>. Values are visible to any user on the host for the process&#x27;s lifetime, and not persisted beyond the pane.</td><td>Are <strong>host-local + ephemeral + non-credential</strong> the conditions you set? The docstring also states the standing guard: *&quot;this backend must never be handed anything credential-bearing&quot;* — today only <code>PYTHONPATH</code> is threaded through.</td></tr>
-<tr><td>2</td><td><strong>Malformed-split pane leak — accepted, NOT fixed.</strong> If <code>pane split</code> returns <code>rc=0</code> with an unparseable body, a real pane may exist but the code has no <code>pane_id</code> to close it (the id lives in the very body that failed to parse).</td><td>Do you accept an unlabeled pane leaking on that narrow path? The stated reason not to fix it: recovering the id would need a list-diff-by-timing heuristic, which is racy and could close a concurrently-created pane.</td></tr>
-<tr><td>3</td><td><strong>Three calls, not atomic.</strong> <code>new_session</code> is <code>pane split</code> → <code>pane rename</code> → <code>pane run … exec …</code>. Safe only single-threaded per spawn.</td><td>Do you accept &quot;never parallelize split+run against one target pane&quot;? Note a failure *after* split (including a runner timeout) now best-effort closes the orphaned pane via <code>try/finally</code>.</td></tr>
-<tr><td>4</td><td><strong><code>exec</code>-injection is herdr-undocumented.</strong> <code>pane run &lt;pane&gt; exec &lt;argv&gt;</code> is neither documented nor endorsed by herdr; a future release could wrap rather than <code>exec</code>-replace, and every PID the supervisor holds would name the wrong process.</td><td>Do you accept this with <strong>#639&#x27;s gate as the compensating control</strong> — a manual, pre-upgrade check rather than anything automatic? (This is GAP-4; the &quot;remembering to run it&quot; half is now [#659](https://github.com/3D-Stories/rawgentic/issues/659).)</td></tr>
-</tbody>
-</table>
-<h4>Already verified for you (2026-07-27) — all four risks accurately describe the code</h4>
-<table>
-<thead><tr><th>Risk</th><th>Verified against</th><th>Result</th></tr></thead>
-<tbody>
-<tr><td>1 — <code>pane_env</code> visible to <code>ps</code></td><td><code>herdr_backend.py:149</code>, comment at <code>:128</code></td><td>✅ <code>(&quot;--env&quot;, f&quot;{k}={v}&quot;)</code> — a CLI arg to a host-wide shared daemon</td></tr>
-<tr><td>2 — malformed split leaks a pane</td><td><code>herdr_backend.py:389-394</code></td><td>✅ returns <strong>before</strong> any <code>pane_id</code> exists — structurally nothing to close, not an oversight</td></tr>
-<tr><td>3 — three calls, not atomic</td><td><code>herdr_backend.py:380, 418, 422</code></td><td>✅ <code>split</code> → <code>rename</code> → <code>run … exec</code></td></tr>
-<tr><td>4 — <code>exec</code>-injection</td><td><code>herdr_backend.py:422</code></td><td>✅ <code>self._herdr(&quot;run&quot;, pane_id, &quot;exec&quot;, *argv)</code></td></tr>
-</tbody>
-</table>
-<p><strong>Verdict: 4/4 recorded risks are accurate.</strong> Only the acceptance is yours.</p>
-<h4>Step 3 — decide</h4>
-<p><strong>UAT-4 passes when:</strong></p>
-<ul>
-<li>[ ] All four risks above are ones you knowingly accepted, with the same conditions attached.</li>
-<li>[ ] Risk 1&#x27;s conditions in the code — *host-local, ephemeral, never credential-bearing* — are</li>
-</ul>
-<p>      the conditions you actually set on 2026-07-24.</p>
-<ul>
-<li>[ ] You are content that risks 2 and 4 are <strong>documented and accepted rather than fixed</strong>, and</li>
-</ul>
-<p>      that #639&#x27;s manual gate is what stands behind risk 4.</p>
-<p><strong>Fails if:</strong> any risk is recorded with conditions you did not agree to, or one you rejected is recorded as accepted. Either way, name it and it becomes a follow-up issue — the code change is small; the point of this item is that the record matches the decision.</p>
+<p><code>git status --porcelain .rawgentic.json</code> must print <strong>nothing</strong>. You can now close the watcher terminal (Ctrl-C).</p>
 <p>---</p>
+<h3>Write down your three results</h3>
+<table>
+<thead><tr><th>Item</th><th>Steps</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><strong>UAT-2</strong> — park-then-reset contract</td><td>2–4</td><td>PASS / FAIL</td></tr>
+<tr><td><strong>UAT-4</strong> — the four accepted risks</td><td>5–6</td><td>PASS / FAIL</td></tr>
+<tr><td><strong>UAT-3a</strong> — build seat did real work in its worktree</td><td>12–13, 16</td><td>PASS / FAIL</td></tr>
+<tr><td><strong>UAT-3b</strong> — review seat stayed on tmux</td><td>14–15</td><td>PASS / FAIL</td></tr>
+</tbody>
+</table>
+<p>Post them on [#656](https://github.com/3D-Stories/rawgentic/issues/656). If anything failed, the step number plus what you saw is enough — no need to diagnose it.</p>
+<p><strong>Rollback if you need to stop early:</strong> run step 17. Removing the <code>executorTerminalBackend</code> key is the entire rollback; absent means tmux, and nothing else was changed.</p>
 <h2>Retired UAT items — evidence recorded, no owner action</h2>
 <p>Kept in full rather than deleted, so the evidence stays auditable. <strong>Nothing in this section needs you to run anything.</strong></p>
 <h3>UAT-1 — a real executor dispatch still works after #636&#x27;s refactor ✅ EVIDENCED</h3>
@@ -411,7 +335,7 @@ python3 -c &quot;import ast;print(ast.get_docstring(ast.parse(open(&#x27;phase_e
 </table>
 
 </main>
-<footer>Last updated: 2026-07-27 13:52 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-27 14:07 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
