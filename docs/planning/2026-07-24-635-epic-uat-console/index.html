@@ -518,24 +518,41 @@ let THREE = null;
    ========================================================================= */
 const CHECKS = [
   {
-    id:"uat2", uid:"UAT-2", name:"The loop-back prose says what you intend",
-    tags:[["owner","Owner only"]],
+    id:"uat2", uid:"UAT-2", name:"Is #637's park-then-reset contract what you want?",
+    tags:[["owner","Owner only"],["","Read &amp; decide · ~5 min"]],
     why:[
-      "#637's <b>park_and_reset</b> parks the diff and untracked files in a named stash, then resets — never a bare <code>reset --hard</code> without a recovery path.",
-      "Ownership is the orchestrator's, and it is a <b>prose</b> contract. Read it as the instruction it actually is, and note GAP-1 while you do: nothing enforces it."
+      "#637 shipped <code>park_and_reset</code> and its AC5 says the <i>contract</i> is documented in skill prose. AC5 is satisfied by <b>documentation only</b> — so the acceptance question is whether that documented behaviour is the behaviour you want. Nothing to run against the daemon, no config changes.",
+      "<b>Correction to this page's own earlier wording.</b> It used to say \"the WF2 <b>(and WF3)</b> skill prose\". That was wrong and would have sent you hunting for something that does not exist: <code>skills/fix-bug/</code> (WF3) has <b>zero</b> <code>park</code>, <b>zero</b> <code>worktree</code> and <b>zero</b> build-seat references. WF3 never puts a build seat in a worktree, so it has nothing to park — its design-flaw path hands off to WF2 (<code>skills/fix-bug/references/steps.md:227</code>). <b>Read WF2 only.</b> #637's AC5 text overstates it; a wording defect in the AC, not a missing implementation."
     ],
     steps:[
-      "Open the WF2 skill prose at the design-level loop-back, and the same passage in WF3.",
-      "Read the park-then-reset paragraphs as if you were the agent following them.",
-      "Decide whether that is the behaviour you want when a design changes mid-build."
+      "Put the two passages on screen (command 1). There are exactly <b>two</b> sites, both in <code>skills/implement-feature/references/steps.md</code>: Step 8's \"Design flaw discovery\" (the primary statement) and Step 11 item 6 (the same contract, referenced from the review loop-back).",
+      "Read it as <b>six plain claims</b> — the prose is dense with code identifiers, so the panel on the right restates what it actually commits the orchestrator to. Check each against your intent; that restatement is what you are accepting.",
+      "Decide the two questions in the pass condition. <b>Note GAP-1 (now #661) while you read: nothing invokes <code>park_and_reset</code>.</b> The primitive is implemented and tested, but no code path calls it at a live loop-back — so today a real design loop-back would NOT actually park. You are accepting the contract's <i>intent</i>, not a running behaviour.",
+      "If it is not what you want, say which of the six claims is wrong — that makes it a change to #661's scope, not a defect in #637."
     ],
-    cmds:[],
-    pass:"The described contract is the one you want the orchestrator to follow, and you have noted that GAP-1 means nothing currently makes it happen.",
-    see:{title:"what is tested vs what is invoked", cap:"The primitive is real and covered; the invocation is not. That asymmetry is GAP-1, stated rather than smoothed over.", lines:[
-      ["p","$ pytest tests/phase_executor/test_worktree_park.py -q"],
-      ["g","tested: named stash, stash-OID attribution, per-worktree gitdir anchoring"],
-      ["a","not tested: any code path that CALLS park_and_reset at a live loop-back"],
-      ["o","grep -rn \"park_and_reset\" hooks/ skills/  ->  prose references only"]
+    cmds:[
+      {label:"1 — the two passages, both in WF2 (read WF3 nowhere)", text:'cd /home/rocky00717/rawgentic/projects/rawgentic\n\n# site 1 — Step 8, "Design flaw discovery" (primary statement of the contract)\nawk \'/\\*\\*Design flaw discovery:\\*\\*/{f=1} f&&c++<24\' skills/implement-feature/references/steps.md\n\n# site 2 — Step 11, item 6 (same contract, from the review loop-back)\ngrep -n \'park-then-reset the build seat\' skills/implement-feature/references/steps.md'},
+      {label:"2 — confirm for yourself that WF3 genuinely has none of this", text:'grep -rc \'park\' skills/fix-bug/ | grep -v \':0\' || echo "0 park references in WF3 — correct, nothing to park there"'}
+    ],
+    pass:"Both: (1) <b>the split is right</b> — a same-design retry throws the work away, a design change parks it recoverably; that asymmetry is the whole design. (2) <b>\"park before reset, verified by stash OID\" is the safety level you want</b> for work a design change just invalidated, rather than something cheaper. Fails if the described behaviour is not what you want — name which claim is wrong.",
+    see:{title:"the contract, as six plain claims", cap:"Restated from the two WF2 passages so you can judge the behaviour without decoding a 20-line paragraph of code identifiers. Read the real prose with command 1; this is the summary you are actually accepting or rejecting.", lines:[
+      ["g","1  A design-level flaw INVALIDATES the current diff — treated differently from"],
+      ["o","   an ordinary failed attempt, because what the work was built against changed."],
+      ["a","2  A SAME-DESIGN retry does NOT park. It discards outright: reset --hard +"],
+      ["o","   clean -fd, no stash — the design is still valid."],
+      ["g","3  A DESIGN-LEVEL loop-back DOES park, stashed recoverably and tagged"],
+      ["o","   rawgentic-parked:<run_id>:<design_version>:<task_id>"],
+      ["g","4  Park strictly BEFORE reset, never the reverse — and the park is verified by"],
+      ["o","   the stash OID actually changing, not by trusting rc == 0."],
+      ["g","5  The prior build worker must be CONFIRMED DEAD first."],
+      ["g","6  The stash OID is written to the run's audit log, so parked work is findable."],
+      ["o","   The OID matters: two loop-backs on one run+task share the same stash NAME."],
+      ["o",""],
+      ["o","Failure clause: if the reset fails AFTER a confirmed park, the audit record is"],
+      ["o","still written before the error propagates — a parked diff is never orphaned."],
+      ["o",""],
+      ["r","GAP-1 / #661: NOTHING INVOKES park_and_reset. You are accepting intent here,"],
+      ["r","not a running behaviour. That is exactly why it is filed."]
     ]}
   },
   {
@@ -593,29 +610,45 @@ const CHECKS = [
     schem:true
   },
   {
-    id:"uat4", uid:"UAT-4", name:"The accepted risks are the ones you accepted",
-    tags:[["owner","Owner only"]],
+    id:"uat4", uid:"UAT-4", name:"Are the four accepted risks the ones you accepted?",
+    tags:[["owner","Owner only"],["","Read &amp; decide · ~5 min"],["evidenced","All four verified accurate vs code"]],
     why:[
-      "Four risks were recorded against the herdr backend, one of which you ruled on directly: <b>pane_env is visible via ps</b>, because herdr has no private per-run env channel the way tmux gets one through a per-run socket.",
-      "Your condition was that it stays host-local and disappears with the pane. Both hold. The stronger claim — that nothing credential-bearing ever reaches a pane's environment — is <b>not</b> provable by reading the backend, because only its CALLERS decide what goes into <code>pane_env</code>. So the second command walks the AST of every <code>.py</code> file in the repo and fails closed. Run today it reports <b>69 construction sites: 4 with a literal pane_env (all <code>PYTHONPATH</code> only — the three production sites in <code>hooks/executor_routing_lib.py</code> plus one test), 65 passing none, 0 built dynamically, 0 violations</b>, exit 0. Re-run it rather than taking this page's word."
+      "#638's AC6 requires the named risks to be encoded at the call site rather than living only in a review thread. You ruled on these on 2026-07-24; this confirms the code records what you actually agreed.",
+      "<b>Already done for you:</b> each of the four risks was checked against the code on 2026-07-27 and all four are <b>accurate descriptions</b> of what the module really does (see the panel). So you are not checking whether the description is true — only whether the decision it records is yours."
     ],
     steps:[
-      "Read the module docstring of <code>phase_executor/src/phase_executor/herdr_backend.py</code>.",
-      "Check the four recorded risks against what you actually accepted.",
-      "Confirm the pane_env conditions stated there are the ones you set."
+      "Print the docstring (command 1). It is 76 lines at the top of one file; this saves opening an editor.",
+      "Check <b>risk 1 — pane_env is visible to <code>ps</code></b>. herdr has no private per-run env channel; the only mechanism is <code>pane split --env KEY=VALUE</code>, passed as CLI args to a <b>host-wide shared daemon</b>. Are <b>host-local + ephemeral + non-credential</b> the conditions you set? The code carries the standing guard \"this backend must never be handed anything credential-bearing\" — today only <code>PYTHONPATH</code> goes through.",
+      "Check <b>risk 2 — malformed-split pane leak, accepted and NOT fixed</b>. If <code>pane split</code> returns rc=0 with an unparseable body, a real pane may exist but the code has no <code>pane_id</code> to close it — the id lives in the very body that failed to parse. Do you accept an unlabeled pane leaking on that narrow path? The stated reason not to fix: recovering the id needs a list-diff-by-timing heuristic, which is racy and could close a concurrently-created pane.",
+      "Check <b>risk 3 — three calls, not atomic</b>. <code>new_session</code> is split → rename → run…exec. Safe only single-threaded per spawn. Do you accept \"never parallelize split+run against one target pane\"? A failure after split (including a runner timeout) now best-effort closes the orphaned pane via <code>try/finally</code>.",
+      "Check <b>risk 4 — <code>exec</code>-injection is herdr-undocumented</b>. A future herdr release could wrap rather than exec-replace, and every PID the supervisor holds would name the wrong process. Do you accept this with <b>#639's gate as the compensating control</b> — a manual pre-upgrade check, nothing automatic? (That is GAP-4; the \"remembering to run it\" half is now #659.)"
     ],
-    cmds:[{label:"read the recorded risks", text:"sed -n '1,80p' phase_executor/src/phase_executor/herdr_backend.py"},
-           {label:"prove it repo-wide — exits 0 only if every pane_env is inside the allowlist",
-            text:"python3 docs/planning/2026-07-24-635-epic-uat-console/pane-env-allowlist-check.py; echo \"exit=$?\""}],
-    pass:"The four risks — pane_env visibility, the malformed-split pane leak, the non-atomic three-call spawn, and undocumented exec-injection — match your intent; the pane_env conditions are yours; and the grep shows every caller passing <code>PYTHONPATH</code> and nothing else.",
-    see:{title:"the four recorded risks", cap:"Verbatim summary of the docstring's risk section. The fourth is why #639 exists at all.", lines:[
-      ["a","1  pane_env via --env is visible to ps for the pane's lifetime (owner-accepted:"],
-      ["o","   host-local, ephemeral, never credential-bearing — PYTHONPATH only)"],
-      ["a","2  malformed-split pane leak: rc=0 with an unparseable body leaves no pane_id"],
-      ["o","   to close with. Documented, not fixed — a list-diff-by-timing fix would be racy"],
-      ["a","3  three calls, not atomic: split -> rename -> run. Safe single-threaded per spawn"],
-      ["r","4  exec-injection is herdr-undocumented. Silent regression risk on upgrade."],
-      ["g","   -> #639's gate is the standing guard against 4"]
+    cmds:[
+      {label:"1 — print the 76-line docstring, no editor needed", text:'cd /home/rocky00717/rawgentic/projects/rawgentic\npython3 -c "import ast;print(ast.get_docstring(ast.parse(open(\'phase_executor/src/phase_executor/herdr_backend.py\').read())))"'},
+      {label:"2 — optional: see the risk-1 mechanism in the code itself", text:'grep -n \'\\-\\-env\' phase_executor/src/phase_executor/herdr_backend.py'}
+    ],
+    pass:"All three: (1) the four risks are ones you knowingly accepted, with the same conditions attached; (2) risk 1's conditions in the code — <b>host-local, ephemeral, never credential-bearing</b> — are the conditions you actually set on 2026-07-24; (3) you are content that risks 2 and 4 are <b>documented and accepted rather than fixed</b>, and that #639's manual gate is what stands behind risk 4. Fails if any risk is recorded with conditions you did not agree to, or one you rejected is recorded as accepted — name it and it becomes a follow-up; the code change is small, the point is that the record matches the decision.",
+    see:{title:"all four risks verified accurate against the code (2026-07-27)", cap:"Each recorded risk was checked against the module on 2026-07-27 — every one is an accurate description of what the code really does, with the file:line that proves it. This is the reading burden removed; the acceptance decision is still yours.", lines:[
+      ["p","risk 1 — pane_env visible to ps"],
+      ["g","  herdr_backend.py:149   ('--env', f'{k}={v}')  -> CLI arg to a shared daemon"],
+      ["g","  herdr_backend.py:128   comment states the ps-visibility explicitly"],
+      ["o","  guard: only PYTHONPATH is threaded through today; never credentials"],
+      ["o",""],
+      ["p","risk 2 — malformed split leaks an unlabeled pane"],
+      ["g","  herdr_backend.py:389-394  returns BEFORE any pane_id exists"],
+      ["a",'  "unparseable/empty response despite rc=0" · "no pane_id in result"'],
+      ["o","  -> nothing to close; confirmed structural, not an oversight"],
+      ["o",""],
+      ["p","risk 3 — three calls, not atomic"],
+      ["g","  herdr_backend.py:380  pane split --current --direction … --cwd …"],
+      ["g","  herdr_backend.py:418  pane rename <pane_id> <name>"],
+      ["g","  herdr_backend.py:422  pane run <pane_id> exec <argv…>"],
+      ["o",""],
+      ["p","risk 4 — exec-injection, herdr-undocumented"],
+      ["g","  herdr_backend.py:422  self._herdr('run', pane_id, 'exec', *argv)"],
+      ["a","  compensating control is #639's gate — MANUAL, pre-upgrade, never automatic"],
+      ["o",""],
+      ["g","VERDICT: 4/4 recorded risks are accurate. Only the acceptance is yours."]
     ]}
   },
 ];
