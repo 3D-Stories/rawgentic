@@ -71,6 +71,13 @@ FEATURE_MANIFEST = [
     {"key": "phaseExecutorTable", "policy": "needs-question",
      "nudge": "phase-executor seat table (setup Step 2i)", "since": "3.55.0",
      "source": "project_config"},
+    # #638: which TerminalBackend the executor's `build` seat launches under. Also
+    # "project_config" — the key lives in the project's .rawgentic.json. Absent derives
+    # "tmux" (package default, unchanged behavior), so the nudge exists to surface the
+    # CHOICE, never to imply the project is broken without it.
+    {"key": "executorTerminalBackend", "policy": "needs-question",
+     "nudge": "executor terminal backend (setup Step 2k)", "since": "3.97.4",
+     "source": "project_config"},
 ]
 
 

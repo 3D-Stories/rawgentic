@@ -614,6 +614,7 @@ class TestProjectConfigSource:
         # the 5 workspace-sourced keys behave exactly as before (all present in entry -> no gaps)
         assert all(k == "phaseExecutorTable" for k, _ in gaps) or gaps == []
 
+
     def test_staleness_cli_warns_on_uninspectable(self, tmp_path):
         import subprocess, sys as _sys
         ws, entry = _ws_with_project(tmp_path, config="{not json")
@@ -635,11 +636,15 @@ class TestProjectConfigSource:
         assert "phase-executor seat table" in r.stdout
 
     def test_staleness_cli_silent_on_sentinel(self, tmp_path):
-        # #531 end-to-end: sentinel config -> zero stdout (the workspace entry in
-        # _ws_with_project answers the four workspace-sourced needs-question
-        # features, so phaseExecutorTable is the only gap candidate).
+        # #531 end-to-end: sentinel config -> zero stdout. The workspace entry in
+        # _ws_with_project answers the four workspace-sourced needs-question features,
+        # so the only gap candidates are the project_config-sourced ones — BOTH of them
+        # must be answered here for stdout to be empty (#638 added the second, setup
+        # Step 2k; add its sentinel alongside any future project_config feature).
         import subprocess, sys as _sys
-        cfg = dict(BASE_CFG, phaseExecutorTable={"version": 1, "file": None})
+        cfg = dict(BASE_CFG,
+                   phaseExecutorTable={"version": 1, "file": None},
+                   executorTerminalBackend={"version": 1, "build": "tmux"})
         ws, entry = _ws_with_project(tmp_path, config=cfg)
         r = subprocess.run([_sys.executable, str(HOOKS_DIR / "post_update_reconcile.py"),
                             "--staleness-project", "p1", "--workspace", str(ws),
@@ -654,3 +659,50 @@ class TestProjectConfigSource:
         # reconcile_projects must NOT surface it as needs_question (P2-G1).
         projects, changes, needs_q = pur.reconcile_projects([entry], pur.FEATURE_MANIFEST)
         assert all(key != "phaseExecutorTable" for _, key, _ in needs_q)
+
+
+
+class TestExecutorTerminalBackendGap:
+    """#638 setup Step 2k: the executorTerminalBackend choice is project_config-sourced,
+    exactly like phaseExecutorTable. Pinned at 3.97.4 (its `since`) — at any earlier
+    `current` the feature does not exist yet and must not nudge."""
+
+    KEY = "executorTerminalBackend"
+    LABEL = "executor terminal backend (setup Step 2k)"
+
+    def _gaps(self, tmp_path, cfg, current="3.97.4"):
+        ws, entry = _ws_with_project(tmp_path, config=cfg)
+        state, pcfg = pur._project_config_state(str(ws), entry)
+        return pur.project_feature_gaps(
+            entry, pur.FEATURE_MANIFEST, current,
+            project_config=pcfg if state == "ok" else None)
+
+    def test_gap_fires_when_key_missing(self, tmp_path):
+        assert (self.KEY, self.LABEL) in self._gaps(tmp_path, BASE_CFG)
+
+    def test_no_gap_before_its_since(self, tmp_path):
+        # the whole point of `since`: a project on 3.97.3 is not "behind" on a feature
+        # that ships in 3.97.4.
+        assert all(k != self.KEY for k, _ in self._gaps(tmp_path, BASE_CFG, current="3.97.3"))
+
+    def test_no_gap_when_herdr_chosen(self, tmp_path):
+        cfg = dict(BASE_CFG, executorTerminalBackend={"version": 1, "build": "herdr"})
+        assert all(k != self.KEY for k, _ in self._gaps(tmp_path, cfg))
+
+    def test_no_gap_when_answered_defaults_sentinel_present(self, tmp_path):
+        # #531 sentinel: resolves identically to absent, but presence records the answer
+        # so the nudge stops re-firing. This pins the sentinel shape setup Step 2k stages.
+        cfg = dict(BASE_CFG, executorTerminalBackend={"version": 1, "build": "tmux"})
+        assert all(k != self.KEY for k, _ in self._gaps(tmp_path, cfg))
+
+    def test_uninspectable_config_does_not_nudge(self, tmp_path):
+        # fail-open: cannot confirm absence -> no gap (the caller warns separately).
+        assert all(k != self.KEY for k, _ in self._gaps(tmp_path, "{not json"))
+
+    def test_manifest_entry_is_project_config_sourced(self):
+        # a workspace-sourced entry would nudge EVERY project on the version crossing,
+        # including configured ones — the #446 comment in the manifest says why.
+        feat = next(f for f in pur.FEATURE_MANIFEST if f["key"] == self.KEY)
+        assert feat["source"] == "project_config"
+        assert feat["policy"] == "needs-question"
+        assert feat["nudge"] == self.LABEL
