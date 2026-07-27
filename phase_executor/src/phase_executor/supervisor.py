@@ -278,6 +278,31 @@ def read_sentinel(record: JobRecord) -> Optional[dict]:
     return None
 
 
+def resolve_backend(terminal_backend: Optional[str], *, tmux: TerminalBackend,
+                    herdr: "Optional[TerminalBackend]") -> TerminalBackend:
+    """The backend-resolution RULE, lifted to module level (#647).
+
+    `None`/`"tmux"` (the vast majority — every pre-#638 record, and every non-build-seat
+    job) resolves to the tmux backend. `"herdr"` resolves to the herdr backend, refusing
+    loud when there isn't one rather than silently defaulting to tmux (a wrong-backend
+    answer means a liveness check or kill_session against the WRONG runtime for a real
+    live job).
+
+    Lifted because the read-only status surface cannot reach the instance method:
+    ``TmuxSupervisor.__init__`` builds a ``JobRegistry``, whose own ``__init__``
+    mkdir/chmods the registry root — a metadata write the AC-J3 read-only surface must not
+    perform. Same reason #471 W8 lifted ``read_sentinel``/``derive_state``/``run_status``:
+    one rule for the method and the read-only surface, never two copies to drift apart.
+    """
+    if terminal_backend == "herdr":
+        if herdr is None:
+            raise SupervisorError(
+                "job requires the herdr TerminalBackend but this supervisor instance "
+                "has none configured (herdr_backend=None)")
+        return herdr
+    return tmux
+
+
 def derive_state(record: JobRecord, *, sentinel: Optional[dict], live: bool) -> str:
     """Derived state: terminal recorded state passes through; valid sentinel → completed;
     live session → running; else exited_no_sentinel (NEVER quota_paused — that
@@ -392,19 +417,12 @@ class TmuxSupervisor:
         self._herdr_backend = herdr_backend
 
     def _resolve_backend(self, terminal_backend: Optional[str]) -> TerminalBackend:
-        """Resolve which `TerminalBackend` a call concerns. `None`/`"tmux"` (the vast
-        majority — every pre-#638 record, and every non-build-seat job) resolves to the
-        single `self._backend` this supervisor has always had. `"herdr"` resolves to
-        `self._herdr_backend` — refusing loud if this instance wasn't given one, rather
-        than silently defaulting to tmux (a wrong-backend answer here means a liveness
-        check or kill_session call against the WRONG runtime for a real live job)."""
-        if terminal_backend == "herdr":
-            if self._herdr_backend is None:
-                raise SupervisorError(
-                    "job requires the herdr TerminalBackend but this supervisor instance "
-                    "has none configured (herdr_backend=None)")
-            return self._herdr_backend
-        return self._backend
+        """Resolve which `TerminalBackend` a call concerns — delegates to the module-level
+        `resolve_backend` (#647), which the read-only status surface also uses, so the rule
+        lives in exactly one place. See that function for the semantics and for why it is
+        not an instance method."""
+        return resolve_backend(terminal_backend, tmux=self._backend,
+                               herdr=self._herdr_backend)
 
     # -- tmux plumbing (delegated to the TerminalBackend, #636/#638) ----------
 

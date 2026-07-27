@@ -20,7 +20,7 @@ import pytest
 from phase_executor import routing
 from phase_executor.quota import QuotaCoordinator
 from phase_executor.registry import JobRegistry, JobRecord
-from phase_executor.supervisor import SupervisorError, TmuxSupervisor
+from phase_executor.supervisor import SupervisorError, TmuxSupervisor, resolve_backend
 from phase_executor.worktree import WorktreeHandle, WorktreeIdentity
 
 
@@ -173,6 +173,28 @@ def test_resolve_backend_herdr_unconfigured_refuses_loud(tmp_path):
     sup = _sup(tmp_path)  # no herdr_backend
     with pytest.raises(SupervisorError, match="herdr"):
         sup._resolve_backend("herdr")  # noqa: SLF001
+
+
+# ---- the lifted module-level resolver (#647) --------------------------------
+
+def test_lifted_resolve_backend_agrees_with_the_method(tmp_path):
+    """#647: the read-only status surface CANNOT construct a TmuxSupervisor to reach the
+    resolver — `__init__` does `self._registry = registry or JobRegistry(registry_root)`
+    and JobRegistry's own `__init__` mkdir/chmods the root, a metadata write the AC-J3
+    read-only surface must not perform. So the resolution RULE is lifted to module level
+    and the method delegates to it: one rule, two callers, no second source of truth.
+    """
+    tmux, herdr = StubBackend("tmux"), StubBackend("herdr")
+    sup = _sup(tmp_path, tmux=tmux, herdr=herdr)
+    for tb in (None, "tmux", "herdr"):
+        assert resolve_backend(tb, tmux=tmux, herdr=herdr) is sup._resolve_backend(tb)  # noqa: SLF001
+
+
+def test_lifted_resolve_backend_herdr_absent_refuses_loud():
+    """Same fail-loud contract as the method: a herdr record must never silently fall back
+    to tmux, which would probe the WRONG runtime for a real live job."""
+    with pytest.raises(SupervisorError, match="herdr"):
+        resolve_backend("herdr", tmux=StubBackend("tmux"), herdr=None)
 
 
 # ---- launch() routes to the resolved backend + stamps the record -----------
