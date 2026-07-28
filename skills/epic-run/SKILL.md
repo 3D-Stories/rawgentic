@@ -114,7 +114,12 @@ put a list up by hand).
 - **Fresh-session boundary (#569 — only when `session_mode == "fresh-session"`).** After a
   child reaches ANY terminal outcome — `merged` OR a blocker's `deferred`/`abandoned` — the
   session ENDS rather than looping in-process (a blocked child's context must not bleed into
-  an independent successor). Call `driver_lib.fresh_session_handoff(state, mode=...)`: on
+  an independent successor). Call `driver_lib.fresh_session_handoff(state, mode=..., project=<the bound project NAME>)` —
+  the project is REQUIRED (#682): the resume prompt must OPEN with `/rawgentic:switch <project>`,
+  because a bare bind enters the switch skill's list mode and waits for a human, and the
+  launcher closes the successor's pane when `project_switched` exhausts at 120 s. Without it the
+  disposition is `no_project` and NOTHING is persisted (deliberately, so a refusal cannot strand
+  a bumped `generation`). On
   `ready` persist the handoff via `driver_lib.open_handoff(state, disp, now_ts=)` (bumps the
   monotonic `generation` + writes `handoff_pending`) and end; the durable launcher — which must
   POSITIVELY advertise no-`--resume` support (`fresh_session_available`'s `fresh_launch_supported`
