@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Blocked-pane watcher: herdr `events.subscribe` -> notify-owner (#612, epic #667).
+"""Blocked-pane watcher: herdr pane-state poll -> notify-owner (#612, #679, epic #667/#684).
 
 WHY THIS EXISTS
 ---------------
@@ -40,6 +40,39 @@ against herdr 0.7.5 on this host, 2026-07-28:
 5. Wire names are snake_case (`pane_updated`) while subscription names are dotted (`pane.updated`).
    A parser keyed on the name it subscribed with sees nothing, silently.
 
+AND THEN THE WHOLE TRANSPORT TURNED OUT TO BE DEAD (#679) — read this before changing the source
+-----------------------------------------------------------------------------------------------
+`events.subscribe` on herdr 0.7.5 delivers a one-time backlog burst of ~39 frames in under 3 seconds
+and then delivers **nothing, ever**. The epic #667 UAT found it: this module subscribed, drained the
+backlog, and sat silent forever — heartbeating, reporting healthy, never notifying. Five independent
+instruments agreed, including a **controlled stimulus** (three `herdr pane rename` calls on a pane we
+owned, on a live subscription -> 0 frames) and **duration-independence** (39 events at a 12 s window,
+39 at 12 s, 39 at 50 s — a live feed cannot be duration-independent). Ruled out with evidence: the
+request shape is correct, `events.subscribe` accepts only `subscriptions` (no `since`/`replay`), a
+keepalive is impossible (`ping` on a subscribed connection returns `Connection reset by peer`, so the
+socket cannot be written to at all), and the server exposes exactly two `events.*` methods out of 90.
+
+So the DEFAULT input layer is now `poll_lines`, which diffs `herdr api snapshot` reads. Owner
+decision 2026-07-28: poll, not `events.wait` in a loop (contract unverified, may drop transitions
+between calls). Two things make this cheap rather than a rewrite:
+
+- **Snapshot panes carry `revision`**, the same monotonic dedup key `pane.updated` carries — so the
+  Reconciler, the debounce, the provenance boundary and the sweep are untouched. Only the source
+  changed. `watch_stream` takes `lines` as its first argument and never touched a socket anyway.
+- **The one other project on this box that displays live herdr pane state polls the CLI too**
+  (`projects/herdr-dashboard` shells out to `herdr tab list`/`herdr pane list`; it has no socket
+  client at all). Polling is the shape that demonstrably works here.
+
+The cost is a latency floor of one poll interval, and a block that clears inside one interval is not
+reported — which is a block nobody wanted a text about. `socket_lines` and the whole subscription
+path are RETAINED behind `--source events`: they are one flag away if herdr fixes the feed, and
+their tests are the written record of the five instruments above.
+
+**The heartbeat's `events` counter cannot prove liveness on its own, and that is why this hid for a
+whole epic:** a healthy watcher on a quiet fleet also reports a flat `events`. `polls` (in the
+heartbeat's payload, via `write_heartbeat(extra=...)`) is the counter that distinguishes "alive and
+nothing happening" from "input layer dead".
+
 AC5 IS A REDACTION RULE, AND A KEY ALLOWLIST ALONE IS NOT ENOUGH
 ----------------------------------------------------------------
 Bodies carry pane LABELS only, never pane contents. The payloads hand us contents whether we want
@@ -61,6 +94,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import socket
 import subprocess
@@ -89,6 +123,15 @@ DEFAULT_HEARTBEAT_S = 300.0
 DEFAULT_STALL_S = 1800.0
 DEFAULT_SOCKET = "~/.config/herdr/herdr.sock"
 DEFAULT_HEARTBEAT_PATH = "~/.claude/rawgentic-pane-watch-heartbeat.json"
+
+# 5 s: a human being waited on does not care, and one `herdr api snapshot` is cheap. A block that
+# clears inside one interval is one nobody wanted a text about.
+DEFAULT_POLL_INTERVAL_S = 5.0
+# A herdr restart is not a watcher bug, so a short run of failures is absorbed. Past this the
+# watcher stops LOUDLY — a dead watcher and a quiet fleet must never look alike (#679).
+POLL_MAX_CONSECUTIVE_FAILURES = 3
+SOURCE_POLL = "poll"
+SOURCE_EVENTS = "events"
 
 
 # A sentinel yielded when the socket closes, so the caller can tell EOF from silence.
@@ -150,12 +193,19 @@ def _load(line) -> dict | None:
     return doc if isinstance(doc, dict) else None
 
 
+# Both ack types mean the same thing — "the input layer confirmed itself live" — which is what
+# `report["subscribed"]` has always meant. The poll source cannot honestly claim
+# `subscription_started` (it subscribes to nothing), and the events source must keep working, so the
+# predicate accepts both rather than either one lying.
+ACK_TYPES = frozenset({"subscription_started", "poll_started"})
+
+
 def is_subscription_ack(line) -> bool:
-    """`{"result":{"type":"subscription_started"}}` — the socket is LIVE, not merely connected. A
-    connected-but-unsubscribed socket reports nothing and looks exactly like a quiet fleet."""
+    """The input layer is LIVE, not merely connected. A connected-but-unsubscribed socket reports
+    nothing and looks exactly like a quiet fleet — and so does a poll loop that never ran."""
     doc = _load(line)
     result = doc.get("result") if doc else None
-    return isinstance(result, dict) and result.get("type") == "subscription_started"
+    return isinstance(result, dict) and result.get("type") in ACK_TYPES
 
 
 def parse_error(line) -> str | None:
@@ -186,10 +236,9 @@ def parse_event(line) -> PaneEvent | None:
         if not isinstance(pane, dict) or not isinstance(pane.get("pane_id"), str):
             return None
         status = pane.get("agent_status")
-        rev = pane.get("revision")
         return PaneEvent(kind=kind, pane_id=pane["pane_id"],
                          status=status if status in AGENT_STATUSES else None,
-                         revision=rev if isinstance(rev, int) and not isinstance(rev, bool) else None,
+                         revision=_revision_of(pane),
                          pane=pane)
 
     if kind in (EVENT_PANE_CLOSED, EVENT_PANE_CREATED):
@@ -241,8 +290,7 @@ class Reconciler:
                              "nothing, because that would accept the entire backlog replay")
         for pane in panes:
             if isinstance(pane, dict) and isinstance(pane.get("pane_id"), str):
-                rev = pane.get("revision")
-                self._rev[pane["pane_id"]] = rev if isinstance(rev, int) else None
+                self._rev[pane["pane_id"]] = _revision_of(pane)
                 self._meta[pane["pane_id"]] = pane
 
     def known_panes(self) -> list[str]:
@@ -444,18 +492,26 @@ def heartbeat_due(*, last: float, now: float, interval_s: float = DEFAULT_HEARTB
     return (now - last) > float(interval_s)
 
 
-def write_heartbeat(path: str, *, now: float, report=None) -> None:
+def write_heartbeat(path: str, *, now: float, report=None, extra=None) -> None:
     """Persist liveness so an EXTERNAL observer can detect a dead watcher.
 
     This is the half a review correctly called missing: a predicate is not a timer, and a watcher
     blocked on a quiet socket cannot report its own death. The socket read below carries a timeout so
     this fires during silence, and something outside (sentinel, cron) must alert on staleness — a
     heartbeat nobody reads proves nothing.
+
+    `extra` carries the input layer's own counters (#679: `polls`, `poll_failures`). `events` alone
+    could never prove the input layer was alive — a healthy watcher on a quiet fleet reports a flat
+    `events` too, which is exactly how a permanently silent subscription passed for healthy through
+    a whole epic. `ts` and `pid` are not overridable: `ts` is what staleness alerting reads, so a
+    caller must not be able to freeze it.
     """
     payload = {"ts": now, "pid": os.getpid()}
     if isinstance(report, dict):
         payload["events"] = report.get("events")
         payload["notified"] = len(report.get("notified") or [])
+    if isinstance(extra, dict):
+        payload.update({k: v for k, v in extra.items() if k not in ("ts", "pid")})
     target = os.path.expanduser(path)
     os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -529,6 +585,97 @@ def resolve_sender(sender_cmd):
     return _default_sender if not sender_cmd else sender_from_cmd(sender_cmd)
 
 
+def _pane_list(snapshot):
+    """The pane list inside a snapshot document, or None when there isn't one.
+
+    `None` and `[]` are DIFFERENT answers and both callers care: an empty list is a legitimate
+    fleet with no panes, while a missing list means the document is unusable. Collapsing them is how
+    a broken snapshot would read as "everything closed" — which on the poll path would emit a
+    `pane_closed` for every pane alive.
+    """
+    node = snapshot.get("snapshot", snapshot) if isinstance(snapshot, dict) else {}
+    panes = node.get("panes") if isinstance(node, dict) else None
+    return panes if isinstance(panes, list) else None
+
+
+def panes_by_id(snapshot) -> dict:
+    """Snapshot pane records keyed by pane id; `{}` when the document is unusable or empty."""
+    return {p["pane_id"]: p for p in (_pane_list(snapshot) or [])
+            if isinstance(p, dict) and isinstance(p.get("pane_id"), str)}
+
+
+def _int_or_none(value):
+    """`bool` is excluded exactly as in `parse_event`: `True` is an int in Python, and a truthy
+    sequence comparing as 1 would be a silent lie."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _revision_of(pane):
+    """THE dedup key: `state_change_seq` when the record has one, else `revision`.
+
+    **`revision` alone is not enough, and this was measured, not reasoned.** Driving a real Claude
+    pane to a permission prompt on 2026-07-28 produced `working` at `revision` 3 and then `blocked`
+    at `revision` 3 — the SAME number. herdr bumps `revision` on pane-record changes, not on every
+    `agent_status` transition, so a revision-keyed reconciler refuses the very frame the watcher
+    exists for (`accepts()` requires a STRICTLY newer key). The live watcher proved it: a genuine
+    block, `polls` climbing, `poll_failures: 0`, and **zero notifications**.
+
+    `state_change_seq` is the key #612's first design wanted and abandoned, because the
+    `pane.updated` EVENT does not carry it. The SNAPSHOT does — on its `agents` records — so the
+    poll path can have what the event path never could. Observed advancing 2148 -> 2151 across the
+    same transition that left `revision` unmoved.
+
+    Falling back to `revision` keeps the events path byte-identical (no event frame carries a
+    sequence) and covers a pane with no agent at all, like the dashboard pane.
+    """
+    if not isinstance(pane, dict):
+        return None
+    seq = _int_or_none(pane.get("state_change_seq"))
+    return seq if seq is not None else _int_or_none(pane.get("revision"))
+
+
+def _has_sequence(pane) -> bool:
+    """Does this record carry a `state_change_seq` — i.e. does the pane have an agent at all?
+
+    The poll path diffs ONLY these. A pane with no agent cannot be an agent waiting on a human, and
+    including it would mean comparing a `state_change_seq` (thousands) against a `revision` (single
+    digits) the moment an agent attaches or detaches.
+    """
+    return isinstance(pane, dict) and _int_or_none(pane.get("state_change_seq")) is not None
+
+
+def merge_agent_sequences(snapshot):
+    """Copy each agent's `state_change_seq` onto its pane record.
+
+    The two live on DIFFERENT nodes of one snapshot: `snapshot.panes[]` carries `revision`,
+    `snapshot.agents[]` carries `state_change_seq` (plus its own `pane_id`). A pane with no agent is
+    left exactly as it was, so it keeps falling back to `revision`.
+    """
+    panes = _pane_list(snapshot)
+    if panes is None:
+        return snapshot
+    node = snapshot.get("snapshot", snapshot) if isinstance(snapshot, dict) else {}
+    agents = node.get("agents") if isinstance(node, dict) else None
+    seqs = {a["pane_id"]: a["state_change_seq"] for a in (agents or [])
+            if isinstance(a, dict) and isinstance(a.get("pane_id"), str)
+            and _int_or_none(a.get("state_change_seq")) is not None}
+    if not seqs:
+        return snapshot
+    merged = []
+    for pane in panes:
+        if isinstance(pane, dict) and pane.get("pane_id") in seqs:
+            pane = dict(pane)
+            pane["state_change_seq"] = seqs[pane["pane_id"]]
+        merged.append(pane)
+    out = dict(snapshot)
+    if isinstance(out.get("snapshot"), dict):
+        out["snapshot"] = dict(out["snapshot"])
+        out["snapshot"]["panes"] = merged
+    else:
+        out["panes"] = merged
+    return out
+
+
 def live_pane_ids(runner=None) -> set:
     """The pane ids herdr currently knows. Used to tell a real creation from a replayed one.
 
@@ -542,15 +689,10 @@ def live_pane_ids(runner=None) -> set:
         # and a `TimeoutExpired` or `FileNotFoundError` escaping here terminated the whole watcher
         # instead of returning the empty set the contract promises.
         return set()
-    node = snap.get("snapshot", snap) if isinstance(snap, dict) else {}
-    panes = node.get("panes") if isinstance(node, dict) else None
-    if not isinstance(panes, list):
-        return set()
-    return {p["pane_id"] for p in panes
-            if isinstance(p, dict) and isinstance(p.get("pane_id"), str)}
+    return set(panes_by_id(snap))
 
 
-def current_pane_record(pane_id: str, runner=None) -> dict | None:
+def current_pane_record(pane_id: str, runner=None, *, enrich: bool = False) -> dict | None:
     """One pane's CURRENT record from a fresh snapshot, or None.
 
     Used when a deferred registration finally lands: the queued creation record is stale (`unknown`,
@@ -560,14 +702,10 @@ def current_pane_record(pane_id: str, runner=None) -> dict | None:
         snap = read_snapshot(runner)
     except Exception:  # pylint: disable=broad-except
         return None
-    node = snap.get("snapshot", snap) if isinstance(snap, dict) else {}
-    panes = node.get("panes") if isinstance(node, dict) else None
-    if not isinstance(panes, list):
-        return None
-    for pane in panes:
-        if isinstance(pane, dict) and pane.get("pane_id") == pane_id:
-            return pane
-    return None
+    # `enrich` follows the SOURCE's key kind: the deferred sweep installs this record's key as a
+    # reconciler baseline, so on the poll path it must be a `state_change_seq` and on the events path
+    # a `revision`. Getting it wrong here means one pane's baseline is in the wrong domain forever.
+    return panes_by_id(merge_agent_sequences(snap) if enrich else snap).get(pane_id)
 
 
 def read_snapshot(runner=None) -> dict:
@@ -581,6 +719,11 @@ def read_snapshot(runner=None) -> dict:
         doc = json.loads(getattr(proc, "stdout", "") or "")
     except ValueError as exc:
         raise WatchError(f"herdr api snapshot returned unparseable JSON: {exc}") from exc
+    # Deliberately NOT enriched here. Enriching centrally looked tidy and broke the retained
+    # `--source events` path: the reconciler's baseline became a `state_change_seq` (~2148) while real
+    # event frames carry only `revision` (~5), so every event would have been silently dropped the day
+    # herdr repairs the feed. The key kind belongs to the SOURCE, so the poll path enriches and the
+    # events path does not (Step-4 pass-3 finding, reproduced).
     return doc.get("result", doc) if isinstance(doc, dict) else {}
 
 
@@ -617,6 +760,231 @@ def socket_lines(sock_path: str, request: dict, *, timeout_s: float = 30.0):
                     yield line.decode("utf-8", "replace")
     finally:
         conn.close()
+
+
+def clamp_poll_interval(interval_s, heartbeat_s=DEFAULT_HEARTBEAT_S) -> float:
+    """Strict parse, clamp, safe default, stderr warning — the house rule for a tunable.
+
+    Step-4 finding: `argparse`'s `type=float` accepts `0`, `-5`, `nan` and `inf`. A non-positive or
+    NaN interval skips the sleep entirely and hammers `herdr api snapshot` in a tight subprocess
+    loop; an infinite one never polls again. And an interval LONGER than `heartbeat_s` holds the idle
+    signal past its own deadline, so the heartbeat cadence the watcher advertises silently becomes
+    the poll interval — the same class of quiet contradiction #679 is about.
+    """
+    ceiling = DEFAULT_HEARTBEAT_S
+    try:
+        candidate_ceiling = float(heartbeat_s)
+        if math.isfinite(candidate_ceiling) and candidate_ceiling > 0:
+            ceiling = candidate_ceiling
+    except (TypeError, ValueError):
+        pass
+    try:
+        value = float(interval_s)
+    except (TypeError, ValueError):
+        value = None
+    if value is None or not math.isfinite(value) or value <= 0:
+        print(f"pane-watch: poll interval {interval_s!r} is not a positive finite number — "
+              f"using {DEFAULT_POLL_INTERVAL_S}s", file=sys.stderr)
+        value = DEFAULT_POLL_INTERVAL_S
+    if value > ceiling:
+        print(f"pane-watch: poll interval {value}s exceeds the heartbeat interval {ceiling}s, which "
+              f"would delay the heartbeat past its own deadline — clamping to {ceiling}s",
+              file=sys.stderr)
+        value = ceiling
+    return value
+
+
+def poll_ack() -> str:
+    """The poll source's "I am live" line. See `ACK_TYPES` for why it is not `subscription_started`."""
+    return json.dumps({"result": {"type": "poll_started"}})
+
+
+def _frame(kind: str, data: dict) -> str:
+    """A wire-shaped line in exactly the shape `parse_event` already accepts.
+
+    Deliberately routed through the SAME parser as a real socket frame rather than constructing
+    `PaneEvent`s directly: the parser is where the status allowlist, the revision type-check and the
+    pane_id validation live, and a source that skipped it would be a second, untested door into the
+    brain.
+    """
+    return json.dumps({"event": kind, "data": data})
+
+
+def poll_lines(*, snapshot, interval_s: float = DEFAULT_POLL_INTERVAL_S,
+               heartbeat_s: float = DEFAULT_HEARTBEAT_S, runner=None,
+               clock=time.time, sleep=time.sleep, stats=None):
+    """Yield wire lines by DIFFING `herdr api snapshot` reads — the drop-in for `socket_lines`.
+
+    Why this is the default: `events.subscribe` is dead (#679 — see the module docstring). Same
+    contract as the socket source, so `watch_stream` is untouched: JSON lines, `None` for "idle, run
+    your heartbeat", `_EOF` for "the input layer has died, stop loudly".
+
+    `snapshot` is the document the `Reconciler` was built from, passed in rather than re-read. That
+    is load-bearing: a second read would open a window where a pane blocking between the startup
+    sweep's snapshot and the first poll is seeded as already-known and never emits a frame at all.
+
+    Emission order within a cycle is **closes, then creations, then updates**, and that is not
+    cosmetic — `watch_stream` applies a `pane_closed` line BEFORE its heartbeat drain precisely so a
+    due beat cannot page for a pane that is already gone. Consuming an update from the same cycle
+    first would run the drain while the closed pane was still known.
+    """
+    interval_s = clamp_poll_interval(interval_s, heartbeat_s)
+    stats = stats if isinstance(stats, dict) else {}
+    stats.setdefault("polls", 0)
+    stats.setdefault("poll_failures", 0)
+    # The SEED is enriched here too, not just the polls. `_cmd_watch` already passes an enriched
+    # document and `merge_agent_sequences` is idempotent, but a seed that skipped it would make every
+    # agent-bearing pane look freshly attached on the first cycle — a spurious re-baseline for the
+    # whole fleet.
+    prev = panes_by_id(merge_agent_sequences(snapshot))
+    # A per-pane HIGH-WATER MARK of the last integer key we have ever seen, kept independently of
+    # `prev`. Step-4 finding: comparing only against the immediately previous snapshot let a single
+    # unreadable revision bridge a regression (`24 -> None -> 1`), after which the reconciler still
+    # held baseline 24 and silently refused every later frame — a subscribed, error-free, permanently
+    # blind watcher, which is the exact failure #679 exists to end.
+    high = {pid: _revision_of(rec) for pid, rec in prev.items()
+            if _has_sequence(rec) and _revision_of(rec) is not None}
+    failures = 0
+    acked = False
+    last_idle = clock()
+    next_at = clock() + interval_s
+    while True:
+        delay = next_at - clock()
+        if delay > 0:
+            sleep(delay)
+        # Schedule from the PREVIOUS tick, not from "now". `watch_stream` PULLS from this generator,
+        # so a sender call (up to 60 s) or a heartbeat drain suspends sampling entirely, and
+        # `sleep(interval)` would then drift by the consumer's work on every single cycle. A tick
+        # already in the past is skipped, never queued up as a burst.
+        next_at += interval_s
+        now = clock()
+        if next_at <= now:
+            next_at = now + interval_s
+
+        try:
+            # Enriched HERE, on the poll path only: `state_change_seq` is the poll source's key, and
+            # `read_snapshot` deliberately does not add it so the events path keeps its own.
+            current_list = _pane_list(merge_agent_sequences(read_snapshot(runner)))
+        except Exception:  # pylint: disable=broad-except
+            # Deliberately broad, like `live_pane_ids`: this is the one place a herdr restart shows
+            # up, and `TimeoutExpired`/`FileNotFoundError` escaping here would kill the watcher on a
+            # transient failure the next poll would have survived.
+            current_list = None
+        if current_list is None:
+            failures += 1
+            stats["poll_failures"] += 1
+            if failures > POLL_MAX_CONSECUTIVE_FAILURES:
+                # Fail-loud, same as the socket path's EOF: `watch_stream` records that the watcher
+                # has stopped watching and the CLI exits non-zero so a supervisor restarts us.
+                yield _EOF
+                return
+            # Step-4 finding (gpt-5.6-sol, #4): a `None` per failed poll would silently move
+            # `watch_stream`'s ENTIRE drain — heartbeat write, pending-send retries, stall warnings —
+            # from `heartbeat_s` to the poll interval, and re-invoke an already-failing transport
+            # every few seconds. Failures are counted internally and only surface as an idle signal
+            # when the heartbeat is genuinely due; `poll_failures` is what an observer reads.
+            if heartbeat_due(last=last_idle, now=clock(), interval_s=heartbeat_s):
+                last_idle = clock()
+                yield None
+            continue
+        failures = 0
+        stats["polls"] += 1
+        current = {p["pane_id"]: p for p in current_list
+                   if isinstance(p, dict) and isinstance(p.get("pane_id"), str)}
+
+        # ONLY PANES THAT HAVE AN AGENT ARE TRACKED, and that is what keeps the key single-domain.
+        # Step-4 pass-3 finding, reproduced: `state_change_seq` counts in the thousands while
+        # `revision` counts in single digits, so letting one fall back to the other meant a routine
+        # agent DETACH (a Claude session exits, its pane stays open) read as 2148 -> 5 and killed the
+        # whole watcher as a "source reset". A pane with no agent has nothing that can be waiting on a
+        # human, so it is simply not diffed — no comparison across kinds ever happens.
+        seq_now = {pid: rec for pid, rec in current.items() if _has_sequence(rec)}
+        seq_before = {pid: rec for pid, rec in prev.items() if _has_sequence(rec)}
+
+        # CLOSES LEAD THE BATCH ABSOLUTELY, ahead of the regression guard and the ack. Step-4
+        # finding: emitting the regression error before them broke that invariant — a regressing pane
+        # A alongside a closing pane B, with the heartbeat due, drained on A's error line while B was
+        # still known and retried B's pending send for a pane the same snapshot proves is gone.
+        closes = sorted(set(prev) - set(current))
+        # An agent ATTACHING to an already-known pane is a re-baseline, not an update: the reconciler
+        # still holds that pane's `revision` baseline, and a `state_change_seq` frame compared against
+        # it is exactly the cross-kind comparison this fix removes. A synthetic close makes
+        # `forget_pane` drop the stale baseline so the following creation registers with none at all
+        # and the update is accepted on its own terms. Safe because a pane with no agent is never
+        # notified for, so there is no pending send to lose.
+        attached = sorted(pid for pid in set(seq_now) & set(prev) if pid not in seq_before)
+        for pane_id in closes + attached:
+            yield _frame(EVENT_PANE_CLOSED, {"pane_id": pane_id})
+        for pane_id in attached:
+            high.pop(pane_id, None)
+
+        # The hole that tolerating failures opened. A herdr restart used to kill the socket outright
+        # (EOF -> loud stop -> supervisor restart -> fresh snapshot). A poll loop SURVIVES a restart,
+        # and if the source's counters reset it would hold baselines from the dead process:
+        # `Reconciler.accepts` refuses every frame at or below a stale baseline, so those panes go
+        # silently blind. Compared against the HIGH-WATER mark rather than `prev`, because a single
+        # unreadable key would otherwise bridge the regression (`24 -> None -> 1`) and the guard
+        # would never fire while the reconciler stayed permanently blind. Only ever sequence-vs-
+        # sequence, because only agent-bearing panes reach here.
+        regressed = sorted(pane_id for pane_id in set(seq_now) & set(high)
+                           if _revision_of(seq_now[pane_id]) is not None
+                           and _revision_of(seq_now[pane_id]) < high[pane_id])
+        if regressed:
+            yield json.dumps({"error": {
+                "code": "pane_revision_regressed",
+                "message": ("pane state key went backwards for " + ", ".join(regressed) +
+                            " — the pane source was reset (herdr restart or a reused pane id), so "
+                            "every baseline is stale and blocked frames would be silently "
+                            "refused; stopping so a supervisor restarts us with a fresh snapshot")}})
+            yield _EOF
+            return
+        for pane_id, record in seq_now.items():
+            key = _revision_of(record)
+            if key is not None and key > high.get(pane_id, key - 1):
+                high[pane_id] = key
+
+        frames = []
+        if not acked:
+            # Step-4 finding (gpt-5.6-sol, #6): the ack used to be self-issued BEFORE the first
+            # poll, so a source that could never read a snapshot still reported a live input layer
+            # and the CLI still exited 0. The ack now means what `subscription_started` means — one
+            # real read has happened.
+            #
+            # It sits AFTER this batch's closes, not before them, and a test earned that ordering:
+            # `watch_stream` runs its whole drain on ANY line once the heartbeat is due — including
+            # a non-event line like this ack — and a drain that runs before a close is applied
+            # retries a pending send for a pane the same snapshot proves is gone. Closes lead the
+            # batch absolutely; everything else, this line included, follows them.
+            acked = True
+            frames.append(poll_ack())
+        # A brand-new pane, and a pane whose agent just attached (re-baselined by the synthetic close
+        # above), both need BOTH frames: `watch_stream` learns a pane only from a creation, while the
+        # status that might page the owner rides on the update.
+        for pane_id in sorted((set(seq_now) - set(prev)) | set(attached)):
+            frames.append(_frame(EVENT_PANE_CREATED, {"pane": seq_now[pane_id]}))
+            frames.append(_frame(EVENT_PANE_UPDATED, {"pane": seq_now[pane_id]}))
+        for pane_id in sorted(set(seq_now) & set(seq_before)):
+            pane, before = seq_now[pane_id], seq_before[pane_id]
+            # Keyed on `_revision_of`, so a `state_change_seq` bump counts as a change even when
+            # `revision` sat still — which is what a real block does.
+            if ((_revision_of(pane), pane.get("agent_status"))
+                    != (_revision_of(before), before.get("agent_status"))):
+                frames.append(_frame(EVENT_PANE_UPDATED, {"pane": pane}))
+        closed_any = bool(closes or attached)
+        prev = current
+
+        if frames:
+            last_idle = clock()
+            for frame in frames:
+                yield frame
+        elif closed_any:
+            last_idle = clock()          # closes were already yielded above; this cycle was not idle
+        elif heartbeat_due(last=last_idle, now=clock(), interval_s=heartbeat_s):
+            # Paced by `heartbeat_s`, NOT by the poll interval: `watch_stream` runs its whole drain
+            # (heartbeat write, pending-send retries, stall warnings) on any `None`, so one per poll
+            # would silently move that cadence from 300 s to 5 s.
+            last_idle = clock()
+            yield None
 
 
 def startup_sweep(reconciler, *, sender, now, debouncer=None, emit=print) -> dict:
@@ -735,8 +1103,11 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
     for line in lines:
         now = clock()
         if line is _EOF:
-            report["errors"].append("socket closed by herdr — the watcher has stopped watching")
-            emit("pane-watch: SOCKET CLOSED — stopping loudly so a supervisor restarts us")
+            # Source-neutral wording (#679): the same signal now arrives from a closed socket OR a
+            # poll source that has given up, and a message naming only the socket would misdescribe
+            # half the ways a watcher can die.
+            report["errors"].append("input layer ended — the watcher has stopped watching")
+            emit("pane-watch: INPUT LAYER ENDED — stopping loudly so a supervisor restarts us")
             break
         # Step 11 pass-5: a LIFECYCLE line is applied BEFORE the heartbeat drain. With the heartbeat
         # due on a `pane_closed` line, the drain used to run first and page for a pane that this very
@@ -778,7 +1149,10 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
                     # Install the FRESH record (pass-9): the reconciler otherwise holds the scrubbed
                     # creation metadata, and `stall_warning` reads from there.
                     reconciler.register_pane(safe_record(current), live_pane_ids={pane_id})
-                    reconciler.set_revision(pane_id, current.get("revision"))
+                    # `_revision_of`, not `current["revision"]`: since #679 the baseline key is
+                    # `state_change_seq` when present, and installing a raw revision here would
+                    # compare two different numbers forever after.
+                    reconciler.set_revision(pane_id, _revision_of(current))
                     emit(f"pane-watch: registered {pane_id} on retry")
                     if current.get("agent_status") == BLOCKED and prior.get(pane_id) != BLOCKED:
                         if debouncer.allow(pane_id, now):
@@ -937,25 +1311,51 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
 # thin CLI
 # ---------------------------------------------------------------------------
 
+def input_plan(args) -> dict:
+    """What `--dry-run` prints: the selected input layer, without touching it."""
+    if getattr(args, "source", SOURCE_POLL) == SOURCE_EVENTS:
+        return subscribe_request()
+    return {"source": SOURCE_POLL, "interval_s": float(args.poll_interval_s),
+            "command": ["herdr", "api", "snapshot"]}
+
+
 def _cmd_watch(args) -> int:
-    request = subscribe_request()
+    source = getattr(args, "source", SOURCE_POLL)
     if args.dry_run:
-        print(json.dumps(request, indent=2))
+        print(json.dumps(input_plan(args), indent=2))
         return 0
     sender = resolve_sender(getattr(args, "sender_cmd", None))
-    reconciler = Reconciler(read_snapshot())
+    # ONE snapshot read feeds both the reconciler and the poll baseline. A second read would open a
+    # window in which a pane that blocked in between is seeded as already-known and never notified.
+    snapshot = read_snapshot()
+    if source == SOURCE_POLL:
+        # The key kind belongs to the source: the poll path keys on `state_change_seq`, the events
+        # path on `revision`, and the reconciler's baseline must match whichever will feed it.
+        snapshot = merge_agent_sequences(snapshot)
+    reconciler = Reconciler(snapshot)
     debouncer = Debouncer(args.debounce_s)
     sweep = startup_sweep(reconciler, sender=sender, now=time.time(),
                           debouncer=debouncer)
-    lines = socket_lines(args.socket, request, timeout_s=args.heartbeat_s)
+    stats: dict = {}
+    if source == SOURCE_EVENTS:
+        lines = socket_lines(args.socket, subscribe_request(), timeout_s=args.heartbeat_s)
+    else:
+        lines = poll_lines(snapshot=snapshot, interval_s=args.poll_interval_s,
+                          heartbeat_s=args.heartbeat_s, stats=stats)
     report = watch_stream(
         lines, reconciler=reconciler, sender=sender,
         debouncer=debouncer, heartbeat_s=args.heartbeat_s, stall_s=args.stall_s,
-        beat=lambda now, rep: write_heartbeat(args.heartbeat_path, now=now, report=rep),
+        beat=lambda now, rep: write_heartbeat(args.heartbeat_path, now=now, report=rep,
+                                              extra=dict(stats)),
         live_panes=live_pane_ids, already_notified=sweep["notified"],
-        pending=sweep["pending"], current_pane=current_pane_record,
+        pending=sweep["pending"],
+        current_pane=lambda pid: current_pane_record(pid, enrich=(source == SOURCE_POLL)),
         pending_errors=sweep.get("errors"))
     report["startup_sweep"] = sweep
+    # Which input layer actually ran, recorded rather than inferred — the #679 UAT could not tell a
+    # dead feed from a quiet fleet, and a report that does not name its source repeats that.
+    report["source"] = source
+    report["poll_stats"] = dict(stats) if source == SOURCE_POLL else None
     print(json.dumps(report, indent=2))
     return 0 if report["subscribed"] and not report["errors"] else 4
 
@@ -964,7 +1364,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="watch herdr panes for blocked transitions and notify the owner (#612)")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    p_watch = sub.add_parser("watch", help="subscribe and notify on blocked transitions")
+    p_watch = sub.add_parser("watch", help="watch panes and notify on blocked transitions")
+    p_watch.add_argument("--source", choices=(SOURCE_POLL, SOURCE_EVENTS), default=SOURCE_POLL,
+                         help="input layer. 'poll' (default) diffs `herdr api snapshot`; 'events' "
+                              "uses events.subscribe, which on herdr 0.7.5 delivers a backlog "
+                              "burst and then nothing, ever (#679) — retained for the day that is "
+                              "fixed.")
+    p_watch.add_argument("--poll-interval-s", type=float, default=DEFAULT_POLL_INTERVAL_S,
+                         help="seconds between pane-state polls (--source poll)")
     p_watch.add_argument("--socket", default=DEFAULT_SOCKET)
     p_watch.add_argument("--debounce-s", type=float, default=DEFAULT_DEBOUNCE_S)
     p_watch.add_argument("--heartbeat-s", type=float, default=DEFAULT_HEARTBEAT_S)
