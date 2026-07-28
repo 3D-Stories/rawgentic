@@ -165,7 +165,8 @@ class TestReconciliationDefeatsTheReplay:
     def test_a_pane_created_after_the_snapshot_can_be_learned(self):
         rec = self._rec()
         assert rec.accepts(pw.parse_event(_updated("w1:pNEW", "blocked", 1))) is False
-        rec.register_pane({"pane_id": "w1:pNEW", "workspace_id": "w1", "name": "newborn"})
+        rec.register_pane({"pane_id": "w1:pNEW", "workspace_id": "w1", "name": "newborn"},
+                          live_pane_ids={"w1:pNEW"})
         assert rec.accepts(pw.parse_event(_updated("w1:pNEW", "blocked", 1))) is True
 
     def test_a_closed_pane_is_forgotten(self):
@@ -344,7 +345,8 @@ class TestWatchStreamEndToEnd:
         this frame was manufactured by the test and never requested from herdr."""
         sent = []
         self._run([_created("w1:pNEW", name="newborn"),
-                   _updated("w1:pNEW", "blocked", 1, name="newborn")], sent)
+                   _updated("w1:pNEW", "blocked", 1, name="newborn")], sent,
+                  live_panes=lambda: {"w1:pA", "w1:pB", "w1:pNEW"})
         assert len(sent) == 1 and "newborn" in sent[0]
 
     def test_an_error_frame_is_reported(self):
@@ -462,3 +464,93 @@ class TestStep11Findings:
                                  heartbeat_s=1.0, stall_s=1800.0)
         assert report["stalls"] == ["w1:pA"], report
         assert any("stale-pane warning" in m for m in emitted), emitted
+
+
+class TestStep11Pass2Findings:
+    """One test per confirmed pass-2 finding."""
+
+    def _rec(self):
+        return pw.Reconciler(_snapshot([("w1:pA", "working", 5, "alpha")]))
+
+    def test_a_REPLAYED_creation_is_refused(self):
+        """BLOCKER: subscribing to `pane.created` reopened the replay hole. The replay carries
+        `created -> updated(blocked) -> closed` for long-gone panes, and an unconditional
+        registration gave such a pane no revision baseline — so its blocked frame was accepted and
+        the owner paged about a pane that died hours ago."""
+        sent = []
+        report = pw.watch_stream(
+            [_created("w1:pDEAD"), _updated("w1:pDEAD", "blocked", 1), _closed("w1:pDEAD")],
+            reconciler=self._rec(), sender=lambda b: (sent.append(b), 0)[1],
+            clock=lambda: 1000.0, emit=lambda _m: None,
+            live_panes=lambda: {"w1:pA"})          # pDEAD is NOT in the current pane set
+        assert sent == [], sent
+        assert report["notified"] == []
+
+    def test_registration_FAILS_CLOSED_when_the_live_set_is_unreadable(self):
+        """A false page is the failure this class of bug produces, so an unknown answer refuses."""
+        rec = self._rec()
+        assert rec.register_pane({"pane_id": "w1:pNEW"}, live_pane_ids=None) is False
+        assert rec.register_pane({"pane_id": "w1:pNEW"}, live_pane_ids=set()) is False
+
+    def test_live_pane_ids_returns_empty_on_failure(self):
+        assert pw.live_pane_ids(runner=lambda argv: type("P", (), {"returncode": 1,
+                                                                  "stdout": ""})()) == set()
+
+    def test_the_stall_warning_refuses_a_screen_derived_identity(self):
+        """HIGH: the warning rendered the identity without the body builder's refusal, and the
+        heartbeat loop emits it — so a label copied from `terminal_title` leaked into the log."""
+        with pytest.raises(pw.WatchError) as exc:
+            pw.stall_warning(pane={"pane_id": "w1:pA", "label": "SECRET prompt text",
+                                   "terminal_title": "SECRET prompt text",
+                                   "agent_status": "idle"},
+                             since=0.0, now=99999.0, threshold_s=1800)
+        assert "SECRET" not in str(exc.value)
+
+    def test_a_failed_send_rolls_the_revision_back_so_redelivery_retries(self):
+        """HIGH: `accepts()` consumed the revision before the send, so a stable blocked pane that
+        produced no further update was never retried — the block was lost."""
+        attempts = []
+        pw.watch_stream([_updated("w1:pA", "blocked", 6), _updated("w1:pA", "blocked", 6)],
+                        reconciler=self._rec(), sender=lambda b: (attempts.append(b), 1)[1],
+                        clock=lambda: 1000.0, debouncer=pw.Debouncer(window_s=600),
+                        emit=lambda _m: None)
+        assert len(attempts) == 2, "the SAME revision must be eligible again after a failed send"
+
+    def test_a_suppressed_transition_does_not_page_again_after_the_window(self):
+        """MEDIUM: suppression left `prior` unset, so a later frame after the window looked like a
+        NEW block even though the pane never left `blocked`."""
+        sent = []
+        clock = iter([1000.0] * 6 + [99999.0] * 6)
+        report = pw.watch_stream(
+            [_updated("w1:pA", "blocked", 6), _updated("w1:pA", "blocked", 7),
+             _updated("w1:pA", "blocked", 8)],
+            reconciler=self._rec(), sender=lambda b: (sent.append(b), 0)[1],
+            clock=lambda: next(clock), debouncer=pw.Debouncer(window_s=60),
+            emit=lambda _m: None)
+        assert len(sent) == 1, sent
+        # The property is "exactly one page for one continuous block, even across a window expiry".
+        # It now holds via the TRANSITION check rather than the debouncer, because a confirmed send
+        # records `prior=blocked` — so later blocked frames are not transitions at all.
+        assert len(report["notified"]) == 1, report
+
+    def test_a_pane_already_idle_at_startup_can_warn(self):
+        """MEDIUM: `since` was populated only by accepted stream updates, so the stalest panes —
+        the ones already idle at startup — were exactly the ones the warning could not see."""
+        emitted = []
+        clock = iter([1000.0, 99999.0, 99999.0, 99999.0])
+        rec = pw.Reconciler(_snapshot([("w1:pIDLE", "idle", 3, "sleepy")]))
+        report = pw.watch_stream([None], reconciler=rec, sender=lambda b: 0,
+                                 clock=lambda: next(clock), emit=emitted.append,
+                                 heartbeat_s=1.0, stall_s=1800.0)
+        assert report["stalls"] == ["w1:pIDLE"], report
+        assert any("sleepy" in m for m in emitted)
+
+    def test_closing_a_pane_clears_its_stall_bookkeeping(self):
+        emitted = []
+        clock = iter([1000.0, 99999.0, 99999.0, 99999.0, 99999.0, 99999.0])
+        rec = pw.Reconciler(_snapshot([("w1:pIDLE", "idle", 3, "sleepy")]))
+        report = pw.watch_stream([None, _closed("w1:pIDLE"), None],
+                                 reconciler=rec, sender=lambda b: 0,
+                                 clock=lambda: next(clock), emit=emitted.append,
+                                 heartbeat_s=1.0, stall_s=1800.0)
+        assert report["stalls"] == [], report

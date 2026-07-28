@@ -248,10 +248,44 @@ class Reconciler:
     def known_panes(self) -> list[str]:
         return sorted(self._rev)
 
-    def register_pane(self, pane) -> None:
-        if isinstance(pane, dict) and isinstance(pane.get("pane_id"), str):
-            self._rev.setdefault(pane["pane_id"], None)
-            self._meta[pane["pane_id"]] = pane
+    def register_pane(self, pane, *, live_pane_ids=None) -> bool:
+        """Learn a pane from the live feed. Returns True if it was registered.
+
+        Step 11 pass-2 BLOCKER: subscribing to `pane.created` (the pass-1 fix) reopened the very hole
+        the reconciler exists to close. The replay contains `created -> updated(blocked) -> closed`
+        for long-gone panes, and an unconditional registration gives such a pane no revision baseline
+        — so its replayed blocked frame is accepted and the owner is paged about a pane that died
+        hours ago, before the replayed `closed` is even processed.
+
+        So a creation is only believed when the pane is in a CURRENTLY observed pane set.
+        `live_pane_ids=None` means the caller could not check, and then the creation is refused:
+        fail-closed, because a false page is the failure this whole class of bug produces.
+        """
+        if not (isinstance(pane, dict) and isinstance(pane.get("pane_id"), str)):
+            return False
+        pane_id = pane["pane_id"]
+        if pane_id in self._rev:
+            self._meta[pane_id] = pane
+            return True
+        if not live_pane_ids or pane_id not in live_pane_ids:
+            return False
+        self._rev.setdefault(pane_id, None)
+        self._meta[pane_id] = pane
+        return True
+
+    def revision_of(self, pane_id: str):
+        return self._rev.get(pane_id)
+
+    def rollback(self, pane_id: str, revision) -> None:
+        """Un-consume a revision after a FAILED send.
+
+        Step 11 pass-2: `accepts()` advances the baseline before the notification is attempted, so a
+        stable blocked pane that produced no further update was never retried — the block was lost
+        even though the transition state had been preserved. Rolling the baseline back makes the same
+        frame eligible again on redelivery.
+        """
+        if pane_id in self._rev and isinstance(revision, int):
+            self._rev[pane_id] = revision
 
     def forget_pane(self, pane_id: str) -> None:
         self._rev.pop(pane_id, None)
@@ -306,6 +340,23 @@ class Debouncer:
 # AC5 — provenance, not keyword hygiene
 # ---------------------------------------------------------------------------
 
+def _refuse_screen_derived_identity(pane, who) -> None:
+    """Raise when the chosen identity is identical to a screen-derived field.
+
+    Shared by the body builder AND the stall warning. Step 11 pass-2 found the warning rendered the
+    identity directly and the heartbeat loop emitted it, so a label copied from `terminal_title`
+    leaked into the watcher log even though the notification body correctly refused it. One helper,
+    both call sites — the whole point of AC5 being a provenance boundary rather than a per-site check.
+    """
+    for field in CONTENT_FIELDS:
+        value = pane.get(field)
+        if isinstance(value, str) and value and value.strip() == who:
+            raise WatchError(
+                f"refusing to render pane {pane.get('pane_id')!r}: its identity is identical to its "
+                f"{field!r}, which is screen-derived — AC5 permits labels only, because screen text "
+                "can carry prompts and credentials (value withheld)")
+
+
 def _identity_of(pane) -> str:
     """label -> name -> pane_id, selected from the pane record itself.
 
@@ -333,17 +384,7 @@ def body_for_pane(pane, *, status) -> str:
     if status not in AGENT_STATUSES:
         raise WatchError(f"refusing to build a body for an unknown status {status!r}")
     who = _identity_of(pane)
-    for field in CONTENT_FIELDS:
-        value = pane.get(field)
-        if isinstance(value, str) and value and value.strip() == who:
-            # Step 11 finding 5: this message used to interpolate `who`, and `main` prints the
-            # exception to stderr — so the very screen text being refused (an approval prompt, a
-            # credential) landed in the watcher log. The pane id and the field NAME are enough to
-            # diagnose it; the value is exactly what must not be echoed.
-            raise WatchError(
-                f"refusing to build a body for pane {pane.get('pane_id')!r}: its identity is "
-                f"identical to its {field!r}, which is screen-derived — AC5 permits labels only, "
-                "because screen text can carry prompts and credentials (value withheld)")
+    _refuse_screen_derived_identity(pane, who)
     where = " ".join(p for p in (pane.get("workspace_id"), pane.get("tab_id"))
                      if isinstance(p, str) and p)
     agent = pane.get("agent")
@@ -396,8 +437,10 @@ def stall_warning(*, pane, since: float, now: float,
         return None
     if (now - since) <= float(threshold_s):
         return None
+    who = _identity_of(pane)
+    _refuse_screen_derived_identity(pane, who)     # same boundary as the body builder
     mins = int((now - since) // 60)
-    return (f"herdr: {_identity_of(pane)} has been {pane.get('agent_status')} for ~{mins}m with no "
+    return (f"herdr: {who} has been {pane.get('agent_status')} for ~{mins}m with no "
             "recognised transition. This is a stale-pane warning, NOT a missed-prompt detector — "
             "it cannot tell a missed approval from a pane that is simply idle. Worth a look.")
 
@@ -412,6 +455,24 @@ def _default_sender(body: str) -> int:
     proc = subprocess.run([script, body], capture_output=True, text=True, check=False,
                           shell=False, timeout=60)
     return proc.returncode
+
+
+def live_pane_ids(runner=None) -> set:
+    """The pane ids herdr currently knows. Used to tell a real creation from a replayed one.
+
+    Returns an EMPTY set when it cannot be read, which makes `register_pane` refuse — fail-closed,
+    because believing a replayed creation is what pages the owner about a dead pane.
+    """
+    try:
+        snap = read_snapshot(runner)
+    except WatchError:
+        return set()
+    node = snap.get("snapshot", snap) if isinstance(snap, dict) else {}
+    panes = node.get("panes") if isinstance(node, dict) else None
+    if not isinstance(panes, list):
+        return set()
+    return {p["pane_id"] for p in panes
+            if isinstance(p, dict) and isinstance(p.get("pane_id"), str)}
 
 
 def read_snapshot(runner=None) -> dict:
@@ -497,7 +558,7 @@ def startup_sweep(reconciler, *, sender, now, debouncer=None, emit=print) -> dic
 
 def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
                  heartbeat_s: float = DEFAULT_HEARTBEAT_S, stall_s: float = DEFAULT_STALL_S,
-                 emit=print, beat=None) -> dict:
+                 emit=print, beat=None, live_panes=None) -> dict:
     """Drive a stream of wire lines. All I/O is via `sender`, `clock`, `emit` and `beat`.
 
     A `None` line is a read timeout, not an event: it exists so the heartbeat fires during silence.
@@ -507,10 +568,15 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
     prior: dict[str, str] = {}
     # Step 11 finding 7: `stall_warning` shipped as dead code — nothing tracked `since` or called it,
     # so an idle/unknown pane could sit stale forever without the warning AC3 asks for.
+    # Seeded from the snapshot so a pane ALREADY idle/unknown at startup can warn. Step 11 pass-2:
+    # populating this only from accepted stream updates meant such a pane never warned unless it
+    # later changed status — i.e. the stalest panes were the ones the warning could not see.
     since: dict[str, float] = {}
     report = {"subscribed": False, "events": 0, "notified": [], "suppressed": 0,
               "dropped": 0, "errors": [], "heartbeats": 0, "send_failures": 0, "stalls": []}
     last_beat = clock()
+    for pane_id in reconciler.known_panes():
+        since.setdefault(pane_id, last_beat)
     for line in lines:
         now = clock()
         if line is _EOF:
@@ -546,11 +612,22 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
         report["events"] += 1
 
         if event.kind == EVENT_PANE_CREATED:
-            reconciler.register_pane(event.pane or {"pane_id": event.pane_id})
+            ids = live_panes() if callable(live_panes) else None
+            if reconciler.register_pane(event.pane or {"pane_id": event.pane_id},
+                                       live_pane_ids=ids):
+                since.setdefault(event.pane_id, now)
+            else:
+                report["dropped"] += 1
+                emit(f"pane-watch: ignoring creation of {event.pane_id} — not in the current pane "
+                     "set, so this is the backlog replay")
             continue
         if event.kind == EVENT_PANE_CLOSED:
             reconciler.forget_pane(event.pane_id)
             prior.pop(event.pane_id, None)
+            # Step 11 pass-2: neither of these was cleaned, leaving unbounded stale bookkeeping and
+            # a `stalls` entry for a pane that no longer exists.
+            since.pop(event.pane_id, None)
+            report["stalls"] = [p for p in report["stalls"] if p != event.pane_id]
             continue
         # Step 11 finding 6: a frame whose status is absent or unrecognised must not advance the
         # revision baseline. Advancing it meant a CORRECTED frame at the same revision was then
@@ -558,6 +635,7 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
         if event.status is None:
             report["dropped"] += 1
             continue
+        was_revision = reconciler.revision_of(event.pane_id)
         if not reconciler.accepts(event):
             report["dropped"] += 1
             continue
@@ -570,6 +648,10 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
             prior[event.pane_id] = event.status
             continue
         if not debouncer.allow(event.pane_id, now):
+            # Record it: Step 11 pass-2 found a suppressed transition left `prior` unset, so a later
+            # frame after the window expired looked like a NEW block and paged again even though the
+            # pane had never left `blocked`.
+            prior[event.pane_id] = event.status
             report["suppressed"] += 1
             continue
         body = body_for_pane(event.pane or reconciler.meta(event.pane_id), status=event.status)
@@ -585,6 +667,7 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
             # transition and the sender was never retried — the notification was still lost, just
             # more subtly. Neither the window nor the transition state is consumed by a failed send.
             debouncer.release(event.pane_id)
+            reconciler.rollback(event.pane_id, was_revision)
             report["send_failures"] += 1
             emit(f"pane-watch: SEND FAILED for {event.pane_id} (rc={rc}) — will retry on the next "
                  "blocked frame")
@@ -608,7 +691,8 @@ def _cmd_watch(args) -> int:
     report = watch_stream(
         lines, reconciler=reconciler, sender=_default_sender,
         debouncer=debouncer, heartbeat_s=args.heartbeat_s, stall_s=args.stall_s,
-        beat=lambda now, rep: write_heartbeat(args.heartbeat_path, now=now, report=rep))
+        beat=lambda now, rep: write_heartbeat(args.heartbeat_path, now=now, report=rep),
+        live_panes=live_pane_ids)
     report["startup_sweep"] = sweep
     print(json.dumps(report, indent=2))
     return 0 if report["subscribed"] and not report["errors"] else 4
