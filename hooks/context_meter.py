@@ -22,9 +22,13 @@ FAIL MODE: **fail-OPEN.** An absent/unreadable/malformed transcript, an
 unwritable state dir, a bad config value, or any unexpected exception means
 "emit nothing, exit 0" — never a blocked turn. This is a convenience nag, not a
 security boundary (CLAUDE.md §3 decision guide). Fail-open is NOT the same as
-invisible, though: the three self-disabling outcomes each emit a once-per-session
-stderr diagnostic, so a platform path/format change is findable instead of
-manifesting as a meter that quietly never fires.
+invisible, though: every self-disabling outcome emits a stderr diagnostic, so a
+platform path/format change is findable instead of manifesting as a meter that
+quietly never fires. Three are once-per-session (unresolvable transcript,
+ambiguous match, no parseable usage row). The FOURTH — an unusable state
+directory — deliberately REPEATS, because its once-per-session record would have
+to live in the very store that is broken, and a store that cannot remember
+cannot deduplicate. Named here rather than pretending the guarantee is uniform.
 
 Pure core + thin CLI (`registry_prune.py` is the exemplar): every function below
 `main` is pure or takes its I/O injected.
@@ -75,7 +79,7 @@ SWEEP_AGE_S = 7 * 24 * 3600
 # Every file this hook reads is attacker-influenceable and it runs on every tool call under a
 # 5 s timeout, so each read is byte-capped and refuses anything that is not a regular file.
 MAX_JSON_BYTES = 256 * 1024
-MAX_REGISTRY_BYTES = 2 * 1024 * 1024
+MAX_REGISTRY_BYTES = 8 * 1024 * 1024   # ~55k rows; see _find_registry_row
 MAX_STDIN_BYTES = 4 * 1024 * 1024
 
 
@@ -125,6 +129,53 @@ def _load_json_capped(path, limit=MAX_JSON_BYTES):
         return json.loads(text)
     except (ValueError, TypeError):
         return None
+
+
+def _find_registry_row(path, session_id, *, max_bytes=MAX_REGISTRY_BYTES):
+    """Most recent registry row for `session_id`, scanning backward. None if not found.
+
+    Bounded like the transcript reader, and for the same reason: the file can be large
+    and only its end is interesting. Returns as soon as a match is seen, so the common
+    case reads one block.
+    """
+    fd = None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK
+                     | getattr(os, "O_NOFOLLOW", 0))
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        pos = os.lseek(fd, 0, os.SEEK_END)
+        tail = b""
+        read_total = 0
+        while pos > 0 and read_total < max_bytes:
+            block = min(_BLOCK, pos, max_bytes - read_total)
+            pos -= block
+            os.lseek(fd, pos, os.SEEK_SET)
+            chunk = os.read(fd, block)
+            if not chunk:
+                break
+            read_total += len(chunk)
+            parts = (chunk + tail).split(b"\n")
+            tail = parts[0] if pos > 0 else b""
+            for line in reversed(parts[1:] if pos > 0 else parts):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line.decode("utf-8", "replace"))
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(row, dict) and row.get("session_id") == session_id:
+                    return row
+    except (OSError, ValueError):
+        return None
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    return None
 
 
 def _contained(child, parent) -> bool:
@@ -472,12 +523,13 @@ def seam_verdict(armed, current):
         return "wait", "step-state pointer has not advanced"
     if _identity(armed) == _identity(current):
         return "wait", "step-state pointer unchanged"
-    # The pointer is a project-controlled FILE, so `workflow` and `step` are UNTRUSTED
-    # strings, and this reason string is injected into the model's next turn. Echoing them
-    # verbatim let a hostile pointer smuggle instruction text into a session
-    # (#687 Step-11 review, CRITICAL). Allowlisted to a short identifier shape instead.
-    return "seam", (f"step-state moved to {_echo_safe(current.get('workflow'))} step "
-                    f"{_echo_safe(current.get('step'))}")
+    # NOTHING from the pointer is echoed. The pointer is a project-controlled FILE, so its
+    # strings are untrusted, and this reason is injected into the model's next turn — the
+    # Step-11 review rated verbatim interpolation CRITICAL. An allowlist was the first fix,
+    # and the verification review then showed it insufficient: `IGNORE-PRIOR-INSTRUCTIONS`
+    # satisfies any identifier pattern. So the channel is REMOVED rather than narrowed. The
+    # session already knows which step it is on; the meter does not need to tell it.
+    return "seam", "a workflow step boundary was just recorded"
 
 
 def should_check(state, *, now, every_turns, every_seconds) -> bool:
@@ -512,12 +564,15 @@ def marker_path(home, session_id, window, tier):
 
 
 def load_state(path):
-    try:
-        with open(path, encoding="utf-8") as handle:
-            state = json.load(handle)
-        return state if isinstance(state, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    """Read the per-session state, capped and no-follow.
+
+    This one was MISSED by the first bounded-read pass and the verification review
+    caught it: a FIFO planted at the state path hung every hook invocation until the
+    timeout, and a huge state file was read unbounded — on a hook that runs per tool
+    call. It goes through the same capped reader as every other input now.
+    """
+    state = _load_json_capped(path)
+    return state if isinstance(state, dict) else {}
 
 
 def _ensure_dir(home):
@@ -686,24 +741,20 @@ def bound_project(workspace_root, session_id):
     """(name, abs_path) for the LAST registry row matching this session."""
     registry = os.path.join(workspace_root, "claude_docs",
                             "session_registry.jsonl")
-    # Read only the TAIL, byte-capped. The registry is append-only and a workspace can
-    # commit a huge hostile prefix; scanning all of it on every due check is a
-    # self-inflicted timeout on a hook that runs per tool call (#687 Step-11 review).
-    text = _read_capped(registry, MAX_REGISTRY_BYTES, tail=True)
-    if text is None:
-        return None, None
-    found = None
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue          # a truncated first line from the tail read lands here
-        if isinstance(row, dict) and row.get("session_id") == session_id:
-            found = row
+    # Scan BACKWARD in bounded blocks, stopping at the first (i.e. most recent) matching
+    # row. The registry is append-only and a workspace can commit a huge hostile prefix, so
+    # reading all of it on every due check is a self-inflicted timeout on a hook that runs
+    # per tool call (#687 Step-11 review). A fixed TAIL slice was the first fix, and the
+    # verification review showed it wrong in the other direction: >2 MiB appended AFTER a
+    # live session's row made the session look unbound, losing its config and producing a
+    # premature default-window nag. Backward-from-the-end is both bounded and correct for
+    # the case that matters, because a session's own row is written when it binds.
+    found = _find_registry_row(registry, session_id)
     if not found:
+        # Either the session genuinely is not bound, or its row lies beyond the scan
+        # bound. Those are indistinguishable from here, and the consequence of guessing
+        # wrong is a premature default-window nag — so the caller reports the ambiguity
+        # instead of swallowing it (verification review).
         return None, None
     name = found.get("project")
     rel = found.get("project_path") or ""
@@ -716,6 +767,11 @@ def bound_project(workspace_root, session_id):
     if not isinstance(rel, str) or not rel or os.path.isabs(rel):
         return name, None
     path = os.path.normpath(os.path.join(workspace_root, rel))
+    # A symlinked component inside the workspace would let one project's registry row
+    # point at another project's config and pointer, so the declared path must be its
+    # own realpath (verification review: `claimed` symlinked elsewhere was accepted).
+    if os.path.realpath(path) != os.path.abspath(path):
+        return name, None
     if not _contained(path, workspace_root) or not os.path.isdir(path):
         return name, None
     return name, path
@@ -855,14 +911,21 @@ def _is_subagent(payload) -> bool:
     """A subagent has its own short-lived context and no authority to hand over
     its parent's session, so the meter does nothing for one.
 
-    Defensive by design: probe 9 captured only a top-level payload, so the exact
-    field name a subagent invocation carries is UNVERIFIED. If none of these keys
-    is present the branch is simply inert, which is why it cannot break the hook.
+    VERIFIED (probe 10, 2026-07-28) — this was a documented guess until a real
+    subagent was driven under a payload-dumping hook. A subagent's `PostToolUse`
+    payload carries **`agent_id`** ("a8827c81c4105e67c") and **`agent_type`**
+    ("general-purpose"); the parent's own `Agent` tool call carries NEITHER. And the
+    subagent's `session_id` is IDENTICAL to the parent's — which is exactly why the
+    guard is needed: without it a subagent's tool calls would read the parent's
+    transcript and advance the parent's cadence.
+
+    The extra key names are harmless belt-and-braces for other Claude Code versions;
+    absent all of them the branch is inert, so it cannot break the hook.
     """
     if not isinstance(payload, dict):
         return False
-    for key in ("agent_id", "agentId", "subagent_id", "isSidechain",
-                "is_sidechain"):
+    for key in ("agent_id", "agent_type", "agentId", "subagent_id",
+                "isSidechain", "is_sidechain"):
         if payload.get(key):
             return True
     return False
@@ -929,6 +992,15 @@ def cmd_hook(argv) -> int:
     workspace = find_workspace(payload.get("cwd"))
     project, project_path = (bound_project(workspace, session_id)
                              if workspace else (None, None))
+    if workspace and project is None:
+        # Visible degradation, not a silent one: without the bound project there is no
+        # config, so the window falls back to the conservative default and the nag may
+        # fire early. Say so once rather than letting it look like a real reading.
+        _diagnose(state, "session_unbound",
+                  "this session is not bound to a project in "
+                  "claude_docs/session_registry.jsonl (or its row lies beyond the scan "
+                  "bound), so contextMeter config is unavailable and the conservative "
+                  f"default {DEFAULT_WINDOW:,}-token window is assumed")
     cfg = read_meter_config(project_path)
     every_turns, every_seconds = cadence(cfg, env, warn=_warn)
     state["every_turns"], state["every_seconds"] = every_turns, every_seconds
@@ -1021,6 +1093,16 @@ def cmd_hook(argv) -> int:
     # this tier for the rest of the session, which is the defect the reservation
     # exists to prevent, merely relocated.
     if not reserve(home, session_id, window, tier):
+        # A reservation can fail two ways: another process won the race (correct, stay
+        # silent) or the store is unwritable. The second is a SELF-DISABLING failure and
+        # the module contract says those are never invisible — so it warns. This is the
+        # ONE diagnostic that may repeat: its once-per-session record lives in the very
+        # store that is broken, and a store that cannot remember cannot deduplicate.
+        # Stated in the docstring rather than quietly excepted (adversarial diff review).
+        if not os.path.isdir(state_dir(home)):
+            _warn("context_meter: state directory is unusable, so the meter cannot "
+                  "record what it has already said — no nag will be emitted. This "
+                  "warning repeats until storage recovers.")
         save_state(home, session_id, state)
         return 0
     try:
@@ -1045,7 +1127,7 @@ def cmd_read(args) -> int:
     check_in_pct, act_pct = thresholds({}, os.environ)
     print(json.dumps({"used": used, "window": window,
                       "fraction": round(used / window, 6),
-                      "tier": tier_for(used / window, check_in_pct, act_pct),
+                      "tier": tier_for_tokens(used, window, check_in_pct, act_pct),
                       "provenance": provenance, "transcript": transcript},
                      sort_keys=True))
     return 0

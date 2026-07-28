@@ -122,7 +122,7 @@ boundary was seen before work began. Only the session can confirm those, so the 
 
 | Pointer state | Behaviour |
 |---|---|
-| moved since the threshold was crossed | seam candidate — the advisory fires and names it |
+| moved since the threshold was crossed | seam candidate — the advisory fires and says a boundary was recorded (it does NOT name the step: the pointer is a project-controlled file, so nothing from it is echoed into the model's context) |
 | unchanged | wait; the advisory holds until the pointer moves or the directive tier arrives |
 | no pointer at all (an ordinary, non-workflow session) | nothing to wait for — the advisory fires immediately |
 
@@ -209,3 +209,27 @@ it is deliberately not shipped: `~/.claude/rawgentic-statusline.sh` is a user-le
 git repository, so it cannot ship as a tested rawgentic PR, and it renders nothing headless. If you
 want it, have your statusline script persist `context_window.used_percentage` and `session_id` to a
 file; a future consumer could prefer that reading over the transcript one.
+
+## Known limits, named rather than implied
+
+Three things this deliberately does not claim, each with the follow-up that would close it:
+
+1. **A residual TOCTOU window on the state directory.** The symlink and containment checks run
+   before any mutation, and `~/.rawgentic/context-meter/` is created `0700` — but the checks are
+   pathname-based, so a local attacker who can win a race inside the user's own `~/.rawgentic`
+   (which is `0775` on this host, created by other tooling) could swap a directory between the
+   check and the write. Closing it fully means holding verified directory descriptors and doing
+   `mkdir`/`open`/`rename` relative to them; that is a filed follow-up. The exposure is a
+   convenience nag's state file, and the attacker already needs local group access.
+2. **No single pure `evaluate()`.** The decision helpers are pure and individually tested, but
+   `cmd_hook` sequences them alongside the reads and writes, so ordering and trust-boundary
+   behaviour cannot be unit-tested independently of the filesystem. Extracting a total pure
+   evaluation over already-validated facts is a follow-up — it refactors the code the security
+   fixes reshaped, and doing both at once is how a fix gets lost.
+3. **The registry scan is bounded at 8 MiB** (~55k rows) from the end. A session whose registry row
+   lies beyond that is indistinguishable from an unbound session, so the meter falls back to the
+   conservative default window and **says so** via a once-per-session diagnostic. It does not
+   silently pretend to have read a project's config.
+
+Also worth knowing: a marker file whose session state file is missing ages out after 7 days, so a
+session that resumed after a week-long gap could in principle be nagged twice for one tier.
