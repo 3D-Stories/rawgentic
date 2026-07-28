@@ -36,5 +36,58 @@
       "method": "gh api repos/ogulcancelik/herdr/releases/tags/v0.7.5 asset .digest (sha256:3dc83288...c59253, size 21315048) compared against sha256sum ~/.local/bin/herdr (3dc83288...c59253) — identical digest AND identical size, so the installed binary is the official release bit-for-bit. Verified in place; no re-download and no re-install, because the live herdr server was backing 4 actively-working sessions.",
       "install_method": "pinned release binary verified against its published digest (never curl|sh, which plan 1.6 excludes for this workspace)"
     }
+  },
+  "integrations": {
+    "_comment": "herdr's per-agent hook installs on a host (#610, epic #667). A TOP-LEVEL sibling of `pin`, deliberately: `pin` describes one binary release (0.7.5, asserted equal to HERDR_VERSION_FLOOR) while an integration is host hook state on its own version line (claude v7) — nesting one under the other would imply they move together. Guards: tests/hooks/test_herdr_pin.py. Full procedure, the byte-exact installer diff (tests/fixtures/herdr/install.diff), the committed v7 script and a redaction-safe reproduce-it-yourself recipe: docs/runbooks/herdr.md. Evidence classes (byte-exact / redacted / semantic) are labelled in its section 2.1 — no artifact is a verbatim capture of a live host settings file.",
+    "claude": {
+      "integration_version": 7,
+      "status_command": "herdr integration status",
+      "install_command": "herdr integration install claude",
+      "uninstall_command": "herdr integration uninstall claude",
+      "hook_script": {
+        "path": "~/.claude/hooks/herdr-agent-state.sh",
+        "sha256": "ffd5a76b7c62f5313040fc1e98fa010ff19a7aa85dd9fe6f325b9729d5f01b46",
+        "size": 3202,
+        "herdr_managed": true,
+        "_comment": "Recorded from this host on 2026-07-27 AND asserted in CI against a committed byte-exact copy at tests/fixtures/herdr/herdr-agent-state.v7.sh (test_committed_script_fixture_matches_the_pinned_digest). That assertion is possible only because the v7 script is generic — it takes its pane/socket identity from the environment and embeds no host path, so its bytes are identical on every machine, measured equal to this host's installed copy. What CI still cannot do is verify the digest against a LIVE host; for that the operator check is `herdr integration status`. Same shape as api_schema above, which #609 recorded and left #390's check 10 to assert. The script's own header declares it herdr-managed and warns that reinstalling or updating the integration OVERWRITES it, so a changed digest means herdr replaced it, not that someone tampered: add custom hooks beside the file, never edit it."
+      },
+      "settings_footprint": {
+        "file": "~/.claude/settings.json",
+        "hook_events": ["SessionStart"],
+        "entry": {
+          "matcher": "*",
+          "type": "command",
+          "command": "bash '<HOME>/.claude/hooks/herdr-agent-state.sh' session",
+          "timeout": 10
+        },
+        "reformats_whole_file": true,
+        "drops_trailing_newline": true,
+        "_comment": "The SEMANTIC footprint is exactly the one SessionStart entry above — nothing else is added and nothing is removed. But the installer parses and re-serializes the WHOLE file with alphabetically sorted keys (top level and nested) and drops the trailing newline, so on a hand-maintained settings.json a 1-hook change renders as a ~300-line diff. Key order is not semantic in JSON; the reformat is cosmetic. Recorded because the next operator will otherwise read it as the installer rewriting their config."
+      },
+      "idempotency": {
+        "dedupes_on": "the exact hook command string",
+        "repeat_install_is_noop": true,
+        "appends_on_path_mismatch": true,
+        "_comment": "Measured: a 2nd and 3rd `install claude` left the SessionStart array unchanged. But the first install APPENDED a second entry because the pre-existing one named a different path. So a settings.json carried between hosts, users or $HOMEs accumulates a stale SessionStart entry pointing at a script that does not exist, and `install` will not clean it up — remove the stale entry by hand."
+      },
+      "uninstall": {
+        "removes_hook_script": true,
+        "removes_only_own_entry": true,
+        "removes_event_key_when_sole_entry": true,
+        "_comment": "Measured: uninstall deletes the hook script and only its OWN settings.json entry (matched on exact path — a differently-pathed sibling entry survives), touching no other hook event. When its entry is the sole SessionStart member the whole SessionStart key is removed rather than left as an empty array."
+      },
+      "unperturbed": {
+        "wal_guard": "not registered in ~/.claude/settings.json at all — the rawgentic plugin registers it, so the installer's settings.json rewrite cannot reach it",
+        "mempalace": "PreCompact + Stop entries (mempalace-hook-wrapper.sh, timeout 210) survive the install with identical commands, matchers and timeouts",
+        "other_pretooluse": "the question-visibility guard, the tmux-kill guard and `rtk hook claude` likewise survive unchanged",
+        "_comment": "#610 AC2. The disjointness half of this claim is enforced as an invariant by tests/hooks/test_herdr_pin.py, not merely asserted here."
+      },
+      "verified": {
+        "at": "2026-07-27",
+        "issue": 610,
+        "runbook": "docs/runbooks/herdr.md",
+        "method": "The integration was ALREADY installed at v7 on this host (`herdr integration status` → `claude: current (v7)`), so this is verify-and-document, never re-install (epic #667 D-5). `herdr integration install claude` has no dry-run flag, so the footprint was captured by running the exact shipped invocation against a sandboxed $HOME seeded with a byte copy of the live ~/.claude/settings.json — the real installer, the real file as the diff base, no proxy. The live file's sha256 was recorded before and after and MATCHED, as did the installed script's digest. Idempotency was measured by repeating the install; the uninstall behaviours by running it, including on a minimal fixture where herdr held the sole SessionStart entry."
+      }
+    }
   }
 }
