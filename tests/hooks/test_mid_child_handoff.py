@@ -819,7 +819,13 @@ _HANDOFF_BUILDERS = frozenset({
 # A herdr COMMAND, not the bare word: `herdr` also appears legitimately as a terminal-backend
 # NAME in capabilities_lib, driver_lib and executor_routing_lib, and a guard that fired on that
 # would be a keyword alarm rather than a check.
-_HERDR_COMMAND_RE = re.compile(r"\bherdr\s+(pane|agent)\b")
+# The DRIVING verbs only. A read-only `herdr api snapshot` or `herdr pane list` is not a handoff
+# path, and flagging it would make this guard fire on any module that merely observes herdr — which
+# it did, on #612's watcher. What AC7 protects is a second thing that SPLITS, CLOSES, TYPES INTO or
+# STARTS an agent in a pane.
+_HERDR_DRIVING_VERBS = ("split", "close", "send-text", "send-keys", "send_input", "start", "wait")
+_HERDR_COMMAND_RE = re.compile(
+    r"\bherdr\s+(?:pane|agent)\s+(?:" + "|".join(_HERDR_DRIVING_VERBS) + r")\b")
 
 
 def _handoff_path_findings(source: str, *, filename: str) -> list[str]:
@@ -831,7 +837,12 @@ def _handoff_path_findings(source: str, *, filename: str) -> list[str]:
         if isinstance(node, (ast.List, ast.Tuple)) and node.elts:
             first = node.elts[0]
             if isinstance(first, ast.Constant) and first.value == "herdr":
-                findings.append(f"{filename}:{node.lineno} raw herdr argv literal")
+                # Only a DRIVING argv counts (see _HERDR_DRIVING_VERBS): an observing call such as
+                # ["herdr","api","snapshot"] or ["herdr","pane","list"] is not a handoff path.
+                verbs = {e.value for e in node.elts[1:]
+                         if isinstance(e, ast.Constant) and isinstance(e.value, str)}
+                if verbs & set(_HERDR_DRIVING_VERBS):
+                    findings.append(f"{filename}:{node.lineno} raw herdr DRIVING argv literal")
         # 2. the launcher's own builders, imported or reached through the module
         if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("launcher_lib"):
             for alias in node.names:
@@ -927,6 +938,25 @@ class TestNoParallelHandoffPath:
     def test_the_scanner_bites_each_bypass_form(self, bypass, source):
         assert _handoff_path_findings(source, filename="synthetic.py"), \
             f"the guard failed to flag the {bypass} bypass — it would pass a real one too"
+
+    def test_an_OBSERVING_herdr_call_is_not_a_handoff_path(self):
+        """Narrowed after #612's watcher tripped this guard with `["herdr","api","snapshot"]`.
+        Reading herdr's state is not a second handoff path, and a guard that fires on any mention of
+        herdr is noise that gets deleted rather than a check that gets kept."""
+        for source in (
+                'def go(r):\n    return r(["herdr", "api", "snapshot"])\n',
+                'def go(r):\n    return r(["herdr", "pane", "list"])\n',
+                'def go(r):\n    return r(["herdr", "pane", "get", p])\n'):
+            assert _handoff_path_findings(source, filename="observer.py") == [], source
+
+    @pytest.mark.parametrize("verb", ["split", "close", "send-text", "send-keys"])
+    def test_a_DRIVING_herdr_argv_is_still_flagged(self, verb):
+        source = f'def go(r, p):\n    return r(["herdr", "pane", "{verb}", p])\n'
+        assert _handoff_path_findings(source, filename="synthetic.py"), verb
+
+    def test_a_driving_agent_argv_is_still_flagged(self):
+        source = 'def go(r, p):\n    return r(["herdr", "agent", "start", "x", "--pane", p])\n'
+        assert _handoff_path_findings(source, filename="synthetic.py")
 
     def test_a_backend_NAME_is_not_a_handoff_path(self):
         """Precision matters as much as sensitivity: `herdr` is a legitimate terminal-backend

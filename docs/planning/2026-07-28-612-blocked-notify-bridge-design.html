@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#612 — blocked to notify-owner bridge (design R2)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-28 05:45 MDT</div>
+<h1>#612 — blocked to notify-owner bridge (design R2)</h1>
+
+</header>
+<main>
+<h1>#612 — blocked → notify-owner bridge (design, <strong>revision 2</strong>)</h1>
+<p>Epic #667, child 7. Written 2026-07-28. <strong>R2 after a Step-4 review returned FAIL with a BLOCKER, and the probes agreed with it.</strong> Loop-back consumed: <code>design</code> 1 of 2, global 1 of 3.</p>
+<p>R1 was built on <code>pane.agent_status_changed</code> and a <code>state_change_seq</code> dedup key. Both were wrong, and the way they were wrong is the interesting part: R1&#x27;s implementation passed 54 tests because the tests synthesised the event shape R1 had assumed. That is the fifth time this epic has produced a green suite over an invented contract, so R2 states the provenance of every shape it uses.</p>
+<h2>1. What is being built</h2>
+<p><strong>Only the watcher half.</strong> The transport exists and is in daily use: <code>projects/sentinel/bin/notify.sh</code> via the <code>notify-owner</code> skill (one-way; already handles password-out-of-argv, 0600 temp files, HTTP-code reporting and a self-check), and <code>hooks/hermes_bridge.py</code> (#568/#584) for two-way. #608 AC5 proved notify-owner reachability from a herdr context; AC1 names that transport. This change owns subscribe → recognise → reconcile → debounce → notify → heartbeat.</p>
+<h2>2. The platform, measured — every claim here was observed on the wire</h2>
+<table>
+<thead><tr><th>Finding</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td><strong><code>pane.agent_status_changed</code> never observed firing</strong></td><td>0 frames in two captures: 135 s subscribed to all 8 panes, then 90 s subscribed to two named panes while polling their status</td></tr>
+<tr><td><strong>It cannot be subscribed globally</strong></td><td>its subscription requires <code>pane_id</code> (<code>required: [&quot;type&quot;,&quot;pane_id&quot;]</code>); a global attempt is refused <code>invalid_request: missing field &#x27;pane_id&#x27;</code></td></tr>
+<tr><td><strong>It carries no sequence number</strong></td><td>properties are exactly <code>agent, agent_status, display_agent, pane_id, state_labels, title, workspace_id</code></td></tr>
+<tr><td><strong><code>state_change_seq</code> is not where R1 thought</strong></td><td>it is on <code>snapshot.agents</code> (7 items), NOT on <code>snapshot.panes</code> (8 items) and NOT on any event</td></tr>
+<tr><td><strong><code>pane.updated</code> is GLOBAL and sufficient</strong></td><td>no <code>pane_id</code>; embeds a full pane record with <code>agent_status</code>, <code>label</code>, <code>workspace_id</code>, <code>tab_id</code>, <code>agent</code>, and a monotonic <strong><code>revision</code></strong>; observed live with real <code>working</code>/<code>idle</code>/<code>unknown</code> values</td></tr>
+<tr><td><strong><code>snapshot.panes</code> carries <code>revision</code></strong></td><td>read live (<code>revision: 3</code>); it does NOT carry <code>label</code></td></tr>
+<tr><td><strong>A fresh subscription REPLAYS a backlog</strong></td><td>within 450 ms: created/closed frames for six long-gone panes, one created AND closed inside the replay</td></tr>
+<tr><td><strong>Wire names are snake_case</strong></td><td>subscribe <code>pane.updated</code>, receive <code>pane_updated</code></td></tr>
+</tbody>
+</table>
+<p>R1&#x27;s design would therefore have failed in the worst possible way: the event it waited on never arrives, and had it arrived, the dedup key would have been <code>None</code> on every frame — which in R1&#x27;s own reconciler meant *accept*, i.e. page the owner for the entire replay.</p>
+<h2>3. The architecture that follows from those facts</h2>
+<p><strong>Subscribe globally to <code>pane.updated</code> + <code>pane.created</code> + <code>pane.closed</code>.</strong> Nothing per-pane, so the fact that subscriptions are fixed for a connection stops mattering: a pane created later is covered by the same global feed, and there is no re-subscribe protocol to get wrong.</p>
+<p><strong>Reconcile every frame against <code>session.snapshot</code> before it can notify.</strong> The reconciler holds each pane&#x27;s <code>revision</code> baseline; a frame is accepted only for a known pane with a strictly newer revision. A frame with <strong>no</strong> revision fails CLOSED — without one there is no way to distinguish a replay from a live event, and guessing wrong pages the owner about a dead pane. A genuinely new pane is legitimately absent from the snapshot, so it is learned from the live <code>pane_created</code> feed — which Step 11 caught was <strong>not actually subscribed</strong> in the first cut, meaning every post-snapshot pane was ignored forever. It is subscribed now.</p>
+<p><strong>Panes already blocked when the watcher starts are swept from the snapshot.</strong> Step 11 found the advertised &quot;first observation of blocked counts&quot; missed exactly that case: the snapshot records <code>blocked</code>, any replayed frame is rejected as equal to the baseline, and the transition map starts empty — so an agent that was already waiting was never reported. A restart therefore re-notifies a still-blocked pane, which is the right trade: it still needs a human, and a duplicate page is a much smaller harm than silence.</p>
+<p><strong>Notify on a transition INTO <code>blocked</code></strong>, tracked from our own observed series. A first observation of <code>blocked</code> counts: an agent already waiting when the watcher starts is exactly the case F2 says to expect, and requiring a known prior status would silently miss it.</p>
+<p><strong>Debounce reserves, and only a CONFIRMED send commits.</strong> A review found R1 could lose a notification permanently — a failed transport consumed the window, and with no further transition the owner never heard. So <code>allow</code> reserves, <code>commit</code> runs after rc 0, and <code>release</code> reopens the window on failure so the next frame retries. Step 11 found releasing the window was not enough on its own: <code>prior</code> advanced to <code>blocked</code> before the send, so after a failure the next blocked frame was no longer a transition and nothing retried. Neither the window nor the transition state is consumed by a failed send now.</p>
+<h2>4. AC5 is a PROVENANCE boundary, not keyword hygiene</h2>
+<p>R1 refused forbidden keyword arguments. The review pointed out that this stops nothing: a caller can pass <code>label=event.title</code> and every key looks legitimate. Every pane record carries <code>terminal_title</code>/<code>terminal_title_stripped</code>, and a terminal title echoes the current task.</p>
+<p>So <code>body_for_pane</code> is the <strong>only</strong> public builder, it takes a pane RECORD, and it SELECTS <code>label</code>/<code>name</code>/<code>pane_id</code>, <code>workspace_id</code>, <code>tab_id</code>, <code>agent</code> itself. There is no parameter for caller-supplied display text to abuse. One residual hole is closed explicitly: if something upstream copied screen text into <code>label</code>, the body would leak it while every key looked fine — so a label identical to the record&#x27;s own <code>terminal_title</code> is refused. And <code>pane.output_matched</code> is never subscribed at all, so <code>matched_line</code> and <code>read.text</code> never enter the process.</p>
+<h2>5. AC3, and an honest statement of what its signal is not</h2>
+<p>AC3 asks for a heartbeat plus a warning when a waiting process sits <code>idle</code>/<code>unknown</code> with no recognised transition. Both ship, and the second one is described accurately rather than flatteringly.</p>
+<p><strong>The heartbeat needed a timer and an observer, and R1 had neither.</strong> A predicate is not periodic, and a watcher blocked reading a quiet socket cannot run one — nor can a dead watcher report its own death. So the socket read carries a timeout and yields <code>None</code> on expiry, which is what drives the heartbeat during silence, and the heartbeat is <strong>written to disk</strong> (<code>write_heartbeat</code>) for something outside to check. A heartbeat nobody reads proves nothing: an external observer alerting on staleness is required and is named as a follow-up, not implied to exist.</p>
+<p><strong>The stall warning does NOT detect a missed prompt, and says so in its own text.</strong> The review was right: an ordinary finished pane can sit <code>idle</code> forever, and a detector miss can leave the last status as <code>working</code>, so <code>idle</code>/<code>unknown</code> plus elapsed time is neither necessary nor sufficient. What ships is AC3&#x27;s literal signal — a stale-pane warning — whose message states that it cannot tell a missed approval from an idle pane. Promising more would be the same overclaim this epic has already had caught four times.</p>
+<h2>6. Failure modes</h2>
+<table>
+<thead><tr><th>failure</th><th>behaviour</th></tr></thead>
+<tbody>
+<tr><td>socket absent / connect refused</td><td>fail loud, non-zero, nothing sent</td></tr>
+<tr><td>subscription refused</td><td>fail loud with herdr&#x27;s own payload preserved (#673)</td></tr>
+<tr><td>backlog replay on connect</td><td>every frame reconciled against the snapshot; the six-pane replay notifies nobody</td></tr>
+<tr><td>frame with no <code>revision</code></td><td>dropped, fail-closed</td></tr>
+<tr><td>stale or equal <code>revision</code></td><td>dropped as a replay or a re-delivery</td></tr>
+<tr><td>pane closed</td><td>forgotten; later frames for it are dropped</td></tr>
+<tr><td>pane created after the snapshot</td><td>learned from the live feed; first frame accepted</td></tr>
+<tr><td>same pane blocks twice quickly</td><td>debounced; a genuine later block after the window notifies</td></tr>
+<tr><td>transport returns non-zero</td><td>window NOT consumed, <code>send_failures</code> counted, next frame retries</td></tr>
+<tr><td>label copied from screen text</td><td>body refused rather than leaked</td></tr>
+<tr><td>quiet socket</td><td>read timeout fires the heartbeat and writes it to disk</td></tr>
+<tr><td>watcher dies</td><td>its heartbeat goes stale — detectable only by an external observer (follow-up)</td></tr>
+<tr><td>socket closed by herdr</td><td>reported as an ERROR and the run exits non-zero, so a supervisor restarts it. Step 11 found EOF used to return quietly and exit 0, i.e. an unattended watcher stopped watching in silence</td></tr>
+<tr><td>a frame with an unrecognised status</td><td>dropped WITHOUT advancing the revision, so a corrected frame at the same revision is still seen</td></tr>
+<tr><td>detector misses a prompt (F2)</td><td>stale-pane warning, explicitly not a miss detector</td></tr>
+</tbody>
+</table>
+<h2>7. Out of scope</h2>
+<p>Enforcement-relevant liveness (sentinel/exit-code, HD2.4), dashboard polish (HD3.4), any change to the notify-owner transport, and the external heartbeat observer.</p>
+<h2>8. AC2 — what is NOT proven, stated plainly</h2>
+<p>AC2 asks for representative REAL Claude and Codex approval screens driven through the pinned detection manifests, with a notification asserted within a deadline. <strong>This is not discharged here.</strong> Two reasons, both structural rather than effort: driving a real approval screen means putting a live agent into a blocking prompt on this host, and <code>pane.agent_status_changed</code> — the event whose name suggests it reports exactly that — was never observed firing at all, so what herdr emits when a pane genuinely blocks has not been captured. Every other AC is exercised against observed frame shapes; AC2 needs a live blocked pane and is recorded as verification_deferred with the check to run.</p>
+
+</main>
+<footer>Last updated: 2026-07-28 05:45 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
