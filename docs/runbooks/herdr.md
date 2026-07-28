@@ -186,16 +186,24 @@ A herdr-gated project routes its build seat through `herdr pane split --current`
 
 **The mechanism, and the one probed fact it rests on:** `herdr pane split` accepts an **explicit** pane id (`--pane <ID>`), not only `--current`. Splitting from a named **anchor pane** therefore needs no current pane — and the session started in the resulting pane *has* one, so `--current` resolves normally for that session's own dispatches. No `HerdrBackend` change is needed.
 
-The implementation is `hooks/launcher_lib.py`. `perform_handoff` is the wired entry point: it executes the ordered sequence through an **injectable runner** (`subprocess.run(argv, shell=False)` by default), parses each response strictly, reads the verification artifacts itself, and gates teardown internally. Every builder returns a `list[str]` argv; this module never constructs a shell string.
+The implementation is `hooks/launcher_lib.py`. `perform_handoff` is the wired sequence; `python3 hooks/launcher_lib.py handoff …` is the entry point that drives it from a campaign's driver-state file. It executes the ordered sequence through an **injectable runner** (`subprocess.run(argv, shell=False)` by default), parses each response strictly, reads the verification artifacts itself, and gates teardown internally. Every builder returns a `list[str]` argv; this module never constructs a shell string.
+
+**What ships here and what does not.** The in-repo entry point above is real and tested. The workspace launchers that would call it (`/home/rocky00717/rawgentic/*-resume.sh`) and the `long-run-resume` skill live **outside any git repository**, so wiring them is not part of this PR and no crontab line is installed. See §7.6.
 
 ### 7.1 The ordered sequence
 
-1. `herdr pane split --pane <anchor> --direction down --cwd <repo>`, then strictly parse the new pane id out of the response. An unparseable response aborts.
-2. `herdr agent start <name> --kind claude --pane <new> --timeout <ms>` — **with no goal** (see §7.2).
-3. `herdr agent wait <new> --until idle --timeout <ms>` — readiness, before anything is pasted.
-4. `herdr pane send-text <new> "/goal <condition>"` then `herdr pane send-keys <new> Enter`.
-5. Verify each step against its on-disk artifact, in order, aborting at the first failure.
-6. `herdr pane close <anchor>` — the predecessor, **last**, and only once every check passed.
+1. Record the current size of `session_registry.jsonl` — the **pre-launch offset**. Only evidence appearing after it counts (§7.4).
+2. `herdr pane split --pane <anchor> --direction down --cwd <repo>`, then strictly parse the new pane id out of the response. An unparseable response aborts.
+3. `herdr agent start <name> --kind claude --pane <new> --timeout <ms>` — **with no goal** (see §7.2).
+4. `herdr agent wait <new> --until idle --timeout <ms>` — readiness, before anything is pasted.
+5. `herdr pane get <new>` → the successor's session id. Record its transcript's pre-launch offset too.
+6. `herdr pane send-text <new> "/goal <condition>"` then `herdr pane send-keys <new> Enter`.
+7. **Poll the transcript until the guard is proven armed** — a `goal_status` row with `met: false` whose condition is the one just armed. Failing here aborts *before* the successor is given any work.
+8. `herdr pane send-text <new> "<resume prompt>"` then `send-keys Enter`. The prompt is `driver_lib`'s canonical resume wording for the next ready child, never a hand-written string.
+9. Poll the registry until the successor's own `/rawgentic:switch` line appears.
+10. `herdr pane close <anchor>` — the predecessor, **last**, and only once every check passed.
+
+Step 8 comes after step 7 deliberately. A goal only re-prompts a session that tries to **stop**, so a successor that is armed but never given work sits idle and the run stalls silently — with the predecessor already retired. Equally, work handed to a session whose guard never armed is an **unguarded** run. Both orderings were wrong in earlier revisions; this one is the fix.
 
 ### 7.2 Why the goal is NOT armed at birth
 
@@ -207,21 +215,30 @@ The send-text route is used instead. It is independently proven for a 2847-char,
 
 `launcher_lib` never builds a shell string. That is **not** the same as "no shell is involved": herdr strips its `--`, shell-quotes each element, and submits a shell command to the pane's shell. An earlier version of this page claimed no shell ever parses the condition — that was wrong. No injection was found, because herdr's quoting is sound, but the honest residual risks are **argument and authority injection**, not shell injection. Hence:
 
-- `claude_args` is an **allowlist** (`--print`, `--continue`, `--resume`). An authority-bearing flag such as `--permission-mode` or `--config` is refused, because it would change the successor's authority.
+- The wired path takes a **typed launch mode**, not caller-supplied Claude options: `fresh` (no options) or `resume` (`--continue`). A stray `--continue` on a `fresh` handoff would silently defeat the no-`--resume` property `driver_lib.fresh_session_available` gates on.
+- Where Claude options are still accepted at the builder boundary they pass an **allowlist** (`--continue`, `--resume`). An authority-bearing flag such as `--permission-mode` or `--config` is refused, because it would change the successor's authority. `--print` is deliberately absent: it is non-interactive, and `herdr agent start` requires an interactive agent.
 - `cwd` is canonicalized and **confined below the project root**, so a caller cannot move the successor's execution out of the project.
-- Pane ids and agent names are validated fail-closed, option-shaped values refused, control characters rejected.
+- Pane ids and agent names are validated fail-closed, option-shaped values refused, control characters rejected. All of it happens **before** the split, so a refusal can never leave an orphan pane behind.
 
 ### 7.4 Verifying the handoff (never scraped pane text)
+
+Checked in this order — which is causal, not alphabetical:
 
 | Step | Artifact that proves it |
 |---|---|
 | `spawned` | `herdr pane get <pane>` returns a non-empty `agent_session.value` |
-| `project_switched` | `claude_docs/session_registry.jsonl` carries a line with the NEW session id |
-| `goal_armed` | the successor transcript carries a `goal_status` attachment with `met: false` |
+| `goal_armed` | the successor transcript, **below the pre-launch offset**, carries a `goal_status` attachment with `met: false` whose `condition` is the one just armed |
+| `project_switched` | `claude_docs/session_registry.jsonl`, **below the pre-launch offset**, carries a line with the NEW session id |
 
 Pane text is rendered, wrapped, and scrolls away, so it is never the evidence. A step whose artifact is missing, unreadable, or unparseable counts as **failed**, not passed: an unreported check is not evidence of success, and what it gates is irreversible. `goal_armed` specifically requires `met: false` — an already-met goal would not prove the successor is guarded. A live handoff failed on 2026-07-27 precisely because no step was verified and the goal silently never armed.
 
+**Evidence must be launch-bound.** With `--continue`/`--resume` the successor can carry a session id that already owns a registry line and an unmet goal row, so reading whole files would authorise teardown on the predecessor's own history. Each artifact's size is captured before the launch and only what lands after it counts; `goal_armed` additionally matches the row's `condition` against the text actually armed. A capped goal arms the **truncated** text, so that is the form compared — matching the original would fail forever and teardown could never fire.
+
+**Reads are polled, bounded, and fail closed.** The artifacts are written by hooks moments after the paste, so a single read races them. `goal_armed` polls up to 12 times at 1.5 s; `project_switched` polls up to 40 times at 3 s, because it needs the successor to run a whole `/rawgentic:switch` turn first. A read error mid-poll is retried, not fatal — a JSONL file being appended to can momentarily fail to read. Exhausting either budget fails the handoff and leaves the predecessor alive and guarded.
+
 Truncation is surfaced, never silent: if the condition exceeds the 4000-char cap (which includes the `/goal ` prefix and the truncation note, so a 4000-char condition does not itself fit), the wired path reports it on the step record.
+
+The condition itself is read **verbatim** from the predecessor's own last unmet `goal_status` row (`launcher_lib.py read-goal-condition --transcript <file>`), never retyped or summarised. The **last** unmet row wins, because a run can re-arm its goal and only the most recent row states what is still owed. No unmet row is an explicit refusal, not an invented condition.
 
 ### 7.5 Fallback, and what is deliberately NOT a fallback
 
@@ -235,7 +252,7 @@ The third branch is exactly #666's narrowed condition.
 
 ### 7.6 What is NOT yet proven (#611 ACs 2, 3, 5)
 
-Honest status, so this section is not read as more than it is. The sequence in §7.1 is implemented and driven end to end in tests through an injected runner. It has **not** been executed against a live herdr server or a real cron firing.
+Honest status, so this section is not read as more than it is. The sequence in §7.1 is implemented, has an in-repo entry point, and is driven end to end in tests through an injected runner. It has **not** been executed against a live herdr server or a real cron firing, and no workspace launcher calls it yet (those scripts are not in any git repo).
 
 - **AC2 (cron to headless-server path) and AC3 (a real resume cycle through cron landing in a pane) are unproven.** Both need an actual cron firing, i.e. a crontab write, which is owner-gated on this host.
 - **AC5 (a real build-seat dispatch inside a cron-spawned successor) is blocked by #671.** The build seat resolves to a Claude model while `MUTATING_FS_SANDBOXED` allowlists `codex` alone, so a mutating dispatch is refused at STEP 0 before pane resolution is reached. Pane availability is necessary but not sufficient until #671 is resolved.

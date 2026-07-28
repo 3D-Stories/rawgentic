@@ -63,6 +63,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 # Pane ids are OPAQUE stable handles upstream, so this validates the security-relevant
 # properties rather than pretending to know the grammar: non-empty, not option-shaped, no
@@ -77,6 +78,7 @@ _AGENT_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 GOAL_MAX_CHARS = 4000
 _TRUNCATION_NOTE = " […truncated at the 4000-char cap…]"
+_GOAL_PREFIX = "/goal "
 
 # herdr's own documented floor is >3000 ms; mirrored locally so a bad value is rejected here
 # with a clear message instead of failing inside herdr.
@@ -90,13 +92,33 @@ MAX_READINESS_TIMEOUT_MS = 300000
 # after the pane exists (#611 Step-11 Medium 6).
 _ALLOWED_CLAUDE_ARGS = frozenset({"--continue", "--resume"})
 
+# Typed launch modes replace caller-supplied `claude_args` on the wired path (#611 Step-11
+# High 1). `fresh` is the mode `driver_lib.fresh_session_available` gates on: it advertises a
+# no-`--resume` launch, so passing `--continue` here would silently defeat AC1.
+LAUNCH_MODES: dict[str, tuple[str, ...]] = {"fresh": (), "resume": ("--continue",)}
+
+# Bounded polling. The second revision read each artifact ONCE, immediately after `send-keys`,
+# which races the hooks that write them. The two budgets differ by an order of magnitude
+# because the waits are different in kind: `goal_status` is hook-written within seconds of the
+# paste, whereas the registry row needs the successor to run a whole `/rawgentic:switch` turn.
+GOAL_POLL_ATTEMPTS = 12
+GOAL_POLL_DELAY_S = 1.5
+SWITCH_POLL_ATTEMPTS = 40
+SWITCH_POLL_DELAY_S = 3.0
+
+# Order is CAUSAL. The guard is armed before the successor is given work — a session handed a
+# resume prompt before its goal exists is an UNGUARDED run — and the registry row cannot appear
+# until the resume prompt has made it run `/rawgentic:switch`. Checking `project_switched`
+# before the resume prompt was even sent (the second revision) could only pass on stale evidence.
 _VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
     {"step": "spawned",
      "artifact": "herdr pane get <pane> -> a non-empty agent_session.value"},
-    {"step": "project_switched",
-     "artifact": "claude_docs/session_registry.jsonl -> a line carrying the NEW session id"},
     {"step": "goal_armed",
-     "artifact": "the successor transcript -> a goal_status attachment with met:false"},
+     "artifact": "the successor transcript BELOW the pre-launch offset -> a goal_status "
+                 "attachment with met:false whose condition is the one we armed"},
+    {"step": "project_switched",
+     "artifact": "claude_docs/session_registry.jsonl BELOW the pre-launch offset -> a line "
+                 "carrying the NEW session id"},
 )
 
 
@@ -167,6 +189,19 @@ def validate_claude_args(args) -> list[str]:
                 f"authority-bearing flags must not be caller-supplied")
         out.append(a)
     return out
+
+
+def claude_args_for_launch_mode(mode) -> list[str]:
+    """Typed launch mode -> the Claude options it implies.
+
+    The wired path takes a MODE, never raw `claude_args`: an authority-bearing flag smuggled in
+    as a "claude arg" changes the successor's authority, and a stray `--continue` on a `fresh`
+    handoff silently defeats the very property `fresh_session_available` gates on.
+    """
+    if not isinstance(mode, str) or mode not in LAUNCH_MODES:
+        raise LauncherError(
+            f"unknown launch mode {mode!r} — expected one of {sorted(LAUNCH_MODES)}")
+    return list(LAUNCH_MODES[mode])
 
 
 def resolve_cwd(cwd: str, project_root: str) -> str:
@@ -240,10 +275,34 @@ def goal_text(condition: str) -> tuple[str, bool]:
         raise LauncherError(f"goal condition must be a string, got {type(condition).__name__}")
     if not condition.strip():
         raise LauncherError("goal condition is empty — refusing to arm an empty guard")
-    text = f"/goal {condition}"
+    text = f"{_GOAL_PREFIX}{condition}"
     if len(text) <= GOAL_MAX_CHARS:
         return (text, False)
     return (text[:GOAL_MAX_CHARS - len(_TRUNCATION_NOTE)] + _TRUNCATION_NOTE, True)
+
+
+def armed_condition(condition: str) -> tuple[str, bool]:
+    """The condition text as it will ACTUALLY be armed — i.e. after any truncation.
+
+    This is what the successor's `goal_status` row will carry, so it is what the launch-binding
+    check must compare against. Matching the caller's original text instead would fail forever
+    on any capped goal, and predecessor teardown could never fire (#611 Step-11 Medium 4).
+    """
+    text, truncated = goal_text(condition)
+    return (text[len(_GOAL_PREFIX):], truncated)
+
+
+def build_send_text_argv(*, pane: str, text: str) -> tuple[list[str], list[str]]:
+    """The proven paste route: `send-text` then a separate `send-keys Enter`.
+
+    A multiline payload arrives as one collapsed bracketed paste and does not submit early
+    (#654), which is why the Enter is a distinct call rather than a trailing newline.
+    """
+    validate_pane_id(pane)
+    if not isinstance(text, str) or not text.strip():
+        raise LauncherError("refusing to send empty text to the successor")
+    return (["herdr", "pane", "send-text", pane, text],
+            ["herdr", "pane", "send-keys", pane, "Enter"])
 
 
 def build_send_text_goal_argv(*, pane: str, goal_condition: str) -> tuple[list[str], list[str], bool]:
@@ -252,11 +311,9 @@ def build_send_text_goal_argv(*, pane: str, goal_condition: str) -> tuple[list[s
     `truncated` is returned rather than discarded: a silently shortened goal would guard less
     than the operator supplied, which the earlier revision did and the review caught.
     """
-    validate_pane_id(pane)
     text, truncated = goal_text(goal_condition)
-    return (["herdr", "pane", "send-text", pane, text],
-            ["herdr", "pane", "send-keys", pane, "Enter"],
-            truncated)
+    send_text, send_keys = build_send_text_argv(pane=pane, text=text)
+    return (send_text, send_keys, truncated)
 
 
 def build_fallback_launch_argv(*, prompt: str, permission_mode: str,
@@ -349,7 +406,8 @@ def registry_has_session(registry_text: str, session_id: str) -> bool:
     return False
 
 
-def transcript_has_unmet_goal(transcript_text: str) -> bool:
+def transcript_has_unmet_goal(transcript_text: str, *,
+                              expected_condition: str | None = None) -> bool:
     """A goal_status ATTACHMENT with `met: false` proves the guard is armed and not yet met.
 
     The shape is the real one, verified by reading live Claude transcripts:
@@ -365,6 +423,44 @@ def transcript_has_unmet_goal(transcript_text: str) -> bool:
 
     `met: true` deliberately does NOT count: an already-satisfied guard does not prove the
     successor is guarded going forward.
+
+    `expected_condition` binds the evidence to THIS launch (#611 Step-11 Medium 4). Without it
+    any unmet goal in the file would do — and with `--continue`/`--resume` the successor can
+    inherit a transcript that already contains one. Pass the ARMED form (see `armed_condition`),
+    because a capped goal arms the truncated text and that is what the row will carry.
+    """
+    for row in _iter_goal_status(transcript_text):
+        if row.get("met") is not False:
+            continue
+        if expected_condition is None:
+            return True
+        cond = row.get("condition")
+        if isinstance(cond, str) and cond.strip() == expected_condition.strip():
+            return True
+    return False
+
+
+def last_unmet_goal_condition(transcript_text: str) -> str | None:
+    """The LAST unmet goal condition in a transcript, VERBATIM (#611 AC6).
+
+    The successor's guard is armed from the predecessor's own last unmet `goal_status` row —
+    never retyped, never summarised. The LAST one wins because a run can re-arm its goal, and
+    only the most recent row states what is still owed. Returns None when there is nothing to
+    re-arm; the caller refuses rather than inventing a condition.
+    """
+    found: str | None = None
+    for row in _iter_goal_status(transcript_text):
+        cond = row.get("condition")
+        if row.get("met") is False and isinstance(cond, str) and cond.strip():
+            found = cond
+    return found
+
+
+def _iter_goal_status(transcript_text: str):
+    """Yield every `goal_status` object in a JSONL transcript, in file order.
+
+    Line-scoped and lenient: a transcript is append-only JSONL that can end mid-write, so one
+    unparseable line must never hide the rows around it.
     """
     for line in transcript_text.splitlines():
         if "goal_status" not in line:
@@ -373,21 +469,21 @@ def transcript_has_unmet_goal(transcript_text: str) -> bool:
             rec = json.loads(line)
         except ValueError:
             continue
-        if _find_unmet_goal(rec):
-            return True
-    return False
+        yield from _find_goal_status(rec)
 
 
-def _find_unmet_goal(node) -> bool:
+def _find_goal_status(node):
     """Recursive so a nested/reshaped record still matches, but keyed on the REAL contract:
-    an object whose `type` is `goal_status` and whose `met` is exactly False."""
+    an object whose `type` is `goal_status`."""
     if isinstance(node, dict):
-        if node.get("type") == "goal_status" and node.get("met") is False:
-            return True
-        return any(_find_unmet_goal(v) for v in node.values())
-    if isinstance(node, list):
-        return any(_find_unmet_goal(v) for v in node)
-    return False
+        if node.get("type") == "goal_status":
+            yield node
+            return
+        for value in node.values():
+            yield from _find_goal_status(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _find_goal_status(value)
 
 
 def handoff_verification_steps() -> list[dict[str, str]]:
@@ -426,12 +522,58 @@ def herdr_available(which=shutil.which) -> bool:
     return which("herdr") is not None
 
 
+def _poll_for(check, *, attempts: int, delay_s: float, sleeper) -> bool:
+    """Bounded wait for an on-disk artifact. Returns False when it never appears.
+
+    A read error mid-poll is swallowed and retried, not fatal: a JSONL file being appended to
+    can momentarily fail to read, and treating that as a verdict would abort a handoff that was
+    about to succeed. Exhausting the budget still FAILS CLOSED — what this gates (predecessor
+    teardown) is irreversible.
+    """
+    for attempt in range(attempts):
+        if attempt:
+            sleeper(delay_s)
+        try:
+            if check():
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def _artifact_offset(read_text, path) -> int:
+    """Size of an artifact BEFORE the launch, so only what lands after it counts as evidence.
+
+    Unreadable means "nothing here yet" (offset 0), not failure: the successor's transcript
+    genuinely does not exist until it is spawned.
+    """
+    try:
+        return len(read_text(path))
+    except OSError:
+        return 0
+
+
 def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
-                    goal_condition: str, registry_path: str, transcript_path_for,
-                    claude_args=None, readiness_timeout_ms: int = 30000,
-                    runner=_default_runner, read_text=None,
+                    goal_condition: str, resume_prompt: str, registry_path: str,
+                    transcript_path_for, launch_mode: str = "fresh",
+                    readiness_timeout_ms: int = 30000,
+                    runner=_default_runner, read_text=None, sleeper=time.sleep,
                     teardown: bool = True) -> dict:
     """Execute the ordered handoff. Effects are injected so tests drive the whole sequence.
+
+    THE ORDER, and why each position is load-bearing:
+
+    1. split from an explicit anchor pane, 2. `agent start` (no goal — see the module
+    docstring), 3. `agent wait --until idle`, 4. `pane get` for the successor's session id,
+    5. **capture the pre-launch artifact offsets**, 6. paste + submit the goal, 7. **verify the
+    guard actually armed**, 8. only then paste + submit the resume prompt, 9. verify the
+    successor switched project, 10. retire the predecessor LAST.
+
+    Step 8 after step 7 is the fix for #611 Step-11 High 1: the second revision armed a goal and
+    stopped, so the successor sat guarded but idle — a goal only re-prompts a session that tries
+    to STOP, so the run stalled silently while the predecessor had already been retired.
+    Verifying before sending matters too: work handed to a session whose guard never armed is an
+    UNGUARDED run.
 
     Ownership discipline (#611 Step-11 High 3): once the split has created a tentative
     successor pane, EVERY failure path — a failed command, a failed verification, a validation
@@ -464,8 +606,15 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     split_argv = build_split_argv(anchor_pane=anchor_pane, cwd=cwd, project_root=project_root)
     validate_agent_name(name)
     validate_readiness_timeout(readiness_timeout_ms)
-    validate_claude_args(claude_args)
+    claude_args = claude_args_for_launch_mode(launch_mode)
     goal_text(goal_condition)          # raises on a bad/blank condition before anything runs
+    if not isinstance(resume_prompt, str) or not resume_prompt.strip():
+        raise LauncherError("resume_prompt is empty — a guarded successor with no work would "
+                            "sit idle while the predecessor is retired")
+
+    # Captured BEFORE the split so nothing already on disk can be mistaken for this launch's
+    # evidence (#611 Step-11 Medium 4).
+    registry_offset = _artifact_offset(read_text, registry_path)
 
     proc = runner(split_argv)
     record("split", split_argv, proc)
@@ -498,6 +647,19 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             out["failed_step"] = "agent_wait"
             return out
 
+        get_argv = build_pane_get_argv(new_pane)
+        proc = runner(get_argv)
+        record("pane_get", get_argv, proc)
+        session_id = parse_pane_agent_session(getattr(proc, "stdout", "") or "")
+        out["session_id"] = session_id
+        out["results"]["spawned"] = bool(session_id)
+        if not session_id:
+            out["failed_step"] = "spawned"
+            return out
+
+        transcript_path = transcript_path_for(session_id)
+        transcript_offset = _artifact_offset(read_text, transcript_path)
+
         text_argv, keys_argv, truncated = build_send_text_goal_argv(
             pane=new_pane, goal_condition=goal_condition)
         out["truncated"] = truncated
@@ -509,24 +671,28 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                 out["failed_step"] = kind
                 return out
 
-        get_argv = build_pane_get_argv(new_pane)
-        proc = runner(get_argv)
-        record("pane_get", get_argv, proc)
-        session_id = parse_pane_agent_session(getattr(proc, "stdout", "") or "")
-        out["session_id"] = session_id
-        out["results"]["spawned"] = bool(session_id)
+        expected, _ = armed_condition(goal_condition)
+        out["results"]["goal_armed"] = _poll_for(
+            lambda: transcript_has_unmet_goal(
+                read_text(transcript_path)[transcript_offset:], expected_condition=expected),
+            attempts=GOAL_POLL_ATTEMPTS, delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
+        if not out["results"]["goal_armed"]:
+            out["failed_step"] = "goal_armed"
+            return out
 
-        if session_id:
-            try:
-                out["results"]["project_switched"] = registry_has_session(
-                    read_text(registry_path), session_id)
-            except OSError:
-                out["results"]["project_switched"] = False
-            try:
-                out["results"]["goal_armed"] = transcript_has_unmet_goal(
-                    read_text(transcript_path_for(session_id)))
-            except OSError:
-                out["results"]["goal_armed"] = False
+        # Only now — the guard is proven armed — is the successor given work.
+        prompt_argv, prompt_keys = build_send_text_argv(pane=new_pane, text=resume_prompt)
+        for kind, argv in (("send_resume_prompt", prompt_argv),
+                           ("send_resume_keys", prompt_keys)):
+            proc = runner(argv)
+            record(kind, argv, proc)
+            if getattr(proc, "returncode", 1) != 0:
+                out["failed_step"] = "send_resume_prompt"
+                return out
+
+        out["results"]["project_switched"] = _poll_for(
+            lambda: registry_has_session(read_text(registry_path)[registry_offset:], session_id),
+            attempts=SWITCH_POLL_ATTEMPTS, delay_s=SWITCH_POLL_DELAY_S, sleeper=sleeper)
 
         ok, failed, _ = evaluate_verifications(out["results"])
         if not ok:
@@ -591,12 +757,118 @@ def _extract_pane_id(stdout: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# the production caller — driver state in, handoff out
+# ---------------------------------------------------------------------------
+
+def _driver_lib():
+    """Imported lazily so `launcher_lib` stays importable on its own (and so a driver_lib
+    import error surfaces at the one subcommand that needs it, not at module load)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import driver_lib  # pylint: disable=import-outside-toplevel
+    return driver_lib
+
+
+def resume_prompt_for_state(state: dict) -> str | None:
+    """The canonical resume prompt for the next ready child, or None when nothing is ready.
+
+    Deliberately delegated to `driver_lib._build_resume_prompt` via `fresh_session_handoff`
+    rather than written here: the successor must rebuild from durable state, and two copies of
+    that wording would drift. `None` means the campaign is complete or blocked — there is
+    nothing to hand off, and the caller must not spawn a successor with no work.
+    """
+    driver_lib = _driver_lib()
+    disposition = driver_lib.fresh_session_handoff(state, mode=driver_lib.FRESH_SESSION_MODE)
+    if disposition.get("outcome") != "ready":
+        return None
+    return disposition["resume_prompt"]
+
+
+def _cmd_handoff(args) -> int:
+    """The non-test caller the Step-11 review found missing.
+
+    The workspace `*-resume.sh` launchers invoke this. They live outside any git repo
+    (workspace root is not a repository), so the logic that needs tests lives here and the
+    launcher is a thin call — D-11 finding 2.
+    """
+    driver_lib = _driver_lib()
+    with open(args.driver_state, encoding="utf-8") as fh:
+        state = json.load(fh)
+
+    disposition = driver_lib.fresh_session_handoff(state, mode=driver_lib.FRESH_SESSION_MODE)
+    if disposition.get("outcome") != "ready":
+        print(f"no handoff: campaign disposition is {disposition.get('outcome')!r}")
+        return 3
+
+    available, reason = driver_lib.fresh_session_available(
+        state, launcher_armed=True, handoff_writable=True, fresh_launch_supported=True,
+        launch_mode=args.herdr_mode)
+    if not available:
+        print(f"no handoff: {reason} (launch mode {args.herdr_mode!r})")
+        return 3
+
+    condition = args.goal_condition
+    if condition is None:
+        with open(args.goal_condition_from, encoding="utf-8") as fh:
+            condition = last_unmet_goal_condition(fh.read())
+        if condition is None:
+            print("no unmet goal in the predecessor transcript — refusing to invent a "
+                  "condition", file=sys.stderr)
+            return 3
+
+    transcript_dir = args.transcript_dir
+    out = perform_handoff(
+        anchor_pane=args.anchor_pane, cwd=args.cwd, project_root=args.project_root,
+        name=args.name, goal_condition=condition,
+        resume_prompt=disposition["resume_prompt"],
+        registry_path=args.registry,
+        transcript_path_for=lambda s: os.path.join(transcript_dir, f"{s}.jsonl"),
+        launch_mode=args.launch_mode, teardown=not args.no_teardown)
+    print(json.dumps({k: out[k] for k in
+                      ("ok", "results", "failed_step", "new_pane", "session_id",
+                       "truncated", "cleanup")}, indent=2))
+    return 0 if out["ok"] else 4
+
+
+# ---------------------------------------------------------------------------
 # thin CLI
 # ---------------------------------------------------------------------------
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="herdr launch mode helpers (#611)")
     sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_ho = sub.add_parser("handoff", help="run the wired herdr handoff for a campaign")
+    p_ho.add_argument("--driver-state", required=True,
+                      help="claude_docs/.driver-state/<campaign>.json")
+    p_ho.add_argument("--anchor-pane", required=True, help="the PREDECESSOR's pane id")
+    p_ho.add_argument("--name", required=True, help="herdr agent name for the successor")
+    p_ho.add_argument("--project-root", required=True)
+    p_ho.add_argument("--cwd", required=True)
+    p_ho.add_argument("--registry", required=True,
+                      help="claude_docs/session_registry.jsonl")
+    p_ho.add_argument("--transcript-dir", required=True,
+                      help="~/.claude/projects/<slug>/ — <session-id>.jsonl lives here")
+    cond = p_ho.add_mutually_exclusive_group(required=True)
+    cond.add_argument("--goal-condition")
+    cond.add_argument("--goal-condition-from", metavar="PREDECESSOR_TRANSCRIPT",
+                      help="read the last unmet goal condition VERBATIM (AC6)")
+    p_ho.add_argument("--launch-mode", default="fresh", choices=sorted(LAUNCH_MODES))
+    p_ho.add_argument("--herdr-mode", required=True,
+                      choices=("herdr", "pane_less", "single_session"),
+                      help="the verdict from `select-mode`")
+    p_ho.add_argument("--no-teardown", action="store_true",
+                      help="verify everything but leave the predecessor running")
+
+    p_read = sub.add_parser("read-goal-condition",
+                            help="the predecessor's last unmet goal condition, verbatim (AC6)")
+    p_read.add_argument("--transcript", required=True)
+
+    # The `pane_less` half of AC1/AC4. Exposed so the non-herdr launch has an in-repo entry
+    # point too — a builder with no caller is the disconnected-module smell both reviews caught.
+    p_fb = sub.add_parser("build-fallback", help="argv for the retained pane-less launch")
+    p_fb.add_argument("--prompt", required=True)
+    p_fb.add_argument("--permission-mode", default="bypassPermissions")
+    p_fb.add_argument("--wall-timeout", default=None)
 
     p_mode = sub.add_parser("select-mode")
     p_mode.add_argument("--terminal-backend", default=None)
@@ -618,6 +890,16 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
+        if args.cmd == "handoff":
+            return _cmd_handoff(args)
+        if args.cmd == "read-goal-condition":
+            with open(args.transcript, encoding="utf-8") as fh:
+                condition = last_unmet_goal_condition(fh.read())
+            if condition is None:
+                print("no unmet goal_status row in that transcript", file=sys.stderr)
+                return 3
+            print(json.dumps({"condition": condition}))
+            return 0
         if args.cmd == "select-mode":
             mode, reason = select_launch_mode(
                 terminal_backend=args.terminal_backend,
@@ -632,6 +914,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.cmd == "verification-steps":
             print(json.dumps(handoff_verification_steps(), indent=2))
+            return 0
+        if args.cmd == "build-fallback":
+            print(json.dumps(build_fallback_launch_argv(
+                prompt=args.prompt, permission_mode=args.permission_mode,
+                wall_timeout=args.wall_timeout)))
             return 0
         if args.cmd == "goal-text":
             text, truncated = goal_text(args.condition)

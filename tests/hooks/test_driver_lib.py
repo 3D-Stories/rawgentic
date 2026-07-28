@@ -554,6 +554,38 @@ class TestFreshSessionAvailable:
             _st([]), launcher_armed=True, handoff_writable=False, fresh_launch_supported=True)
         assert ok is False and "writ" in reason.lower()
 
+    # --- #611 Step-11 High 1: the herdr decision belongs at THIS boundary ---------------
+
+    def test_launch_mode_defaults_to_unspecified_and_changes_nothing(self):
+        """Back-compat: every #569 caller omits the argument and keeps its exact contract."""
+        ok, _ = dl.fresh_session_available(
+            _st([]), launcher_armed=True, handoff_writable=True, fresh_launch_supported=True)
+        assert ok is True
+
+    def test_single_session_launch_mode_refuses(self):
+        """A herdr-gated project with no reachable pane must keep its current loop. Deciding
+        this only inside the launcher left the real boundary — the driver's own availability
+        check — still saying yes (#611 Step-11 High 1)."""
+        ok, reason = dl.fresh_session_available(
+            _st([]), launcher_armed=True, handoff_writable=True, fresh_launch_supported=True,
+            launch_mode="single_session")
+        assert ok is False and "single_session" in reason
+
+    def test_herdr_and_pane_less_launch_modes_are_both_available(self):
+        for mode in ("herdr", "pane_less"):
+            ok, _ = dl.fresh_session_available(
+                _st([]), launcher_armed=True, handoff_writable=True,
+                fresh_launch_supported=True, launch_mode=mode)
+            assert ok is True, mode
+
+    def test_an_unknown_launch_mode_fails_closed(self):
+        """Fail-open means degrading to the single-session loop, never launching on a mode
+        nobody recognises."""
+        ok, reason = dl.fresh_session_available(
+            _st([]), launcher_armed=True, handoff_writable=True, fresh_launch_supported=True,
+            launch_mode="turbo")
+        assert ok is False and "turbo" in reason
+
 
 def _pending(gen=5, nxt=7):
     # a ready state: generation counter == the pending generation (F2/F4 monotonic contract).
