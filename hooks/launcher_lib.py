@@ -632,6 +632,10 @@ def _find_goal_status(node):
             yield from _find_goal_status(value)
 
 
+_KNOWN_VERIFICATION_STEPS = frozenset(
+    s["step"] for s in _VERIFICATION_STEPS + _MID_CHILD_VERIFICATION_STEPS)
+
+
 def handoff_verification_steps() -> list[dict[str, str]]:
     return [dict(s) for s in _VERIFICATION_STEPS]
 
@@ -659,8 +663,23 @@ def evaluate_verifications(results: dict[str, bool],
     `steps` defaults to #611's three-step launch ladder, so every existing caller and its pinned
     contract are untouched; the mid-child path passes `mid_child_verification_steps()`. The
     ladder LOGIC stays single-sourced here rather than being copied per ladder.
+
+    **The ladder itself is validated (8a correctness 4).** It was previously accepted as complete
+    authority, which made two vacuous authorisations reachable: an EMPTY ladder passed every
+    check trivially and `teardown_allowed` said yes with nothing proven, and a hand-built subset
+    carrying no `owner` key read as entirely predecessor-owned, silently disabling the
+    successor-owned half of the gate. A ladder must be non-empty and built from known steps.
     """
-    ladder = _VERIFICATION_STEPS if steps is None else steps
+    ladder = list(_VERIFICATION_STEPS if steps is None else steps)
+    if not ladder:
+        raise LauncherError(
+            "refusing to evaluate an EMPTY verification ladder — it would report success with "
+            "nothing proven and authorise an irreversible teardown")
+    unknown = sorted({s.get("step") for s in ladder} - _KNOWN_VERIFICATION_STEPS)
+    if unknown:
+        raise LauncherError(
+            f"unknown verification step(s) {unknown} — a ladder must be built from "
+            "handoff_verification_steps() or mid_child_verification_steps(), not hand-rolled")
     checked: list[str] = []
     for step in (s["step"] for s in ladder):
         checked.append(step)
@@ -1341,6 +1360,25 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
         except (OSError, UnicodeDecodeError):
             return ""
 
+    def _run(argv, kind, note=None):
+        """Run one command in the destructive region, converting a runner EXCEPTION into a failed
+        attempt rather than an abort (8a destructive 4).
+
+        `_default_runner` can raise `subprocess.TimeoutExpired`. Letting that propagate meant a
+        close that timed out AFTER a confirmed clear jumped straight to the outer handler, skipping
+        the remaining bounded retries AND the entire re-arm — leaving the predecessor alive and
+        unguarded while reporting a generic `error` rather than `alive_and_unguarded`. A timeout is
+        also genuinely ambiguous about whether the server acted, so it must be treated as "this
+        attempt did not demonstrably succeed", never as "stop".
+        """
+        try:
+            proc = runner(argv)
+        except (OSError, subprocess.SubprocessError) as exc:
+            record(kind, argv, None, note=f"runner raised {type(exc).__name__}: {exc}")
+            return None
+        record(kind, argv, proc, note=note)
+        return proc
+
     try:
         driver_lib = _driver_lib()
         state = _locked_state_read(driver_state_path)
@@ -1420,6 +1458,16 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             expected_project=position["project"],
             expected_project_path=position["project_path"])
 
+        launch_ladder = _predecessor_steps(mid_child_verification_steps())
+        ok_early, failed_early, _ = evaluate_verifications(out["results"], steps=launch_ladder)
+        if not ok_early:
+            out["outcome"] = "teardown_refused"
+            out["failed_step"] = failed_early
+            out["reason"] = (f"refusing teardown: verification {failed_early!r} has not passed — "
+                             "the predecessor stays alive and still guarded, and no claim is "
+                             "acked so a later generation can still take over cleanly")
+            return out
+
         def _git(*rev_args) -> str | None:
             argv = ["git", "-C", position["repo_root"], "rev-parse", *rev_args]
             proc = runner(argv)
@@ -1464,6 +1512,9 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
         out["results"]["position_rebuilt"] = rebuilt
 
         # --- 5. ack ---
+        # 8a correctness 2: gate the PREDECESSOR-owned checks BEFORE persisting a receipt or
+        # acking a claim. A claim marked `started` is never reclaimable, so acking on evidence
+        # that already failed strands the takeover until someone opens a new generation by hand.
         def _ack(s):
             acked, new = driver_lib.handoff_ack_started(s, generation, session_id)
             return new if acked else None
@@ -1483,15 +1534,27 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             return out
 
         # --- 7. prove the target's identity before touching it ---
-        get_argv = build_pane_get_argv(anchor_pane)
-        proc = runner(get_argv)
-        record("pane_get_anchor", get_argv, proc)
-        live_session = parse_pane_agent_session(getattr(proc, "stdout", "") or "")
-        if live_session != position["predecessor_session"]:
-            return refuse(
-                f"pre-teardown identity check FAILED: pane {anchor_pane} hosts "
-                f"{live_session!r}, not the recorded predecessor session "
-                f"{position['predecessor_session']!r} — refusing both destructive steps")
+        # 8a destructive 2: the return code is checked as well as the payload. A parseable stdout
+        # from a FAILED command was previously enough to satisfy this, and this is the check that
+        # stands between us and closing a stranger's pane.
+        def _anchor_hosts_predecessor() -> tuple[bool, str]:
+            get_argv = build_pane_get_argv(anchor_pane)
+            proc = runner(get_argv)
+            record("pane_get_anchor", get_argv, proc)
+            if getattr(proc, "returncode", 1) != 0:
+                return (False, f"identity check FAILED: `herdr pane get {anchor_pane}` returned "
+                               f"rc={getattr(proc, 'returncode', None)} — an unreadable target is "
+                               "not a verified one")
+            live = parse_pane_agent_session(getattr(proc, "stdout", "") or "")
+            if live != position["predecessor_session"]:
+                return (False, f"identity check FAILED: pane {anchor_pane} hosts {live!r}, not "
+                               f"the recorded predecessor session "
+                               f"{position['predecessor_session']!r}")
+            return (True, "")
+
+        ok_identity, why = _anchor_hosts_predecessor()
+        if not ok_identity:
+            return refuse(f"{why} — refusing both destructive steps")
 
         # --- 8. is OUR guard still in force? ---
         own_text = read_or_empty(own_transcript)
@@ -1507,38 +1570,94 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
                 "the continuing run is already unguarded — retiring the predecessor here is the "
                 "original defect this workflow exists to prevent")
 
-        # --- 9. record the phase, clear, then CONFIRM the clear ---
-        def _phase(value):
+        # --- 9. FENCE, record the phase, clear, then CONFIRM the clear ---
+        #
+        # 8a correctness 1 / destructive 3, both reviewers converging: `cancelled` and the claim
+        # were validated only at ENTRY, and the phase write validated nothing and ignored its own
+        # failure. So a cancel landing before the clear, or a newer generation installed by
+        # `open_handoff`, could not stop a teardown already in flight — and the phase could be
+        # written into a DIFFERENT generation's record. Design §3 R4 requires this re-validation
+        # under the lock immediately before the destructive step; it was missing.
+        def _phase(value, *, fenced: bool):
+            """Set `teardown_phase` under the lock, optionally re-validating the whole record.
+
+            Returns (ok, reason). When `fenced`, the write only lands if this is still OUR
+            un-cancelled generation and OUR claim — the check and the write share one lock hold,
+            so nothing can slip between them.
+            """
+            verdict: dict = {}
+
             def _mutate(s):
-                p = s.get("handoff_pending")
-                if not isinstance(p, dict):
+                pend = s.get("handoff_pending")
+                if not isinstance(pend, dict):
+                    verdict["reason"] = "handoff_pending has disappeared from driver state"
                     return None
+                if fenced:
+                    if pend.get("kind") != driver_lib.MID_CHILD_HANDOFF_KIND:
+                        verdict["reason"] = (f"handoff_pending.kind changed to "
+                                             f"{pend.get('kind')!r} while this teardown was in "
+                                             "flight")
+                        return None
+                    if pend.get("cancelled") is True:
+                        verdict["reason"] = ("the handoff was CANCELLED after this teardown "
+                                             "began — refusing to clear a guard or close a pane")
+                        return None
+                    if pend.get("generation") != generation or s.get("generation") != generation:
+                        verdict["reason"] = (
+                            f"generation moved on: this claim is {generation}, driver state now "
+                            f"carries {s.get('generation')!r} with pending "
+                            f"{pend.get('generation')!r} — a newer handoff supersedes this one")
+                        return None
+                    claim = s.get("handoff_claim")
+                    if not (isinstance(claim, dict)
+                            and claim.get("generation") == generation
+                            and claim.get("claimant") == session_id):
+                        verdict["reason"] = ("the claim is no longer ours — another claimant or "
+                                             "generation holds it")
+                        return None
                 new = dict(s)
-                new["handoff_pending"] = {**p, "teardown_phase": value}
+                new["handoff_pending"] = {**pend, "teardown_phase": value}
                 return new
-            return _mutate
+
+            landed = _locked_state_update(driver_state_path, _mutate) is not None
+            return (landed, verdict.get("reason", "the driver-state write did not land"))
 
         # Persisted BEFORE the send, so the one window where a crash leaves the predecessor
-        # alive and UNGUARDED is discoverable on disk instead of invisible (§6 step 9).
-        _locked_state_update(driver_state_path, _phase("clearing"))
+        # alive and UNGUARDED is discoverable on disk instead of invisible (§6 step 9). A write
+        # that does NOT land aborts: proceeding would open that window with nothing on disk to
+        # find it by, which is the whole reason the phase exists.
+        fenced_ok, fence_reason = _phase("clearing", fenced=True)
+        if not fenced_ok:
+            return refuse(f"refusing at the pre-teardown fence: {fence_reason}")
+
         pred_transcript = os.path.join(transcript_dir,
                                        f"{position['predecessor_session']}.jsonl")
         pred_baseline = _baseline(read_text, pred_transcript)
         if pred_baseline is None:
-            _locked_state_update(driver_state_path, _phase(None))
+            _phase(None, fenced=False)
             return refuse("cannot baseline the predecessor transcript — without a baseline the "
                           "clear could never be confirmed, so nothing is sent")
 
         clear_text, clear_keys = build_send_text_argv(pane=anchor_pane, text=_CLEAR_COMMAND)
         for kind, argv in (("clear_text", clear_text), ("clear_keys", clear_keys)):
-            proc = runner(argv)
-            record(kind, argv, proc)
-            if getattr(proc, "returncode", 1) != 0:
-                _locked_state_update(driver_state_path, _phase(None))
+            proc = _run(argv, kind)
+            if proc is None or getattr(proc, "returncode", 1) != 0:
+                # 8a destructive 5: these two failures are NOT equivalent. If `send-text`
+                # succeeded and only the Enter failed, the `/goal clear` is sitting UNSUBMITTED in
+                # the predecessor's input, and a later stray Enter submits it — leaving the
+                # predecessor unguarded long after this function returned "STILL guarded". That
+                # state is recorded discoverably instead of being reset to idle.
+                staged = kind == "clear_keys"
+                _phase("clear_staged_unsubmitted" if staged else None, fenced=False)
                 out["outcome"] = "clear_failed"
                 out["failed_step"] = kind
-                out["reason"] = (f"{kind} for {_CLEAR_COMMAND!r} failed — aborting BEFORE "
-                                 "pane close; the predecessor is alive and STILL guarded")
+                out["reason"] = (
+                    f"{kind} for {_CLEAR_COMMAND!r} failed — aborting BEFORE pane close. "
+                    + ("The clear text was transported but never submitted, so it may be STAGED "
+                       "in the predecessor's input: it is still guarded now, but a later Enter "
+                       "would submit the clear. teardown_phase records this."
+                       if staged else
+                       "Nothing was transported, so the predecessor is alive and STILL guarded."))
                 return out
 
         def _cleared() -> bool:
@@ -1549,26 +1668,41 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
                          sleeper=sleeper):
             # Deliberately NOT reset to None: the clear may have landed while its confirmation
             # was unreadable, so the state stays discoverable rather than claiming to be idle.
-            _locked_state_update(driver_state_path, _phase("clear_unconfirmed"))
+            _phase("clear_unconfirmed", fenced=False)
             out["outcome"] = "clear_unconfirmed"
             out["reason"] = ("the clear was transported but never confirmed by a met:true "
                              "sentinel row — leaving the pane OPEN")
             return out
 
-        # --- 10. close, bounded ---
+        # --- 10. re-prove the target, then close, bounded ---
+        # 8a destructive 2: the identity proof above is now stale. The clear was confirmed, so the
+        # predecessor may have stopped and exited — and a pane id is a REUSABLE handle, so it can
+        # already belong to an unrelated session. Closing on the old proof would kill that session
+        # and report `retired`. Re-arming would paste into it too, so neither is safe: report and
+        # touch nothing.
+        ok_identity, why = _anchor_hosts_predecessor()
+        if not ok_identity:
+            _phase("target_changed_after_clear", fenced=False)
+            out["outcome"] = "target_changed_after_clear"
+            out["reason"] = (
+                f"{why}. The guard was already cleared, so the predecessor is alive-and-unguarded "
+                "OR has exited on its own — this cannot distinguish them. Refusing to close or "
+                "re-arm, because both would act on a pane that is no longer provably the "
+                "predecessor's. teardown_phase records this for an operator.")
+            return out
+
         close_argv = build_teardown_argv(anchor_pane)
         closed = False
         for attempt in range(CLOSE_ATTEMPTS):
             if attempt:
                 sleeper(CLOSE_RETRY_DELAY_S)
-            proc = runner(close_argv)
-            record("pane_close", close_argv, proc,
-                   note=f"attempt {attempt + 1}/{CLOSE_ATTEMPTS}")
-            if getattr(proc, "returncode", 1) == 0:
+            proc = _run(close_argv, "pane_close",
+                        note=f"attempt {attempt + 1}/{CLOSE_ATTEMPTS}")
+            if proc is not None and getattr(proc, "returncode", 1) == 0:
                 closed = True
                 break
         if closed:
-            _locked_state_update(driver_state_path, _phase(None))
+            _phase(None, fenced=False)
             out["outcome"] = "retired"
             out["ok"] = True
             out["reason"] = "guard cleared and confirmed, pane closed"
@@ -1584,9 +1718,8 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             pane=anchor_pane, goal_condition=position["goal_condition"])
         rearm_sent = True
         for kind, argv in (("rearm_text", rearm_text), ("rearm_keys", rearm_keys)):
-            proc = runner(argv)
-            record(kind, argv, proc, note="goal TRUNCATED" if truncated else None)
-            if getattr(proc, "returncode", 1) != 0:
+            proc = _run(argv, kind, note="goal TRUNCATED" if truncated else None)
+            if proc is None or getattr(proc, "returncode", 1) != 0:
                 rearm_sent = False
                 break
 
@@ -1604,7 +1737,7 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             "recorded condition" if confirmed else
             "pane close failed after a CONFIRMED clear AND the re-arm could not be confirmed — "
             "the predecessor may be alive and UNGUARDED; this is an incident")
-        _locked_state_update(driver_state_path, _phase(out["outcome"]))
+        _phase(out["outcome"], fenced=False)
         return out
     except (LauncherError, OSError, subprocess.SubprocessError, ValueError) as exc:
         out["outcome"] = out["outcome"] or "error"
@@ -1658,26 +1791,42 @@ def _cmd_handoff(args) -> int:
     # to the legacy branch and launch a second successor from a record it does not understand —
     # two successors competing for one generation. Absent is the only accepted value here; every
     # present value is refused, naming which case it is.
-    pend = state.get("handoff_pending")
-    if isinstance(pend, dict):
-        if "kind" in pend:
-            if pend["kind"] == driver_lib.MID_CHILD_HANDOFF_KIND:
+    def _refuse_foreign_kind(state_snapshot) -> int | None:
+        """The kind/cancelled allowlist, factored out so it can run TWICE (8a correctness 3).
+
+        This entry point reads driver state WITHOUT the lock (as #611 always has), so checking
+        once is a time-of-check/time-of-use window: a concurrent `mid-child-handoff` can install
+        `kind: "mid_child"` after this read and both commands then launch a successor — exactly
+        the two-successors-on-one-generation condition the discriminator exists to prevent. It is
+        re-run against a LOCKED re-read immediately before the launch, which narrows the window to
+        the launch call itself rather than the whole capability-probe sequence.
+        """
+        pend_now = state_snapshot.get("handoff_pending")
+        if not isinstance(pend_now, dict):
+            return None
+        if "kind" in pend_now:
+            if pend_now["kind"] == driver_lib.MID_CHILD_HANDOFF_KIND:
                 print(f"refusing: handoff_pending.kind is "
                       f"{driver_lib.MID_CHILD_HANDOFF_KIND!r} — a mid-child resume is already in "
                       "flight; building a child-boundary handoff from it would put a second "
                       "successor on one generation", file=sys.stderr)
             else:
-                print(f"refusing: unrecognised handoff_pending.kind {pend['kind']!r} — this "
+                print(f"refusing: unrecognised handoff_pending.kind {pend_now['kind']!r} — this "
                       "entry point handles only the legacy child-boundary handoff, which carries "
                       "no kind at all", file=sys.stderr)
             return 3
-        if pend.get("cancelled") is True:
+        if pend_now.get("cancelled") is True:
             # An aborted handoff cancels its own record, and until a later `open_handoff` bumps
             # the counter that record IS the current generation and therefore claimable. Refusing
             # it here is what stops a stray successor taking a lease on an abandoned handoff.
             print("refusing: handoff_pending is cancelled — an aborted handoff record must not "
                   "be claimed", file=sys.stderr)
             return 3
+        return None
+
+    refused = _refuse_foreign_kind(state)
+    if refused is not None:
+        return refused
 
     # The campaign's OWN mode decides whether there is a process boundary at all. Forcing
     # FRESH_SESSION_MODE here (the previous revision) would hand off for a campaign documented
@@ -1711,6 +1860,13 @@ def _cmd_handoff(args) -> int:
                   "condition", file=sys.stderr)
             return 3
 
+    # Re-check against a LOCKED re-read immediately before launching. Everything above — the
+    # disposition, the capability probes, the goal-condition read — takes time during which a
+    # concurrent `mid-child-handoff` can install its own record.
+    refused = _refuse_foreign_kind(_locked_state_read(args.driver_state))
+    if refused is not None:
+        return refused
+
     out = perform_handoff(
         anchor_pane=args.anchor_pane, cwd=args.cwd, project_root=args.project_root,
         name=args.name, goal_condition=condition,
@@ -1724,9 +1880,25 @@ def _cmd_handoff(args) -> int:
 
 
 def _own_session_id(explicit: str | None) -> str:
-    """The caller's own Claude session id. Never invented: an id we guessed would be compared
-    against the recorded successor identity, which is the whole basis of the teardown authority."""
-    return explicit or os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    """The caller's OWN Claude session id — the environment is authoritative.
+
+    8a destructive 1 (Critical): this used to return `explicit or env`, so a caller-supplied
+    `--session-id` OVERRODE the real identity. Since `retire_predecessor`'s whole authority is
+    "my own session id equals the recorded successor", any session — the predecessor included —
+    could read `handoff_pending.successor.session`, pass it back, and authorise the teardown. That
+    recreates exactly the predecessor-driven path approach C was rejected for, without touching
+    `.driver-state` at all.
+
+    So `$CLAUDE_CODE_SESSION_ID` wins whenever it is set, and an explicit value that CONTRADICTS
+    it is refused rather than silently preferred. The flag survives only as an assertion (useful
+    in tests and for an explicit operator invocation) and can no longer be an impersonation.
+    """
+    env = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if env and explicit and explicit != env:
+        raise LauncherError(
+            f"--session-id {explicit!r} contradicts $CLAUDE_CODE_SESSION_ID {env!r} — teardown "
+            "authority is THIS session's own identity, so an override is refused")
+    return env or explicit or ""
 
 
 def _cmd_mid_child_handoff(args) -> int:
@@ -1749,11 +1921,24 @@ def _cmd_mid_child_handoff(args) -> int:
                   "for the successor", file=sys.stderr)
             return 3
 
+    # 8a destructive 6: `--repo-root` and `--project-root` were independent inputs, and nothing
+    # bound the recorded repo to the project the successor proves it switched to. So
+    # `project_switched` could prove rawgentic while `position_rebuilt` proved an unrelated
+    # repository that happened to carry the same branch name — an authority-binding failure, not
+    # an injection. Confining it to the project root binds the two proofs to one tree.
+    try:
+        repo_root = resolve_cwd(args.repo_root, args.project_root)
+    except LauncherError as exc:
+        print(f"refusing: --repo-root is not inside --project-root ({exc}) — the recorded repo "
+              "must be the project the successor proves it switched to, or project_switched and "
+              "position_rebuilt can prove two different trees", file=sys.stderr)
+        return 2
+
     position = {"issue": args.issue, "step": args.step, "branch": args.branch,
                 "test_baseline": args.test_baseline, "predecessor_pane": args.anchor_pane,
                 "predecessor_session": predecessor_session, "goal_condition": condition,
                 "project": args.project, "project_path": args.project_path,
-                "repo_root": args.repo_root}
+                "repo_root": repo_root}
 
     # The disposition is computed INSIDE the lock so the generation it bumps is derived from the
     # state actually being written, not from a copy read earlier.
@@ -1785,17 +1970,26 @@ def _cmd_mid_child_handoff(args) -> int:
             return new
         _locked_state_update(args.driver_state, _mutate)
 
-    out = perform_handoff(
-        anchor_pane=args.anchor_pane, cwd=args.cwd, project_root=args.project_root,
-        name=args.name, goal_condition=condition,
-        resume_prompt=disposition["resume_prompt"], registry_path=args.registry,
-        transcript_dir=args.transcript_dir, launch_mode=args.launch_mode,
-        prompt_marker=driver_lib.mid_child_marker(position["issue"], generation),
-        expected_project=args.project, expected_project_path=args.project_path,
-        steps=mid_child_verification_steps(), teardown=False,
-        on_successor=_record_successor)
+    # 8a correctness 5: `perform_handoff` validates the pane id, agent name and transcript
+    # directory AFTER this record is persisted, and it RAISES rather than returning a result. So a
+    # malformed argument used to bump the generation and leave an uncancelled `mid_child` record
+    # that the legacy launcher refuses and no successor can ever satisfy. Every exit from here
+    # cancels, not just the ones that return.
+    out = None
+    try:
+        out = perform_handoff(
+            anchor_pane=args.anchor_pane, cwd=args.cwd, project_root=args.project_root,
+            name=args.name, goal_condition=condition,
+            resume_prompt=disposition["resume_prompt"], registry_path=args.registry,
+            transcript_dir=args.transcript_dir, launch_mode=args.launch_mode,
+            prompt_marker=driver_lib.mid_child_marker(position["issue"], generation),
+            expected_project=args.project, expected_project_path=args.project_path,
+            steps=mid_child_verification_steps(), teardown=False,
+            on_successor=_record_successor)
+    except (LauncherError, OSError, subprocess.SubprocessError) as exc:
+        print(f"mid-child handoff aborted: {exc}", file=sys.stderr)
 
-    if not out["ok"]:
+    if out is None or not out["ok"]:
         # An aborted handoff CANCELS its own record. Until a later `open_handoff` bumps the
         # counter the abandoned record IS the current generation and therefore claimable, so a
         # delayed or stray successor could otherwise take a lease on it. Monotonic: once the
@@ -1814,6 +2008,11 @@ def _cmd_mid_child_handoff(args) -> int:
 
         _locked_state_update(args.driver_state, _cancel)
 
+    if out is None:
+        print(json.dumps({"generation": generation, "ok": False,
+                          "failed_step": "exception_before_result",
+                          "cancelled": True}, indent=2))
+        return 4
     print(json.dumps({"generation": generation,
                       **{k: out[k] for k in ("ok", "results", "failed_step", "new_pane",
                                              "session_id", "truncated", "cleanup",

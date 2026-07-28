@@ -682,12 +682,13 @@ class TestRetireCLI:
     def test_a_refusal_is_a_non_zero_exit(self, tmp_path):
         world = _world(tmp_path)
         state = _write_state(tmp_path, world, pend_over={"cancelled": True})
+        env = {**os.environ, "CLAUDE_CODE_SESSION_ID": SUCC}
         proc = subprocess.run(
             [sys.executable, str(CLI), "retire-predecessor", "--driver-state", str(state),
              "--session-id", SUCC, "--anchor-pane", ANCHOR,
              "--transcript-dir", str(tmp_path / "transcripts"),
              "--registry", str(tmp_path / "reg.jsonl")],
-            capture_output=True, text=True, check=False)
+            capture_output=True, text=True, check=False, env=env)
         assert proc.returncode != 0
         assert "cancel" in (proc.stdout + proc.stderr).lower()
 
@@ -696,6 +697,13 @@ class TestMidChildHandoffCommand:
     """The predecessor's side. `perform_handoff` is stubbed because it needs a live herdr server,
     but the STATE MACHINE around it is the load-bearing half and is exercised for real: a
     subcommand whose only test is `--help` is the disconnected-module smell #611 shipped twice."""
+
+    @pytest.fixture(autouse=True)
+    def _as_the_predecessor(self, monkeypatch):
+        """These tests ARE the predecessor session, so its own id must be in the environment:
+        since the 8a fix, a `--predecessor-session`/`--session-id` that contradicts
+        $CLAUDE_CODE_SESSION_ID is refused rather than silently preferred."""
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", PRED)
 
     def _args(self, tmp_path, state_path, **over):
         from types import SimpleNamespace
@@ -912,3 +920,243 @@ class TestNoParallelHandoffPath:
                   'def pick(config):\n'
                   '    return config.get("build") == "herdr"\n')
         assert _handoff_path_findings(source, filename="synthetic.py") == []
+
+
+# --- WF2 Step 8a findings (two independent cross-model reviewers, both lenses) --------------
+#
+# Both reviewers converged on the same core defect: the design (§3 R4) requires
+# `retire_predecessor` to re-validate `cancelled` AND the claim under the lock immediately
+# before the destructive step, and the first implementation only checked them at entry. Every
+# test below pins one confirmed finding.
+
+def _spy(world, on_kind, effect):
+    """Wrap a FakeWorld so `effect()` runs when a matching argv is issued — the way a real
+    concurrent writer lands between our entry read and our destructive step."""
+    def runner(argv, timeout=180):
+        if on_kind(argv):
+            effect()
+        return world(argv, timeout)
+    return runner
+
+
+def _mutate_state(path, fn):
+    state = json.loads(Path(path).read_text(encoding="utf-8"))
+    fn(state)
+    Path(path).write_text(json.dumps(state), encoding="utf-8")
+
+
+class TestCancellationAndGenerationAreFencedAtTheDestructiveStep:
+    """8a finding (correctness 1 / destructive 3), CONFIRMED. The entry check is not enough: a
+    cancel or a generation bump landing after it must still stop the teardown, because what
+    follows clears a live guard and closes a pane."""
+
+    def test_a_cancel_landing_before_the_clear_refuses(self, tmp_path):
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        runner = _spy(world, lambda a: a[:3] == ["herdr", "pane", "get"],
+                      lambda: _mutate_state(
+                          state, lambda s: s["handoff_pending"].update(cancelled=True)))
+        out = _retire(state, world, tmp_path, runner=runner)
+        assert out["outcome"] == "refused" and "cancel" in out["reason"].lower(), out
+        assert "clear_text" not in world.kinds() and "pane_close" not in world.kinds()
+
+    def test_a_superseding_generation_refuses(self, tmp_path):
+        """If `open_handoff` has installed a newer generation, this claim is stale and its
+        teardown would clear a guard the NEW handoff is relying on."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        runner = _spy(world, lambda a: a[:3] == ["herdr", "pane", "get"],
+                      lambda: _mutate_state(state, lambda s: (
+                          s.update(generation=GEN + 1),
+                          s["handoff_pending"].update(generation=GEN + 1))))
+        out = _retire(state, world, tmp_path, runner=runner)
+        assert out["outcome"] == "refused" and "generation" in out["reason"], out
+        assert "clear_text" not in world.kinds() and "pane_close" not in world.kinds()
+
+    def test_a_foreign_claimant_taking_over_before_the_clear_refuses(self, tmp_path):
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        runner = _spy(world, lambda a: a[:3] == ["herdr", "pane", "get"],
+                      lambda: _mutate_state(state, lambda s: s.update(
+                          handoff_claim={"generation": GEN, "claimant": "someone-else",
+                                         "claimed_at": 1, "started": True})))
+        out = _retire(state, world, tmp_path, runner=runner)
+        assert out["outcome"] == "refused" and "claim" in out["reason"].lower(), out
+        assert "clear_text" not in world.kinds() and "pane_close" not in world.kinds()
+
+    def test_a_failed_phase_write_aborts_rather_than_being_ignored(self, tmp_path):
+        """The phase write is what makes the unguarded window discoverable. If it cannot be
+        persisted, proceeding would open that window with nothing on disk to find it by."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        out = _retire(state, world, tmp_path,
+                      driver_state_path=str(tmp_path / "does-not-exist.json"))
+        assert out["outcome"] in ("refused", "error"), out
+        assert "clear_text" not in world.kinds() and "pane_close" not in world.kinds()
+
+
+class TestPaneIdentityIsProvedBeforeEachDestructiveCall:
+    """8a finding (destructive 2), CONFIRMED: identity was checked once and the handle then
+    reused across the clear, the close, and every retry, with `pane get`'s return code ignored."""
+
+    def test_a_failed_pane_get_refuses(self, tmp_path):
+        world = _world(tmp_path, pane_get_rc=1)
+        state = _write_state(tmp_path, world)
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "refused" and "identity" in out["reason"]
+        assert "clear_text" not in world.kinds() and "pane_close" not in world.kinds()
+
+    def test_the_pane_is_re_proved_before_the_close(self, tmp_path):
+        """A pane id is a reusable handle. If the predecessor exits after a confirmed clear and
+        the id is reassigned, closing it would kill an unrelated session and report success."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+
+        def steal_pane():
+            world.pane_session = "a-totally-different-session"
+
+        runner = _spy(world, lambda a: a[:3] == ["herdr", "pane", "send-keys"], steal_pane)
+        out = _retire(state, world, tmp_path, runner=runner)
+        assert out["outcome"] == "target_changed_after_clear", out
+        assert "pane_close" not in world.kinds()
+        assert "rearm_text" not in world.kinds()      # re-arming would also hit the wrong pane
+        assert out["ok"] is False
+
+
+class TestDestructiveRegionExceptionsAreNotSwallowedAsGenericErrors:
+    """8a finding (destructive 4), CONFIRMED: `_default_runner` can raise TimeoutExpired, which
+    jumped straight to the outer handler — skipping the close retries AND the re-arm, and
+    reporting `error` while the predecessor was alive and unguarded."""
+
+    def test_a_close_timeout_still_retries_and_re_arms(self, tmp_path):
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        calls = {"close": 0}
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "close"]:
+                calls["close"] += 1
+                raise subprocess.TimeoutExpired(cmd=argv, timeout=180)
+            return world(argv, timeout)
+
+        out = _retire(state, world, tmp_path, runner=runner)
+        assert calls["close"] == 3, "the remaining bounded retries must still run"
+        assert out["outcome"] in ("alive_and_re_armed", "alive_and_unguarded"), out
+        assert out["outcome"] != "error"
+
+
+class TestAFailedEnterLeavesTheClearStaged:
+    """8a finding (destructive 5), CONFIRMED: send-text succeeded and send-keys failed, so the
+    `/goal clear` sits UNSUBMITTED in the predecessor's input. The old code reset the phase to
+    None and reported 'STILL guarded' — but a later stray Enter submits it."""
+
+    def test_the_phase_stays_discoverable_and_the_reason_is_honest(self, tmp_path):
+        world = _world(tmp_path, clear_keys_rc=1, confirm_clear=False)
+        state = _write_state(tmp_path, world)
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "clear_failed"
+        assert "pane_close" not in world.kinds()
+        phase = _state_of(state)["handoff_pending"].get("teardown_phase")
+        assert phase == "clear_staged_unsubmitted", phase
+        assert "staged" in out["reason"].lower()
+
+    def test_a_failed_send_text_is_still_a_clean_abort(self, tmp_path):
+        """Nothing was transported, so there is nothing staged and the phase clears."""
+        world = _world(tmp_path, clear_text_rc=1)
+        state = _write_state(tmp_path, world)
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "clear_failed"
+        assert _state_of(state)["handoff_pending"].get("teardown_phase") is None
+
+
+class TestLadderValidation:
+    """8a finding (correctness 4), CONFIRMED: `steps` was accepted as complete authority, so an
+    empty list authorised teardown vacuously and a hand-built four-step list silently disabled
+    the successor-owned half of the gate."""
+
+    def test_an_empty_ladder_is_refused_not_vacuously_passed(self):
+        with pytest.raises(ll.LauncherError):
+            ll.evaluate_verifications({}, steps=[])
+
+    def test_an_unknown_step_name_is_refused(self):
+        with pytest.raises(ll.LauncherError):
+            ll.evaluate_verifications({"whatever": True},
+                                      steps=[{"step": "whatever", "artifact": "x"}])
+
+    def test_teardown_allowed_refuses_an_empty_ladder_too(self):
+        with pytest.raises(ll.LauncherError):
+            ll.teardown_allowed({}, steps=())
+
+    def test_both_canonical_ladders_still_work(self):
+        assert ll.evaluate_verifications({"spawned": True, "goal_armed": True,
+                                          "project_switched": True})[0] is True
+        assert ll.evaluate_verifications(
+            {s["step"]: True for s in ll.mid_child_verification_steps()},
+            steps=ll.mid_child_verification_steps())[0] is True
+
+
+class TestHandoffRecordIsCancelledOnEveryFailurePath:
+    """8a finding (correctness 5), CONFIRMED: `perform_handoff` validates pane/name/transcript
+    AFTER the record is persisted and RAISES rather than returning, so a malformed argument
+    bumped the generation and left an uncancelled mid_child record nobody could claim or use."""
+
+    @pytest.fixture(autouse=True)
+    def _as_the_predecessor(self, monkeypatch):
+        """These tests ARE the predecessor session, so its own id must be in the environment:
+        since the 8a fix, a `--predecessor-session`/`--session-id` that contradicts
+        $CLAUDE_CODE_SESSION_ID is refused rather than silently preferred."""
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", PRED)
+
+    def test_an_exception_from_perform_handoff_still_cancels(self, tmp_path, monkeypatch):
+        state = TestMidChildHandoffCommand()._bare_state(tmp_path)
+        args = TestMidChildHandoffCommand()._args(tmp_path, state)
+
+        def boom(**kw):
+            raise ll.LauncherError("malformed pane id 'nope!'")
+
+        monkeypatch.setattr(ll, "perform_handoff", boom)
+        rc = ll._cmd_mid_child_handoff(args)
+        assert rc != 0
+        assert _state_of(state)["handoff_pending"]["cancelled"] is True
+
+
+class TestRepoRootIsBoundToTheProject:
+    """8a finding (destructive 6), CONFIRMED: `--repo-root` and `--project-root` were
+    independent, so `project_switched` could prove rawgentic while `position_rebuilt` proved an
+    unrelated repository that happened to carry the same branch name."""
+
+    @pytest.fixture(autouse=True)
+    def _as_the_predecessor(self, monkeypatch):
+        """These tests ARE the predecessor session, so its own id must be in the environment:
+        since the 8a fix, a `--predecessor-session`/`--session-id` that contradicts
+        $CLAUDE_CODE_SESSION_ID is refused rather than silently preferred."""
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", PRED)
+
+    def test_a_repo_root_outside_the_project_root_is_refused(self, tmp_path, monkeypatch):
+        state = TestMidChildHandoffCommand()._bare_state(tmp_path)
+        args = TestMidChildHandoffCommand()._args(tmp_path, state,
+                                                  repo_root="/somewhere/else/entirely")
+        monkeypatch.setattr(ll, "perform_handoff",
+                            lambda **kw: pytest.fail("must not launch a successor"))
+        rc = ll._cmd_mid_child_handoff(args)
+        assert rc != 0
+        assert "handoff_pending" not in _state_of(state)
+
+
+class TestTeardownAuthorityCannotBeImpersonated:
+    """8a finding (destructive 1, CRITICAL), CONFIRMED: `--session-id` overrode
+    $CLAUDE_CODE_SESSION_ID, so any session could pass the recorded successor's id and authorise
+    the teardown — recreating the predecessor-driven path approach C was rejected for."""
+
+    def test_an_explicit_session_id_may_not_contradict_the_environment(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "the-real-caller")
+        with pytest.raises(ll.LauncherError):
+            ll._own_session_id("someone-elses-session")
+
+    def test_a_matching_explicit_id_is_accepted(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "the-real-caller")
+        assert ll._own_session_id("the-real-caller") == "the-real-caller"
+
+    def test_the_environment_wins_when_no_override_is_given(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "the-real-caller")
+        assert ll._own_session_id(None) == "the-real-caller"
