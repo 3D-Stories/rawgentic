@@ -18,7 +18,11 @@ Its whole job is that **a verdict cannot be recorded without the evidence that p
 that `summary` names every check that has NOT run — a harness which only lists what it tried reads
 as complete when it isn't. `summary`'s non-zero exit is the DONE gate.
 
-The `CHECKS` dict is the 24 agent-runnable checks from the plan. Unknown ids and invalid verdicts are
+The `CHECKS` dict is the agent-runnable checks from the plan — **37 after the 2026-07-28 re-triage**
+(the original 24, plus 6 converted from human-only once the owner authorised them, plus tier 7's 7 for
+#687). The four remaining owner judgements (W8b, V3b, L3b, C8) are deliberately NOT registered: an
+unregistered id cannot be recorded, so an agent can never quietly answer them on the owner's behalf.
+Unknown ids and invalid verdicts are
 refused, so a typo fails loudly instead of silently recording nothing.
 
 ## `probe.py` — herdr event capture

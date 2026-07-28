@@ -51,6 +51,24 @@ CHECKS = {
     "D2": (5, "The #654 Q1 context measurement reproduces"),
     "R1": (6, "Whole suite + both lint lanes green"),
     "R2": (6, "The driver_bench parallel-run race reproduces (or is downgraded)"),
+    # Converted from human-only to agent-runnable, 2026-07-28. Each was an agent-checkable FACT
+    # welded to an owner JUDGEMENT; the judgement halves (W8b, V3b, L3b, C8) were split out and stay
+    # the owner's, deliberately NOT registered here — an unregistered id cannot be recorded, so the
+    # agent can never quietly answer them for them.
+    "W8a": (1, "The notification is DELIVERED, not merely sent (transport success, not an exit code)"),
+    "H7": (2, "A real authorised handoff on a live epic child (owner grant D-3)"),
+    "V3a": (3, "0.7.6 compatibility evidence: both pinned gates re-checked against it"),
+    "L3a": (4, "A per-item recommendation with evidence for #611's deferred ACs and #666's premise"),
+    "D3": (5, "A cold reader with no authoring context follows the runbook"),
+    "R3": (6, "Plugin reinstall; a fresh session loads the shipped version"),
+    # Tier 7 — #687's context-pressure trigger. VOID until #687 merges.
+    "C1": (7, "The meter's context reading agrees with an independently computed one"),
+    "C2": (7, "A threshold crossing emits once per tier, not once per turn"),
+    "C3": (7, "Cadence: at most one check per 5 turns or 5 minutes, whichever comes first"),
+    "C4": (7, "A mid-phase break is refused; a step-boundary break fires"),
+    "C5": (7, "Thresholds are relative: the same count tiers differently on 200k vs 1M"),
+    "C6": (7, "Fail-open: an absent or corrupt transcript emits nothing and blocks nothing"),
+    "C7": (7, "End to end: handoff written, successor bound/prompted/goaled, predecessor retired last"),
 }
 
 
