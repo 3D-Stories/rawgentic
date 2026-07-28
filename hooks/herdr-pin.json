@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "_comment": "Single machine-readable source of truth for the herdr toolchain pin (#609, epic #667). Read by #390's workspace-doctor check 8 ('herdr binary present AND version == the pinned release'). MUST stay equal to HERDR_VERSION_FLOOR in phase_executor/src/phase_executor/herdr_backend.py — tests/hooks/test_herdr_pin.py asserts it. Verify an install with: sha256sum ~/.local/bin/herdr, compared against gh api repos/<repo>/releases/tags/<tag> asset .digest. Full procedure and rationale: docs/reviews/2026-07-27-609-herdr-supply-chain-vet.md",
+  "pin": {
+    "version": "0.7.5",
+    "tag": "v0.7.5",
+    "repo": "ogulcancelik/herdr",
+    "release_url": "https://github.com/ogulcancelik/herdr/releases/tag/v0.7.5",
+    "published_at": "2026-07-21T18:11:20Z",
+    "prerelease": false,
+    "assets": {
+      "linux-x86_64": {
+        "name": "herdr-linux-x86_64",
+        "size": 21315048,
+        "sha256": "3dc83288073e4c2d3c679a30e7be97bcca9141c6fd17dbbb9219142e95c59253",
+        "url": "https://github.com/ogulcancelik/herdr/releases/download/v0.7.5/herdr-linux-x86_64"
+      }
+    },
+    "api_schema": {
+      "protocol": 17,
+      "schema_version": 1,
+      "_comment": "Recorded from `herdr api schema --json` on the pinned binary. #609 only RECORDS this; asserting it against a live server is #390's check 10."
+    },
+    "config_baseline": {
+      "update.channel": "stable",
+      "update.version_check": false,
+      "update.manifest_check": false,
+      "ui.mouse_capture": true,
+      "ui.mouse_scroll_lines": 3,
+      "ui.sound.enabled": true,
+      "_comment": "Hardened target for ~/.config/herdr/config.toml. Keys and their upstream defaults were read from `herdr --default-config`, never assumed. manifest_check defaults to TRUE and makes herdr fetch a remote agent-detection manifest from herdr.dev in the background — behavior can change under a pinned binary with no version bump, which is the supply-chain hole a version pin alone does not close. Apply with `herdr config check && herdr server reload-config` (no restart needed). NOT yet applied to this host: owner-triggered per epic-run D-5."
+    },
+    "verified": {
+      "at": "2026-07-27",
+      "issue": 609,
+      "method": "gh api repos/ogulcancelik/herdr/releases/tags/v0.7.5 asset .digest (sha256:3dc83288...c59253, size 21315048) compared against sha256sum ~/.local/bin/herdr (3dc83288...c59253) — identical digest AND identical size, so the installed binary is the official release bit-for-bit. Verified in place; no re-download and no re-install, because the live herdr server was backing 4 actively-working sessions.",
+      "install_method": "pinned release binary verified against its published digest (never curl|sh, which plan 1.6 excludes for this workspace)"
+    }
+  }
+}

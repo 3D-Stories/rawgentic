@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>herdr supply-chain vet + pinned install (#609)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-27 18:13 MDT</div>
+<h1>herdr supply-chain vet + pinned install (#609)</h1>
+
+</header>
+<main>
+<h1>herdr supply-chain vet + pinned install + config baseline (#609)</h1>
+<p><strong>Issue:</strong> [#609](https://github.com/3D-Stories/rawgentic/issues/609) · epic [#667](https://github.com/3D-Stories/rawgentic/issues/667) (HD1.1, plan §4.4) <strong>Date:</strong> 2026-07-27 · <strong>Verdict: PASS — the installed binary is the authentic pinned release, verified bit-for-bit against the upstream published digest.</strong></p>
+<p>herdr became load-bearing for two projects&#x27; build seats on 2026-07-27 (<code>projects/rawgentic</code> at <code>e673192</code>, <code>projects/thewanderinginn</code> at <code>f64b467</code>) while sitting on an install of unrecorded provenance. This document is the vet artifact that closes that gap: it records what is installed, proves it is the official release, pins it machine-readably, and specifies the hardened config baseline.</p>
+<h2>1. What is installed (confirmed)</h2>
+<table>
+<thead><tr><th>Property</th><th>Value</th><th>How confirmed</th></tr></thead>
+<tbody>
+<tr><td>Path</td><td><code>~/.local/bin/herdr</code></td><td><code>command -v herdr</code></td></tr>
+<tr><td>Version</td><td><code>herdr 0.7.5</code></td><td><code>herdr --version</code> (exact stdout)</td></tr>
+<tr><td>Size</td><td>21,315,048 bytes</td><td><code>ls -la</code></td></tr>
+<tr><td>SHA-256</td><td><code>3dc83288073e4c2d3c679a30e7be97bcca9141c6fd17dbbb9219142e95c59253</code></td><td><code>sha256sum ~/.local/bin/herdr</code></td></tr>
+<tr><td>Upstream repo</td><td><code>ogulcancelik/herdr</code></td><td>owner-supplied (epic-run D-6)</td></tr>
+<tr><td>Upstream tag</td><td><code>v0.7.5</code>, published 2026-07-21T18:11:20Z, <code>isPrerelease: false</code>, marked Latest</td><td><code>gh release view v0.7.5</code></td></tr>
+<tr><td>Upstream asset</td><td><code>herdr-linux-x86_64</code>, size <strong>21,315,048</strong></td><td><code>gh release view v0.7.5 --json assets</code></td></tr>
+<tr><td>Upstream digest</td><td><code>sha256:3dc83288073e4c2d3c679a30e7be97bcca9141c6fd17dbbb9219142e95c59253</code></td><td><code>gh api repos/ogulcancelik/herdr/releases/tags/v0.7.5</code> → asset <code>.digest</code></td></tr>
+</tbody>
+</table>
+<p><strong>The local SHA-256 and the upstream published digest are identical, and the sizes are identical. The installed binary is the official <code>v0.7.5</code> <code>linux-x86_64</code> release, bit-for-bit.</strong></p>
+<p>Provenance was established by <strong>verification, not re-installation</strong> (epic-run D-5): the live herdr server was backing 8 panes with 4 sessions actively working — including another project&#x27;s in-flight WF2 run — and no supply-chain goal required disturbing them. Verification yields the same assurance as a clean re-install and costs nothing.</p>
+<p>Two method notes, so this is reproducible and not over-claimed:</p>
+<ul>
+<li>The release publishes <strong>no separate <code>checksums.txt</code> asset</strong>. The GitHub API&#x27;s per-asset <code>digest</code></li>
+</ul>
+<p>  field *is* the published checksum, which is why the procedure below reads it rather than   downloading a checksum file.</p>
+<ul>
+<li>The binary was never re-downloaded during this vet. Comparing the API digest against the local</li>
+</ul>
+<p>  hash is sufficient; downloading 21 MB to re-hash it would prove nothing further.</p>
+<h3>AGPL posture (owner sign-off carried, 2026-07-23)</h3>
+<p>herdr is <strong>dual-licensed: AGPL-3.0-or-later + a commercial license</strong> (plan §1.6, repo-confirmed). rawgentic invokes herdr as a <strong>separate process over CLI/socket</strong> — no linking, no vendoring, no distribution — so no copyleft obligation attaches. <strong>RE-VERIFY if herdr is ever bundled into a shipped image</strong>; the commercial license is the standing exit if that changes.</p>
+<h3>Trust boundary (owner sign-off carried, 2026-07-23)</h3>
+<p>Same-user boundary accepted. Confirmed live: <code>~/.config/herdr/herdr.sock</code> is mode <code>srw-------</code> (0600) — identical posture to the existing tmux private socket. Revisit only if mixed-trust processes ever share this account.</p>
+<h2>2. The pin (AC3, AC6)</h2>
+<p>The pin lives in <strong><code>hooks/herdr-pin.json</code></strong> — one machine-readable source of truth.</p>
+<p>Placement follows the established convention rather than inventing one: the repo already keeps a machine-readable data file beside the hooks that consume it (<code>hooks/security-patterns.json</code>, same kebab-case JSON-in-<code>hooks/</code> shape). Rejected alternatives: <code>.rawgentic.json</code> (per-project config, but a toolchain pin is host scope) and <code>phase_executor/</code> (which deliberately does not import <code>hooks/</code>, while #390&#x27;s doctor will live at <code>hooks/workspace_doctor.py</code>).</p>
+<p><strong>How AC6 is satisfied.</strong> AC6 reads *&quot;Pin verified by workspace-doctor (post-#390 re-scope)&quot;*, and [#390](https://github.com/3D-Stories/rawgentic/issues/390) is still OPEN — no doctor exists. That is not a blocker, because #390&#x27;s own owner-approved re-scope gates its herdr checks on *this* issue: *&quot;Only applies when the workspace has herdr adopted (HD1.1 config baseline present).&quot;* <strong>#390 depends on #609, not the reverse.</strong> #609&#x27;s obligation is therefore to record the pin in the shape #390&#x27;s check 8 (&quot;herdr binary present AND version == the pinned release&quot;) will assert — which <code>hooks/herdr-pin.json</code> does. #609 does not implement the doctor.</p>
+<p><strong>Drift guard.</strong> <code>HERDR_VERSION_FLOOR = (0, 7, 5)</code> already ships at <code>phase_executor/src/phase_executor/herdr_backend.py:84</code> (from #633, &quot;qualified live, 40/40 PID-identity reps&quot;). Two independent pins for one fact is exactly the mirrored-constant hazard the repo operating manual names, so a test asserts <code>herdr-pin.json</code>&#x27;s version equals <code>HERDR_VERSION_FLOOR</code>. Neither pin can move without the other.</p>
+<h2>3. Reproducible checksummed install (AC1, AC5)</h2>
+<p><strong><code>curl | sh</code> is never used in this workspace</strong> (plan §1.6 states this explicitly). The sanctioned path is the <strong>pinned release binary verified against its published digest</strong> — the decision plan §1.6 left to this epic.</p>
+<pre><code>#!/usr/bin/env bash
+set -euo pipefail   # load-bearing: without it a failed fetch falls through to the compare
+
+PLATFORM=linux-x86_64                  # the key in the pin&#x27;s `assets` map
+ASSET=herdr-$PLATFORM                  # the release asset&#x27;s filename — NOT the same string
+PIN=hooks/herdr-pin.json
+WORK=$(mktemp -d)                      # never a fixed /tmp path: world-writable dir + predictable
+trap &#x27;rm -rf &quot;$WORK&quot;&#x27; EXIT             # name = symlink/pre-seed surface
+
+# 1. Read the pin (never hardcode the version or hash)
+read -r VER TAG REPO WANT &lt; &lt;(python3 - &quot;$PIN&quot; &quot;$PLATFORM&quot; &lt;&lt;&#x27;PY&#x27;
+import json, sys
+p = json.load(open(sys.argv[1]))[&quot;pin&quot;]
+print(p[&quot;version&quot;], p[&quot;tag&quot;], p[&quot;repo&quot;], p[&quot;assets&quot;][sys.argv[2]][&quot;sha256&quot;])
+PY
+)
+
+# 2. Fetch the asset AND the upstream published digest for the same tag.
+#    NOTE: `gh api --jq` takes exactly ONE argument, so --arg must go to a real jq.
+gh release download &quot;$TAG&quot; --repo &quot;$REPO&quot; --pattern &quot;$ASSET&quot; --dir &quot;$WORK&quot;
+UPSTREAM=$(gh api &quot;repos/$REPO/releases/tags/$TAG&quot; \
+  | jq -r --arg a &quot;$ASSET&quot; &#x27;.assets[] | select(.name==$a) | .digest&#x27; | sed &#x27;s/^sha256://&#x27;)
+GOT=$(sha256sum &quot;$WORK/$ASSET&quot; | cut -d&#x27; &#x27; -f1)
+
+# 3. Reject EMPTY values before comparing. Skipping this is the trap: if the pin were
+#    unreadable and the API returned nothing, `[ &quot;&quot; = &quot;&quot; ]` passes and the guard reports
+#    success having verified nothing.
+for v in VER TAG REPO WANT UPSTREAM GOT; do
+  [ -n &quot;${!v}&quot; ] || { echo &quot;ABORT: $v is empty — verified nothing&quot;; exit 1; }
+done
+
+# 4. Three-way agreement REQUIRED: pin == upstream == downloaded bytes.
+[ &quot;$WANT&quot; = &quot;$UPSTREAM&quot; ] || { echo &quot;ABORT: pin disagrees with upstream ($WANT vs $UPSTREAM)&quot;; exit 1; }
+[ &quot;$WANT&quot; = &quot;$GOT&quot; ]      || { echo &quot;ABORT: downloaded bytes do not match the pin ($WANT vs $GOT)&quot;; exit 1; }
+
+# 5. Only now install
+install -m 0755 &quot;$WORK/$ASSET&quot; ~/.local/bin/herdr
+[ &quot;$(herdr --version)&quot; = &quot;herdr $VER&quot; ] || { echo &quot;ABORT: installed binary reports the wrong version&quot;; exit 1; }
+echo &quot;OK: herdr $VER installed, sha256 $GOT verified against pin and upstream&quot;</code></pre>
+<p>The three-way check is the point: comparing the download against the pin alone would still install a tampered artifact if the pin itself were edited, and comparing against upstream alone would drift silently when upstream re-tags. Requiring pin == upstream == bytes catches both.</p>
+<p><strong>Why the empty-value loop in step 3 exists</strong> (a real defect found reviewing this procedure, not a hypothetical): string equality in shell is happy to compare two empty strings. A cascade where the pin is unreadable *and* the API call yields nothing would leave <code>WANT</code> and <code>UPSTREAM</code> both empty, <code>[ &quot;&quot; = &quot;&quot; ]</code> would pass, and the script would print no ABORT — reporting a successful verification that checked nothing. <code>set -euo pipefail</code> plus the explicit non-empty assertions close it. The version assertion in step 5 is the same instinct applied at the other end: an install that silently put the wrong binary in place should fail loudly, not print &quot;OK&quot;.</p>
+<p><strong>To verify an already-installed binary</strong> (what this vet did — no download, no mutation):</p>
+<pre><code>sha256sum ~/.local/bin/herdr | cut -d&#x27; &#x27; -f1
+gh api repos/ogulcancelik/herdr/releases/tags/v0.7.5 \
+  --jq &#x27;.assets[] | select(.name==&quot;herdr-linux-x86_64&quot;) | .digest&#x27;
+# the two must agree modulo the &quot;sha256:&quot; prefix</code></pre>
+<h2>4. Config baseline (AC2, AC3)</h2>
+<p>Every key below was read from <strong><code>herdr --default-config</code></strong> — the authoritative source — not assumed. Defaults are noted so each change is legible as a deliberate delta.</p>
+<pre><code>[update]
+channel = &quot;stable&quot;        # default &quot;stable&quot; on Linux/macOS; pinned EXPLICITLY so a
+                          # future default change cannot move us onto preview builds
+version_check = false     # default true — no background version phone-home on a pinned install
+manifest_check = false    # default true — AC2. See the rationale below; this is the
+                          # supply-chain hole that a version pin alone does NOT close.
+
+[ui]
+mouse_capture = true      # default true — kept explicit; herdr owns mouse UI
+mouse_scroll_lines = 3    # default 3 — kept explicit so scroll feel is pinned, not inherited
+
+[ui.sound]
+enabled = true            # default true — audible agent state changes in background workspaces</code></pre>
+<p><strong>Why <code>manifest_check = false</code> is the load-bearing line.</strong> Its default is <code>true</code>, and per <code>herdr --default-config</code> it makes herdr *&quot;Check herdr.dev for remote agent-detection manifest updates in the background.&quot;* That means <strong>agent-detection behavior can change under a pinned binary with no version bump</strong> — a pin on the binary does not pin the manifest. Turning it off, and pinning any manifest locally in the config dir instead, is what AC2 is actually protecting. The same reasoning retires <code>version_check</code>: a pinned install has no use for a background phone-home.</p>
+<h3>Applying the baseline — no restart, no lost panes</h3>
+<p><code>herdr server reload-config</code> reloads <code>config.toml</code> in the <strong>running</strong> server (<code>herdr --help</code>: &quot;Reload config.toml in the running server&quot;). Applying this baseline therefore does <strong>not</strong> require bouncing the server and does <strong>not</strong> endanger live panes. The earlier assumption that a restart was needed was wrong, and this is the correction.</p>
+<pre><code>cp ~/.config/herdr/config.toml ~/.config/herdr/config.toml.bak-$(date -u +%Y%m%dT%H%M%SZ)  # undo path
+# merge the blocks above into ~/.config/herdr/config.toml (it already has
+# [theme]/[ui.toast]/[ui]/[keys]; ADD [update] and [ui.sound], and add the two
+# mouse_* keys to the EXISTING [ui] table rather than creating a second one)
+herdr config check          # validate before loading
+herdr server reload-config  # apply to the running server</code></pre>
+<p><strong>Not yet applied to this host.</strong> Under epic-run D-5 the live apply is the owner&#x27;s to trigger at a moment of their choosing; this document is the reviewed target and the procedure. The undo is the timestamped <code>.bak</code> copy plus a second <code>reload-config</code>.</p>
+<p>Current live state, for the diff: <code>~/.config/herdr/config.toml</code> is 239 bytes holding <code>onboarding</code>, <code>[theme]</code>, <code>[ui.toast]</code>, <code>[ui]</code>, <code>[keys]</code> — <strong>no <code>[update]</code> section and no <code>[ui.sound]</code> section at all</strong>, so <code>manifest_check</code> and <code>version_check</code> are both at their insecure-for-us defaults today.</p>
+<h2>5. Residual risk</h2>
+<table>
+<thead><tr><th>Risk</th><th>Severity</th><th>Mitigation</th></tr></thead>
+<tbody>
+<tr><td>Upstream re-tags <code>v0.7.5</code> with different bytes</td><td>Medium</td><td>The pin stores the digest, so the three-way check fails loudly instead of installing silently</td></tr>
+<tr><td>No hard semver/back-compat guarantee upstream (plan §1.6)</td><td>Medium</td><td><code>HERDR_VERSION_FLOOR</code> + this pin + #390&#x27;s future <code>api schema</code> digest check (protocol 17, schema_version 1, recorded in the pin file)</td></tr>
+<tr><td>Remote agent-detection manifest changes behavior under a pinned binary</td><td>Medium</td><td><code>manifest_check = false</code> (§4) — the reason AC2 exists</td></tr>
+<tr><td>Config baseline not yet applied to the live host</td><td>Low</td><td>Documented procedure + <code>reload-config</code>; owner-triggered per D-5</td></tr>
+<tr><td>Weekly-cadence upstream drifts past the pin</td><td>Low</td><td>Pin bump is a deliberate PR that re-runs §3&#x27;s verification</td></tr>
+</tbody>
+</table>
+<h2>6. The claim most worth re-checking</h2>
+<p><strong><code>herdr server reload-config</code> actually reloads <code>[update]</code> and <code>[ui.sound]</code> without a restart.</strong> It is documented in <code>herdr --help</code> and I have <strong>not executed it</strong> — doing so would mutate the live shared server, which D-5 put out of bounds. Everything else in this document was proven by running the exact command shown. If reload-config turns out to be partial (e.g. reloads UI keys but not <code>[update]</code>), the apply step in §4 needs a restart during a quiet window instead, and #613&#x27;s runbook is where that gets settled.</p>
+<p>platform_apis:</p>
+<ul>
+<li>api: gh api repos/{owner}/{repo}/releases/tags/{tag} → asset .digest</li>
+</ul>
+<p>  feasibility: verified via spike — ran <code>gh api repos/ogulcancelik/herdr/releases/tags/v0.7.5</code>; asset <code>herdr-linux-x86_64</code> returned <code>digest: sha256:3dc83288073e4c2d3c679a30e7be97bcca9141c6fd17dbbb9219142e95c59253</code>, size 21315048 (this exact invocation, not a proxy)   failure: fail-loud</p>
+<ul>
+<li>api: sha256sum &lt;path&gt;</li>
+</ul>
+<p>  feasibility: verified via spike — ran <code>sha256sum ~/.local/bin/herdr</code> → <code>3dc83288073e4c2d3c679a30e7be97bcca9141c6fd17dbbb9219142e95c59253</code>, matching the upstream digest exactly   failure: fail-loud</p>
+<ul>
+<li>api: herdr --version</li>
+</ul>
+<p>  feasibility: verified via spike — ran <code>herdr --version</code> → exact stdout <code>herdr 0.7.5</code>; this is the parse target #390 check 8 will assert, so its exact shape is load-bearing   failure: fail-loud</p>
+<ul>
+<li>api: herdr --default-config</li>
+</ul>
+<p>  feasibility: verified via spike — ran <code>herdr --default-config</code>; every key name and default in §4 (<code>[update] channel/version_check/manifest_check</code>, <code>[ui] mouse_capture/mouse_scroll_lines</code>, <code>[ui.sound] enabled</code>) was read from its output rather than assumed   failure: fail-loud</p>
+<ul>
+<li>api: herdr api schema --json</li>
+</ul>
+<p>  feasibility: verified via spike — ran <code>herdr api schema --json</code> → <code>{&quot;protocol&quot;: 17, &quot;schema_version&quot;: 1, ...}</code>; recorded in the pin file for #390&#x27;s future check 10, which is #390&#x27;s to assert, not #609&#x27;s   failure: fail-loud</p>
+<p><code>herdr server reload-config</code> is deliberately absent from the declaration above: #609 ships no code that invokes it. It is a documented manual step for the owner&#x27;s apply moment, and §6 names it as this document&#x27;s one unproven claim rather than dressing it as verified.</p>
+
+</main>
+<footer>Last updated: 2026-07-27 18:13 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
