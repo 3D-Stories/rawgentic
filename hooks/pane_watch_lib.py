@@ -481,6 +481,26 @@ def live_pane_ids(runner=None) -> set:
             if isinstance(p, dict) and isinstance(p.get("pane_id"), str)}
 
 
+def current_pane_record(pane_id: str, runner=None) -> dict | None:
+    """One pane's CURRENT record from a fresh snapshot, or None.
+
+    Used when a deferred registration finally lands: the queued creation record is stale (`unknown`,
+    revision 0), so believing it silently dropped a pane that had blocked in the meantime.
+    """
+    try:
+        snap = read_snapshot(runner)
+    except Exception:  # pylint: disable=broad-except
+        return None
+    node = snap.get("snapshot", snap) if isinstance(snap, dict) else {}
+    panes = node.get("panes") if isinstance(node, dict) else None
+    if not isinstance(panes, list):
+        return None
+    for pane in panes:
+        if isinstance(pane, dict) and pane.get("pane_id") == pane_id:
+            return pane
+    return None
+
+
 def read_snapshot(runner=None) -> dict:
     runner = runner or (lambda argv: subprocess.run(argv, capture_output=True, text=True,
                                                     check=False, shell=False, timeout=30))
@@ -569,12 +589,25 @@ def startup_sweep(reconciler, *, sender, now, debouncer=None, emit=print) -> dic
 def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
                  heartbeat_s: float = DEFAULT_HEARTBEAT_S, stall_s: float = DEFAULT_STALL_S,
                  emit=print, beat=None, live_panes=None, already_notified=None,
-                 pending=None) -> dict:
+                 pending=None, current_pane=None) -> dict:
     """Drive a stream of wire lines. All I/O is via `sender`, `clock`, `emit` and `beat`.
 
     A `None` line is a read timeout, not an event: it exists so the heartbeat fires during silence.
     Never calls sys.exit — the caller decides the exit code.
     """
+    def _send(pane_rec) -> int:
+        """Every sender call goes through here. Step 11 pass-4: the calls were unguarded and `main`
+        catches only `WatchError`, so the real sender's `TimeoutExpired` killed the watcher and the
+        notification bypassed `pending_sends` entirely — the one outcome this mechanism exists to
+        prevent. An exception is a failed send, nothing more."""
+        try:
+            return int(sender(body_for_pane(pane_rec, status=BLOCKED)))
+        except WatchError:
+            raise
+        except Exception as exc:  # pylint: disable=broad-except
+            emit(f"pane-watch: sender raised {type(exc).__name__} — treating as a failed send")
+            return 1
+
     debouncer = debouncer or Debouncer()
     # Seeded from the startup sweep. Step 11 pass-3: the stream started with an empty `prior`, so a
     # pane the sweep had ALREADY paged looked like a fresh transition once the debounce window
@@ -616,10 +649,34 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
                     pending_registrations.pop(pane_id, None)
                     since.setdefault(pane_id, now)
                     emit(f"pane-watch: registered {pane_id} on retry")
+                    # Step 11 pass-4 BLOCKER: registering was not enough. A `blocked` update that
+                    # arrived while the pane was still unknown was dropped, and the creation record
+                    # is stale (`unknown`, revision 0), so nothing ever notified. Sweep the pane's
+                    # CURRENT state instead of trusting the record we queued.
+                    current = current_pane(pane_id) if callable(current_pane) else None
+                    if isinstance(current, dict) and current.get("agent_status") == BLOCKED \
+                            and prior.get(pane_id) != BLOCKED:
+                        if debouncer.allow(pane_id, now):
+                            rc = _send(current)
+                            if rc == 0:
+                                debouncer.commit(pane_id, now)
+                                prior[pane_id] = BLOCKED
+                                report["notified"].append({"pane_id": pane_id, "rc": rc,
+                                                           "deferred_sweep": True})
+                                emit(f"pane-watch: deferred sweep notified for {pane_id}")
+                            else:
+                                debouncer.release(pane_id)
+                                pending_sends[pane_id] = current
             for pane_id, pane_rec in list(pending_sends.items()):
+                if pane_id not in reconciler.known_panes():
+                    # Step 11 pass-4: with the heartbeat due on the close line, the drain ran before
+                    # the close was processed and paged for an already-closed pane.
+                    pending_sends.pop(pane_id, None)
+                    emit(f"pane-watch: dropping pending send for {pane_id} — pane is gone")
+                    continue
                 if not debouncer.allow(pane_id, now):
                     continue
-                rc = sender(body_for_pane(pane_rec, status=BLOCKED))
+                rc = _send(pane_rec)
                 if rc == 0:
                     debouncer.commit(pane_id, now)
                     prior[pane_id] = BLOCKED
@@ -706,11 +763,13 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
             prior[event.pane_id] = event.status
             report["suppressed"] += 1
             continue
-        body = body_for_pane(event.pane or reconciler.meta(event.pane_id), status=event.status)
-        rc = sender(body)
+        rc = _send(event.pane or reconciler.meta(event.pane_id))
         if rc == 0:
             debouncer.commit(event.pane_id, now)
             prior[event.pane_id] = event.status
+            # Step 11 pass-4: a newer frame succeeding did not clear an older pending entry, so the
+            # next heartbeat sent the same block a second time.
+            pending_sends.pop(event.pane_id, None)
             report["notified"].append({"pane_id": event.pane_id, "rc": rc})
             emit(f"pane-watch: notified for {event.pane_id}")
         else:
@@ -746,7 +805,7 @@ def _cmd_watch(args) -> int:
         debouncer=debouncer, heartbeat_s=args.heartbeat_s, stall_s=args.stall_s,
         beat=lambda now, rep: write_heartbeat(args.heartbeat_path, now=now, report=rep),
         live_panes=live_pane_ids, already_notified=sweep["notified"],
-        pending=sweep["pending"])
+        pending=sweep["pending"], current_pane=current_pane_record)
     report["startup_sweep"] = sweep
     print(json.dumps(report, indent=2))
     return 0 if report["subscribed"] and not report["errors"] else 4
