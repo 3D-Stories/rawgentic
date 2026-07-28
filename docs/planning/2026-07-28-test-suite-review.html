@@ -81,22 +81,21 @@ h2{font-family:var(--display);font-weight:700;font-size:clamp(27px,3.9vw,42px);l
 .prop .cap b{color:var(--hot-lift);font-family:var(--mono);font-weight:600}
 
 /* outliers */
-.outliers{display:grid;gap:9px;margin-top:8px}
-.o{display:grid;grid-template-columns:minmax(0,1fr) 66px 62px;gap:14px;align-items:center}
-.o .track{position:relative;background:var(--surface);border-radius:6px;height:36px;
-  display:flex;align-items:center;overflow:hidden}
-.o .fill{height:100%;background:var(--hot)}
-.o.first .fill{background:var(--hot-lift)}
-.o .nm{position:absolute;left:12px;right:12px;font-family:var(--mono);font-size:12.5px;
-  color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  text-shadow:0 1px 3px rgba(8,11,30,.9)}
-.o .sec{font-family:var(--mono);font-size:14px;color:var(--ink-2);text-align:right}
+.outliers{display:grid;gap:15px;margin-top:8px}
+.o .meta{display:flex;align-items:baseline;gap:12px;margin-bottom:7px}
+.o .nm{font-family:var(--mono);font-size:13px;color:var(--ink);flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.o .sec{font-family:var(--mono);font-size:13.5px;color:var(--ink-2);flex:none}
+.o.first .nm{color:var(--hot-lift)}
 .o.first .sec{color:var(--hot-lift);font-weight:600}
+.o .track{background:var(--surface);border-radius:5px;height:10px;overflow:hidden}
+.o .fill{height:100%;background:var(--hot);border-radius:5px}
+.o.first .fill{background:var(--hot-lift)}
 .pill{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
-  text-align:center;padding:4px 0;border-radius:999px;border:1px solid}
+  padding:3px 10px;border-radius:999px;border:1px solid;flex:none}
 .pill.fix{color:var(--hot-lift);border-color:var(--hot-lift)}
 .pill.keep{color:var(--cool-lift);border-color:var(--cool-lift)}
-@media(max-width:640px){.o{grid-template-columns:minmax(0,1fr) 54px}.o .pill{display:none}}
+@media(max-width:640px){.o .nm{font-size:11.5px}}
 
 /* growth */
 .growth{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:clamp(22px,4vw,48px)}
@@ -284,10 +283,10 @@ svg{display:block;width:100%;height:auto}
   var mx=O[0][1];
   document.getElementById("outliers").innerHTML=O.map(function(d,i){
     return '<div class="o'+(i===0?' first':'')+'">'+
-      '<div class="track"><div class="fill" style="width:'+(d[1]/mx*100)+'%"></div>'+
-      '<span class="nm">'+d[0]+'</span></div>'+
-      '<div class="sec">'+d[1].toFixed(2)+'s</div>'+
-      '<div class="pill '+d[2]+'">'+d[2]+'</div></div>';
+      '<div class="meta"><span class="nm">'+d[0]+'</span>'+
+      '<span class="sec">'+d[1].toFixed(2)+'s</span>'+
+      '<span class="pill '+d[2]+'">'+d[2]+'</span></div>'+
+      '<div class="track"><div class="fill" style="width:'+(d[1]/mx*100)+'%"></div></div></div>';
   }).join("");
 
   var X=[70,270.8,478.4,679.2,860],
