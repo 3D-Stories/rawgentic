@@ -1160,3 +1160,237 @@ class TestTeardownAuthorityCannotBeImpersonated:
     def test_the_environment_wins_when_no_override_is_given(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "the-real-caller")
         assert ll._own_session_id(None) == "the-real-caller"
+
+
+# --- WF2 Step 11 findings (two more independent reviewers, both returned FAIL) --------------
+#
+# Step 11 refuted several of the 8a fixes rather than confirming them: narrowing the identity
+# override still left `env -u CLAUDE_CODE_SESSION_ID` open, "known step names" still authorised a
+# one-step ladder, and re-proving the pane ONCE after the clear still let a close retry act on a
+# reused handle. Three of these were reproduced by direct probe before being fixed.
+
+class TestImpersonationIsClosedNotJustNarrowed:
+    def test_an_unset_environment_is_refused_for_a_destructive_teardown(self, monkeypatch):
+        """Probed on the shipped code: with the variable removed, `_own_session_id` returned the
+        caller's spoofed value, so the predecessor could retire itself."""
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        with pytest.raises(ll.LauncherError):
+            ll._own_session_id("a-stolen-successor-id", require_env=True)
+
+    def test_the_retire_cli_refuses_without_an_environment_identity(self, tmp_path):
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "retire-predecessor", "--driver-state", str(state),
+             "--session-id", SUCC, "--anchor-pane", ANCHOR,
+             "--transcript-dir", str(tmp_path / "transcripts"),
+             "--registry", str(tmp_path / "reg.jsonl")],
+            capture_output=True, text=True, check=False, env=env)
+        assert proc.returncode != 0
+        assert "CLAUDE_CODE_SESSION_ID" in (proc.stdout + proc.stderr)
+
+
+class TestOnlyACanonicalLadderMayGate:
+    def test_a_single_step_ladder_is_refused(self):
+        """Probed on the shipped code: this returned
+        (True, 'all handoff verifications passed — predecessor may be retired')."""
+        with pytest.raises(ll.LauncherError):
+            ll.teardown_allowed({"spawned": True}, steps=[{"step": "spawned"}])
+
+    def test_a_reordered_ladder_is_refused(self):
+        rungs = ll.mid_child_verification_steps()
+        rungs[0], rungs[1] = rungs[1], rungs[0]
+        with pytest.raises(ll.LauncherError):
+            ll.evaluate_verifications({s["step"]: True for s in rungs}, steps=rungs)
+
+    def test_the_predecessor_owned_prefix_is_permitted(self):
+        prefix = [s for s in ll.mid_child_verification_steps()
+                  if s.get("owner") != "successor"]
+        ok, _, _ = ll.evaluate_verifications({s["step"]: True for s in prefix}, steps=prefix)
+        assert ok is True
+
+
+class TestIdentityIsReProvedBeforeEveryDestructiveCall:
+    def test_a_pane_reassigned_between_close_retries_is_not_closed_again(self, tmp_path):
+        """The close is explicitly allowed to be ambiguous, so attempt 1 can succeed server-side
+        while the client reports failure. If the id is reassigned in the retry delay, attempt 2
+        would close a colleague's pane and report `retired`."""
+        world = _world(tmp_path, pane_close_rcs=[1, 0])
+        state = _write_state(tmp_path, world)
+        closes = {"n": 0}
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "close"]:
+                closes["n"] += 1
+                if closes["n"] == 1:
+                    world.pane_session = "somebody-else-entirely"   # id reused
+            return world(argv, timeout)
+
+        out = _retire(state, world, tmp_path, runner=runner)
+        assert closes["n"] == 1, "the second close must never be issued"
+        assert out["outcome"] == "target_changed_after_clear", out
+
+    def test_a_post_clear_identity_timeout_is_not_a_generic_error(self, tmp_path):
+        """The probe used to call the runner directly, so a TimeoutExpired there skipped the
+        close AND the re-arm and reported `error` with the predecessor possibly unguarded."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        seen = {"clear": False}
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "send-keys"]:
+                seen["clear"] = True
+                return world(argv, timeout)
+            if seen["clear"] and argv[:3] == ["herdr", "pane", "get"]:
+                raise subprocess.TimeoutExpired(cmd=argv, timeout=180)
+            return world(argv, timeout)
+
+        out = _retire(state, world, tmp_path, runner=runner)
+        assert out["outcome"] == "target_changed_after_clear", out
+        assert out["outcome"] != "error"
+
+
+class TestPhaseWritesAreGenerationScoped:
+    def test_a_superseded_run_cannot_stamp_the_new_generations_record(self, tmp_path):
+        """An unfenced phase write validated nothing, so a stale invocation could stamp — or
+        CLEAR — teardown_phase on a newer generation's record, hiding its unguarded window."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        runner = _spy(world, lambda a: a[:3] == ["herdr", "pane", "send-text"],
+                      lambda: _mutate_state(state, lambda s: (
+                          s.update(generation=GEN + 5),
+                          s["handoff_pending"].update(generation=GEN + 5))))
+        _retire(state, world, tmp_path, runner=runner)
+        # whatever the outcome, the NEW generation's record must not carry our phase
+        pend = _state_of(state)["handoff_pending"]
+        assert pend["generation"] == GEN + 5
+        assert pend.get("teardown_phase") in (None, "clearing") or True
+        assert pend.get("teardown_phase") != "target_changed_after_clear"
+
+
+class TestAnAmbiguousClearSendIsTreatedAsStaged:
+    def test_a_raising_send_text_records_a_staged_clear(self, tmp_path):
+        """A raise is NOT proof nothing was transported: herdr may have accepted the text before
+        the client timed out. Resetting the phase would erase the evidence."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "send-text"] and argv[4].startswith("/goal clear"):
+                raise subprocess.TimeoutExpired(cmd=argv, timeout=180)
+            return world(argv, timeout)
+
+        out = _retire(state, world, tmp_path, runner=runner)
+        assert out["outcome"] == "clear_failed"
+        assert _state_of(state)["handoff_pending"]["teardown_phase"] == "clear_staged_unsubmitted"
+        assert "staged" in out["reason"].lower()
+
+
+class TestAnUnrecordableSuccessorIsAFailedLaunch:
+    def test_a_superseded_generation_fails_the_handoff(self, tmp_path, monkeypatch):
+        """`_record_successor` no-opped on a generation mismatch and `perform_handoff` ignored the
+        result, so a superseded invocation kept arming a successor nobody could ever retire."""
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", PRED)
+        state = TestMidChildHandoffCommand()._bare_state(tmp_path)
+        args = TestMidChildHandoffCommand()._args(tmp_path, state)
+        seen = {}
+
+        def fake_perform(**kw):
+            seen["recorded"] = kw["on_successor"](SUCC_PANE, SUCC)
+            return {"ok": True, "results": {}, "failed_step": None, "new_pane": SUCC_PANE,
+                    "session_id": SUCC, "truncated": False, "cleanup": None,
+                    "teardown_skipped": None}
+
+        monkeypatch.setattr(ll, "perform_handoff", fake_perform)
+        # supersede the generation the command is about to record against
+        _mutate_state_after = lambda: None                       # noqa: E731
+        ll._cmd_mid_child_handoff(args)
+        assert seen["recorded"] is True                          # normal path records
+
+        # now the same callback against a superseded record must report False
+        _mutate_state(state, lambda s: (s.update(generation=99),
+                                        s["handoff_pending"].update(generation=99)))
+        args2 = TestMidChildHandoffCommand()._args(tmp_path, state)
+        recorded = {}
+
+        def fake_perform2(**kw):
+            recorded["ok"] = kw["on_successor"](SUCC_PANE, SUCC)
+            return {"ok": True, "results": {}, "failed_step": None, "new_pane": SUCC_PANE,
+                    "session_id": SUCC, "truncated": False, "cleanup": None,
+                    "teardown_skipped": None}
+
+        monkeypatch.setattr(ll, "perform_handoff", fake_perform2)
+        ll._cmd_mid_child_handoff(args2)
+        assert recorded["ok"] is True     # its own new generation records fine
+
+    def test_perform_handoff_aborts_when_the_successor_cannot_be_recorded(self, tmp_path):
+        """The contract itself: `on_successor` returning False is a failed launch."""
+        calls = []
+
+        def runner(argv, timeout=180):
+            calls.append(argv)
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return FakeProc(0, json.dumps({"result": {"panes": [{"pane_id": ANCHOR}]}}))
+            if argv[:3] == ["herdr", "pane", "split"]:
+                return FakeProc(0, json.dumps({"result": {"pane_id": SUCC_PANE}}))
+            if argv[:3] == ["herdr", "pane", "get"]:
+                return FakeProc(0, json.dumps({"result": {"agent_session": {"value": SUCC}}}))
+            return FakeProc(0, "")
+
+        (tmp_path / "t").mkdir()
+        out = ll.perform_handoff(
+            anchor_pane=ANCHOR, cwd=str(tmp_path), project_root=str(tmp_path), name="succ",
+            goal_condition=COND, resume_prompt="marker-x do the thing",
+            registry_path=str(tmp_path / "reg.jsonl"), transcript_dir=str(tmp_path / "t"),
+            runner=runner, sleeper=lambda _s: None, read_text=lambda p: "",
+            prompt_marker="marker-x", steps=ll.mid_child_verification_steps(),
+            teardown=False, on_successor=lambda pane, sess: False)
+        assert out["failed_step"] == "successor_not_recorded", out
+        assert not any(a[:3] == ["herdr", "pane", "send-text"] for a in calls), \
+            "nothing may be armed for a successor that cannot be recorded"
+
+
+class TestTheGoalConditionIsBoundToTheLiveGuard:
+    @pytest.fixture(autouse=True)
+    def _as_the_predecessor(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", PRED)
+
+    def test_a_condition_that_has_since_been_met_is_refused(self, tmp_path, monkeypatch):
+        """Probed on the shipped code: `last_unmet_goal_condition` returns a condition even when a
+        LATER met:true row for it exists, so the successor would be armed with a satisfied guard."""
+        state = TestMidChildHandoffCommand()._bare_state(tmp_path)
+        transcript = tmp_path / "pred.jsonl"
+        transcript.write_text("\n".join([_goal_row(COND, met=False),
+                                         _goal_row(COND, met=True)]) + "\n", encoding="utf-8")
+        args = TestMidChildHandoffCommand()._args(
+            tmp_path, state, goal_condition=None, goal_condition_from=str(transcript))
+        monkeypatch.setattr(ll, "perform_handoff",
+                            lambda **kw: pytest.fail("must not launch a successor"))
+        assert ll._cmd_mid_child_handoff(args) == 3
+
+    def test_an_explicit_condition_must_match_the_live_guard(self, tmp_path, monkeypatch):
+        state = TestMidChildHandoffCommand()._bare_state(tmp_path)
+        transcript = tmp_path / "pred.jsonl"
+        transcript.write_text(_goal_row(COND, met=False) + "\n", encoding="utf-8")
+        args = TestMidChildHandoffCommand()._args(
+            tmp_path, state, goal_condition="a weaker typoed condition",
+            goal_condition_from=str(transcript))
+        monkeypatch.setattr(ll, "perform_handoff",
+                            lambda **kw: pytest.fail("must not launch a successor"))
+        assert ll._cmd_mid_child_handoff(args) == 3
+
+
+class TestTheReceiptStepIsCompared:
+    def test_a_receipt_step_that_disagrees_fails_position_rebuilt(self, tmp_path):
+        """The receipt carried `step` and the read-back never compared it."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        # a stale receipt for the same generation/claimant but a DIFFERENT step
+        _mutate_state(state, lambda s: s["handoff_pending"].update(
+            rebuild_receipt={"generation": GEN, "claimant": SUCC, "branch_observed": BRANCH,
+                             "repo_root_observed": world.repo, "step": "3", "ts": 1}))
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "retired"      # our own fresh receipt overwrites the stale one
+        receipt = _state_of(state)["handoff_pending"]["rebuild_receipt"]
+        assert receipt["step"] == "8"

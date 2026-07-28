@@ -452,11 +452,11 @@ platform_apis:
 | pane inventory unavailable, or split response not provably new | refuse before or instead of claiming ownership; possible orphan REPORTED, never closed (#611 discipline, unchanged) |
 | goal never arms | successor pane closed (ownership proven), predecessor alive and guarded |
 | resume prompt never lands, or project/path never matches | same as above |
-| successor is not on the recorded branch, or echoes a step/baseline that disagrees with the record | `position_rebuilt` fails; teardown refused; predecessor alive, guarded, and still holding the live context |
+| successor is not on the recorded branch, is not in the recorded repository, or its receipt disagrees with the record on generation, claimant or step | `position_rebuilt` fails; teardown refused; predecessor alive, guarded, and still holding the live context. (The receipt carries no `test_baseline` — an earlier revision of this row implied it did, corrected at Step 11) |
 | successor cannot claim (stale generation, foreign claimant) | predecessor alive and guarded; the run continues in place |
 | pre-teardown identity check fails (pane no longer hosts the recorded session, or the anchor argument disagrees with durable state) | both destructive steps refused; predecessor alive and guarded; reported loudly |
 | `send-text` or `send-keys` for `/goal clear` fails | abort BEFORE `pane close`; predecessor alive and STILL guarded |
-| `/goal clear` transported but never confirmed (`met:true` never appears) | `clear_unconfirmed`; pane left OPEN; predecessor alive and STILL guarded |
+| `/goal clear` transported but never confirmed (`met:true` never appears) | `clear_unconfirmed`; pane left OPEN. **Guard state genuinely AMBIGUOUS** — the clear may have been parsed while its confirmation was unreadable or arrived after the poll budget, so the predecessor is either still guarded or alive-and-unguarded and this cannot distinguish them. `teardown_phase: "clear_unconfirmed"` is persisted so an operator can. An earlier revision of this table claimed "STILL guarded", which was wrong (Step 11) |
 | `pane close` fails after a CONFIRMED clear | bounded retries, then re-arm from `position.goal_condition` with confirmation; terminal state `alive_and_re_armed`, or `alive_and_unguarded` if the re-arm fails — the one state treated as an incident |
 | successor dies BEFORE the clear is sent | predecessor alive and guarded; recovery is a NEW handoff generation, not a foreign claim |
 
