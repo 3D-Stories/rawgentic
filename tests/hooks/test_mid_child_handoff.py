@@ -19,8 +19,10 @@ What this file is defending, in the order the design's own failure list puts it:
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -775,3 +777,138 @@ class TestMidChildHandoffCommand:
         rc = ll._cmd_mid_child_handoff(self._args(tmp_path, state, issue=612))
         assert rc == 3
         assert "handoff_pending" not in _state_of(state)
+
+
+# --- Task 5 / AC7: the anti-parallel-path guard --------------------------------------------
+#
+# What this IS: a source-level drift guard that makes a second handoff path fail the suite when
+# someone writes one in the obvious ways. What it is NOT: a proof of architectural
+# impossibility — Python offers no such enclosure, and an earlier revision of the design
+# overstated it. The scanner is a plain function precisely so its own negative cases are
+# testable: a guard that has never been shown to bite is not a guard.
+
+_HANDOFF_BUILDERS = frozenset({
+    "build_split_argv", "build_agent_start_argv", "build_agent_wait_argv",
+    "build_send_text_argv", "build_send_text_goal_argv", "build_teardown_argv",
+    "build_pane_get_argv", "perform_handoff", "retire_predecessor",
+})
+# A herdr COMMAND, not the bare word: `herdr` also appears legitimately as a terminal-backend
+# NAME in capabilities_lib, driver_lib and executor_routing_lib, and a guard that fired on that
+# would be a keyword alarm rather than a check.
+_HERDR_COMMAND_RE = re.compile(r"\bherdr\s+(pane|agent)\b")
+
+
+def _handoff_path_findings(source: str, *, filename: str) -> list[str]:
+    """Every construction in `source` that would amount to a second handoff path."""
+    findings: list[str] = []
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        # 1. a raw herdr argv built by hand
+        if isinstance(node, (ast.List, ast.Tuple)) and node.elts:
+            first = node.elts[0]
+            if isinstance(first, ast.Constant) and first.value == "herdr":
+                findings.append(f"{filename}:{node.lineno} raw herdr argv literal")
+        # 2. the launcher's own builders, imported or reached through the module
+        if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("launcher_lib"):
+            for alias in node.names:
+                if alias.name in _HANDOFF_BUILDERS:
+                    findings.append(
+                        f"{filename}:{node.lineno} imports handoff builder {alias.name!r}")
+        if isinstance(node, ast.Name) and node.id in _HANDOFF_BUILDERS:
+            findings.append(f"{filename}:{node.lineno} calls handoff builder {node.id!r}")
+        if isinstance(node, ast.Attribute) and node.attr in _HANDOFF_BUILDERS:
+            findings.append(f"{filename}:{node.lineno} reaches handoff builder {node.attr!r}")
+        # 3. shelling out to herdr through a command STRING (the shell=True bypass), including
+        #    the f-string form, whose literal segments are plain Constants
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+                and _HERDR_COMMAND_RE.search(node.value):
+            findings.append(f"{filename}:{node.lineno} herdr command string")
+    return findings
+
+
+def _function_names(source: str) -> list[str]:
+    return [n.name for n in ast.walk(ast.parse(source))
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+
+
+class TestNoParallelHandoffPath:
+    def test_no_parallel_handoff_path(self):
+        """AC7. `launcher_lib` is the ONE module that may drive herdr; anything else doing it is
+        a second ordered sequence, which is the defect the issue's rewrite exists to prevent."""
+        offenders = {}
+        for path in sorted((REPO_ROOT / "hooks").glob("*.py")):
+            if path.name == "launcher_lib.py":
+                continue
+            findings = _handoff_path_findings(path.read_text(encoding="utf-8"),
+                                              filename=path.name)
+            if findings:
+                offenders[path.name] = findings
+        assert offenders == {}, f"a parallel handoff path appeared: {offenders}"
+
+    def test_the_launcher_holds_exactly_one_ordered_sequence(self):
+        """A second sequence inside the SAME module is just as much a parallel path."""
+        names = _function_names((HOOKS / "launcher_lib.py").read_text(encoding="utf-8"))
+        assert names.count("perform_handoff") == 1
+        assert names.count("retire_predecessor") == 1
+
+    def test_the_launcher_sources_the_state_machine_from_driver_lib(self):
+        """The reuse AC1 demands, asserted rather than described: a hand-rolled generation bump
+        or claim write inside the launcher fails here."""
+        src = (HOOKS / "launcher_lib.py").read_text(encoding="utf-8")
+        for attr in ("open_handoff", "handoff_claim", "handoff_ack_started",
+                     "mid_child_handoff", "validate_mid_child_position", "mid_child_marker"):
+            assert f"driver_lib.{attr}" in src, f"launcher_lib must source {attr} from driver_lib"
+        defined = _function_names(src)
+        for owned_by_driver_lib in ("open_handoff", "handoff_claim", "handoff_ack_started",
+                                    "mid_child_handoff"):
+            assert owned_by_driver_lib not in defined, \
+                f"launcher_lib defines its own {owned_by_driver_lib} — that is a second mechanism"
+
+    def test_open_handoff_is_the_only_handoff_pending_writer_in_driver_lib(self):
+        src = (HOOKS / "driver_lib.py").read_text(encoding="utf-8")
+        writers = set()
+        for fn in ast.walk(ast.parse(src)):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Assign):
+                    continue
+                for target in node.targets:
+                    if isinstance(target, ast.Subscript) \
+                            and isinstance(target.slice, ast.Constant) \
+                            and target.slice.value == "handoff_pending":
+                        writers.add(fn.name)
+        assert writers == {"open_handoff"}, \
+            f"handoff_pending must have exactly one writer in driver_lib, found {writers}"
+
+    @pytest.mark.parametrize("bypass,source", [
+        ("raw argv",
+         'def go(runner, pane):\n'
+         '    return runner(["herdr", "pane", "split", "--pane", pane])\n'),
+        ("imported builder",
+         'from launcher_lib import build_split_argv\n'
+         'def go():\n    return build_split_argv(anchor_pane="w1:p1")\n'),
+        ("module attribute",
+         'import launcher_lib\n'
+         'def go():\n    return launcher_lib.perform_handoff(anchor_pane="w1:p1")\n'),
+        ("shell string",
+         'import subprocess\n'
+         'def go(pane):\n'
+         '    subprocess.run("herdr pane split --pane " + pane, shell=True)\n'),
+        ("f-string shell",
+         'import subprocess\n'
+         'def go(pane):\n'
+         '    subprocess.run(f"herdr agent start x --pane {pane}", shell=True)\n'),
+    ])
+    def test_the_scanner_bites_each_bypass_form(self, bypass, source):
+        assert _handoff_path_findings(source, filename="synthetic.py"), \
+            f"the guard failed to flag the {bypass} bypass — it would pass a real one too"
+
+    def test_a_backend_NAME_is_not_a_handoff_path(self):
+        """Precision matters as much as sensitivity: `herdr` is a legitimate terminal-backend
+        value in three real hooks, and a guard that fired on the bare word would be noise that
+        gets deleted rather than a check that gets kept."""
+        source = ('BACKENDS = frozenset({"herdr", "native"})\n'
+                  'def pick(config):\n'
+                  '    return config.get("build") == "herdr"\n')
+        assert _handoff_path_findings(source, filename="synthetic.py") == []
