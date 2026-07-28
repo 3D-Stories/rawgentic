@@ -374,6 +374,20 @@ def _identity_of(pane) -> str:
     return pane.get("pane_id") or "<unknown pane>"
 
 
+def safe_record(pane) -> dict:
+    """The allowlisted subset of a pane record — the ONLY shape allowed to leave this module.
+
+    Step 11 pass-5 (AC5 failure, reproduced): a failed startup send stored the whole snapshot record
+    in `pending`, and `_cmd_watch` prints the sweep as JSON — so `terminal_title` ("SECRET prompt
+    text" in the reproduction) reached stdout and the logs. Bodies were never the only exit; a report
+    is one too.
+    """
+    pane = pane if isinstance(pane, dict) else {}
+    return {k: pane[k] for k in
+            ("pane_id", "label", "name", "workspace_id", "tab_id", "agent", "agent_status")
+            if isinstance(pane.get(k), str)}
+
+
 def body_for_pane(pane, *, status) -> str:
     """The ONLY public body builder. Selects its own fields from a pane record.
 
@@ -570,7 +584,16 @@ def startup_sweep(reconciler, *, sender, now, debouncer=None, emit=print) -> dic
             continue
         if not debouncer.allow(pane_id, now):
             continue
-        rc = sender(body_for_pane(pane, status=BLOCKED))
+        try:
+            rc = int(sender(body_for_pane(pane, status=BLOCKED)))
+        except WatchError:
+            raise
+        except Exception as exc:  # pylint: disable=broad-except
+            # Step 11 pass-5: this call was unguarded while the guard lived only in `watch_stream`,
+            # and the sweep runs FIRST — so the real sender's `TimeoutExpired` killed the watcher
+            # before any pending map was returned.
+            emit(f"pane-watch: startup sender raised {type(exc).__name__} — treating as failed")
+            rc = 1
         if rc == 0:
             debouncer.commit(pane_id, now)
             out["notified"].append(pane_id)
@@ -581,7 +604,7 @@ def startup_sweep(reconciler, *, sender, now, debouncer=None, emit=print) -> dic
             # Step 11 pass-3 BLOCKER: releasing the window scheduled no retry, and a stable blocked
             # pane emits nothing newer — so the owner was never told. Hand it to the stream as
             # PENDING so the heartbeat retries it.
-            out["pending"][pane_id] = pane
+            out["pending"][pane_id] = safe_record(pane)
             emit(f"pane-watch: startup sweep SEND FAILED for {pane_id} (rc={rc}) — pending retry")
     return out
 
@@ -638,6 +661,19 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
             report["errors"].append("socket closed by herdr — the watcher has stopped watching")
             emit("pane-watch: SOCKET CLOSED — stopping loudly so a supervisor restarts us")
             break
+        # Step 11 pass-5: a LIFECYCLE line is applied BEFORE the heartbeat drain. With the heartbeat
+        # due on a `pane_closed` line, the drain used to run first and page for a pane that this very
+        # line says is gone — the "known pane" check could not help, because the pane was still known.
+        early = parse_event(line) if isinstance(line, str) else None
+        if early is not None and early.kind == EVENT_PANE_CLOSED:
+            reconciler.forget_pane(early.pane_id)
+            prior.pop(early.pane_id, None)
+            since.pop(early.pane_id, None)
+            pending_sends.pop(early.pane_id, None)
+            pending_registrations.pop(early.pane_id, None)
+            report["stalls"] = [x for x in report["stalls"] if x != early.pane_id]
+            report["events"] += 1
+            continue
         if line is None or heartbeat_due(last=last_beat, now=now, interval_s=heartbeat_s):
             last_beat = now
             report["heartbeats"] += 1
@@ -646,16 +682,24 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
             for pane_id, pane_rec in list(pending_registrations.items()):
                 ids = live_panes() if callable(live_panes) else None
                 if reconciler.register_pane(pane_rec, live_pane_ids=ids):
-                    pending_registrations.pop(pane_id, None)
                     since.setdefault(pane_id, now)
-                    emit(f"pane-watch: registered {pane_id} on retry")
                     # Step 11 pass-4 BLOCKER: registering was not enough. A `blocked` update that
                     # arrived while the pane was still unknown was dropped, and the creation record
                     # is stale (`unknown`, revision 0), so nothing ever notified. Sweep the pane's
                     # CURRENT state instead of trusting the record we queued.
                     current = current_pane(pane_id) if callable(current_pane) else None
-                    if isinstance(current, dict) and current.get("agent_status") == BLOCKED \
-                            and prior.get(pane_id) != BLOCKED:
+                    if current is None:
+                        # Step 11 pass-5 BLOCKER: the registration used to be dropped the moment
+                        # `register_pane` succeeded, BEFORE this second snapshot. If that snapshot
+                        # then failed, the pane was registered but never swept — and a stable block
+                        # emits nothing further, so it ended with no notification AND no pending
+                        # entry. The registration stays pending until its sweep resolves.
+                        emit(f"pane-watch: {pane_id} registered but its current state is unreadable "
+                             "— keeping it pending for the next heartbeat")
+                        continue
+                    pending_registrations.pop(pane_id, None)
+                    emit(f"pane-watch: registered {pane_id} on retry")
+                    if current.get("agent_status") == BLOCKED and prior.get(pane_id) != BLOCKED:
                         if debouncer.allow(pane_id, now):
                             rc = _send(current)
                             if rc == 0:
@@ -666,7 +710,7 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
                                 emit(f"pane-watch: deferred sweep notified for {pane_id}")
                             else:
                                 debouncer.release(pane_id)
-                                pending_sends[pane_id] = current
+                                pending_sends[pane_id] = safe_record(current)
             for pane_id, pane_rec in list(pending_sends.items()):
                 if pane_id not in reconciler.known_panes():
                     # Step 11 pass-4: with the heartbeat due on the close line, the drain ran before
@@ -723,7 +767,7 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
                     # The live set could not be READ, which is not the same as "the pane is dead".
                     # Refusing now is right (fail-closed against a false page) but forgetting would
                     # blind us to a real pane forever, so it is retried.
-                    pending_registrations[event.pane_id] = (
+                    pending_registrations[event.pane_id] = safe_record(
                         event.pane or {"pane_id": event.pane_id})
                     emit(f"pane-watch: creation of {event.pane_id} deferred — live pane set "
                          "unreadable, will retry")
@@ -779,7 +823,8 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
             # more subtly. Neither the window nor the transition state is consumed by a failed send.
             debouncer.release(event.pane_id)
             reconciler.rollback(event.pane_id, was_revision)
-            pending_sends[event.pane_id] = event.pane or reconciler.meta(event.pane_id)
+            pending_sends[event.pane_id] = safe_record(
+                event.pane or reconciler.meta(event.pane_id))
             report["send_failures"] += 1
             emit(f"pane-watch: SEND FAILED for {event.pane_id} (rc={rc}) — pending retry")
     report["pending_at_exit"] = sorted(pending_sends)

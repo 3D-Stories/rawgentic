@@ -652,6 +652,37 @@ class TestDeliveryIsRetriedNotLost:
         assert len(sent) == 1, f"the deferred pane's block must still be reported: {report}"
         assert "newborn" in sent[0] and "SECRET" not in sent[0]
 
+    def test_a_deferred_registration_STAYS_pending_when_its_state_is_unreadable(self):
+        """Step 11 pass-5 BLOCKER: the registration was dropped the moment `register_pane` succeeded,
+        BEFORE the current-state snapshot. If that second snapshot then failed, the pane was
+        registered but never swept — and a stable block emits nothing more, so it ended with no
+        notification AND no pending evidence."""
+        rec = pw.Reconciler(_snapshot([("w1:pA", "working", 5, "alpha")]))
+        sent = []
+        ticks = iter([1000.0, 1000.0, 2000.0, 3000.0])
+        calls = {"n": 0}
+        live_calls = {"n": 0}
+
+        def live():
+            # unreadable at creation time (so the registration is DEFERRED), readable afterwards
+            live_calls["n"] += 1
+            return set() if live_calls["n"] == 1 else {"w1:pA", "w1:pNEW"}
+
+        def current(_pane_id):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return None                      # the second snapshot fails on the first attempt
+            return {"pane_id": "w1:pNEW", "workspace_id": "w1", "agent_status": "blocked",
+                    "name": "newborn", "revision": 4}
+
+        report = pw.watch_stream(
+            [_created("w1:pNEW", name="newborn"), None, None],
+            reconciler=rec, sender=lambda b: (sent.append(b), 0)[1],
+            clock=lambda: next(ticks), emit=lambda _m: None, heartbeat_s=1.0,
+            live_panes=live, current_pane=current)
+        assert calls["n"] >= 2, f"the sweep must be retried, not abandoned: {report}"
+        assert len(sent) == 1, f"the block must still be reported once readable: {report}"
+
     def test_a_stale_pending_entry_is_cleared_by_a_successful_stream_send(self):
         """Step 11 pass-4: a newer frame succeeding left the older pending entry in place, so the
         next heartbeat paged the same continuous block a second time."""
@@ -671,17 +702,22 @@ class TestDeliveryIsRetriedNotLost:
         assert len(sent) == 2, sent
         assert report["pending_at_exit"] == [], report
 
-    def test_a_pending_send_for_a_CLOSED_pane_is_dropped_not_delivered(self):
-        """Step 11 pass-4: with the heartbeat due on the close line, the drain ran before the close
-        was processed and paged for an already-closed pane."""
+    def test_a_pending_send_for_a_pane_CLOSED_IN_THE_SAME_BATCH_is_dropped(self):
+        """Step 11 pass-5 caught the earlier version of this test calling `forget_pane()` by hand and
+        feeding `[None]` — it never fed a close EVENT, so it passed while the real ordering stayed
+        broken. Here the close arrives as a frame with the heartbeat due on that same line, which is
+        exactly when the drain used to run first and page for an already-closed pane."""
         rec = pw.Reconciler(_snapshot([("w1:pA", "blocked", 6, "alpha")]))
         sent = []
-        rec.forget_pane("w1:pA")                     # the pane is gone
-        report = pw.watch_stream([None], reconciler=rec,
+        # clock() is called once for `last_beat` at entry, then once per line — so these two values
+        # are what actually make the heartbeat DUE on the close line. Without that the drain never
+        # runs and the test cannot observe the ordering at all.
+        ticks = iter([1000.0, 99999.0])
+        report = pw.watch_stream([_closed("w1:pA")], reconciler=rec,
                                  sender=lambda b: (sent.append(b), 0)[1],
-                                 clock=lambda: 2000.0, emit=lambda _m: None, heartbeat_s=1.0,
+                                 clock=lambda: next(ticks), emit=lambda _m: None, heartbeat_s=1.0,
                                  pending={"w1:pA": {"pane_id": "w1:pA", "name": "alpha"}})
-        assert sent == [], "a closed pane must not be paged from the pending queue"
+        assert sent == [], f"a pane closed in this very batch must not be paged: {sent}"
         assert report["pending_at_exit"] == []
 
     def test_a_sender_EXCEPTION_is_a_failed_send_not_a_dead_watcher(self):
@@ -697,6 +733,25 @@ class TestDeliveryIsRetriedNotLost:
                                  heartbeat_s=10_000.0)
         assert report["send_failures"] == 1, report
         assert report["pending_at_exit"] == ["w1:pA"], report
+
+    def test_a_STARTUP_sender_exception_is_also_a_failed_send(self):
+        """Step 11 pass-5: the guard lived only in `watch_stream`, and the sweep runs FIRST — so the
+        real sender's TimeoutExpired killed the watcher before any pending map was returned."""
+        rec = pw.Reconciler(_snapshot([("w1:pA", "blocked", 6, "alpha")]))
+
+        def boom(_body):
+            raise subprocess.TimeoutExpired(cmd=["notify"], timeout=60)
+
+        out = pw.startup_sweep(rec, sender=boom, now=1000.0, emit=lambda _m: None)
+        assert out["send_failures"] == ["w1:pA"], out
+        assert "w1:pA" in out["pending"], out
+
+    def test_the_sweep_pending_record_carries_no_pane_contents(self):
+        """AC5, and this one is about a REPORT rather than a body: the sweep stored the whole snapshot
+        record and `_cmd_watch` prints it as JSON, so `terminal_title` reached stdout."""
+        rec = pw.Reconciler(_snapshot([("w1:pA", "blocked", 6, "alpha")]))
+        out = pw.startup_sweep(rec, sender=lambda b: 1, now=1000.0, emit=lambda _m: None)
+        assert "SECRET" not in json.dumps(out), out
 
     def test_the_sweep_does_not_page_twice_for_one_continuous_block(self):
         """The stream started with an empty `prior`, so a pane the sweep had already paged looked
