@@ -4,7 +4,7 @@ Operational reference for the herdr terminal multiplexer as this workspace uses 
 
 herdr is load-bearing: `projects/rawgentic` and `projects/thewanderinginn` both route their WF2 **build seat** through it (`executorTerminalBackend: {"build": "herdr"}`), so a broken herdr install takes the build seat with it.
 
-**Scope of this page today (#610).** It covers the **Claude Code integration** — what installing it changes, how to prove the rest of the harness survived, and how to remove it. The binary pin itself lives in `hooks/herdr-pin.json` and its provenance in `docs/reviews/2026-07-27-609-herdr-supply-chain-vet.md`. Broader workspace conventions — pane/workspace layout, the epic-launcher herdr variant, run-driver conventions — arrive with #613, which extends this file.
+**Scope of this page today (#610).** It covers the **Claude Code integration** — what installing it changes, how to prove the rest of the harness survived, and how to remove it. The binary pin itself lives in `hooks/herdr-pin.json` and its provenance in `docs/reviews/2026-07-27-609-herdr-supply-chain-vet.md`. Section 7 covers the launcher's herdr mode (#611). Broader workspace conventions — pane/workspace layout and run-driver conventions — arrive with #613, which extends this file.
 
 ## 1. What is installed on this host
 
@@ -179,3 +179,67 @@ Delete it when you are done. For a shareable artifact use the committed sanitize
 **On this project a build-seat dispatch is currently refused outright**, so no pane appears from it either. The build seat resolves to a Claude model, but `MUTATING_FS_SANDBOXED` in `hooks/executor_routing_lib.py` allowlists `codex` alone (owner decision 2026-07-20: codex is Landlock-confined, claude has no FS sandbox), so a mutating-claude dispatch returns `EXIT_REFUSED` at STEP 0 with tag `mutating_claude_requires_fs_sandbox` — before any worktree or pane is created. Closing that needs either a declared codex build lane or the FS-sandbox child.
 
 **A pane-less process cannot dispatch the build seat.** `HerdrBackend` dispatches via `herdr pane split --current`, so a cron-spawned process gets `{"error":{"code":"no_current_pane"}}`. This is why arming a durable launcher for a herdr-gated project needs the #611 herdr-aware variant first.
+
+## 7. Unattended resume: the launcher's herdr mode
+
+A herdr-gated project routes its build seat through `herdr pane split --current`. A cron-spawned launcher has no current pane, so a session it starts the ordinary pane-less way dies at its first build-seat dispatch with `{"error":{"code":"no_current_pane"}}`. Without herdr mode, every herdr-gated project loses unattended resumption entirely.
+
+**The mechanism, and the one probed fact it rests on:** `herdr pane split` accepts an **explicit** pane id (`--pane <ID>`), not only `--current`. Splitting from a named **anchor pane** therefore needs no current pane — and the session started in the resulting pane *has* one, so `--current` resolves normally for that session's own dispatches. No `HerdrBackend` change is needed.
+
+The implementation is `hooks/launcher_lib.py`. `perform_handoff` is the wired entry point: it executes the ordered sequence through an **injectable runner** (`subprocess.run(argv, shell=False)` by default), parses each response strictly, reads the verification artifacts itself, and gates teardown internally. Every builder returns a `list[str]` argv; this module never constructs a shell string.
+
+### 7.1 The ordered sequence
+
+1. `herdr pane split --pane <anchor> --direction down --cwd <repo>`, then strictly parse the new pane id out of the response. An unparseable response aborts.
+2. `herdr agent start <name> --kind claude --pane <new> --timeout <ms>` — **with no goal** (see §7.2).
+3. `herdr agent wait <new> --until idle --timeout <ms>` — readiness, before anything is pasted.
+4. `herdr pane send-text <new> "/goal <condition>"` then `herdr pane send-keys <new> Enter`.
+5. Verify each step against its on-disk artifact, in order, aborting at the first failure.
+6. `herdr pane close <anchor>` — the predecessor, **last**, and only once every check passed.
+
+### 7.2 Why the goal is NOT armed at birth
+
+An earlier revision passed the goal through `herdr agent start … -- "/goal …"`. A cross-model review rejected that: herdr 0.7.5 refuses a native agent argument containing a **control character** and requires a readiness timeout **greater than 3000 ms**. A real goal condition is multiline, so argv-at-birth fails on precisely the case the requirement exists for. Those upstream line citations came from the review and are **not independently verified here**, which is why `launcher_lib` validates control characters and the timeout floor itself rather than relying on herdr to do it.
+
+The send-text route is used instead. It is independently proven for a 2847-char, 41-newline condition, which arrives as a collapsed bracketed paste and does not submit early.
+
+### 7.3 What "argv-only" does and does not mean
+
+`launcher_lib` never builds a shell string. That is **not** the same as "no shell is involved": herdr strips its `--`, shell-quotes each element, and submits a shell command to the pane's shell. An earlier version of this page claimed no shell ever parses the condition — that was wrong. No injection was found, because herdr's quoting is sound, but the honest residual risks are **argument and authority injection**, not shell injection. Hence:
+
+- `claude_args` is an **allowlist** (`--print`, `--continue`, `--resume`). An authority-bearing flag such as `--permission-mode` or `--config` is refused, because it would change the successor's authority.
+- `cwd` is canonicalized and **confined below the project root**, so a caller cannot move the successor's execution out of the project.
+- Pane ids and agent names are validated fail-closed, option-shaped values refused, control characters rejected.
+
+### 7.4 Verifying the handoff (never scraped pane text)
+
+| Step | Artifact that proves it |
+|---|---|
+| `spawned` | `herdr pane get <pane>` returns a non-empty `agent_session.value` |
+| `project_switched` | `claude_docs/session_registry.jsonl` carries a line with the NEW session id |
+| `goal_armed` | the successor transcript carries a `goal_status` attachment with `met: false` |
+
+Pane text is rendered, wrapped, and scrolls away, so it is never the evidence. A step whose artifact is missing, unreadable, or unparseable counts as **failed**, not passed: an unreported check is not evidence of success, and what it gates is irreversible. `goal_armed` specifically requires `met: false` — an already-met goal would not prove the successor is guarded. A live handoff failed on 2026-07-27 precisely because no step was verified and the goal silently never armed.
+
+Truncation is surfaced, never silent: if the condition exceeds the 4000-char cap (which includes the `/goal ` prefix and the truncation note, so a 4000-char condition does not itself fit), the wired path reports it on the step record.
+
+### 7.5 Fallback, and what is deliberately NOT a fallback
+
+`select_launch_mode` returns one of three modes, always with a visible reason:
+
+- `pane_less` — the project is not herdr-gated, so the pre-existing pane-less launch is correct. Retained and tested.
+- `single_session` — the project **is** herdr-gated but herdr is unavailable, or this launcher does not advertise herdr mode. This deliberately does **not** hand out a pane-less successor: that successor is already known to die at its first build-seat dispatch, and retiring a viable predecessor for it is not what this repo means by fail-open. Keeping the current loop matches `driver_lib.fresh_session_available`'s contract and `docs/multi-issue-driver.md`.
+- `herdr` — herdr-gated, herdr available, launcher advertises support.
+
+The third branch is exactly #666's narrowed condition.
+
+### 7.6 What is NOT yet proven (#611 ACs 2, 3, 5)
+
+Honest status, so this section is not read as more than it is. The sequence in §7.1 is implemented and driven end to end in tests through an injected runner. It has **not** been executed against a live herdr server or a real cron firing.
+
+- **AC2 (cron to headless-server path) and AC3 (a real resume cycle through cron landing in a pane) are unproven.** Both need an actual cron firing, i.e. a crontab write, which is owner-gated on this host.
+- **AC5 (a real build-seat dispatch inside a cron-spawned successor) is blocked by #671.** The build seat resolves to a Claude model while `MUTATING_FS_SANDBOXED` allowlists `codex` alone, so a mutating dispatch is refused at STEP 0 before pane resolution is reached. Pane availability is necessary but not sufficient until #671 is resolved.
+
+### 7.7 Correction to a documented gotcha
+
+The top-level `herdr wait` genuinely does not exist in 0.7.5 (tracked as #659), but **`herdr agent wait <target> --until idle|working|blocked|done|unknown --timeout <ms>` does exist** and is the readiness primitive §7.1 step 3 uses. Scope #659 to the top-level form rather than claiming the capability is absent.

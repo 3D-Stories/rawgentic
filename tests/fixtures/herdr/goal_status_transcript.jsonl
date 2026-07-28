@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-07-28T00:00:00.000Z","sessionId":"sess-new-123","isSidechain":false,"attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"PR open with green CI, or a blocker is posted to the issue via the ERROR protocol"}}
+{"type":"user","timestamp":"2026-07-28T00:00:01.000Z","sessionId":"sess-new-123","attachment":{"type":"goal_status","met":true,"condition":"an already-satisfied guard, which must NOT count as armed-and-unmet"}}
