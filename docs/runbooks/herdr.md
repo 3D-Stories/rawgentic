@@ -192,18 +192,19 @@ The implementation is `hooks/launcher_lib.py`. `perform_handoff` is the wired se
 
 ### 7.1 The ordered sequence
 
-1. Record the current size of `session_registry.jsonl` — the **pre-launch offset**. Only evidence appearing after it counts (§7.4).
-2. `herdr pane split --pane <anchor> --direction down --cwd <repo>`, then strictly parse the new pane id out of the response. An unparseable response aborts.
-3. `herdr agent start <name> --kind claude --pane <new> --timeout <ms>` — **with no goal** (see §7.2).
-4. `herdr agent wait <new> --until idle --timeout <ms>` — readiness, before anything is pasted.
-5. `herdr pane get <new>` → the successor's session id. Record its transcript's pre-launch offset too.
-6. `herdr pane send-text <new> "/goal <condition>"` then `herdr pane send-keys <new> Enter`.
-7. **Poll the transcript until the guard is proven armed** — a `goal_status` row with `met: false` whose condition is the one just armed. Failing here aborts *before* the successor is given any work.
-8. `herdr pane send-text <new> "<resume prompt>"` then `send-keys Enter`. The prompt is `driver_lib`'s canonical resume wording for the next ready child, never a hand-written string.
-9. Poll the registry until the successor's own `/rawgentic:switch` line appears.
-10. `herdr pane close <anchor>` — the predecessor, **last**, and only once every check passed.
+1. Record the current size and prefix digest of `session_registry.jsonl` — its **baseline**. Only evidence appearing after it counts (§7.4).
+2. Take a full `herdr pane list` inventory. This is **required**: it is the only thing that can later show a returned pane id is genuinely new, so a `pane list` that fails — or that carries a single malformed record — refuses the handoff before anything is created.
+3. `herdr pane split --pane <anchor> --direction down --cwd <repo>`, then strictly parse the new pane id out of the response. An unparseable response aborts.
+4. `herdr agent start <name> --kind claude --pane <new> --timeout <ms>` — **with no goal** (see §7.2).
+5. `herdr agent wait <new> --until idle --timeout <ms>` — readiness, before anything is pasted.
+6. `herdr pane get <new>` → the successor's session id. Record its transcript's pre-launch offset too.
+7. `herdr pane send-text <new> "/goal <condition>"` then `herdr pane send-keys <new> Enter`.
+8. **Poll the transcript until the guard is proven armed** — a `goal_status` row with `met: false` whose condition is the one just armed. Failing here aborts *before* the successor is given any work.
+9. `herdr pane send-text <new> "<resume prompt>"` then `send-keys Enter`. The prompt is `driver_lib`'s canonical resume wording for the next ready child, never a hand-written string.
+10. Poll the registry until the successor's own `/rawgentic:switch` line appears.
+11. `herdr pane close <anchor>` — the predecessor, **last**, and only once every check passed.
 
-Step 8 comes after step 7 deliberately. A goal only re-prompts a session that tries to **stop**, so a successor that is armed but never given work sits idle and the run stalls silently — with the predecessor already retired. Equally, work handed to a session whose guard never armed is an **unguarded** run. Both orderings were wrong in earlier revisions; this one is the fix.
+Step 9 comes after step 8 deliberately. A goal only re-prompts a session that tries to **stop**, so a successor that is armed but never given work sits idle and the run stalls silently — with the predecessor already retired. Equally, work handed to a session whose guard never armed is an **unguarded** run. Both orderings were wrong in earlier revisions; this one is the fix.
 
 ### 7.2 Why the goal is NOT armed at birth
 
@@ -218,7 +219,7 @@ The send-text route is used instead. It is independently proven for a 2847-char,
 - The wired path takes a **typed launch mode**, not caller-supplied Claude options. There is exactly one: `fresh`, which passes no options. A `resume` mode was offered and then removed — a resumed successor can already own a registry row and an unmet goal row, so its evidence is only ever temporal, never causally tied to this handoff, and #569's contract is a FRESH successor launched with no `--resume` anyway. Removing it deletes the whole stale-evidence class rather than documenting around it.
 - Where Claude options are still accepted at the builder boundary they pass an **allowlist** (`--continue`, `--resume`). An authority-bearing flag such as `--permission-mode` or `--config` is refused, because it would change the successor's authority. `--print` is deliberately absent: it is non-interactive, and `herdr agent start` requires an interactive agent.
 - `cwd` is canonicalized and **confined below the project root**, so a caller cannot move the successor's execution out of the project.
-- Pane ids and agent names are validated fail-closed, option-shaped values refused, control characters rejected. Every **caller-supplied** field is validated before the split, so a bad argument can never create a pane and then fail. The pane id herdr **returns** is necessarily validated after the split; if it is malformed, or equal to the anchor, or an id that already existed, ownership is not provable and it takes the report-only path below rather than being closed.
+- Pane ids and agent names are validated fail-closed, option-shaped values refused, control characters rejected. Every **caller-supplied** field is validated before the split — including the transcript directory, which must already exist — so a bad argument can never create a pane and then fail. The pane id herdr **returns** is necessarily validated after the split; if it is malformed, or equal to the anchor, or an id that already existed, ownership is not provable and it takes the report-only path below rather than being closed. The successor **session id** herdr returns is validated the same way, as a bare token, because it is interpolated into a transcript path and an id carrying `..` would read outside the directory.
 
 **The uncertain-split window — a KNOWN residual leak, reported not fixed.** herdr can create a pane and still fail to describe it: a non-zero exit after server-side creation, rc 0 with truncated JSON, a client timeout after the server acted, or a pane id that parses but fails validation. A pane is closed **only when it is proven ours** — herdr named it, it is not the anchor, and it was absent from the mandatory pre-split inventory. Every other outcome is reported. (The inventory is required, not best-effort: it is the only thing that can show a returned id is genuinely new, so a `pane list` that fails refuses the handoff before anything is created.) When ownership cannot be proven, this runbook's earlier revision closed whichever single pane appeared in a before/after diff — and that was **unsound**. Cardinality is not attribution: if our split created nothing and an unrelated session split concurrently, the diff is exactly one pane and it belongs to a live session. The inventory is server-wide, so it need not even share our workspace.
 

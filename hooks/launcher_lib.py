@@ -76,6 +76,10 @@ _PANE_ID_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z:_-]{0,63}$")
 # (upstream src/app/agents.rs#L9-L14). Mirrored so a bad name fails HERE, before a pane
 # has been created, instead of after (#611 Step-11 Medium 6).
 _AGENT_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+# herdr hands back the successor's Claude session id and it is interpolated into a transcript
+# path, so it is constrained to a bare token: no separators, no `..`, no control characters.
+# Real ids are UUIDs; this is deliberately a little wider without admitting traversal.
+_SESSION_ID_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z_-]{0,63}$")
 
 GOAL_MAX_CHARS = 4000
 _TRUNCATION_NOTE = " […truncated at the 4000-char cap…]"
@@ -599,7 +603,7 @@ def _tail(text: str, baseline: tuple[int, str]) -> str | None:
 
 def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     goal_condition: str, resume_prompt: str, registry_path: str,
-                    transcript_path_for, launch_mode: str = "fresh",
+                    transcript_dir: str, launch_mode: str = "fresh",
                     readiness_timeout_ms: int = 30000,
                     runner=_default_runner, read_text=None, sleeper=time.sleep,
                     teardown: bool = True) -> dict:
@@ -633,9 +637,11 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     (`split_response_not_new`), and an inventory that cannot be taken at all refuses before the
     split (`pane_inventory_unavailable`).
 
-    Every caller-supplied field — including `transcript_path_for`, which is probed — is
-    validated before the split, so a bad argument cannot create a pane and then fail. The id
-    herdr RETURNS is necessarily validated after it.
+    Every caller-supplied field — including `transcript_dir`, which must already exist — is
+    validated before the split, so a bad argument cannot create a pane and then fail. The pane
+    id and session id herdr RETURNS are necessarily validated after it.
+
+    `transcript_dir` is where `<session-id>.jsonl` lives (`~/.claude/projects/<slug>/`).
 
     Returns a dict with `ok`, `steps`, `results`, `truncated`, `failed_step`, `new_pane`,
     `session_id`, and `cleanup` (what happened to the tentative pane, if anything).
@@ -663,14 +669,17 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     if not isinstance(resume_prompt, str) or not resume_prompt.strip():
         raise LauncherError("resume_prompt is empty — a guarded successor with no work would "
                             "sit idle while the predecessor is retired")
-    # Exercised BEFORE the split (#611 Step-11 pass-6 Medium 2): its first real use is after the
-    # pane exists, so a broken path builder would otherwise create a pane and then fail.
-    probe = transcript_path_for("probe-session-id")
-    if not isinstance(probe, str) or not probe:
-        raise LauncherError("transcript_path_for must return a non-empty path string")
-    if not os.path.isdir(os.path.dirname(probe) or "."):
-        raise LauncherError(f"transcript directory {os.path.dirname(probe)!r} does not exist — "
-                            "the goal_armed check could never read anything")
+    # Validated BEFORE the split: its first real use is after the pane exists, so a bad
+    # directory would otherwise create a pane and then fail. An earlier revision took a
+    # `transcript_path_for` CALLBACK and probed it with an invented session id, which both
+    # rejected any callback that validated its input and proved nothing about the real id
+    # (#611 Step-11 pass-7 Medium 2). Taking the directory and building the path here removes
+    # the callback, the sentinel, and the gap between them.
+    if not isinstance(transcript_dir, str) or not transcript_dir:
+        raise LauncherError("transcript_dir must be a non-empty string")
+    if not os.path.isdir(transcript_dir):
+        raise LauncherError(f"transcript directory {transcript_dir!r} does not exist — the "
+                            "goal_armed check could never read anything")
 
     # Captured BEFORE the split so nothing already on disk can be mistaken for this launch's
     # evidence (#611 Step-11 Medium 4). A registry that exists but cannot be read yields no
@@ -743,7 +752,12 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             out["failed_step"] = "spawned"
             return out
 
-        transcript_path = transcript_path_for(session_id)
+        # The session id comes from herdr and is interpolated into a path, so it is validated
+        # as a bare token first — an id carrying `..` or a separator would escape the directory.
+        if not _SESSION_ID_RE.fullmatch(session_id):
+            out["failed_step"] = "session_id_malformed"
+            return out
+        transcript_path = os.path.join(transcript_dir, f"{session_id}.jsonl")
         transcript_baseline = _baseline(read_text, transcript_path)
         if transcript_baseline is None:
             out["failed_step"] = "transcript_baseline_unreadable"
@@ -842,8 +856,17 @@ def _pane_inventory(runner) -> set[str] | None:
     panes = node.get("panes") if isinstance(node, dict) else None
     if not isinstance(panes, list):
         return None
-    return {p["pane_id"] for p in panes
-            if isinstance(p, dict) and isinstance(p.get("pane_id"), str)}
+    # Fail CLOSED on a malformed MEMBER, not just malformed whole output (#611 Step-11 pass-7
+    # High 1). Silently dropping an unparseable record yields a short inventory that still looks
+    # authoritative — and a pane missing from it reads as "new", which is exactly the licence to
+    # close a foreign pane. A partial inventory is not an inventory.
+    out: set[str] = set()
+    for pane in panes:
+        if not isinstance(pane, dict) or not isinstance(pane.get("pane_id"), str) \
+                or not pane["pane_id"]:
+            return None
+        out.add(pane["pane_id"])
+    return out
 
 
 def _report_possible_orphan(panes_before, runner, anchor_pane: str) -> str | None:
@@ -982,13 +1005,11 @@ def _cmd_handoff(args) -> int:
                   "condition", file=sys.stderr)
             return 3
 
-    transcript_dir = args.transcript_dir
     out = perform_handoff(
         anchor_pane=args.anchor_pane, cwd=args.cwd, project_root=args.project_root,
         name=args.name, goal_condition=condition,
         resume_prompt=disposition["resume_prompt"],
-        registry_path=args.registry,
-        transcript_path_for=lambda s: os.path.join(transcript_dir, f"{s}.jsonl"),
+        registry_path=args.registry, transcript_dir=args.transcript_dir,
         launch_mode=args.launch_mode, teardown=not args.no_teardown)
     print(json.dumps({k: out[k] for k in
                       ("ok", "results", "failed_step", "new_pane", "session_id",

@@ -126,7 +126,7 @@ def _handoff(**over):
         anchor_pane="w1:p1", cwd=str(REPO_ROOT), project_root=str(REPO_ROOT),
         name="child4", goal_condition=GOAL_CONDITION, resume_prompt=RESUME_PROMPT,
         registry_path=REGISTRY_PATH,
-        transcript_path_for=lambda s: f"/tmp/{s}.jsonl",
+        transcript_dir="/tmp",
         read_text=Artifacts(), sleeper=lambda _s: None,
     )
     kw.update(over)
@@ -653,7 +653,7 @@ class TestHandoffCLI:
         assert seen["goal_condition"] == "keep going"
         assert "612" in seen["resume_prompt"], "the successor must be told which child is next"
         assert seen["launch_mode"] == "fresh"
-        assert callable(seen["transcript_path_for"])
+        assert seen["transcript_dir"] == str(tmp_path)
 
 
 class TestOwnershipDiscipline:
@@ -1051,6 +1051,24 @@ class TestUncertainSplitReporting:
             "nothing may be created when ownership could never be proven"
         assert out["cleanup"] is None
 
+    def test_a_malformed_inventory_MEMBER_voids_the_whole_inventory(self) -> None:
+        """#611 Step-11 pass-7 High 1. Silently dropping an unparseable record yields a SHORT
+        inventory that still looks authoritative — and a pane missing from it reads as "new",
+        which is precisely the licence to close a foreign pane. A partial inventory is not one."""
+        bad = json.dumps({"result": {"panes": [{"pane_id": "w1:p1"}, {"no_id": True}]}})
+        assert ll._pane_inventory(lambda _a, timeout=180: FakeProc(0, bad)) is None
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return FakeProc(0, bad)
+            if argv[:3] == ["herdr", "pane", "split"]:
+                return FakeProc(0, json.dumps({"result": {"pane_id": "w1:pFOREIGN"}}))
+            return FakeProc(1)
+
+        out = ll.perform_handoff(runner=runner, **_handoff())
+        assert out["ok"] is False and out["failed_step"] == "pane_inventory_unavailable"
+        assert out["new_pane"] is None
+
     def test_a_foreign_pane_is_not_claimed_when_the_inventory_is_missing(self) -> None:
         """The exact pass-6 scenario: inventory fails, then the split returns a well-formed
         pre-existing FOREIGN id. Nothing may be closed."""
@@ -1105,6 +1123,40 @@ class TestUncertainSplitReporting:
         assert out["ok"] is False
         assert out["cleanup"] and "POSSIBLE ORPHAN" in out["cleanup"]
         assert not any(c[:3] == ["herdr", "pane", "close"] for c in r.calls)
+
+
+class TestTranscriptPathIsBuiltNotSupplied:
+    """#611 Step-11 pass-7 Medium 2. The earlier revision took a `transcript_path_for` CALLBACK
+    and probed it with an invented session id — which rejected any callback that validated its
+    input, and proved nothing about the real id anyway. Taking the directory and building the
+    path internally removes the callback, the sentinel, and the gap between them."""
+
+    def test_a_missing_transcript_dir_is_refused_before_anything_runs(self) -> None:
+        r = Runner({"herdr pane split": SPLIT_OK})
+        with pytest.raises(ll.LauncherError):
+            ll.perform_handoff(runner=r, **_handoff(transcript_dir="/no/such/dir"))
+        assert r.calls == []
+
+    @pytest.mark.parametrize("bad", ["", None, 7])
+    def test_a_non_directory_transcript_dir_is_refused(self, bad) -> None:
+        r = Runner({"herdr pane split": SPLIT_OK})
+        with pytest.raises(ll.LauncherError):
+            ll.perform_handoff(runner=r, **_handoff(transcript_dir=bad))
+        assert r.calls == []
+
+    def test_a_traversing_session_id_cannot_escape_the_directory(self) -> None:
+        """herdr supplies the session id and it is interpolated into a path, so an id carrying
+        `..` or a separator would read a file outside the transcript directory."""
+        evil = json.dumps({"result": {"pane": {
+            "agent_session": {"value": "../../../../etc/passwd"}}}})
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": evil})
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["ok"] is False and out["failed_step"] == "session_id_malformed"
+        assert not _predecessor_closed(r)
+        assert out["cleanup"] and "closed tentative pane" in out["cleanup"]
+
+    def test_the_real_session_id_shape_is_accepted(self) -> None:
+        assert ll._SESSION_ID_RE.fullmatch("75f231f2-fdf2-40d4-a68d-71bafcfc8608")
 
 
 class TestBoundedPolling:
