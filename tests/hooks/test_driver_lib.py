@@ -793,3 +793,56 @@ class TestOpenHandoffCarriesMidChildFields:
         assert ok2 is True and acked["handoff_claim"]["started"] is True
         # the position survives claim + ack untouched
         assert acked["handoff_pending"]["position"]["branch"] == "feat/665-mid-child-handoff"
+
+
+class TestTheResumePromptBindsFirst:
+    """#682: `project_switched` allows `SWITCH_POLL_ATTEMPTS (40) x SWITCH_POLL_DELAY_S (3.0)` =
+    120 s for a fresh successor to bind and append to the registry. A successor that verifies its
+    facts BEFORE binding — correct, prudent behaviour — can exceed that, and the launcher then
+    declares `failed_step: project_switched` and closes its pane mid-bind. Observed live three
+    times in the epic #667 UAT (check L2).
+
+    The observation is CONFOUNDED and the issue says so: the fixture used a synthetic issue 99998
+    that does not exist, so the successor spent its budget investigating a nonexistent issue's
+    provenance. What is NOT confounded is the real concern — the 120 s budget assumes the bind comes
+    first, and nothing ENFORCED that ordering. The mid-child prompt already led with it; the
+    child-boundary prompt buried it in a comma list.
+    """
+
+    def test_the_child_boundary_prompt_puts_the_bind_before_anything_else(self):
+        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684})
+        prompt = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE)["resume_prompt"]
+        ok, why = dl.resume_prompt_binds_first(prompt)
+        assert ok, f"{why}\nprompt: {prompt}"
+
+    def test_the_mid_child_prompt_still_binds_first(self):
+        """It already did — this pins it so the shared validator cannot regress one and not the
+        other."""
+        s = _st([_iss(665, "in_progress")], generation=4, extra={"epic": 667})
+        prompt = dl.mid_child_handoff(s, position=_position())["resume_prompt"]
+        ok, why = dl.resume_prompt_binds_first(prompt)
+        assert ok, f"{why}\nprompt: {prompt}"
+
+    def test_a_prompt_that_asks_for_git_before_the_bind_is_refused(self):
+        ok, why = dl.resume_prompt_binds_first(
+            "Resume the run. git fetch origin, then bind with /rawgentic:switch.")
+        assert not ok and "git" in why
+
+    def test_a_prompt_with_no_bind_at_all_is_refused(self):
+        ok, why = dl.resume_prompt_binds_first("Resume the run and get on with the next child.")
+        assert not ok and "never tells the successor to bind" in why
+
+    def test_a_non_string_is_refused_rather_than_crashing(self):
+        for bad in (None, 42, [], {}):
+            ok, _why = dl.resume_prompt_binds_first(bad)
+            assert not ok
+
+    def test_the_prompt_says_why_the_bind_comes_first(self):
+        """A bare ordering instruction is easy to rationalise past. The reason — an unbound session
+        cannot Read anything under projects/, and the launcher will close the pane at 120 s — is what
+        makes a prudent successor bind before verifying rather than after."""
+        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684})
+        prompt = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE)["resume_prompt"]
+        low = prompt.lower()
+        assert "before" in low and "/rawgentic:switch" in prompt
+        assert "unbound" in low or "cannot read" in low

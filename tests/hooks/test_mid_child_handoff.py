@@ -1399,7 +1399,7 @@ class TestAnUnrecordableSuccessorIsAFailedLaunch:
         (tmp_path / "t").mkdir()
         out = ll.perform_handoff(
             anchor_pane=ANCHOR, cwd=str(tmp_path), project_root=str(tmp_path), name="succ",
-            goal_condition=COND, resume_prompt="marker-x do the thing",
+            goal_condition=COND, resume_prompt="marker-x FIRST run /rawgentic:switch to bind, then do the thing",
             registry_path=str(tmp_path / "reg.jsonl"), transcript_dir=str(tmp_path / "t"),
             runner=runner, sleeper=lambda _s: None, read_text=lambda p: "",
             prompt_marker="marker-x", steps=ll.mid_child_verification_steps(),

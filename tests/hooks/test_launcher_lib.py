@@ -82,7 +82,12 @@ GOAL_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "herdr" / "goal_status_transcr
 TRANSCRIPT_OK = GOAL_FIXTURE.read_text(encoding="utf-8")
 GOAL_CONDITION = ("PR open with green CI, or a blocker is posted to the issue via the ERROR "
                   "protocol")
-RESUME_PROMPT = "Fresh-session resume for epic #667. Re-bind the project and run the next child."
+# #682: a realistic prompt BINDS FIRST. The old fixture said only "Re-bind the project" with no
+# `/rawgentic:switch` directive at all, which is exactly the unrealism that let an
+# ordering-free prompt ship — `perform_handoff` now refuses one, fail-closed.
+RESUME_PROMPT = ("Fresh-session resume for epic #667. FIRST, before reading any file: run "
+                 "/rawgentic:switch to bind the project — an unbound session cannot Read "
+                 "under projects/. THEN run the next child.")
 REGISTRY_PATH = "/reg.jsonl"
 
 
@@ -753,6 +758,25 @@ class TestResumePrompt:
         r = Runner({"herdr pane split": SPLIT_OK})
         with pytest.raises(ll.LauncherError):
             ll.perform_handoff(runner=r, **_handoff(resume_prompt=""))
+        assert r.calls == []
+
+    def test_a_prompt_that_does_not_bind_first_is_refused_before_anything_runs(self) -> None:
+        """#682. `project_switched` allows 120 s for the registry row and then CLOSES THE PANE, so
+        that budget is only sound if the bind is the successor's first act. A prompt that asks it to
+        verify first buys a silent, expensive failure: a clean-looking `failed_step`, a closed pane,
+        and the work the successor already did is lost. Refused BEFORE the split, like every other
+        caller mismatch, so the refusal never leaves a pane behind."""
+        r = Runner({"herdr pane split": SPLIT_OK})
+        with pytest.raises(ll.LauncherError, match="does not bind first"):
+            ll.perform_handoff(runner=r, **_handoff(
+                resume_prompt="Resume epic #667: git fetch origin, then /rawgentic:switch."))
+        assert r.calls == [], "a pane was created before the ordering was validated"
+
+    def test_a_prompt_with_no_bind_directive_at_all_is_refused(self) -> None:
+        r = Runner({"herdr pane split": SPLIT_OK})
+        with pytest.raises(ll.LauncherError, match="does not bind first"):
+            ll.perform_handoff(runner=r, **_handoff(
+                resume_prompt="Resume epic #667 and run the next child."))
         assert r.calls == []
 
     def test_resume_prompt_step_is_named_in_the_output(self) -> None:

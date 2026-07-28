@@ -280,20 +280,73 @@ FRESH_SESSION_MODE = "fresh-session"
 LAUNCHABLE_MODES = frozenset({"herdr", "pane_less"})
 
 
+BIND_DIRECTIVE = "/rawgentic:switch"
+
+# Directives a successor must not be asked for BEFORE the bind. Not an exhaustive list of shell
+# verbs — it is the set that a resume prompt realistically opens with, which is all a regression
+# guard needs. `_LATER_DIRECTIVES` is checked by POSITION, so a prompt that merely mentions `git`
+# later on is fine.
+_LATER_DIRECTIVES: tuple[str, ...] = (
+    "git ", "gh ", "pytest", "python3 ", "/rawgentic:implement-feature", "/rawgentic:fix-bug",
+    "/rawgentic:epic-run",
+)
+
+
+def resume_prompt_binds_first(prompt) -> tuple[bool, str]:
+    """Does this resume prompt tell the successor to bind BEFORE doing anything else? (#682)
+
+    `perform_handoff` gives a successor `SWITCH_POLL_ATTEMPTS x SWITCH_POLL_DELAY_S` = 120 s to bind
+    and append to the registry, then declares `failed_step: project_switched` and CLOSES ITS PANE.
+    That budget is only sound if the bind is the successor's first act. Nothing enforced the
+    ordering, so a prudent successor that verified its facts first got killed mid-bind — observed
+    live three times, and the failure is silent and expensive: the launcher reports a clean
+    `failed_step`, closes the pane, and the work the successor had already done is gone.
+
+    So the ordering is a MECHANICAL precondition of the handoff rather than a wording convention.
+    Returns `(ok, reason)`; the reason is empty when ok.
+    """
+    if not isinstance(prompt, str) or not prompt.strip():
+        return False, "the resume prompt is not a non-empty string"
+    bind_at = prompt.find(BIND_DIRECTIVE)
+    if bind_at < 0:
+        return False, (f"the resume prompt never tells the successor to bind ({BIND_DIRECTIVE}), so "
+                       "`project_switched` could only ever fail and the pane would be closed at "
+                       "120 s")
+    for token in _LATER_DIRECTIVES:
+        at = prompt.find(token)
+        if 0 <= at < bind_at:
+            return False, (f"the resume prompt asks for {token.strip()!r} at offset {at} before the "
+                           f"bind at {bind_at} — the 120 s `project_switched` budget assumes the "
+                           "bind is the FIRST action, and a successor that obeys this ordering can "
+                           "have its pane closed mid-bind (#682)")
+    return True, ""
+
+
 def _build_resume_prompt(state: dict, next_issue: int) -> str:
     """The canonical idempotent, state-re-deriving resume prompt for a fresh session (no
     in-context memory). Used for the interactive hand-back + a direct `claude -p` spawn; the
-    crontab launcher's own static prompt conforms to this (design §4 SR1)."""
+    crontab launcher's own static prompt conforms to this (design §4 SR1).
+
+    #682: the bind leads, explicitly and with its REASON. This prompt used to open with
+    "Re-bind the project (/rawgentic:switch), git fetch origin, read the driver-state ..." — a comma
+    list that reads as a set of parallel tasks rather than an ordering, which is exactly how a
+    successor ends up verifying before binding and having its pane closed at the 120 s mark. The
+    mid-child prompt already led with the bind and its reason; this one now matches it, and
+    `resume_prompt_binds_first` keeps both honest.
+    """
     camp = state.get("campaign", "the campaign")
     epic = state.get("epic")
     epic_ref = f"epic #{epic}" if _is_int(epic) else camp
     return (
-        f"Fresh-session resume for {epic_ref}. Re-bind the project (/rawgentic:switch), "
-        "git fetch origin, read the driver-state + epic-<N>-autorun-log, and run the next ready "
-        f"child (currently #{next_issue}) via /rawgentic:implement-feature to full WF2 completion. "
-        "Derive position from durable state, never in-context memory; never re-do a merged/closed "
-        "child; restate the run's auth grant. On a blocker, post the ERROR comment and end so the "
-        "next fresh session continues."
+        f"Fresh-session resume for {epic_ref}. FIRST, before reading any file and before checking "
+        f"any fact: run {BIND_DIRECTIVE} to bind the project. An unbound session cannot Read "
+        "anything under projects/, and the launcher closes this pane if the bind has not landed in "
+        "claude_docs/session_registry.jsonl within 120 seconds — so bind, then verify, never the "
+        "other way round. THEN: git fetch origin, read the driver-state + epic-<N>-autorun-log, and "
+        f"run the next ready child (currently #{next_issue}) via /rawgentic:implement-feature to "
+        "full WF2 completion. Derive position from durable state, never in-context memory; never "
+        "re-do a merged/closed child; restate the run's auth grant. On a blocker, post the ERROR "
+        "comment and end so the next fresh session continues."
     )
 
 
