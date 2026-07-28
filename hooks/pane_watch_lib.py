@@ -500,6 +500,35 @@ def _default_sender(body: str) -> int:
     return proc.returncode
 
 
+def sender_from_cmd(cmd: str):
+    """Build a sender that pipes the body to `cmd` on stdin, for testing the watcher.
+
+    Fail-OPEN as a SENDER (any exception becomes a non-zero rc, never a raise): `_send`
+    already treats a non-zero rc as a failed send and records it, and a watcher that dies
+    because the operator mistyped a test command is worse than one that reports the send
+    failed.
+
+    `shell=True` is deliberate. `cmd` is an operator-supplied argument on the same command
+    line that launched the process — it carries the invoker's own privileges, so there is no
+    boundary here to harden. It is NOT read from config or from any pane/wire data. The body
+    goes on STDIN, never interpolated into the command, so pane text can never reach the
+    shell.
+    """
+    def _send_via_cmd(body: str) -> int:
+        try:
+            proc = subprocess.run(cmd, shell=True, input=body, capture_output=True,
+                                  text=True, check=False, timeout=60)
+            return proc.returncode
+        except Exception:  # noqa: BLE001 - a bad test command must not kill the watcher
+            return 1
+    return _send_via_cmd
+
+
+def resolve_sender(sender_cmd):
+    """The production transport unless an override was explicitly asked for."""
+    return _default_sender if not sender_cmd else sender_from_cmd(sender_cmd)
+
+
 def live_pane_ids(runner=None) -> set:
     """The pane ids herdr currently knows. Used to tell a real creation from a replayed one.
 
@@ -913,13 +942,14 @@ def _cmd_watch(args) -> int:
     if args.dry_run:
         print(json.dumps(request, indent=2))
         return 0
+    sender = resolve_sender(getattr(args, "sender_cmd", None))
     reconciler = Reconciler(read_snapshot())
     debouncer = Debouncer(args.debounce_s)
-    sweep = startup_sweep(reconciler, sender=_default_sender, now=time.time(),
+    sweep = startup_sweep(reconciler, sender=sender, now=time.time(),
                           debouncer=debouncer)
     lines = socket_lines(args.socket, request, timeout_s=args.heartbeat_s)
     report = watch_stream(
-        lines, reconciler=reconciler, sender=_default_sender,
+        lines, reconciler=reconciler, sender=sender,
         debouncer=debouncer, heartbeat_s=args.heartbeat_s, stall_s=args.stall_s,
         beat=lambda now, rep: write_heartbeat(args.heartbeat_path, now=now, report=rep),
         live_panes=live_pane_ids, already_notified=sweep["notified"],
@@ -942,6 +972,10 @@ def main(argv: list[str] | None = None) -> int:
     p_watch.add_argument("--stall-s", type=float, default=DEFAULT_STALL_S)
     p_watch.add_argument("--dry-run", action="store_true",
                          help="print the subscribe request and exit; sends nothing")
+    p_watch.add_argument("--sender-cmd", default=None,
+                         help="send notifications by piping the body to this shell command "
+                              "instead of notify.sh (e.g. 'cat >> /tmp/uat.log'). For "
+                              "acceptance-testing the watcher without paging the owner.")
     args = parser.parse_args(argv)
     try:
         if args.cmd == "watch":

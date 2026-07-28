@@ -1014,3 +1014,45 @@ class TestTheDeferredSweepInstallsItsRevisionBaseline:
         assert sent == [], f"a revision older than the installed baseline must be dropped: {report}"
         assert rec.revision_of("w1:pNEW") == 9, rec.revision_of("w1:pNEW")
         assert rec.meta("w1:pNEW").get("name") == "newborn", "fresh metadata must still be installed"
+
+
+class TestSenderCmdOverride:
+    """`--sender-cmd` (#612 follow-up, found by the epic #667 UAT).
+
+    Without it the watcher's only transport is notify.sh, so every acceptance check for
+    W2-W7 pages the owner's phone for real and the feature is effectively untestable
+    end-to-end. The seam already existed — `sender` is injected into both `startup_sweep`
+    and `watch_stream`; only the CLI hardcoded `_default_sender`.
+    """
+
+    def test_sender_from_cmd_runs_the_command_and_feeds_the_body_on_stdin(self, tmp_path):
+        log = tmp_path / "sent.log"
+        sender = pw.sender_from_cmd(f"cat >> {log}")
+        assert sender("pane w1:pB8 is blocked") == 0
+        assert log.read_text().strip() == "pane w1:pB8 is blocked"
+
+    def test_sender_from_cmd_reports_a_failing_command_as_nonzero(self):
+        sender = pw.sender_from_cmd("exit 7")
+        assert sender("body") == 7
+
+    def test_sender_from_cmd_never_raises_on_a_broken_command(self):
+        """A bad --sender-cmd must degrade to a failed send, not kill the watcher."""
+        sender = pw.sender_from_cmd("this-command-does-not-exist-uat667")
+        assert sender("body") != 0
+
+    def test_cli_exposes_sender_cmd(self):
+        proc = subprocess.run(
+            [sys.executable, str(HOOKS / "pane_watch_lib.py"), "watch", "--help"],
+            capture_output=True, text=True, check=False)
+        assert "--sender-cmd" in proc.stdout
+
+    def test_default_sender_is_still_the_default(self, monkeypatch):
+        """Omitting the flag must not silently change the production transport."""
+        monkeypatch.setattr(pw, "read_snapshot", lambda *a, **k: {"panes": []})
+        assert pw.resolve_sender(None) is pw._default_sender
+
+    def test_resolve_sender_prefers_the_override(self, tmp_path):
+        log = tmp_path / "o.log"
+        sender = pw.resolve_sender(f"cat >> {log}")
+        assert sender is not pw._default_sender
+        assert sender("x") == 0
