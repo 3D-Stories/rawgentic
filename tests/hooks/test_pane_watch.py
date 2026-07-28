@@ -1312,11 +1312,15 @@ class TestPollLinesIsADropInForTheDeadSubscription:
         assert [(e.kind, e.pane_id) for e in _events_only(lines)] == [
             ("pane_updated", "w1:pA")]
 
-    def test_a_status_change_with_no_revision_bump_is_dropped_by_the_reconciler(self):
-        """An honest ceiling, asserted rather than hoped: the reconciler's revision rule is what
-        defeats the backlog replay, and a frame at a stale revision is refused. The event path had
-        exactly this hole; polling does not widen it. Measured basis for it not mattering: a real
-        block moved `revision` 1 -> 3 on this host (#679 evidence 5)."""
+    def test_a_change_with_neither_monotonic_key_advancing_is_dropped(self):
+        """The honest remaining ceiling, asserted rather than hoped: the reconciler refuses a frame
+        whose key is not strictly newer, because that is what defeats the backlog replay.
+
+        Step-11 finding corrected this docstring. It used to cite `revision 1 -> 3` as the measured
+        reason a same-revision change "does not matter" — which the live run REFUTED
+        (`working@3 -> blocked@3`) and which the sequence key exists to fix. What survives is the case
+        where NEITHER monotonic key advances; there is genuinely no way to tell that from a replay.
+        """
         seed = _agent_snapshot([("w1:pA", "idle", 5, "a")])
         after = _agent_snapshot([("w1:pA", "blocked", 5, "a")])
         clock = _Clock()
@@ -1611,15 +1615,21 @@ class TestTheRegressionGuardAfterTheStep4Findings:
         delivered. The genuine regression (a key present on both sides moving backwards) still stops
         the watcher loudly; that is the sibling test.
         """
-        seed = _agent_snapshot([("w1:pA", "idle", 24, "a")])
-        no_key = {"snapshot": {"panes": [{"pane_id": "w1:pA", "workspace_id": "w1",
-                                          "agent_status": "idle", "name": "a"}]}}
-        lower = _agent_snapshot([("w1:pA", "blocked", 1, "a")])
+        seed = pw.merge_agent_sequences(
+            _snapshot_with_agents([("w1:pA", "idle", 4, "a")], [("w1:pA", "idle", 4, 24)]))
+        # The agents node stays VALID and the pane's own agent entry goes away: a detach. (A snapshot
+        # with NO agents node at all is a failed poll now, not a vanishing key — see
+        # `TestAnUnusableSnapshotIsAFailedPoll`.)
+        detached = _snapshot_with_agents([("w1:pA", "idle", 4, "a")], [])
+        # ...and it returns with a LOWER sequence than the 24 we last saw, which is what pass 2's
+        # `24 -> None -> 1` was really about.
+        returned = _snapshot_with_agents([("w1:pA", "blocked", 4, "a")], [("w1:pA", "blocked", 4, 1)])
         clock = _Clock()
         sent = []
         lines = _drain(pw.poll_lines(snapshot=seed, interval_s=5, heartbeat_s=300,
-                                     runner=_runner_for([no_key, lower]), clock=clock,
-                                     sleep=clock.sleep), 6)
+                                     runner=_runner_for([detached, returned]), clock=clock,
+                                     sleep=clock.sleep), 7)
+        assert pw._EOF not in lines, "a detach-then-return was misread as a source reset"
         kinds = [(e.kind, e.pane_id) for e in _events_only(lines)]
         assert ("pane_closed", "w1:pA") in kinds and ("pane_created", "w1:pA") in kinds, kinds
         report = pw.watch_stream(lines, reconciler=pw.Reconciler(seed),
@@ -1766,3 +1776,130 @@ class TestTheEventsPathKeepsItsOwnKey:
         rec = pw.Reconciler(pw.merge_agent_sequences(pw.read_snapshot(_runner_for([doc]))))
         assert rec.revision_of("w1:pA") == 2148
         assert rec.accepts(pw.parse_event(_updated("w1:pA", "blocked", revision=5))) is False
+
+
+class TestAnUnusableSnapshotIsAFailedPoll:
+    """Step-8a + adversarial findings, agreed on independently by three reviewers and each
+    reproduced: an unusable snapshot used to be counted as a SUCCESSFUL poll. `polls` climbed,
+    `poll_failures` stayed 0, the ack fired, and every agent pane was silently excluded — a real block
+    producing no events and no notification while the heartbeat reported perfect health. That is
+    #679's own failure mode rebuilt inside its fix, so an unusable snapshot is a failed poll subject to
+    the consecutive-failure ceiling."""
+
+    def _drain_one(self, seed, bad):
+        clock = _Clock()
+        stats = {}
+        lines = _drain(pw.poll_lines(snapshot=seed, interval_s=5, heartbeat_s=300,
+                                     runner=_runner_for([bad]), clock=clock,
+                                     sleep=clock.sleep, stats=stats), 8)
+        return lines, stats
+
+    def test_a_missing_agents_node_is_a_failure_not_a_quiet_poll(self):
+        seed = pw.merge_agent_sequences(
+            _snapshot_with_agents([("w1:pA", "working", 4, "a")], [("w1:pA", "working", 4, 2148)]))
+        no_agents = {"snapshot": {"panes": [{"pane_id": "w1:pA", "agent_status": "blocked",
+                                             "revision": 4}]}}
+        lines, stats = self._drain_one(seed, no_agents)
+        assert lines[-1] is pw._EOF
+        assert stats["polls"] == 0 and stats["poll_failures"] == pw.POLL_MAX_CONSECUTIVE_FAILURES + 1
+        assert not any(isinstance(x, str) and pw.is_subscription_ack(x) for x in lines), (
+            "acked a live input layer while tracking nothing")
+
+    def test_an_agent_entry_with_no_usable_sequence_is_a_failure(self):
+        """Skipping it silently is what drops a REAL agent pane out of tracking altogether."""
+        seed = pw.merge_agent_sequences(
+            _snapshot_with_agents([("w1:pA", "working", 4, "a")], [("w1:pA", "working", 4, 2148)]))
+        bad = _snapshot_with_agents([("w1:pA", "blocked", 4, "a")], [])
+        bad["snapshot"]["agents"] = [{"pane_id": "w1:pA", "agent_status": "blocked"}]   # no sequence
+        lines, stats = self._drain_one(seed, bad)
+        assert lines[-1] is pw._EOF and stats["polls"] == 0
+
+    @pytest.mark.parametrize("panes", [
+        [{"pane_id": "w1:pA"}, {"pane_id": "w1:pA"}],          # duplicate ids
+        [{"pane_id": ""}],                                      # empty id
+        ["not-a-dict"],                                         # malformed entry
+    ])
+    def test_a_malformed_or_duplicate_pane_entry_is_a_failure(self, panes):
+        """Adversarial finding: the old comprehension FILTERED these, and a filtered-out pane looks
+        CLOSED to the diff — a false close plus a dropped pane, with healthy-looking heartbeats."""
+        assert pw.usable_pane_map(panes) is None
+
+    def test_a_clean_pane_list_still_maps(self):
+        assert set(pw.usable_pane_map([{"pane_id": "w1:pA"}, {"pane_id": "w1:pB"}])) == {
+            "w1:pA", "w1:pB"}
+
+    def test_an_empty_agents_list_is_usable_and_visible(self):
+        """herdr truthfully saying "no pane is running an agent" is not a failure — but it must be
+        VISIBLE, or it is indistinguishable from blindness."""
+        assert pw.agent_view_usable({"snapshot": {"panes": [], "agents": []}}) is True
+        seed = _snapshot_with_agents([("w1:pA", "idle", 4, "a")], [])
+        clock = _Clock()
+        stats = {}
+        gen = pw.poll_lines(snapshot=seed, interval_s=5, heartbeat_s=30,
+                            runner=_runner_for([seed]), clock=clock, sleep=clock.sleep, stats=stats)
+        next(gen, None)
+        assert stats["agents_tracked"] == 0 and stats["polls"] >= 1
+
+
+class TestASourceResetNeverPagesOnItsWayOut:
+    def test_the_terminal_error_is_handled_before_the_drain(self):
+        """Adversarial finding: the regression error was an ORDINARY line, so with the heartbeat due
+        the drain ran on it and retried pending sends for still-present panes immediately after the
+        source told us every baseline was stale — paging the owner about the PREVIOUS session on the
+        way out."""
+        seed = _agent_snapshot([("w1:pA", "blocked", 24, "a")])
+        now = {"t": 1000.0}
+
+        def stepping_clock():
+            now["t"] += 400.0
+            return now["t"]
+
+        sent = []
+        err = json.dumps({"error": {"code": "pane_revision_regressed",
+                                    "message": "pane state key went backwards for w1:pA"}})
+        report = pw.watch_stream([err, pw._EOF], reconciler=pw.Reconciler(seed),
+                                 sender=lambda body: sent.append(body) or 0,
+                                 clock=stepping_clock, heartbeat_s=300,
+                                 pending={"w1:pA": {"pane_id": "w1:pA", "name": "a"}},
+                                 emit=lambda _m: None)
+        assert sent == [], f"paged from a stale baseline on the way out: {sent}"
+        assert any("source reset" in e for e in report["errors"])
+        assert report["pending_at_exit"] == [], "an untrustworthy pending send survived the reset"
+
+
+class TestTheAckNamesItsOwnSource:
+    def test_the_report_records_which_input_layer_acked(self):
+        """Step-11 finding: the log said `subscription_started` whatever the source, contradicting the
+        design's own point that a poll loop cannot honestly claim a subscription."""
+        seen = []
+        report = pw.watch_stream([pw.poll_ack()], reconciler=pw.Reconciler(_agent_snapshot([])),
+                                 sender=lambda b: 0, clock=lambda: 1000.0,
+                                 emit=seen.append)
+        assert report["input_ack"] == "poll_started" and report["subscribed"] is True
+        assert any("poll_started" in m for m in seen)
+        assert not any("subscription_started" in m for m in seen)
+
+    def test_the_events_ack_still_says_subscription_started(self):
+        seen = []
+        ack = json.dumps({"result": {"type": "subscription_started"}})
+        report = pw.watch_stream([ack], reconciler=pw.Reconciler(_agent_snapshot([])),
+                                 sender=lambda b: 0, clock=lambda: 1000.0, emit=seen.append)
+        assert report["input_ack"] == "subscription_started"
+        assert any("subscription_started" in m for m in seen)
+
+
+class TestTheHeartbeatIntervalIsValidatedToo:
+    @pytest.mark.parametrize("bad", [0, -5, float("nan"), float("inf"), "abc", None])
+    def test_a_bad_heartbeat_falls_back_to_the_default(self, bad):
+        """Step-8a finding: NaN or inf made `heartbeat_due` never fire, disabling idle heartbeats,
+        pending-send retries AND stall warnings; zero or negative ran the whole drain every frame."""
+        assert pw.clamp_heartbeat(bad) == pw.DEFAULT_HEARTBEAT_S
+
+    def test_a_sane_heartbeat_is_left_alone(self):
+        assert pw.clamp_heartbeat(45.0) == 45.0
+
+    def test_an_exact_boundary_poll_counts_as_due(self):
+        """Step-8a finding: with a strict `>` a poll landing exactly on the deadline was not due, so a
+        poll interval clamped to exactly `heartbeat_s` beat every SECOND interval."""
+        assert pw.heartbeat_due(last=1000.0, now=1300.0, interval_s=300.0) is True
+        assert pw.heartbeat_due(last=1000.0, now=1299.0, interval_s=300.0) is False
