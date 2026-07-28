@@ -54,7 +54,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body class="tpl-review">
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-27 19:04 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-27 19:24 MDT</div>
 <h1>herdr runbook</h1>
 <p class="sub">Claude Code integration: install footprint, uninstall, and how to prove the harness survived (#610)</p>
 </header>
@@ -62,8 +62,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <h1>herdr runbook</h1>
 <p>Operational reference for the herdr terminal multiplexer as this workspace uses it.</p>
 <p>herdr is load-bearing: <code>projects/rawgentic</code> and <code>projects/thewanderinginn</code> both route their WF2 <strong>build seat</strong> through it (<code>executorTerminalBackend: {&quot;build&quot;: &quot;herdr&quot;}</code>), so a broken herdr install takes the build seat with it.</p>
-<p><strong>Scope of this page today (#610).</strong> It covers the <strong>Claude Code integration</strong> — what installing it changes, how to prove the rest of the harness survived, and how to remove it. The binary pin itself lives in [<code>hooks/herdr-pin.json</code>](../../hooks/herdr-pin.json) and its provenance in [the #609 supply-chain vet](../reviews/2026-07-27-609-herdr-supply-chain-vet.md). Broader workspace conventions — pane/workspace layout, the epic-launcher herdr variant, run-driver conventions — arrive with #613, which extends this file.</p>
-<p>---</p>
+<p><strong>Scope of this page today (#610).</strong> It covers the <strong>Claude Code integration</strong> — what installing it changes, how to prove the rest of the harness survived, and how to remove it. The binary pin itself lives in <code>hooks/herdr-pin.json</code> and its provenance in <code>docs/reviews/2026-07-27-609-herdr-supply-chain-vet.md</code>. Broader workspace conventions — pane/workspace layout, the epic-launcher herdr variant, run-driver conventions — arrive with #613, which extends this file.</p>
 <h2>1. What is installed on this host</h2>
 <table>
 <thead><tr><th>Component</th><th>State</th><th>Source of truth</th></tr></thead>
@@ -75,127 +74,117 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 </table>
 <p>Check the integration at any time:</p>
 <pre><code>herdr integration status            # or: --outdated-only
-# claude: current (v7) (/home/&lt;user&gt;/.claude/hooks/herdr-agent-state.sh)</code></pre>
+# claude: current (v7) (&lt;HOME&gt;/.claude/hooks/herdr-agent-state.sh)</code></pre>
 <p><code>status</code> is the check that matters. It compares the installed script&#x27;s embedded <code>HERDR_INTEGRATION_VERSION</code> against the binary&#x27;s own expectation, so it catches the case a version pin alone misses: the same pinned binary shipping a newer integration script.</p>
-<p>---</p>
 <h2>2. What the install changes</h2>
 <p><code>herdr integration install claude</code> does exactly two things:</p>
 <p>1. Writes the hook script to <code>~/.claude/hooks/herdr-agent-state.sh</code>. 2. Registers <strong>one</strong> hook entry in <code>~/.claude/settings.json</code>.</p>
-<h3>2.1 The settings.json entry — verbatim</h3>
-<p>This is the entire semantic footprint. Nothing else is added and <strong>nothing is removed</strong>:</p>
-<pre><code>{
-  &quot;matcher&quot;: &quot;*&quot;,
-  &quot;hooks&quot;: [
-    {
-      &quot;command&quot;: &quot;bash &#x27;&lt;HOME&gt;/.claude/hooks/herdr-agent-state.sh&#x27; session&quot;,
-      &quot;timeout&quot;: 10,
-      &quot;type&quot;: &quot;command&quot;
-    }
-  ]
-}</code></pre>
-<p>…appended to <code>hooks.SessionStart</code>. <code>&lt;HOME&gt;</code> is the absolute home directory at install time.</p>
-<blockquote><strong>Redaction, stated deliberately.</strong> <code>3D-Stories/rawgentic</code> is a <strong>public</strong> repository, and a real</blockquote>
-<blockquote><code>~/.claude/settings.json</code> carries the operator&#x27;s permission allowlist, absolute home paths, and</blockquote>
-<blockquote>plugin/marketplace inventory. So this page reproduces the <strong>herdr-owned hunk verbatim</strong> — the part</blockquote>
-<blockquote>that is actually the install&#x27;s diff — and characterizes the rest by shape only, never by content.</blockquote>
-<blockquote>The full unredacted diff is reproducible in seconds with the recipe in §6.</blockquote>
-<h3>2.2 The incidental whole-file reformat</h3>
-<p>The installer parses and <strong>re-serializes the entire settings.json with alphabetically sorted keys</strong> (top level *and* nested — e.g. <code>&quot;repo&quot;</code> sorts before <code>&quot;source&quot;</code> inside every marketplace entry) and <strong>drops the trailing newline</strong>.</p>
-<p>On a hand-maintained settings.json this renders as a <strong>~300-line diff for a one-hook change</strong>. It is cosmetic: JSON object key order is not semantic, and no value is altered. It is called out here because a diff-review that does not expect it reads it as the installer rewriting the config.</p>
-<h3>2.3 The hook script</h3>
-<p><code>~/.claude/hooks/herdr-agent-state.sh</code>, integration v7, <code>3202</code> bytes, sha256 <code>ffd5a76b7c62f5313040fc1e98fa010ff19a7aa85dd9fe6f325b9729d5f01b46</code>.</p>
-<p>That digest is a <strong>recorded observation of this host</strong>, not a CI-enforced invariant — CI has no <code>~/.claude/</code>. The script&#x27;s own header declares it herdr-managed and warns that reinstalling or updating the integration <strong>overwrites</strong> it, so a changed digest normally means herdr replaced it. <strong>Add custom hooks beside this file; never edit it.</strong></p>
+<h3>2.1 Evidence classes — read this before trusting any artifact below</h3>
+<p>A real <code>~/.claude/settings.json</code> carries the operator&#x27;s permission allowlist, absolute home paths, and plugin inventory, and this repo is <strong>public</strong>. So the committed evidence is deliberately of three different strengths, and each is labelled:</p>
+<table>
+<thead><tr><th>Class</th><th>What it means</th><th>Where</th></tr></thead>
+<tbody>
+<tr><td><strong>byte-exact</strong></td><td>Committed bytes, asserted by digest or regenerated diff in CI</td><td>the v7 hook script fixture; <code>install.diff</code></td></tr>
+<tr><td><strong>redacted</strong></td><td>Real installer output against a *synthetic* settings file, with the sandbox <code>$HOME</code> normalized to the literal <code>&lt;HOME&gt;</code></td><td><code>settings.before.json</code> / <code>settings.after.json</code></td></tr>
+<tr><td><strong>semantic</strong></td><td>A claim about the live host, verified by reading, not committed verbatim</td><td>§3 unperturbed claims; §4 measurements</td></tr>
+</tbody>
+</table>
+<p>Nothing here is a verbatim capture of a live host settings file, and no artifact should be read as one.</p>
+<h3>2.2 The exact diff — byte-exact, on a sanitized fixture</h3>
+<p><code>tests/fixtures/herdr/install.diff</code> is the real unified diff produced by running the actual installer against a sandboxed <code>$HOME</code> seeded with <code>tests/fixtures/herdr/settings.before.json</code> — a synthetic file carrying the same *shape* as a real one (mempalace on <code>Stop</code> + <code>PreCompact</code>, three <code>PreToolUse</code> entries, one nested object to expose key sorting) and none of its content.</p>
+<p><code>tests/hooks/test_herdr_pin.py</code> regenerates that diff with the same <code>diff -u</code> invocation and asserts it matches, so the artifact cannot drift from the fixture pair it documents.</p>
+<p>The herdr-owned addition, in full:</p>
+<pre><code>    &quot;SessionStart&quot;: [
+      {
+        &quot;hooks&quot;: [
+          {
+            &quot;command&quot;: &quot;bash &#x27;&lt;HOME&gt;/.claude/hooks/herdr-agent-state.sh&#x27; session&quot;,
+            &quot;timeout&quot;: 10,
+            &quot;type&quot;: &quot;command&quot;
+          }
+        ],
+        &quot;matcher&quot;: &quot;*&quot;
+      }
+    ],</code></pre>
+<p>That is the entire semantic footprint. Nothing else is added and <strong>nothing is removed</strong> — asserted against the fixtures by <code>test_install_adds_only_the_sessionstart_entry</code>.</p>
+<h3>2.3 The incidental whole-file reformat</h3>
+<p>The installer parses and <strong>re-serializes the entire settings.json with alphabetically sorted keys</strong> (top level and nested — <code>&quot;repo&quot;</code> sorts before <code>&quot;source&quot;</code>, <code>&quot;type&quot;</code> after <code>&quot;command&quot;</code>, <code>&quot;matcher&quot;</code> after <code>&quot;hooks&quot;</code>) and <strong>drops the trailing newline</strong>.</p>
+<p><code>install.diff</code> shows this plainly: on a 67-line synthetic fixture, a one-hook change produces a 79-line rewrite ending in <code>\ No newline at end of file</code>. On a real hand-maintained settings.json it renders as a ~300-line diff. It is cosmetic — JSON object key order is not semantic and no value changes — but a diff-review that does not expect it reads it as the installer rewriting the config.</p>
+<h3>2.4 The hook script — byte-exact</h3>
+<p><code>tests/fixtures/herdr/herdr-agent-state.v7.sh</code> is the installed script, committed verbatim: integration v7, <code>3202</code> bytes, sha256 <code>ffd5a76b7c62f5313040fc1e98fa010ff19a7aa85dd9fe6f325b9729d5f01b46</code>.</p>
+<p>Committing it is safe and useful for one measured reason: the script is <strong>generic</strong>. It takes its pane and socket identity from the environment and embeds no host path, so its bytes are identical on every machine — the fixture&#x27;s digest was measured equal to this host&#x27;s installed script. That is also what makes the digest CI-verifiable (<code>test_committed_script_fixture_matches_the_pinned_digest</code>) rather than an observation nobody can check.</p>
+<p>The file header declares it herdr-managed and warns that reinstalling or updating the integration <strong>overwrites</strong> it. <strong>Add custom hooks beside this file; never edit it.</strong></p>
 <p>What it does, read from the script rather than inferred:</p>
 <ul>
 <li><code>#!/bin/sh</code>, <code>set -eu</code>. Accepts only the <code>session</code> action; any other argument exits 0.</li>
-<li>Hard-gates on <code>HERDR_ENV=1</code>, <code>HERDR_SOCKET_PATH</code>, <code>HERDR_PANE_ID</code> and <code>python3</code> being present,</li>
-</ul>
-<p>  exiting 0 if any is missing — <strong>outside a herdr pane it is inert.</strong></p>
-<ul>
-<li>Sends one <code>pane.report_agent_session</code> JSON-RPC line over the unix socket with a 0.5 s timeout and</li>
-</ul>
-<p>  swallows every exception.</p>
-<ul>
+<li>Hard-gates on <code>HERDR_ENV=1</code>, <code>HERDR_SOCKET_PATH</code>, <code>HERDR_PANE_ID</code> and <code>python3</code> being present, exiting 0 if any is missing, so outside a herdr pane it is inert.</li>
+<li>Sends one <code>pane.report_agent_session</code> JSON-RPC line over the unix socket with a 0.5 s timeout and swallows every exception.</li>
 <li>Ignores any event carrying <code>agent_id</code>, so <strong>subagent</strong> events never move the pane state.</li>
-<li>Explicitly refuses <code>SubagentStop</code>. The in-script comment records why: older integrations mapped it</li>
+<li>Explicitly refuses <code>SubagentStop</code>. The in-script comment records why: older integrations mapped it to durable-working, but Claude&#x27;s recap/away-summary can emit it after the main turn already stopped — &quot;never let it revive an idle pane.&quot;</li>
 </ul>
-<p>  to durable-working, but Claude&#x27;s recap/away-summary can emit it after the main turn already   stopped — &quot;never let it revive an idle pane.&quot;</p>
-<p>Because every failure path exits 0 silently, a broken wiring produces <strong>no error anywhere</strong>. That is why <code>herdr integration status</code> (§1) and the record guards in <code>tests/hooks/test_herdr_pin.py</code> are the only things that reveal it.</p>
-<p>---</p>
+<p>Because every failure path exits 0 silently, a broken wiring produces <strong>no error anywhere</strong>. That is why <code>herdr integration status</code> (§1) is the operator check.</p>
 <h2>3. What the install does NOT touch</h2>
 <p>Verified, not assumed:</p>
 <ul>
-<li><strong>wal-guard is not in <code>~/.claude/settings.json</code> at all.</strong> The rawgentic *plugin* registers it, so</li>
+<li><strong>wal-guard is not in <code>~/.claude/settings.json</code> at all.</strong> The rawgentic <strong>plugin</strong> registers it, so the installer&#x27;s settings.json rewrite cannot reach it. Confirmed by grepping the user settings file for <code>wal-guard</code> and <code>wal_guard</code>: no matches.</li>
+<li><strong>mempalace survives:</strong> its <code>PreCompact</code> and <code>Stop</code> entries (<code>mempalace-hook-wrapper.sh</code>, <code>timeout: 210</code>) come through with identical commands, matchers and timeouts.</li>
+<li><strong>The <code>PreToolUse</code> chain survives unchanged:</strong> the question-visibility guard, the tmux-kill guard, and <code>rtk hook claude</code>.</li>
 </ul>
-<p>  the installer&#x27;s settings.json rewrite cannot reach it. (<code>grep -n &#x27;wal-guard\|wal_guard&#x27;</code> over the   user settings file returns nothing.)</p>
-<ul>
-<li><strong>mempalace survives byte-for-byte in content:</strong> <code>PreCompact</code> → `mempalace-hook-wrapper.sh</li>
-</ul>
-<p>  precompact<code> and </code>Stop<code> → </code>mempalace-hook-wrapper.sh stop<code>, both </code>timeout: 210`.</p>
-<ul>
-<li><strong>The <code>PreToolUse</code> chain survives unchanged:</strong> the question-visibility guard, the tmux-kill guard,</li>
-</ul>
-<p>  and <code>rtk hook claude</code> — same commands, same matchers, same timeouts.</p>
-<p>The disjointness half of this claim is enforced as an executable invariant, not just written down here: <code>tests/hooks/test_herdr_pin.py</code> asserts the recorded footprint is exactly <code>[&quot;SessionStart&quot;]</code> and disjoint from the events other tools own, so a future edit claiming herdr owns <code>Stop</code> or <code>PreCompact</code> fails the suite.</p>
-<p>---</p>
+<p>For the fixture pair this is an enforced invariant, not prose: <code>test_install_leaves_every_other_hook_owner_value_identical</code> asserts every pre-existing hook event is value-identical after the install. Compared by value rather than bytes on purpose — the whole-file key sort (§2.3) would fail a byte comparison while telling you nothing about semantics.</p>
+<p>For the <strong>live host</strong> the same claim is <code>semantic</code> class per §2.1: established by reading the live file, not by a committed capture.</p>
 <h2>4. Proving the harness still works</h2>
 <p>Registration surviving a diff is not the same as the hooks still running. Three live checks:</p>
-<p>1. <strong>The herdr hook itself delivered.</strong> Ask the server what it knows about your pane and compare it    against your own session id:</p>
-<pre><code>   printenv CLAUDE_CODE_SESSION_ID
-   herdr pane list          # find your $HERDR_PANE_ID</code></pre>
-<p>   The pane&#x27;s <code>agent_session</code> must carry <code>&quot;source&quot;: &quot;herdr:claude&quot;</code> and a <code>value</code> equal to that    session id. Measured on 2026-07-27 in pane <code>w1:pAZ</code>: <code>agent_session.value</code> was exactly the    session&#x27;s <code>CLAUDE_CODE_SESSION_ID</code>, with <code>source: &quot;herdr:claude&quot;</code>, <code>kind: &quot;id&quot;</code> and    <code>agent_status: &quot;working&quot;</code> — end-to-end proof the SessionStart hook ran and its socket write landed.</p>
-<p>2. <strong>The <code>PreToolUse</code> chain still fires.</strong> <code>rtk</code> rewrites and filters Bash output, so ordinary    <code>git</code>/<code>grep</code> calls coming back in rtk&#x27;s condensed form is itself proof that the PreToolUse chain    is live.</p>
-<p>3. <strong>The rawgentic hook suite is green.</strong> <code>pytest tests/ -q</code> from the repo root.</p>
-<p><strong>Honest limit:</strong> mempalace&#x27;s hooks are <code>Stop</code> and <code>PreCompact</code>, which fire at turn end and at compaction, so a mid-turn check cannot observe them running. Their *registration* is verified above; observing them fire requires ending a turn or triggering a compaction.</p>
-<p>---</p>
+<p>1. <strong>The herdr hook itself delivered.</strong> Compare what the server knows about your pane against your own session id. Run <code>printenv CLAUDE_CODE_SESSION_ID</code>, then <code>herdr pane list</code> and find your <code>$HERDR_PANE_ID</code>. That pane&#x27;s <code>agent_session</code> must carry <code>&quot;source&quot;: &quot;herdr:claude&quot;</code> and a <code>value</code> equal to the session id. Measured 2026-07-27 on this host: <code>agent_session.value</code> was exactly the running session&#x27;s <code>CLAUDE_CODE_SESSION_ID</code>, with <code>source: &quot;herdr:claude&quot;</code>, <code>kind: &quot;id&quot;</code> and <code>agent_status: &quot;working&quot;</code> — end-to-end proof the SessionStart hook ran and its socket write landed. 2. <strong>The <code>PreToolUse</code> chain still fires.</strong> <code>rtk</code> rewrites and filters Bash output, so ordinary <code>git</code> and <code>grep</code> calls coming back in rtk&#x27;s condensed form is itself proof the chain is live. 3. <strong>The rawgentic hook suite is green.</strong> <code>pytest tests/ -q</code> from the repo root.</p>
+<p><strong>Honest limit:</strong> mempalace&#x27;s hooks are <code>Stop</code> and <code>PreCompact</code>, which fire at turn end and at compaction, so a mid-turn check verifies their registration but cannot observe them running.</p>
 <h2>5. Uninstall</h2>
 <pre><code>herdr integration uninstall claude</code></pre>
 <p>Measured behaviour:</p>
 <ul>
 <li>Deletes <code>~/.claude/hooks/herdr-agent-state.sh</code>.</li>
-<li>Removes <strong>only its own</strong> <code>settings.json</code> entry, matched on the exact command path. A</li>
-</ul>
-<p>  differently-pathed sibling entry survives (see the stale-duplicate gotcha below).</p>
-<ul>
-<li>When its entry is the <strong>sole</strong> <code>SessionStart</code> member, the whole <code>SessionStart</code> key is removed</li>
-</ul>
-<p>  rather than left as an empty array. Unrelated events are untouched.</p>
-<ul>
+<li>Removes <strong>only its own</strong> <code>settings.json</code> entry, matched on the exact command path. A differently-pathed sibling entry survives — see the stale-duplicate gotcha in §6.</li>
+<li>When its entry is the <strong>sole</strong> <code>SessionStart</code> member, the whole <code>SessionStart</code> key is removed rather than left as an empty array. Unrelated events are untouched.</li>
 <li><code>herdr integration status</code> then reports <code>claude: not installed</code>.</li>
 </ul>
-<p>Uninstall does not restore the pre-install key ordering — the file stays in herdr&#x27;s normalized, sorted form. That is cosmetic (§2.2).</p>
-<p>---</p>
+<p>Uninstall does not restore the pre-install key ordering; the file stays in herdr&#x27;s normalized sorted form. That is cosmetic (§2.3).</p>
 <h2>6. Gotchas, each measured</h2>
-<ul>
-<li><strong>There is no dry-run.</strong> <code>herdr integration install &lt;TARGET&gt;</code> takes no flags. To see the diff before</li>
-</ul>
-<p>  committing to it, run the real installer against a sandboxed <code>$HOME</code> seeded with a copy of your   real file — the exact shipped invocation, your real content as the base, your live file untouched:</p>
-<pre><code>  FH=$(mktemp -d); mkdir -p &quot;$FH/.claude&quot;
-  cp ~/.claude/settings.json &quot;$FH/.claude/settings.json&quot;
-  sha256sum ~/.claude/settings.json                    # record BEFORE
-  HOME=&quot;$FH&quot; herdr integration install claude
-  sha256sum ~/.claude/settings.json                    # MUST be unchanged
-  diff -u ~/.claude/settings.json &quot;$FH/.claude/settings.json&quot;</code></pre>
-<p>  The installer honours <code>$HOME</code>; confirmed by the sandbox&#x27;s <code>integration status</code> going   <code>not installed</code> → <code>current (v7)</code> while the host&#x27;s own file and script digests stayed identical.</p>
-<ul>
-<li><strong>Idempotent on an exact-path match, appending otherwise.</strong> Repeating the install a 2nd and 3rd</li>
-</ul>
-<p>  time left the <code>SessionStart</code> array unchanged — it dedupes on the exact command string. But an   install whose target path differs from the entry already present <strong>appends a second entry</strong>. So a   settings.json carried between hosts, users or <code>$HOME</code>s accumulates a stale <code>SessionStart</code> entry   pointing at a script that does not exist, and <code>install</code> will never clean it up. Remove the stale   entry by hand.</p>
-<ul>
-<li><strong><code>herdr wait</code> does not exist in 0.7.5</strong> even though the herdr agent skill documents it — tracked</li>
-</ul>
-<p>  as #659.</p>
-<ul>
-<li><strong>Only the <code>build</code> seat pops a pane.</strong> Review and analysis seats return <code>transport: &quot;native&quot;</code> and no</li>
-</ul>
-<p>  pane, by design. Expecting a pane from a review dispatch means waiting forever.</p>
-<ul>
-<li><strong>A pane-less process cannot dispatch the build seat.</strong> <code>HerdrBackend</code> dispatches via</li>
-</ul>
-<p>  <code>herdr pane split --current</code>, so a cron-spawned (pane-less) process gets   <code>{&quot;error&quot;:{&quot;code&quot;:&quot;no_current_pane&quot;}}</code>. This is why arming a durable launcher for a herdr-gated   project needs the #611 herdr-aware variant first.</p>
+<p><strong>There is no dry-run.</strong> <code>herdr integration install &lt;TARGET&gt;</code> takes no flags. To preview the change, run the real installer against a sandboxed <code>$HOME</code>. The recipe below is deliberately <strong>redaction-safe</strong>: it prints only the JSON *paths* that changed, never their values, so it is safe to run inside an agent session or paste into a ticket.</p>
+<pre><code>set -eu
+umask 077
+FH=$(mktemp -d)
+trap &#x27;rm -rf &quot;$FH&quot;&#x27; EXIT INT TERM        # the copy holds your real settings — always clean it up
+mkdir -p &quot;$FH/.claude&quot;
+cp ~/.claude/settings.json &quot;$FH/.claude/settings.json&quot;
+before=$(sha256sum &lt; ~/.claude/settings.json)
+HOME=&quot;$FH&quot; herdr integration install claude
+after=$(sha256sum &lt; ~/.claude/settings.json)
+[ &quot;$before&quot; = &quot;$after&quot; ] &amp;&amp; echo &quot;live settings.json unchanged: OK&quot; || echo &quot;LIVE FILE CHANGED - STOP&quot;
+python3 - &quot;$FH&quot; &lt;&lt;&#x27;PY&#x27;
+import json, sys, pathlib
+def paths(o, p=&quot;&quot;):
+    if isinstance(o, dict):
+        for k, v in o.items(): yield from paths(v, f&quot;{p}.{k}&quot;)
+    elif isinstance(o, list):
+        for i, v in enumerate(o): yield from paths(v, f&quot;{p}[{i}]&quot;)
+    else: yield p
+fh = pathlib.Path(sys.argv[1])
+a = set(paths(json.loads(pathlib.Path.home().joinpath(&quot;.claude/settings.json&quot;).read_text())))
+b = set(paths(json.loads((fh / &quot;.claude/settings.json&quot;).read_text())))
+for k in sorted(b - a): print(&quot;ADDED  &quot;, k)
+for k in sorted(a - b): print(&quot;REMOVED&quot;, k)
+print(&quot;(paths only, no values printed)&quot;)
+PY</code></pre>
+<p>Expect exactly the <code>.hooks.SessionStart[...]</code> paths added and nothing removed.</p>
+<p><strong>If you need the full unredacted diff</strong>, run it only in a trusted local terminal — never in an agent session or CI log, where the transcript would capture your permission allowlist. Write it to a mode-<code>0600</code> file rather than stdout:</p>
+<pre><code>( umask 077; diff -u ~/.claude/settings.json &quot;$FH/.claude/settings.json&quot; &gt; ~/herdr-install.diff )</code></pre>
+<p>Delete it when you are done. For a shareable artifact use the committed sanitized pair in §2.2 instead.</p>
+<p><strong>Idempotent on an exact-path match, appending otherwise.</strong> Repeating the install a 2nd and 3rd time left the <code>SessionStart</code> array unchanged — it dedupes on the exact command string. But an install whose target path differs from the entry already present <strong>appends a second entry</strong>. So a settings.json carried between hosts, users or <code>$HOME</code>s accumulates a stale <code>SessionStart</code> entry pointing at a script that does not exist, and <code>install</code> will never clean it up. Remove the stale entry by hand.</p>
+<p><strong><code>herdr wait</code> does not exist in 0.7.5</strong> even though the herdr agent skill documents it. Tracked as #659.</p>
+<p><strong>Only the <code>build</code> seat pops a pane.</strong> Review and analysis seats return <code>transport: &quot;native&quot;</code> and no pane, by design. Expecting a pane from a review dispatch means waiting forever.</p>
+<p><strong>On this project a build-seat dispatch is currently refused outright</strong>, so no pane appears from it either. The build seat resolves to a Claude model, but <code>MUTATING_FS_SANDBOXED</code> in <code>hooks/executor_routing_lib.py</code> allowlists <code>codex</code> alone (owner decision 2026-07-20: codex is Landlock-confined, claude has no FS sandbox), so a mutating-claude dispatch returns <code>EXIT_REFUSED</code> at STEP 0 with tag <code>mutating_claude_requires_fs_sandbox</code> — before any worktree or pane is created. Closing that needs either a declared codex build lane or the FS-sandbox child.</p>
+<p><strong>A pane-less process cannot dispatch the build seat.</strong> <code>HerdrBackend</code> dispatches via <code>herdr pane split --current</code>, so a cron-spawned process gets <code>{&quot;error&quot;:{&quot;code&quot;:&quot;no_current_pane&quot;}}</code>. This is why arming a durable launcher for a herdr-gated project needs the #611 herdr-aware variant first.</p>
 
 </main>
-<footer>Last updated: 2026-07-27 19:04 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-27 19:24 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

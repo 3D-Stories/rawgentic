@@ -38,7 +38,7 @@
     }
   },
   "integrations": {
-    "_comment": "herdr's per-agent hook installs on a host (#610, epic #667). A TOP-LEVEL sibling of `pin`, deliberately: `pin` describes one binary release (0.7.5, asserted equal to HERDR_VERSION_FLOOR) while an integration is host hook state on its own version line (claude v7) — nesting one under the other would imply they move together. Guards: tests/hooks/test_herdr_pin.py. Full procedure, the verbatim herdr-owned diff hunk and the reproduce-it-yourself recipe: docs/runbooks/herdr.md",
+    "_comment": "herdr's per-agent hook installs on a host (#610, epic #667). A TOP-LEVEL sibling of `pin`, deliberately: `pin` describes one binary release (0.7.5, asserted equal to HERDR_VERSION_FLOOR) while an integration is host hook state on its own version line (claude v7) — nesting one under the other would imply they move together. Guards: tests/hooks/test_herdr_pin.py. Full procedure, the byte-exact installer diff (tests/fixtures/herdr/install.diff), the committed v7 script and a redaction-safe reproduce-it-yourself recipe: docs/runbooks/herdr.md. Evidence classes (byte-exact / redacted / semantic) are labelled in its section 2.1 — no artifact is a verbatim capture of a live host settings file.",
     "claude": {
       "integration_version": 7,
       "status_command": "herdr integration status",
@@ -49,7 +49,7 @@
         "sha256": "ffd5a76b7c62f5313040fc1e98fa010ff19a7aa85dd9fe6f325b9729d5f01b46",
         "size": 3202,
         "herdr_managed": true,
-        "_comment": "A RECORDED OBSERVATION of this host on 2026-07-27, not a CI-enforced invariant — CI has no ~/.claude/, so no test here can compare this digest against a real host; the guards only stop the record from drifting against the runbook that quotes it. Same shape as api_schema above, which #609 recorded and left #390's check 10 to assert. The script's own header declares it herdr-managed and warns that reinstalling or updating the integration OVERWRITES it, so a changed digest means herdr replaced it, not that someone tampered: add custom hooks beside the file, never edit it."
+        "_comment": "Recorded from this host on 2026-07-27 AND asserted in CI against a committed byte-exact copy at tests/fixtures/herdr/herdr-agent-state.v7.sh (test_committed_script_fixture_matches_the_pinned_digest). That assertion is possible only because the v7 script is generic — it takes its pane/socket identity from the environment and embeds no host path, so its bytes are identical on every machine, measured equal to this host's installed copy. What CI still cannot do is verify the digest against a LIVE host; for that the operator check is `herdr integration status`. Same shape as api_schema above, which #609 recorded and left #390's check 10 to assert. The script's own header declares it herdr-managed and warns that reinstalling or updating the integration OVERWRITES it, so a changed digest means herdr replaced it, not that someone tampered: add custom hooks beside the file, never edit it."
       },
       "settings_footprint": {
         "file": "~/.claude/settings.json",
@@ -86,7 +86,7 @@
         "at": "2026-07-27",
         "issue": 610,
         "runbook": "docs/runbooks/herdr.md",
-        "method": "The integration was ALREADY installed at v7 on this host (`herdr integration status` → `claude: current (v7)`), so this is verify-and-document, never re-install (epic #667 D-5). `herdr integration install claude` has no dry-run flag, so the footprint was captured by running the exact shipped invocation against a sandboxed $HOME seeded with a byte copy of the live ~/.claude/settings.json — the real installer, the real file as the diff base, no proxy. The live file's sha256 was recorded before and after and was UNCHANGED (0ed7e89b…8ae69), as was the installed script's. Idempotency was measured by repeating the install; the uninstall behaviours by running it, including on a minimal fixture where herdr held the sole SessionStart entry."
+        "method": "The integration was ALREADY installed at v7 on this host (`herdr integration status` → `claude: current (v7)`), so this is verify-and-document, never re-install (epic #667 D-5). `herdr integration install claude` has no dry-run flag, so the footprint was captured by running the exact shipped invocation against a sandboxed $HOME seeded with a byte copy of the live ~/.claude/settings.json — the real installer, the real file as the diff base, no proxy. The live file's sha256 was recorded before and after and MATCHED, as did the installed script's digest. Idempotency was measured by repeating the install; the uninstall behaviours by running it, including on a minimal fixture where herdr held the sole SessionStart entry."
       }
     }
   }

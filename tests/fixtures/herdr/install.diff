@@ -1,0 +1,111 @@
+--- settings.before.json
++++ settings.after.json
+@@ -1,67 +1,79 @@
+ {
+-  "model": "opus",
++  "extraKnownMarketplaces": {
++    "example": {
++      "source": {
++        "repo": "example/example",
++        "source": "github"
++      }
++    }
++  },
+   "hooks": {
+     "PreCompact": [
+       {
+         "hooks": [
+           {
+-            "type": "command",
+             "command": "mempalace-hook-wrapper.sh precompact",
+-            "timeout": 210
++            "timeout": 210,
++            "type": "command"
+           }
+         ]
+       }
+     ],
+     "PreToolUse": [
+       {
+-        "matcher": "AskUserQuestion",
+         "hooks": [
+           {
+-            "type": "command",
+             "command": "question-visibility-guard.py",
+-            "timeout": 10
++            "timeout": 10,
++            "type": "command"
+           }
+-        ]
++        ],
++        "matcher": "AskUserQuestion"
+       },
+       {
+-        "matcher": "Bash",
+         "hooks": [
+           {
+-            "type": "command",
+             "command": "guard_tmux_kill.py",
+-            "timeout": 10
++            "timeout": 10,
++            "type": "command"
+           }
+-        ]
++        ],
++        "matcher": "Bash"
+       },
+       {
+-        "matcher": "Bash",
+         "hooks": [
+           {
+-            "type": "command",
+-            "command": "rtk hook claude"
++            "command": "rtk hook claude",
++            "type": "command"
+           }
+-        ]
++        ],
++        "matcher": "Bash"
++      }
++    ],
++    "SessionStart": [
++      {
++        "hooks": [
++          {
++            "command": "bash '<HOME>/.claude/hooks/herdr-agent-state.sh' session",
++            "timeout": 10,
++            "type": "command"
++          }
++        ],
++        "matcher": "*"
+       }
+     ],
+     "Stop": [
+       {
+-        "matcher": "*",
+         "hooks": [
+           {
+-            "type": "command",
+             "command": "mempalace-hook-wrapper.sh stop",
+-            "timeout": 210
++            "timeout": 210,
++            "type": "command"
+           }
+-        ]
++        ],
++        "matcher": "*"
+       }
+     ]
+   },
+-  "extraKnownMarketplaces": {
+-    "example": {
+-      "source": {
+-        "source": "github",
+-        "repo": "example/example"
+-      }
+-    }
+-  }
+-}
++  "model": "opus"
++}
+\ No newline at end of file

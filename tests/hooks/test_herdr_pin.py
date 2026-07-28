@@ -12,17 +12,28 @@ file are two records of ONE fact. Mirrored constants drift silently, so they are
 equal — neither can move without the other.
 
 The same file also carries the `integrations` block (#610): what herdr's per-agent hook
-installs do to a host. Those guards are **record-integrity** guards, not behavioral ones —
-CI has no `~/.claude/`, so nothing here can verify the recorded digest against a real host.
-What they do enforce is that the record cannot silently widen: the claimed hook footprint
-must stay disjoint from the events other tools own, the digest must stay in sync with the
-runbook that quotes it, and the recorded command must not leak a concrete home path into
-this public repo.
+installs do to a host. Those guards come in two kinds, and the distinction is deliberate
+because #610's review correctly called an earlier framing self-referential:
+
+- **Record-integrity guards** compare the authored record against constants. They cannot
+  prove anything about a real install; what they buy is that the record cannot silently
+  widen, drift from the runbook that quotes it, or grow a concrete home path in a public
+  repo. Their docstrings say so.
+- **Fixture-based guards** compare REAL output of `herdr integration install claude`, run
+  against a sandboxed `$HOME` seeded with `tests/fixtures/herdr/settings.before.json`. These
+  carry the actual AC1/AC2 properties: the install adds exactly one `SessionStart` entry, and
+  every other hook owner (mempalace's `Stop`/`PreCompact`, the `PreToolUse` chain) comes out
+  value-identical. The committed `install.diff` is asserted to be the real diff of that pair,
+  and the committed v7 script fixture is asserted byte-equal to the pinned digest — which is
+  possible only because that script is generic (it takes its identity from the environment
+  and embeds no host path, so its bytes match on every machine).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -126,23 +137,17 @@ def test_api_schema_pin_recorded_for_issue_390(pin: dict) -> None:
 # --------------------------------------------------------------------------------------
 
 RUNBOOK_PATH = REPO_ROOT / "docs" / "runbooks" / "herdr.md"
+FIXTURES = REPO_ROOT / "tests" / "fixtures" / "herdr"
+SETTINGS_BEFORE = FIXTURES / "settings.before.json"
+SETTINGS_AFTER = FIXTURES / "settings.after.json"
+INSTALL_DIFF = FIXTURES / "install.diff"
+SCRIPT_FIXTURE = FIXTURES / "herdr-agent-state.v7.sh"
 
-# Hook events owned by tools OTHER than herdr on this workspace's hosts: mempalace
-# (Stop, PreCompact), the question-visibility guard / tmux-kill guard / rtk (PreToolUse).
-# The remainder are Claude Code events herdr's claude integration simply does not register.
-# AC2 of #610 is "wal-guard / mempalace hooks verified unperturbed" — expressed here as an
-# invariant on the record rather than a sentence in a doc, so a future edit that claims
-# herdr owns one of these fails the suite instead of quietly shipping.
-NON_HERDR_HOOK_EVENTS = frozenset({
-    "Stop",
-    "PreCompact",
-    "PreToolUse",
-    "PostToolUse",
-    "SubagentStop",
-    "Notification",
-    "UserPromptSubmit",
-    "SessionEnd",
-})
+# The exact hook command the installer writes, with the install-time home normalized to
+# `<HOME>` in the committed fixture. Asserted by EQUALITY, not suffix: `endswith` would
+# accept `evil-command; bash '<HOME>/…/herdr-agent-state.sh' session`, which is precisely
+# what a guard named "invokes only the managed script" must reject (#610 review, Medium 4).
+EXPECTED_HOOK_COMMAND = "bash '<HOME>/.claude/hooks/herdr-agent-state.sh' session"
 
 
 @pytest.fixture(scope="module")
@@ -169,21 +174,19 @@ def test_claude_integration_records_its_version_and_commands(claude_integration:
     assert ci["uninstall_command"] == "herdr integration uninstall claude"
 
 
-def test_claude_footprint_is_sessionstart_only_and_disjoint_from_other_owners(
-    claude_integration: dict,
-) -> None:
-    """#610 AC2, as an executable invariant.
+def test_recorded_footprint_names_only_sessionstart(claude_integration: dict) -> None:
+    """RECORD-SHAPE guard only — deliberately labelled as such.
 
-    herdr's claude integration registers exactly one hook event. If a future edit widens
-    this record to claim herdr also owns `Stop` or `PreCompact`, that is either wrong or a
-    real collision with mempalace — either way it must not ship silently.
+    This compares the authored record against a constant, so it cannot prove anything about
+    a real install; the #610 review was right to call the earlier "executable invariant"
+    framing self-referential, and the follow-up set-disjointness assert was redundant once
+    this equality holds. The actual unperturbed-hooks property is proven against installer
+    output in `test_install_adds_only_the_sessionstart_entry` /
+    `test_install_leaves_every_other_hook_owner_value_identical` below. What this still buys
+    is cheap: a future edit widening the RECORD to claim herdr owns another event fails here.
     """
     events = claude_integration["settings_footprint"]["hook_events"]
     assert events == ["SessionStart"], f"expected exactly ['SessionStart'], got {events!r}"
-    assert not (set(events) & NON_HERDR_HOOK_EVENTS), (
-        f"recorded footprint collides with events other tools own: "
-        f"{sorted(set(events) & NON_HERDR_HOOK_EVENTS)}"
-    )
 
 
 def test_recorded_hook_command_leaks_no_concrete_home_path(claude_integration: dict) -> None:
@@ -199,11 +202,17 @@ def test_recorded_hook_command_leaks_no_concrete_home_path(claude_integration: d
 def test_recorded_hook_command_invokes_only_the_managed_script(
     claude_integration: dict,
 ) -> None:
-    """The entry runs the herdr-managed script with the `session` action and nothing else —
-    guards against an edit that widens what herdr is documented to execute."""
+    """The entry runs the herdr-managed script with the `session` action and NOTHING else.
+
+    Asserted by equality against `EXPECTED_HOOK_COMMAND`. A suffix check (the original form)
+    accepted an arbitrary prefix — `evil; bash '<HOME>/…' session` would have passed a guard
+    whose whole purpose is to reject exactly that (#610 review, Medium 4).
+    """
     entry = claude_integration["settings_footprint"]["entry"]
     assert entry["type"] == "command"
-    assert entry["command"].endswith("herdr-agent-state.sh' session")
+    assert entry["command"] == EXPECTED_HOOK_COMMAND, (
+        f"expected exactly {EXPECTED_HOOK_COMMAND!r}, got {entry['command']!r}"
+    )
     assert isinstance(entry["timeout"], int) and entry["timeout"] > 0
     assert entry["matcher"] == "*"
 
@@ -260,6 +269,127 @@ def test_claude_integration_records_the_uninstall_path(claude_integration: dict)
     assert un["removes_event_key_when_sole_entry"] is True
 
 
+# --------------------------------------------------------------------------------------
+# Fixture-based guards (#610 review) — these compare REAL installer output, not the record
+# against itself. The fixtures were produced by running the actual `herdr integration
+# install claude` against a sandboxed $HOME seeded with `settings.before.json`, then
+# normalizing the sandbox path to the literal `<HOME>`. That normalization is the ONLY
+# edit; everything else is byte-exact installer output.
+# --------------------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def before_after() -> tuple[dict, dict]:
+    return (
+        json.loads(SETTINGS_BEFORE.read_text(encoding="utf-8")),
+        json.loads(SETTINGS_AFTER.read_text(encoding="utf-8")),
+    )
+
+
+def test_install_adds_only_the_sessionstart_entry(before_after: tuple[dict, dict]) -> None:
+    """#610 AC1/AC2, proven against installer output.
+
+    The ONLY semantic change the installer makes is one added `SessionStart` entry. Every
+    other top-level key and every other hook event must be untouched.
+    """
+    before, after = before_after
+    assert set(after) == set(before), "installer must not add or drop top-level keys"
+    for key in set(before) - {"hooks"}:
+        assert after[key] == before[key], f"top-level {key!r} changed"
+
+    assert "SessionStart" not in before["hooks"], "fixture precondition: no herdr entry yet"
+    assert set(after["hooks"]) == set(before["hooks"]) | {"SessionStart"}, (
+        "the only new hook event may be SessionStart"
+    )
+    added = after["hooks"]["SessionStart"]
+    assert added == [
+        {
+            "hooks": [
+                {"command": EXPECTED_HOOK_COMMAND, "timeout": 10, "type": "command"},
+            ],
+            "matcher": "*",
+        }
+    ], f"unexpected SessionStart entry: {added!r}"
+
+
+def test_install_leaves_every_other_hook_owner_value_identical(
+    before_after: tuple[dict, dict],
+) -> None:
+    """The real AC2: mempalace's and the PreToolUse chain's registrations survive intact.
+
+    Compared by VALUE, because the installer re-serializes the whole file with sorted keys —
+    a byte comparison would fail on cosmetics and tell us nothing about semantics. This is
+    what the runbook's unperturbed claim rests on.
+    """
+    before, after = before_after
+    for event, entries in before["hooks"].items():
+        assert after["hooks"][event] == entries, (
+            f"hook event {event!r} was perturbed by the install: "
+            f"{before['hooks'][event]!r} -> {after['hooks'][event]!r}"
+        )
+    # And specifically the owners #610 AC2 names, so the intent survives a fixture edit.
+    commands = [
+        h["command"]
+        for entries in after["hooks"].values()
+        for entry in entries
+        for h in entry["hooks"]
+    ]
+    assert "mempalace-hook-wrapper.sh precompact" in commands
+    assert "mempalace-hook-wrapper.sh stop" in commands
+    assert "rtk hook claude" in commands
+
+
+def test_committed_install_diff_matches_the_fixtures() -> None:
+    """The committed unified diff IS the diff of the committed fixtures.
+
+    Without this, `install.diff` is decorative prose free to drift from the pair it claims to
+    describe. Regenerated with the SAME tool and flags the runbook documents:
+      diff -u tests/fixtures/herdr/settings.before.json tests/fixtures/herdr/settings.after.json
+    (then the two `---`/`+++` header lines are normalized to bare filenames, since the real
+    ones carry local paths and mtimes).
+
+    Deliberately shells out rather than using `difflib`: GNU diff and difflib pick different —
+    both valid — hunk alignments for the same change, so comparing them tests diff-algorithm
+    agreement instead of artifact freshness. Subprocess is also this repo's house style.
+    """
+    proc = subprocess.run(
+        ["diff", "-u", str(SETTINGS_BEFORE), str(SETTINGS_AFTER)],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 1, (
+        f"expected diff to report differences (rc 1), got rc {proc.returncode}"
+    )
+    fresh = proc.stdout.splitlines()[2:]                     # drop path/mtime headers
+    committed = INSTALL_DIFF.read_text(encoding="utf-8").splitlines()[2:]
+    assert committed == fresh, (
+        "install.diff has drifted from the fixtures it documents — regenerate it"
+    )
+
+
+def test_committed_script_fixture_matches_the_pinned_digest(
+    claude_integration: dict,
+) -> None:
+    """Byte-exact, and verifiable in CI — unlike the host digest on its own.
+
+    The v7 script is generic: it reads its pane/socket identity from the environment and
+    embeds no host path, so the bytes are identical on every machine. Measured: the fixture's
+    sha256 equals the live host's installed script. Committing it turns the recorded digest
+    from an unverifiable observation into an assertion CI can actually make.
+    """
+    digest = hashlib.sha256(SCRIPT_FIXTURE.read_bytes()).hexdigest()
+    assert digest == claude_integration["hook_script"]["sha256"], (
+        "committed script fixture does not match the digest recorded in herdr-pin.json"
+    )
+    assert SCRIPT_FIXTURE.stat().st_size == claude_integration["hook_script"]["size"]
+
+
+def test_committed_script_fixture_carries_no_host_path(claude_integration: dict) -> None:
+    """A committed copy of a host file is exactly where a home path leaks into a public repo."""
+    text = SCRIPT_FIXTURE.read_text(encoding="utf-8")
+    assert "/home/" not in text and "/Users/" not in text, "host path in the script fixture"
+    assert "HERDR_INTEGRATION_VERSION=7" in text, "fixture must be the v7 script"
+
+
 def test_claude_integration_verification_provenance(claude_integration: dict) -> None:
     """An unattributed record is a claim; a dated method pointing at a real file is
     evidence. Also pins the honesty caveat from Step-4 finding #4 — the digest is a
@@ -269,8 +399,15 @@ def test_claude_integration_verification_provenance(claude_integration: dict) ->
     assert re.match(r"^\d{4}-\d{2}-\d{2}$", v["at"])
     assert v["method"].strip(), "record HOW the footprint was measured"
     assert (REPO_ROOT / v["runbook"]).is_file(), f"runbook path {v['runbook']!r} does not exist"
+    # The caveat's job is to stop the digest being over-claimed. Since #610's review the digest
+    # IS asserted in CI against a committed byte-exact fixture, so the honest residual limit is
+    # narrower than before: CI still cannot check it against a LIVE host. Pin that residual —
+    # the phrasing may evolve, the disclosure of what is NOT verified may not.
     caveat = claude_integration["hook_script"]["_comment"].lower()
-    assert "recorded observation" in caveat, (
-        "the digest caveat must state it is a recorded observation, not a CI-enforced "
-        "invariant — CI has no host home directory to check it against"
+    assert "live host" in caveat, (
+        "the digest caveat must still name what CI cannot verify — the digest against a live "
+        "host — so a reader never mistakes the fixture assertion for host verification"
+    )
+    assert "herdr integration status" in caveat, (
+        "the caveat must name the operator-side check that DOES cover a live host"
     )
