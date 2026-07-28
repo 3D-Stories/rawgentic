@@ -509,7 +509,8 @@ def transcript_has_marker(transcript_text: str, marker: str) -> bool:
     return marker in (transcript_text or "")
 
 
-def transcript_has_cleared_goal(transcript_text: str) -> bool:
+def transcript_has_cleared_goal(transcript_text: str,
+                                expected_condition: str | None = None) -> bool:
     """A `met:true, sentinel:true` goal_status row — the SEMANTIC confirmation that a
     cross-pane `/goal clear` was actually parsed and acted on.
 
@@ -520,9 +521,23 @@ def transcript_has_cleared_goal(transcript_text: str) -> bool:
 
     `sentinel` is required as well as `met`: it is what distinguishes a goal-guard row from any
     other record that happens to carry a met flag.
+
+    `expected_condition` binds the confirmation to the guard we were authorised to clear, and
+    Step 11 pass-3 showed why it is not optional in the destructive path. BOTH reviewers
+    reproduced the same hole: with any `met:true` row accepted, a row belonging to a DIFFERENT
+    guard confirmed our clear. One walked it end to end — the predecessor acquired a replacement
+    guard, clearing THAT produced its own `met:true` row, `retire_predecessor` took it as proof,
+    returned `retired` and closed a live pane. The other showed the timing variant: a row landing
+    between the baseline and the send confirms a clear herdr never executed. Matching the
+    condition closes both, because the row must belong to the guard the handoff recorded.
     """
     for row in _iter_goal_status(transcript_text):
-        if row.get("met") is True and row.get("sentinel") is True:
+        if row.get("met") is not True or row.get("sentinel") is not True:
+            continue
+        if expected_condition is None:
+            return True
+        cond = row.get("condition")
+        if isinstance(cond, str) and cond.strip() == expected_condition.strip():
             return True
     return False
 
@@ -1521,7 +1536,11 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
         if toplevel and branch:
             receipt = {"generation": generation, "claimant": session_id,
                        "branch_observed": branch, "repo_root_observed": toplevel,
-                       "step": position["step"], "ts": now}
+                       "step": position["step"],
+                       # #665's AC4 addendum on the issue says the receipt echoes the WF2 step AND
+                       # the recorded test baseline. `step` was carried; the baseline was not, so
+                       # the acceptance record and the code disagreed (Step 11 pass-3, gate 3).
+                       "test_baseline_observed": position["test_baseline"], "ts": now}
 
             def _write_receipt(s):
                 p = s.get("handoff_pending")
@@ -1544,7 +1563,8 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
                 and got.get("claimant") == session_id \
                 and got.get("branch_observed") == position["branch"] \
                 and got.get("repo_root_observed") == position["repo_root"] \
-                and got.get("step") == position["step"]   # Step 11 prose 7: written, never compared
+                and got.get("step") == position["step"] \
+                and got.get("test_baseline_observed") == position["test_baseline"]
         out["results"]["position_rebuilt"] = rebuilt
 
         # --- 5. ack ---
@@ -1597,7 +1617,7 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
                                     f"predecessor session {position['predecessor_session']!r}")
             return ("ok", "")
 
-        def _state_fence() -> tuple[bool, str]:
+        def _state_fence() -> tuple[bool, str, str]:
             """Re-read driver state under the lock and confirm this teardown is still authorised.
 
             Step 11 pass-2, both reviewers (Critical): the single fence before `send-text` was far
@@ -1608,25 +1628,30 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             before every destructive call is the fix; the residual is now just the gap between this
             check and the syscall, which no amount of checking can close.
             """
+            # Tri-state like the identity probe (Step 11 pass-3): a TRANSIENT read failure is not
+            # proof that authority was revoked. Collapsing them meant one unreadable state file
+            # after a confirmed clear abandoned the remaining close attempts AND the re-arm,
+            # leaving a live predecessor unguarded on the strength of a momentary I/O error.
             try:
                 snapshot = _locked_state_read(driver_state_path)
             except (OSError, ValueError) as exc:
-                return (False, f"driver state could not be re-read ({exc})")
+                return (False, f"driver state could not be re-read ({exc})", "unreadable")
             pend = snapshot.get("handoff_pending")
             if not isinstance(pend, dict):
-                return (False, "handoff_pending has disappeared from driver state")
+                return (False, "handoff_pending has disappeared from driver state", "changed")
             if pend.get("kind") != driver_lib.MID_CHILD_HANDOFF_KIND:
-                return (False, f"handoff_pending.kind is now {pend.get('kind')!r}")
+                return (False, f"handoff_pending.kind is now {pend.get('kind')!r}", "changed")
             if pend.get("cancelled") is True:
-                return (False, "the handoff has been CANCELLED")
+                return (False, "the handoff has been CANCELLED", "changed")
             if snapshot.get("generation") != generation or pend.get("generation") != generation:
                 return (False, f"generation moved on: ours is {generation}, state now carries "
-                               f"{snapshot.get('generation')!r}/{pend.get('generation')!r}")
+                               f"{snapshot.get('generation')!r}/{pend.get('generation')!r}",
+                        "changed")
             claim = snapshot.get("handoff_claim")
             if not (isinstance(claim, dict) and claim.get("generation") == generation
                     and claim.get("claimant") == session_id):
-                return (False, "the claim is no longer ours")
-            return (True, "")
+                return (False, "the claim is no longer ours", "changed")
+            return (True, "", "ok")
 
         def _destructive_call(argv, kind, note=None):
             """State-fence AND re-prove the target, THEN issue one destructive command.
@@ -1635,9 +1660,11 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             `None`, `"unavailable"` (transient — the caller may retry) or `"mismatch"`/`"state"`
             (terminal — stop).
             """
-            fence_ok, fence_why = _state_fence()
+            fence_ok, fence_why, fence_kind = _state_fence()
             if not fence_ok:
-                return (None, f"state fence REFUSED: {fence_why}", "state")
+                # "unreadable" is retryable by the caller; "changed" is proven and terminal.
+                return (None, f"state fence REFUSED: {fence_why}",
+                        "unavailable" if fence_kind == "unreadable" else "state")
             status, why_now = _anchor_hosts_predecessor()
             if status != "ok":
                 return (None, f"identity check failed: {why_now}", status)
@@ -1730,14 +1757,32 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
         # DIFFERENT guard while the successor was rebuilding, this cleared that replacement guard
         # and closed a live session anyway. What we are authorised to clear is the condition the
         # handoff recorded, so that is what must still be in force on the target.
+        # FAIL-CLOSED (Step 11 pass-3): the first version refused only when a non-None condition
+        # DIFFERED, so an absent row, an unreadable transcript, and a newest row that was already
+        # `met:true` all sailed through — the check "failed open" on exactly the evidence it exists
+        # to demand. It must positively establish that the guard we are authorised to clear is the
+        # one currently in force on the target.
         pred_text = read_or_empty(pred_transcript)
-        pred_newest = latest_goal_status_condition(pred_text)
-        if pred_newest is not None \
-                and pred_newest.strip() != position["goal_condition"].strip():
+        pred_rows = [r for r in _iter_goal_status(pred_text)]
+        pred_newest = pred_rows[-1] if pred_rows else None
+        if pred_newest is None:
+            return refuse(
+                "refusing: the predecessor's transcript carries no goal_status row at all (or "
+                "could not be read), so there is no evidence of the guard this teardown would "
+                "clear — absence of evidence is not evidence of a guard")
+        pred_cond = pred_newest.get("condition")
+        if not isinstance(pred_cond, str) \
+                or pred_cond.strip() != position["goal_condition"].strip():
             return refuse(
                 "refusing: the predecessor's newest goal_status row carries a DIFFERENT condition "
-                "than the one this handoff recorded, so it has re-armed since the handover — "
-                "clearing it would remove a guard this teardown was never authorised to touch")
+                f"({pred_cond!r}) than the one this handoff recorded, so it has re-armed since the "
+                "handover — clearing it would remove a guard this teardown was never authorised "
+                "to touch")
+        if pred_newest.get("met") is not False:
+            return refuse(
+                "refusing: the predecessor's newest goal_status row for the recorded condition is "
+                "not unmet, so its guard is already gone — there is nothing to clear, and closing "
+                "an already-unguarded session is not this command's decision to make")
 
         # Persisted BEFORE the send, so the one window where a crash leaves the predecessor
         # alive and UNGUARDED is discoverable on disk instead of invisible (§6 step 9). A write
@@ -1747,16 +1792,29 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
         if not fenced_ok:
             return refuse(f"refusing at the pre-teardown fence: {fence_reason}")
 
-        # The baseline is taken HERE — after the fence and immediately before the send (Step 11
-        # pass-2, High). Taken any earlier, a `met:true` row appended in the interval would sit in
-        # the tail and "confirm" a clear that herdr had in fact ignored.
+        clear_text, clear_keys = build_send_text_argv(pane=anchor_pane, text=_CLEAR_COMMAND)
+
+        # The baseline is captured as the LAST thing before the first transport (Step 11 pass-3):
+        # the fence and identity probe are herdr/disk round-trips, so a baseline taken before them
+        # leaves a window in which a `met:true` row can land and later "confirm" a clear that was
+        # never executed. Fence and probe FIRST, baseline, then send — so the only remaining window
+        # is between the baseline and the syscall itself. (That last sliver, and the equivalent one
+        # for the state fence, is the residual design §10 item 1 declares out of scope: closing it
+        # needs a fencing token herdr does not offer.)
+        pre_ok, pre_why, pre_kind = _state_fence()
+        if not pre_ok:
+            _phase(None, fenced=False)
+            return refuse(f"state fence REFUSED before the clear: {pre_why} ({pre_kind})")
+        status, why = _anchor_hosts_predecessor()
+        if status != "ok":
+            _phase(None, fenced=False)
+            return refuse(f"identity check failed before the clear: {why}")
         pred_baseline = _baseline(read_text, pred_transcript)
         if pred_baseline is None:
             _phase(None, fenced=False)
             return refuse("cannot baseline the predecessor transcript — without a baseline the "
                           "clear could never be confirmed, so nothing is sent")
 
-        clear_text, clear_keys = build_send_text_argv(pane=anchor_pane, text=_CLEAR_COMMAND)
         text_landed = False
         for kind, argv in (("clear_text", clear_text), ("clear_keys", clear_keys)):
             proc, refusal_why, _refusal_kind = _destructive_call(argv, kind)
@@ -1765,9 +1823,17 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
                 # erase the staged-command warning — the `/goal clear` is sitting unsubmitted and a
                 # later Enter would submit it. Only a refusal before anything was transported may
                 # reset the phase to idle.
-                _phase("clear_staged_unsubmitted" if text_landed else None, fenced=False)
+                phase_ok, phase_why = _phase(
+                    "clear_staged_unsubmitted" if text_landed else None, fenced=False)
                 out["outcome"] = "clear_failed"
                 out["failed_step"] = kind
+                if text_landed and not phase_ok:
+                    out["reason"] = (
+                        f"{refusal_why} — refusing to continue {_CLEAR_COMMAND!r}. The clear text "
+                        "was already transported and is STAGED unsubmitted in the predecessor's "
+                        f"input, and this could NOT be persisted to teardown_phase ({phase_why}), "
+                        "so nothing on disk records it.")
+                    return out
                 out["reason"] = (
                     f"{refusal_why} — refusing to continue {_CLEAR_COMMAND!r}."
                     + (" The clear text was already transported and is STAGED unsubmitted in the "
@@ -1802,16 +1868,22 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
 
         def _cleared() -> bool:
             tail = _tail(read_text(pred_transcript), pred_baseline)
-            return tail is not None and transcript_has_cleared_goal(tail)
+            return tail is not None and transcript_has_cleared_goal(
+                tail, expected_condition=position["goal_condition"])
 
         if not _poll_for(_cleared, attempts=GOAL_POLL_ATTEMPTS, delay_s=GOAL_POLL_DELAY_S,
                          sleeper=sleeper):
             # Deliberately NOT reset to None: the clear may have landed while its confirmation
             # was unreadable, so the state stays discoverable rather than claiming to be idle.
-            _phase("clear_unconfirmed", fenced=False)
+            phase_ok, phase_why = _phase("clear_unconfirmed", fenced=False)
             out["outcome"] = "clear_unconfirmed"
-            out["reason"] = ("the clear was transported but never confirmed by a met:true "
-                             "sentinel row — leaving the pane OPEN")
+            out["reason"] = (
+                "the clear was transported but never confirmed by a met:true sentinel row for the "
+                "recorded condition — leaving the pane OPEN. The guard state is AMBIGUOUS: the "
+                "clear may have been parsed with its confirmation unreadable or late."
+                + ("" if phase_ok else
+                   f" WARNING: this could NOT be persisted to teardown_phase ({phase_why}), so "
+                   "nothing on disk records it."))
             return out
 
         # --- 10. close, re-proving the target before EVERY attempt ---
@@ -2102,11 +2174,21 @@ def _cmd_mid_child_handoff(args) -> int:
             print("no unmet goal in this session's transcript — refusing to invent a condition "
                   "for the successor", file=sys.stderr)
             return 3
+    # Two separate questions, and Step 11 pass-3 (verify 4) showed that only asking the first lets
+    # a REPLACED guard through: `goal_currently_unmet` deliberately examines only rows matching the
+    # condition, so with history `A/met:false` then `B/met:false`, an explicit `--goal-condition A`
+    # was accepted even though B is the live guard. So the condition must be BOTH still-unmet AND
+    # the newest guard in the transcript.
     if not goal_currently_unmet(transcript_text, condition):
         print("refusing: the supplied/derived goal condition is not the guard currently in force "
-              "in this session's transcript (it has been met, or replaced by a different "
-              "condition) — arming the successor with it would hand over a guard that is not what "
-              "is owed", file=sys.stderr)
+              "in this session's transcript (it has been met) — arming the successor with it would "
+              "hand over a guard that is not what is owed", file=sys.stderr)
+        return 3
+    newest_condition = latest_goal_status_condition(transcript_text)
+    if newest_condition is None or newest_condition.strip() != condition.strip():
+        print(f"refusing: the goal condition is not the NEWEST guard in this session's transcript "
+              f"(newest is {newest_condition!r}) — it has been replaced, so handing it over would "
+              "arm the successor with a guard that has already been retired", file=sys.stderr)
         return 3
 
     # 8a destructive 6: `--repo-root` and `--project-root` were independent inputs, and nothing

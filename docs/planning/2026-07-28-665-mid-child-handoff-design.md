@@ -460,6 +460,7 @@ platform_apis:
 | `/goal clear` transported but never confirmed (`met:true` never appears) | `clear_unconfirmed`; pane left OPEN. **Guard state genuinely AMBIGUOUS** — the clear may have been parsed while its confirmation was unreadable or arrived after the poll budget, so the predecessor is either still guarded or alive-and-unguarded and this cannot distinguish them. `teardown_phase: "clear_unconfirmed"` is persisted so an operator can. An earlier revision of this table claimed "STILL guarded", which was wrong (Step 11) |
 | `pane close` fails after a CONFIRMED clear | bounded retries, then re-arm from `position.goal_condition` with confirmation; terminal state `alive_and_re_armed`, or `alive_and_unguarded` if the re-arm fails — the one state treated as an incident |
 | successor dies BEFORE the clear is sent | predecessor alive and guarded; recovery is a NEW handoff generation, not a foreign claim |
+| the anchor stops provably hosting the predecessor AFTER a confirmed clear | `target_changed_after_clear`; NEITHER close nor re-arm is attempted, because both would act on a pane that may now belong to someone else. The predecessor is alive-and-unguarded OR has exited on its own and this cannot distinguish them (Step 11 pass-3 — this state was producible and this table omitted it) |
 
 ## 10. Out of scope, explicitly
 

@@ -1322,41 +1322,35 @@ class TestAnAmbiguousClearSendIsTreatedAsStaged:
 
 
 class TestAnUnrecordableSuccessorIsAFailedLaunch:
-    def test_a_superseded_generation_fails_the_handoff(self, tmp_path, monkeypatch):
-        """`_record_successor` no-opped on a generation mismatch and `perform_handoff` ignored the
-        result, so a superseded invocation kept arming a successor nobody could ever retire."""
+    def test_a_superseded_generation_cannot_record_its_successor(self, tmp_path, monkeypatch):
+        """Step 11 pass-3 (verify 6) caught the previous version of this test never creating a
+        supersession at all: it renumbered the OLD record, then the command opened a fresh
+        generation of its own before the callback ran, so `on_successor` legitimately returned True
+        and the assertion proved nothing. Here the supersession lands BETWEEN the command's own
+        `open_handoff` and its callback — the real race — by bumping the generation from inside
+        the fake launch."""
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", PRED)
         state = TestMidChildHandoffCommand()._bare_state(tmp_path)
         args = TestMidChildHandoffCommand()._args(tmp_path, state)
         seen = {}
 
         def fake_perform(**kw):
+            # a concurrent mid-child handoff opens the next generation first
+            _mutate_state(state, lambda st: (
+                st.update(generation=999),
+                st.update(handoff_pending={"generation": 999, "next_issue": ISSUE,
+                                           "written_ts": 3,
+                                           "kind": dl.MID_CHILD_HANDOFF_KIND,
+                                           "cancelled": False, "teardown_phase": None})))
             seen["recorded"] = kw["on_successor"](SUCC_PANE, SUCC)
-            return {"ok": True, "results": {}, "failed_step": None, "new_pane": SUCC_PANE,
-                    "session_id": SUCC, "truncated": False, "cleanup": None,
-                    "teardown_skipped": None}
+            return {"ok": seen["recorded"], "results": {}, "failed_step": None,
+                    "new_pane": SUCC_PANE, "session_id": SUCC, "truncated": False,
+                    "cleanup": None, "teardown_skipped": None}
 
         monkeypatch.setattr(ll, "perform_handoff", fake_perform)
-        # supersede the generation the command is about to record against
-        _mutate_state_after = lambda: None                       # noqa: E731
-        ll._cmd_mid_child_handoff(args)
-        assert seen["recorded"] is True                          # normal path records
-
-        # now the same callback against a superseded record must report False
-        _mutate_state(state, lambda s: (s.update(generation=99),
-                                        s["handoff_pending"].update(generation=99)))
-        args2 = TestMidChildHandoffCommand()._args(tmp_path, state)
-        recorded = {}
-
-        def fake_perform2(**kw):
-            recorded["ok"] = kw["on_successor"](SUCC_PANE, SUCC)
-            return {"ok": True, "results": {}, "failed_step": None, "new_pane": SUCC_PANE,
-                    "session_id": SUCC, "truncated": False, "cleanup": None,
-                    "teardown_skipped": None}
-
-        monkeypatch.setattr(ll, "perform_handoff", fake_perform2)
-        ll._cmd_mid_child_handoff(args2)
-        assert recorded["ok"] is True     # its own new generation records fine
+        rc = ll._cmd_mid_child_handoff(args)
+        assert seen["recorded"] is False, "a superseded generation must not record a successor"
+        assert rc != 0
 
     def test_perform_handoff_aborts_when_the_successor_cannot_be_recorded(self, tmp_path):
         """The contract itself: `on_successor` returning False is a failed launch."""
@@ -1480,3 +1474,122 @@ class TestTheReceiptStepIsCompared:
         assert out["outcome"] == "teardown_refused"
         assert out["failed_step"] == "position_rebuilt", out
         assert "clear_text" not in world.kinds() and "pane_close" not in world.kinds()
+
+
+# --- WF2 Step 11 pass 3 (both reviewers: DO NOT MERGE) -------------------------------------
+#
+# The decisive finding, reproduced end-to-end by one reviewer: clear confirmation accepted ANY
+# `met:true` row, so a replacement guard's own clear "confirmed" ours and an irreversible
+# `pane close` followed. Everything here pins one confirmed pass-3 finding.
+
+class TestClearConfirmationIsBoundToTheRecordedCondition:
+    def test_a_foreign_conditions_cleared_row_does_not_confirm(self):
+        foreign = _goal_row("some completely different guard", met=True)
+        assert ll.transcript_has_cleared_goal(foreign, expected_condition=COND) is False
+        assert ll.transcript_has_cleared_goal(foreign) is True      # unbound reader, unchanged
+
+    def test_the_recorded_conditions_cleared_row_confirms(self):
+        assert ll.transcript_has_cleared_goal(_goal_row(COND, met=True),
+                                              expected_condition=COND) is True
+
+    def test_a_replacement_guards_clear_does_not_authorise_a_close(self, tmp_path):
+        """The reproduction: the predecessor's own clear of a DIFFERENT guard used to satisfy the
+        confirmation poll, and the pane was closed on it."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "send-keys"]:
+                # herdr ignores our /goal clear, but a row for another guard appears
+                world._staged = None
+                world._append_pred(_goal_row("a different guard entirely", met=True))
+                return FakeProc(0, "")
+            return world(argv, timeout)
+
+        out = _retire(state, world, tmp_path, runner=runner)
+        assert out["outcome"] == "clear_unconfirmed", out
+        assert "pane_close" not in world.kinds(), world.kinds()
+
+
+class TestThePredecessorGuardCheckFailsClosed:
+    def test_no_goal_status_row_at_all_is_refused(self, tmp_path):
+        """It used to refuse only on a DIFFERING condition, so absent evidence passed."""
+        world = _world(tmp_path)
+        world.pred_transcript.write_text("", encoding="utf-8")
+        state = _write_state(tmp_path, world)
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "refused" and "no goal_status row" in out["reason"]
+        assert "clear_text" not in world.kinds() and "pane_close" not in world.kinds()
+
+    def test_an_already_met_newest_row_is_refused(self, tmp_path):
+        world = _world(tmp_path)
+        world.pred_transcript.write_text(
+            "\n".join([_goal_row(COND, met=False), _goal_row(COND, met=True)]) + "\n",
+            encoding="utf-8")
+        state = _write_state(tmp_path, world)
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "refused" and "not unmet" in out["reason"]
+        assert "clear_text" not in world.kinds()
+
+    def test_a_replacement_condition_is_refused(self, tmp_path):
+        world = _world(tmp_path)
+        world.pred_transcript.write_text(
+            "\n".join([_goal_row(COND, met=False),
+                       _goal_row("a replacement guard", met=False)]) + "\n", encoding="utf-8")
+        state = _write_state(tmp_path, world)
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "refused" and "DIFFERENT condition" in out["reason"]
+        assert "clear_text" not in world.kinds()
+
+
+class TestATransientStateReadIsNotProvenRevocation:
+    def test_an_unreadable_state_file_after_the_clear_still_retries(self, tmp_path):
+        """`_state_fence` used to collapse an I/O error into the same verdict as a proven
+        cancellation, so one transient failure after a confirmed clear abandoned every remaining
+        close attempt AND the re-arm."""
+        world = _world(tmp_path, pane_close_rcs=[1, 0])
+        state = _write_state(tmp_path, world)
+        real_read = ll._locked_state_read
+        flaked = {"n": 0}
+
+        def flaky_read(path):
+            if flaked["n"] == 0 and world.kinds().count("pane_close") == 1:
+                flaked["n"] += 1
+                raise OSError("transient")
+            return real_read(path)
+
+        import unittest.mock as mock
+        with mock.patch.object(ll, "_locked_state_read", flaky_read):
+            out = _retire(state, world, tmp_path)
+        assert flaked["n"] == 1, "the transient failure must actually have been exercised"
+        assert out["outcome"] == "retired", out
+
+
+class TestTheReceiptCarriesTheRecordedBaseline:
+    def test_the_receipt_echoes_and_compares_the_test_baseline(self, tmp_path):
+        """#665's AC4 addendum says the receipt echoes the WF2 step AND the recorded baseline."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "retired", out
+        receipt = _state_of(state)["handoff_pending"]["rebuild_receipt"]
+        assert receipt["test_baseline_observed"] == \
+            "5362 passed, 21 skipped, 0 failed, exit 0"
+        assert receipt["step"] == "8"
+
+
+class TestAnExplicitlyAssertedReplacedGuardIsRefused:
+    def test_a_condition_that_is_no_longer_the_newest_is_refused(self, tmp_path, monkeypatch):
+        """`goal_currently_unmet` examines only matching rows by design, so with history
+        `A/met:false` then `B/met:false` an explicit `--goal-condition A` was accepted."""
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", PRED)
+        state = TestMidChildHandoffCommand()._bare_state(tmp_path)
+        transcript = tmp_path / "pred.jsonl"
+        transcript.write_text("\n".join([_goal_row(COND, met=False),
+                                         _goal_row("a replacement guard", met=False)]) + "\n",
+                             encoding="utf-8")
+        monkeypatch.setattr(ll, "perform_handoff",
+                            lambda **kw: pytest.fail("must not launch a successor"))
+        rc = ll.main(TestTheGoalConditionIsBoundToTheLiveGuard()._argv(
+            tmp_path, state, transcript, "--goal-condition", COND))
+        assert rc == 3
