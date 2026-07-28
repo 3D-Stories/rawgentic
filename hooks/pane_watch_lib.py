@@ -273,6 +273,18 @@ class Reconciler:
         self._meta[pane_id] = pane
         return True
 
+    def set_revision(self, pane_id: str, revision) -> None:
+        """Install a known baseline for a pane we already track.
+
+        Step 11 pass-10: the deferred sweep installed fresh METADATA via `register_pane`, but
+        `safe_record()` deliberately omits `revision`, so the baseline stayed `None` and `accepts()`
+        would then take ANY positive revision — including one older than the snapshot it had just
+        read. That defeats the replay-reconciliation invariant and can poison `prior` before the real
+        transition, so the baseline is installed explicitly alongside the metadata.
+        """
+        if pane_id in self._rev and isinstance(revision, int) and not isinstance(revision, bool):
+            self._rev[pane_id] = revision
+
     def revision_of(self, pane_id: str):
         return self._rev.get(pane_id)
 
@@ -737,6 +749,7 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
                     # Install the FRESH record (pass-9): the reconciler otherwise holds the scrubbed
                     # creation metadata, and `stall_warning` reads from there.
                     reconciler.register_pane(safe_record(current), live_pane_ids={pane_id})
+                    reconciler.set_revision(pane_id, current.get("revision"))
                     emit(f"pane-watch: registered {pane_id} on retry")
                     if current.get("agent_status") == BLOCKED and prior.get(pane_id) != BLOCKED:
                         if debouncer.allow(pane_id, now):

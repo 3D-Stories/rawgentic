@@ -984,3 +984,33 @@ class TestSafeRecordSanitizesAtTheBoundary:
             heartbeat_s=1.0, live_panes=live, current_pane=current)
         assert all("SECRET" not in x for x in sent), sent
         assert "SECRET" not in json.dumps(report), report
+
+
+class TestTheDeferredSweepInstallsItsRevisionBaseline:
+    def test_a_stale_frame_after_a_deferred_sweep_is_dropped(self):
+        """Step 11 pass-10: the sweep installed fresh METADATA but `safe_record()` omits `revision`,
+        so the baseline stayed `None` and `accepts()` would take ANY positive revision — including one
+        older than the snapshot just read. Reproduced by the reviewer: a fresh `working@9` record
+        followed by a stale `blocked@1` frame notified the owner."""
+        rec = pw.Reconciler(_snapshot([("w1:pA", "working", 5, "alpha")]))
+        sent = []
+        ticks = iter([1000.0, 1000.0, 2000.0, 3000.0])
+        live_calls = {"n": 0}
+
+        def live():
+            live_calls["n"] += 1
+            return set() if live_calls["n"] == 1 else {"w1:pA", "w1:pNEW"}
+
+        def current(_pid):
+            return {"pane_id": "w1:pNEW", "workspace_id": "w1", "agent_status": "working",
+                    "name": "newborn", "revision": 9}
+
+        report = pw.watch_stream(
+            [_created("w1:pNEW", name="newborn"), None,
+             _updated("w1:pNEW", "blocked", 1, name="newborn")],   # STALE: older than the snapshot
+            reconciler=rec, sender=lambda b: (sent.append(b), 0)[1],
+            clock=lambda: next(ticks), debouncer=pw.Debouncer(window_s=0.0),
+            emit=lambda _m: None, heartbeat_s=1.0, live_panes=live, current_pane=current)
+        assert sent == [], f"a revision older than the installed baseline must be dropped: {report}"
+        assert rec.revision_of("w1:pNEW") == 9, rec.revision_of("w1:pNEW")
+        assert rec.meta("w1:pNEW").get("name") == "newborn", "fresh metadata must still be installed"
