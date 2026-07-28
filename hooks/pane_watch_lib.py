@@ -284,8 +284,11 @@ class Reconciler:
         even though the transition state had been preserved. Rolling the baseline back makes the same
         frame eligible again on redelivery.
         """
-        if pane_id in self._rev and isinstance(revision, int):
-            self._rev[pane_id] = revision
+        if pane_id in self._rev:
+            # `None` is a real baseline (a newly registered pane has no history), and restoring it
+            # matters: Step 11 pass-3 found a new pane's first failed send left the consumed revision
+            # in place, so redelivery of the same frame was dropped and the block was lost.
+            self._rev[pane_id] = revision if isinstance(revision, int) else None
 
     def forget_pane(self, pane_id: str) -> None:
         self._rev.pop(pane_id, None)
@@ -465,7 +468,10 @@ def live_pane_ids(runner=None) -> set:
     """
     try:
         snap = read_snapshot(runner)
-    except WatchError:
+    except Exception:  # pylint: disable=broad-except
+        # Deliberately broad (Step 11 pass-3): this only ever answers "which panes exist right now",
+        # and a `TimeoutExpired` or `FileNotFoundError` escaping here terminated the whole watcher
+        # instead of returning the empty set the contract promises.
         return set()
     node = snap.get("snapshot", snap) if isinstance(snap, dict) else {}
     panes = node.get("panes") if isinstance(node, dict) else None
@@ -537,7 +543,7 @@ def startup_sweep(reconciler, *, sender, now, debouncer=None, emit=print) -> dic
     harm than silence.
     """
     debouncer = debouncer or Debouncer()
-    out = {"notified": [], "send_failures": []}
+    out = {"notified": [], "send_failures": [], "pending": {}}
     for pane_id in reconciler.known_panes():
         pane = reconciler.meta(pane_id)
         if pane.get("agent_status") != BLOCKED:
@@ -552,20 +558,35 @@ def startup_sweep(reconciler, *, sender, now, debouncer=None, emit=print) -> dic
         else:
             debouncer.release(pane_id)
             out["send_failures"].append(pane_id)
-            emit(f"pane-watch: startup sweep SEND FAILED for {pane_id} (rc={rc})")
+            # Step 11 pass-3 BLOCKER: releasing the window scheduled no retry, and a stable blocked
+            # pane emits nothing newer — so the owner was never told. Hand it to the stream as
+            # PENDING so the heartbeat retries it.
+            out["pending"][pane_id] = pane
+            emit(f"pane-watch: startup sweep SEND FAILED for {pane_id} (rc={rc}) — pending retry")
     return out
 
 
 def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
                  heartbeat_s: float = DEFAULT_HEARTBEAT_S, stall_s: float = DEFAULT_STALL_S,
-                 emit=print, beat=None, live_panes=None) -> dict:
+                 emit=print, beat=None, live_panes=None, already_notified=None,
+                 pending=None) -> dict:
     """Drive a stream of wire lines. All I/O is via `sender`, `clock`, `emit` and `beat`.
 
     A `None` line is a read timeout, not an event: it exists so the heartbeat fires during silence.
     Never calls sys.exit — the caller decides the exit code.
     """
     debouncer = debouncer or Debouncer()
-    prior: dict[str, str] = {}
+    # Seeded from the startup sweep. Step 11 pass-3: the stream started with an empty `prior`, so a
+    # pane the sweep had ALREADY paged looked like a fresh transition once the debounce window
+    # expired, and the owner was paged twice for one continuous block.
+    prior: dict[str, str] = {p: BLOCKED for p in (already_notified or ())}
+    # The ONE delivery-retry mechanism, replacing three per-case patches. A failed send lands here
+    # and the heartbeat retries it, so delivery no longer depends on another frame arriving —
+    # which was the hole pass-3 found on both the sweep and the new-pane paths.
+    pending_sends: dict[str, dict] = dict(pending or {})
+    # A creation refused because the live-pane set could not be read. Retried the same way, so a
+    # transient snapshot failure no longer blinds the watcher to that pane forever.
+    pending_registrations: dict[str, dict] = {}
     # Step 11 finding 7: `stall_warning` shipped as dead code — nothing tracked `since` or called it,
     # so an idle/unknown pane could sit stale forever without the warning AC3 asks for.
     # Seeded from the snapshot so a pane ALREADY idle/unknown at startup can warn. Step 11 pass-2:
@@ -573,7 +594,8 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
     # later changed status — i.e. the stalest panes were the ones the warning could not see.
     since: dict[str, float] = {}
     report = {"subscribed": False, "events": 0, "notified": [], "suppressed": 0,
-              "dropped": 0, "errors": [], "heartbeats": 0, "send_failures": 0, "stalls": []}
+              "dropped": 0, "errors": [], "heartbeats": 0, "send_failures": 0, "stalls": [],
+              "pending_at_exit": []}
     last_beat = clock()
     for pane_id in reconciler.known_panes():
         since.setdefault(pane_id, last_beat)
@@ -588,6 +610,25 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
             report["heartbeats"] += 1
             if beat is not None:
                 beat(now, report)
+            for pane_id, pane_rec in list(pending_registrations.items()):
+                ids = live_panes() if callable(live_panes) else None
+                if reconciler.register_pane(pane_rec, live_pane_ids=ids):
+                    pending_registrations.pop(pane_id, None)
+                    since.setdefault(pane_id, now)
+                    emit(f"pane-watch: registered {pane_id} on retry")
+            for pane_id, pane_rec in list(pending_sends.items()):
+                if not debouncer.allow(pane_id, now):
+                    continue
+                rc = sender(body_for_pane(pane_rec, status=BLOCKED))
+                if rc == 0:
+                    debouncer.commit(pane_id, now)
+                    prior[pane_id] = BLOCKED
+                    pending_sends.pop(pane_id, None)
+                    report["notified"].append({"pane_id": pane_id, "rc": rc, "retry": True})
+                    emit(f"pane-watch: retry succeeded for {pane_id}")
+                else:
+                    debouncer.release(pane_id)
+                    emit(f"pane-watch: retry failed for {pane_id} — still pending")
             for pane_id, first_seen in list(since.items()):
                 warning = stall_warning(pane=reconciler.meta(pane_id), since=first_seen, now=now,
                                         threshold_s=stall_s)
@@ -618,8 +659,17 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
                 since.setdefault(event.pane_id, now)
             else:
                 report["dropped"] += 1
-                emit(f"pane-watch: ignoring creation of {event.pane_id} — not in the current pane "
-                     "set, so this is the backlog replay")
+                if ids:
+                    emit(f"pane-watch: ignoring creation of {event.pane_id} — not in the current "
+                         "pane set, so this is the backlog replay")
+                else:
+                    # The live set could not be READ, which is not the same as "the pane is dead".
+                    # Refusing now is right (fail-closed against a false page) but forgetting would
+                    # blind us to a real pane forever, so it is retried.
+                    pending_registrations[event.pane_id] = (
+                        event.pane or {"pane_id": event.pane_id})
+                    emit(f"pane-watch: creation of {event.pane_id} deferred — live pane set "
+                         "unreadable, will retry")
             continue
         if event.kind == EVENT_PANE_CLOSED:
             reconciler.forget_pane(event.pane_id)
@@ -627,6 +677,8 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
             # Step 11 pass-2: neither of these was cleaned, leaving unbounded stale bookkeeping and
             # a `stalls` entry for a pane that no longer exists.
             since.pop(event.pane_id, None)
+            pending_sends.pop(event.pane_id, None)
+            pending_registrations.pop(event.pane_id, None)
             report["stalls"] = [p for p in report["stalls"] if p != event.pane_id]
             continue
         # Step 11 finding 6: a frame whose status is absent or unrecognised must not advance the
@@ -668,9 +720,10 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
             # more subtly. Neither the window nor the transition state is consumed by a failed send.
             debouncer.release(event.pane_id)
             reconciler.rollback(event.pane_id, was_revision)
+            pending_sends[event.pane_id] = event.pane or reconciler.meta(event.pane_id)
             report["send_failures"] += 1
-            emit(f"pane-watch: SEND FAILED for {event.pane_id} (rc={rc}) — will retry on the next "
-                 "blocked frame")
+            emit(f"pane-watch: SEND FAILED for {event.pane_id} (rc={rc}) — pending retry")
+    report["pending_at_exit"] = sorted(pending_sends)
     return report
 
 
@@ -692,7 +745,8 @@ def _cmd_watch(args) -> int:
         lines, reconciler=reconciler, sender=_default_sender,
         debouncer=debouncer, heartbeat_s=args.heartbeat_s, stall_s=args.stall_s,
         beat=lambda now, rep: write_heartbeat(args.heartbeat_path, now=now, report=rep),
-        live_panes=live_pane_ids)
+        live_panes=live_pane_ids, already_notified=sweep["notified"],
+        pending=sweep["pending"])
     report["startup_sweep"] = sweep
     print(json.dumps(report, indent=2))
     return 0 if report["subscribed"] and not report["errors"] else 4
