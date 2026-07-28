@@ -763,7 +763,8 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     runner=_default_runner, read_text=None, sleeper=time.sleep,
                     teardown: bool = True, prompt_marker: str | None = None,
                     expected_project: str | None = None,
-                    expected_project_path: str | None = None, steps=None) -> dict:
+                    expected_project_path: str | None = None, steps=None,
+                    on_successor=None) -> dict:
     """Execute the ordered handoff. Effects are injected so tests drive the whole sequence.
 
     THE ORDER, and why each position is load-bearing:
@@ -962,6 +963,14 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         if not _SESSION_ID_RE.fullmatch(session_id):
             out["failed_step"] = "session_id_malformed"
             return out
+
+        # #665 — hand the observed (pane, session) pair to the caller HERE, immediately after
+        # `pane get`, exactly as design §3 R4 specifies. The predecessor is the only party that
+        # can see both values (a session cannot discover its own pane id), and recording them now
+        # rather than after the whole sequence removes the window in which a successor that had
+        # already switched project could not yet prove its own identity to `retire_predecessor`.
+        if on_successor is not None:
+            on_successor(new_pane, session_id)
         transcript_path = os.path.join(transcript_dir, f"{session_id}.jsonl")
         transcript_baseline = _baseline(read_text, transcript_path)
         if transcript_baseline is None:
@@ -1177,6 +1186,71 @@ def _close_tentative_pane(pane: str, runner, record) -> str:
         return f"cleanup errored for {pane}: {exc}"
 
 
+def latest_goal_status_condition(transcript_text: str) -> str | None:
+    """The condition of the LAST goal_status row, whatever that condition is.
+
+    This is the half of design §5 that `goal_currently_unmet` deliberately does not carry: if
+    the newest guard in the transcript belongs to a DIFFERENT condition, then the condition we
+    armed has been replaced, and a replaced guard is a retired one. Teardown must refuse, because
+    the run is no longer guarded by what was handed over. Returns None when there is no
+    goal_status row at all.
+    """
+    found: str | None = None
+    for row in _iter_goal_status(transcript_text):
+        cond = row.get("condition")
+        if isinstance(cond, str) and cond.strip():
+            found = cond
+    return found
+
+
+# ---------------------------------------------------------------------------
+# #665 — the ONE locked driver-state writer
+# ---------------------------------------------------------------------------
+
+def _plan_lib():
+    """Lazy, same direction as `_driver_lib`, so `launcher_lib` stays importable alone."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import plan_lib  # pylint: disable=import-outside-toplevel
+    return plan_lib
+
+
+def _atomic_write(path: str, text: str) -> None:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import atomic_write_lib  # pylint: disable=import-outside-toplevel
+    atomic_write_lib.atomic_write_text(path, text)
+
+
+def _locked_state_read(path: str) -> dict:
+    """Read driver state while holding the same lock every writer here takes."""
+    with _plan_lib().file_lock(path):
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+
+
+def _locked_state_update(path: str, mutate):
+    """The ONE locked read -> validate -> atomic-replace cycle for driver state (#665).
+
+    `mutate(state)` returns the new state, or None to abort the write. The lock is held across
+    the WHOLE cycle, which is the point: an advisory lock only serialises writers that
+    participate, so a lock held for the write alone would still let another writer's update land
+    between this one's read and its replace, silently erasing a claim, an ack, a generation bump
+    or the position record.
+
+    `plan_lib.file_lock` locks a stable SIDECAR (`<path>.lock`) rather than the state file, and
+    that is load-bearing here: `flock` follows the opened inode while `atomic_write_text`
+    installs a NEW inode at the pathname, so a lock taken on the target itself would let two
+    waiters hold locks on different inodes and interleave anyway.
+    """
+    with _plan_lib().file_lock(path):
+        with open(path, encoding="utf-8") as fh:
+            state = json.load(fh)
+        new = mutate(state)
+        if new is None:
+            return None
+        _atomic_write(path, json.dumps(new, indent=2) + "\n")
+        return new
+
+
 def _extract_pane_id(stdout: str) -> str | None:
     """Strict parse of the split response. Returns None rather than guessing."""
     try:
@@ -1193,6 +1267,349 @@ def _extract_pane_id(stdout: str) -> str | None:
     if isinstance(pane, dict) and isinstance(pane.get("pane_id"), str):
         return pane["pane_id"]
     return None
+
+
+# ---------------------------------------------------------------------------
+# #665 — successor-driven predecessor teardown
+# ---------------------------------------------------------------------------
+
+HANDOFF_LEASE_S = 1800
+CLOSE_ATTEMPTS = 3          # the first close plus two bounded retries
+CLOSE_RETRY_DELAY_S = 2.0
+_CLEAR_COMMAND = "/goal clear"
+
+
+def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: str,
+                       transcript_dir: str, registry_path: str,
+                       runner=_default_runner, read_text=None, sleeper=time.sleep,
+                       now_ts: int | None = None, lease_s: int = HANDOFF_LEASE_S) -> dict:
+    """Retire the predecessor, run BY THE SUCCESSOR. The only destructive path in #665.
+
+    Teardown is successor-driven for an asymmetric-risk reason (design §2, approach C): the
+    predecessor cannot observe whether the successor really took over, so a predecessor that
+    retires itself on its own optimistic report is how "the predecessor would not die" becomes
+    "the predecessor died while holding the only live context".
+
+    The order is fixed and every position in it is load-bearing:
+
+    1-2. locked read, then refuse on `kind`, `cancelled`, an invalid position, a self-predecessor,
+         a caller that is not the RECORDED successor session, or an `--anchor-pane` that disagrees
+         with durable state. Two independent sources must agree before anything destructive runs.
+    3.   claim, idempotently — a refusal whose cause is that the claim is already OURS for this
+         generation is a continuation, not a failure. Probed live: `handoff_claim` returns False
+         for a same-claimant re-claim inside the lease AND after `started`, so without this branch
+         one failed teardown would block its own retry for the whole 1800 s lease.
+    4.   verify the four launch checks from the successor's OWN artifacts (never a report handed
+         to it), then `position_rebuilt` from live git state in the recorded repository.
+    5-6. ack, then gate on all six. Not allowed returns now, predecessor alive AND still guarded.
+    7.   prove the target's identity: `pane get` must still return the recorded predecessor
+         session. A pane id is a reusable handle and syntax validation cannot detect a recycled one.
+    8.   re-check that OUR guard is still in force. Step 4's `goal_armed` proves a guard existed at
+         some point; only this proves the run is guarded NOW, and retiring the predecessor while
+         the continuing session is unguarded is the original defect.
+    9.   persist `teardown_phase` BEFORE sending anything, then clear, then CONFIRM semantically.
+         A zero return code proves keystrokes were transported, not that the command was parsed.
+    10.  close, bounded retries, then re-arm from the predecessor's OWN recorded condition if the
+         close never succeeds.
+
+    `outcome` is one of: `retired`, `refused`, `claim_refused`, `teardown_refused`,
+    `clear_failed`, `clear_unconfirmed`, `alive_and_re_armed`, `alive_and_unguarded`, `error`.
+    Only `retired` sets `ok`.
+    """
+    if read_text is None:
+        def read_text(path):  # pragma: no cover - trivial default
+            with open(path, encoding="utf-8") as fh:
+                return fh.read()
+
+    now = int(time.time()) if now_ts is None else now_ts
+    out: dict = {"ok": False, "outcome": None, "reason": "", "results": {}, "steps": [],
+                 "failed_step": None, "generation": None}
+
+    def record(kind, argv, proc=None, note=None):
+        out["steps"].append({"kind": kind, "argv": argv,
+                             "returncode": getattr(proc, "returncode", None), "note": note})
+
+    def refuse(reason: str) -> dict:
+        out["outcome"] = "refused"
+        out["reason"] = reason
+        return out
+
+    def read_or_empty(path: str) -> str:
+        """Fail CLOSED: an unreadable artifact yields no evidence, so its check fails."""
+        try:
+            return read_text(path)
+        except (OSError, UnicodeDecodeError):
+            return ""
+
+    try:
+        driver_lib = _driver_lib()
+        state = _locked_state_read(driver_state_path)
+
+        # --- 1-2. derive and sanity-check, before anything can be claimed or destroyed ---
+        pend = state.get("handoff_pending")
+        if not isinstance(pend, dict):
+            return refuse("no handoff_pending record in driver state — nothing to retire")
+        if pend.get("kind") != driver_lib.MID_CHILD_HANDOFF_KIND:
+            return refuse(f"handoff_pending.kind is {pend.get('kind')!r}, not "
+                          f"{driver_lib.MID_CHILD_HANDOFF_KIND!r} — this command retires a "
+                          "mid-child predecessor only")
+        if pend.get("cancelled") is True:
+            return refuse("handoff_pending is cancelled — the handoff was aborted, so no guard "
+                          "may be cleared and no pane may be closed")
+        position = pend.get("position")
+        ok_pos, errors = driver_lib.validate_mid_child_position(position)
+        if not ok_pos:
+            return refuse("invalid position record: " + "; ".join(errors))
+        if position["predecessor_session"] == session_id:
+            return refuse("refusing: this session is recorded as its own predecessor — a session "
+                          "is never its own predecessor")
+        successor = pend.get("successor")
+        recorded_session = successor.get("session") if isinstance(successor, dict) else None
+        if not isinstance(recorded_session, str) or recorded_session != session_id:
+            return refuse(f"this session ({session_id!r}) is not the recorded successor "
+                          f"({recorded_session!r}) — only the intended successor may retire the "
+                          "predecessor")
+        if anchor_pane != position["predecessor_pane"]:
+            return refuse(f"--anchor-pane {anchor_pane!r} disagrees with the recorded "
+                          f"predecessor_pane {position['predecessor_pane']!r} — two independent "
+                          "sources must agree before anything destructive happens")
+        validate_pane_id(anchor_pane)
+        generation = pend.get("generation")
+        if not isinstance(generation, int) or isinstance(generation, bool):
+            return refuse("handoff_pending.generation is not an int — refusing to claim")
+        out["generation"] = generation
+
+        # --- 3. claim, idempotently, with the decision taken INSIDE the lock ---
+        claim_state: dict = {}
+
+        def _claim(s):
+            claimed, new = driver_lib.handoff_claim(
+                s, generation, claimant=session_id, now_ts=now, lease_s=lease_s)
+            if claimed:
+                claim_state["verdict"] = "claimed"
+                return new
+            held = s.get("handoff_claim")
+            if isinstance(held, dict) and held.get("generation") == generation \
+                    and held.get("claimant") == session_id:
+                claim_state["verdict"] = "already_ours"
+                return None
+            claim_state["verdict"] = "refused"
+            return None
+
+        _locked_state_update(driver_state_path, _claim)
+        if claim_state.get("verdict") == "refused":
+            out["outcome"] = "claim_refused"
+            out["reason"] = ("could not claim generation "
+                             f"{generation} — a foreign or live claim holds it; the run continues "
+                             "in place and the predecessor stays alive and guarded")
+            return out
+
+        # --- 4. verify from the SUCCESSOR's own artifacts ---
+        armed, _ = armed_condition(position["goal_condition"])
+        own_transcript = os.path.join(transcript_dir, f"{session_id}.jsonl")
+        # `spawned` is the R4 identity binding, already established above: the predecessor
+        # observed both values and recorded them, because a session cannot discover its own pane.
+        out["results"]["spawned"] = True
+        own_text = read_or_empty(own_transcript)
+        out["results"]["goal_armed"] = transcript_has_unmet_goal(
+            own_text, expected_condition=armed)
+        marker = driver_lib.mid_child_marker(position["issue"], generation)
+        out["results"]["prompt_landed"] = transcript_has_marker(own_text, marker)
+        out["results"]["project_switched"] = registry_has_session(
+            read_or_empty(registry_path), session_id,
+            expected_project=position["project"],
+            expected_project_path=position["project_path"])
+
+        def _git(*rev_args) -> str | None:
+            argv = ["git", "-C", position["repo_root"], "rev-parse", *rev_args]
+            proc = runner(argv)
+            record("git", argv, proc)
+            if getattr(proc, "returncode", 1) != 0:
+                return None
+            return ((getattr(proc, "stdout", "") or "").strip() or None)
+
+        # `--show-toplevel` is compared BEFORE the branch: a same-named branch in a DIFFERENT
+        # repository would otherwise satisfy this check and authorise teardown for the wrong tree.
+        toplevel = _git("--show-toplevel")
+        branch = _git("--abbrev-ref", "HEAD")
+        rebuilt = bool(toplevel and branch
+                       and toplevel == position["repo_root"]
+                       and branch == position["branch"])
+        if toplevel and branch:
+            receipt = {"generation": generation, "claimant": session_id,
+                       "branch_observed": branch, "repo_root_observed": toplevel,
+                       "step": position["step"], "ts": now}
+
+            def _write_receipt(s):
+                p = s.get("handoff_pending")
+                if not isinstance(p, dict) or p.get("generation") != generation:
+                    return None
+                new = dict(s)
+                new["handoff_pending"] = {**p, "rebuild_receipt": receipt}
+                return new
+
+            _locked_state_update(driver_state_path, _write_receipt)
+            # Validate the receipt as READ BACK, not as written: that is what makes a stale or
+            # foreign receipt (an earlier generation's, another claimant's) fail rather than
+            # being taken on trust. The attestation is honest about its limit — it proves
+            # something was written by THIS claimant for THIS generation, not that a rebuild
+            # happened; §5 states that plainly.
+            back = _locked_state_read(driver_state_path).get("handoff_pending", {})
+            got = back.get("rebuild_receipt") if isinstance(back, dict) else None
+            rebuilt = rebuilt and isinstance(got, dict) \
+                and got.get("generation") == generation \
+                and got.get("claimant") == session_id \
+                and got.get("branch_observed") == position["branch"] \
+                and got.get("repo_root_observed") == position["repo_root"]
+        out["results"]["position_rebuilt"] = rebuilt
+
+        # --- 5. ack ---
+        def _ack(s):
+            acked, new = driver_lib.handoff_ack_started(s, generation, session_id)
+            return new if acked else None
+
+        out["results"]["state_claimed"] = _locked_state_update(driver_state_path,
+                                                               _ack) is not None
+
+        # --- 6. gate on all six ---
+        allowed, reason = teardown_allowed(out["results"],
+                                          steps=mid_child_verification_steps())
+        if not allowed:
+            _, failed, _ = evaluate_verifications(out["results"],
+                                                  steps=mid_child_verification_steps())
+            out["outcome"] = "teardown_refused"
+            out["failed_step"] = failed
+            out["reason"] = reason
+            return out
+
+        # --- 7. prove the target's identity before touching it ---
+        get_argv = build_pane_get_argv(anchor_pane)
+        proc = runner(get_argv)
+        record("pane_get_anchor", get_argv, proc)
+        live_session = parse_pane_agent_session(getattr(proc, "stdout", "") or "")
+        if live_session != position["predecessor_session"]:
+            return refuse(
+                f"pre-teardown identity check FAILED: pane {anchor_pane} hosts "
+                f"{live_session!r}, not the recorded predecessor session "
+                f"{position['predecessor_session']!r} — refusing both destructive steps")
+
+        # --- 8. is OUR guard still in force? ---
+        own_text = read_or_empty(own_transcript)
+        newest = latest_goal_status_condition(own_text)
+        if newest is not None and newest.strip() != armed.strip():
+            return refuse(
+                "refusing: the newest goal_status row in this session carries a DIFFERENT "
+                "condition, so the handed-over guard has been replaced — a replacement guard "
+                "means the armed condition is stale and the predecessor must not be retired")
+        if not goal_currently_unmet(own_text, armed):
+            return refuse(
+                "refusing: this session's guard for the armed condition is no longer unmet, so "
+                "the continuing run is already unguarded — retiring the predecessor here is the "
+                "original defect this workflow exists to prevent")
+
+        # --- 9. record the phase, clear, then CONFIRM the clear ---
+        def _phase(value):
+            def _mutate(s):
+                p = s.get("handoff_pending")
+                if not isinstance(p, dict):
+                    return None
+                new = dict(s)
+                new["handoff_pending"] = {**p, "teardown_phase": value}
+                return new
+            return _mutate
+
+        # Persisted BEFORE the send, so the one window where a crash leaves the predecessor
+        # alive and UNGUARDED is discoverable on disk instead of invisible (§6 step 9).
+        _locked_state_update(driver_state_path, _phase("clearing"))
+        pred_transcript = os.path.join(transcript_dir,
+                                       f"{position['predecessor_session']}.jsonl")
+        pred_baseline = _baseline(read_text, pred_transcript)
+        if pred_baseline is None:
+            _locked_state_update(driver_state_path, _phase(None))
+            return refuse("cannot baseline the predecessor transcript — without a baseline the "
+                          "clear could never be confirmed, so nothing is sent")
+
+        clear_text, clear_keys = build_send_text_argv(pane=anchor_pane, text=_CLEAR_COMMAND)
+        for kind, argv in (("clear_text", clear_text), ("clear_keys", clear_keys)):
+            proc = runner(argv)
+            record(kind, argv, proc)
+            if getattr(proc, "returncode", 1) != 0:
+                _locked_state_update(driver_state_path, _phase(None))
+                out["outcome"] = "clear_failed"
+                out["failed_step"] = kind
+                out["reason"] = (f"{kind} for {_CLEAR_COMMAND!r} failed — aborting BEFORE "
+                                 "pane close; the predecessor is alive and STILL guarded")
+                return out
+
+        def _cleared() -> bool:
+            tail = _tail(read_text(pred_transcript), pred_baseline)
+            return tail is not None and transcript_has_cleared_goal(tail)
+
+        if not _poll_for(_cleared, attempts=GOAL_POLL_ATTEMPTS, delay_s=GOAL_POLL_DELAY_S,
+                         sleeper=sleeper):
+            # Deliberately NOT reset to None: the clear may have landed while its confirmation
+            # was unreadable, so the state stays discoverable rather than claiming to be idle.
+            _locked_state_update(driver_state_path, _phase("clear_unconfirmed"))
+            out["outcome"] = "clear_unconfirmed"
+            out["reason"] = ("the clear was transported but never confirmed by a met:true "
+                             "sentinel row — leaving the pane OPEN")
+            return out
+
+        # --- 10. close, bounded ---
+        close_argv = build_teardown_argv(anchor_pane)
+        closed = False
+        for attempt in range(CLOSE_ATTEMPTS):
+            if attempt:
+                sleeper(CLOSE_RETRY_DELAY_S)
+            proc = runner(close_argv)
+            record("pane_close", close_argv, proc,
+                   note=f"attempt {attempt + 1}/{CLOSE_ATTEMPTS}")
+            if getattr(proc, "returncode", 1) == 0:
+                closed = True
+                break
+        if closed:
+            _locked_state_update(driver_state_path, _phase(None))
+            out["outcome"] = "retired"
+            out["ok"] = True
+            out["reason"] = "guard cleared and confirmed, pane closed"
+            return out
+
+        # The partial-success state: the guard is confirmed CLEARED but the pane would not
+        # close, so the predecessor may be alive and no longer guarded — strictly worse than
+        # either failure alone. Re-arm from the predecessor's OWN recorded condition (§3: reading
+        # it from the successor's transcript would arm the predecessor with the wrong guard, and
+        # a capped one silently truncated).
+        rearm_baseline = _baseline(read_text, pred_transcript)
+        rearm_text, rearm_keys, truncated = build_send_text_goal_argv(
+            pane=anchor_pane, goal_condition=position["goal_condition"])
+        rearm_sent = True
+        for kind, argv in (("rearm_text", rearm_text), ("rearm_keys", rearm_keys)):
+            proc = runner(argv)
+            record(kind, argv, proc, note="goal TRUNCATED" if truncated else None)
+            if getattr(proc, "returncode", 1) != 0:
+                rearm_sent = False
+                break
+
+        def _rearmed() -> bool:
+            tail = _tail(read_text(pred_transcript), rearm_baseline)
+            return tail is not None and transcript_has_unmet_goal(
+                tail, expected_condition=armed)
+
+        confirmed = bool(rearm_sent and rearm_baseline is not None
+                         and _poll_for(_rearmed, attempts=GOAL_POLL_ATTEMPTS,
+                                       delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper))
+        out["outcome"] = "alive_and_re_armed" if confirmed else "alive_and_unguarded"
+        out["reason"] = (
+            "pane close failed after a CONFIRMED clear; predecessor re-armed from its own "
+            "recorded condition" if confirmed else
+            "pane close failed after a CONFIRMED clear AND the re-arm could not be confirmed — "
+            "the predecessor may be alive and UNGUARDED; this is an incident")
+        _locked_state_update(driver_state_path, _phase(out["outcome"]))
+        return out
+    except (LauncherError, OSError, subprocess.SubprocessError, ValueError) as exc:
+        out["outcome"] = out["outcome"] or "error"
+        out["reason"] = out["reason"] or f"exception: {exc}"
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -1306,6 +1723,122 @@ def _cmd_handoff(args) -> int:
     return 0 if out["ok"] else 4
 
 
+def _own_session_id(explicit: str | None) -> str:
+    """The caller's own Claude session id. Never invented: an id we guessed would be compared
+    against the recorded successor identity, which is the whole basis of the teardown authority."""
+    return explicit or os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+
+
+def _cmd_mid_child_handoff(args) -> int:
+    """The PREDECESSOR's side: capture position, persist it through `open_handoff`, launch the
+    successor with the mid-child ladder, and record the successor's identity. It deliberately
+    does NOT retire anything — that is the successor's command."""
+    driver_lib = _driver_lib()
+    predecessor_session = _own_session_id(args.predecessor_session)
+    if not predecessor_session:
+        print("no --predecessor-session and CLAUDE_CODE_SESSION_ID is unset — refusing to guess "
+              "which session is handing over", file=sys.stderr)
+        return 2
+
+    condition = args.goal_condition
+    if condition is None:
+        with open(args.goal_condition_from, encoding="utf-8") as fh:
+            condition = last_unmet_goal_condition(fh.read())
+        if condition is None:
+            print("no unmet goal in this session's transcript — refusing to invent a condition "
+                  "for the successor", file=sys.stderr)
+            return 3
+
+    position = {"issue": args.issue, "step": args.step, "branch": args.branch,
+                "test_baseline": args.test_baseline, "predecessor_pane": args.anchor_pane,
+                "predecessor_session": predecessor_session, "goal_condition": condition,
+                "project": args.project, "project_path": args.project_path,
+                "repo_root": args.repo_root}
+
+    # The disposition is computed INSIDE the lock so the generation it bumps is derived from the
+    # state actually being written, not from a copy read earlier.
+    held: dict = {}
+
+    def _open(state):
+        disposition = driver_lib.mid_child_handoff(state, position=position)
+        held["disposition"] = disposition
+        if disposition.get("outcome") != "ready":
+            return None
+        return driver_lib.open_handoff(state, disposition, now_ts=int(time.time()))
+
+    _locked_state_update(args.driver_state, _open)
+    disposition = held.get("disposition") or {}
+    if disposition.get("outcome") != "ready":
+        print(f"no mid-child handoff: {disposition.get('outcome')!r} "
+              f"{'; '.join(disposition.get('errors') or [])}", file=sys.stderr)
+        return 3
+
+    generation = disposition["generation"]
+
+    def _record_successor(pane, session):
+        def _mutate(state):
+            pend = state.get("handoff_pending")
+            if not isinstance(pend, dict) or pend.get("generation") != generation:
+                return None
+            new = dict(state)
+            new["handoff_pending"] = {**pend, "successor": {"pane": pane, "session": session}}
+            return new
+        _locked_state_update(args.driver_state, _mutate)
+
+    out = perform_handoff(
+        anchor_pane=args.anchor_pane, cwd=args.cwd, project_root=args.project_root,
+        name=args.name, goal_condition=condition,
+        resume_prompt=disposition["resume_prompt"], registry_path=args.registry,
+        transcript_dir=args.transcript_dir, launch_mode=args.launch_mode,
+        prompt_marker=driver_lib.mid_child_marker(position["issue"], generation),
+        expected_project=args.project, expected_project_path=args.project_path,
+        steps=mid_child_verification_steps(), teardown=False,
+        on_successor=_record_successor)
+
+    if not out["ok"]:
+        # An aborted handoff CANCELS its own record. Until a later `open_handoff` bumps the
+        # counter the abandoned record IS the current generation and therefore claimable, so a
+        # delayed or stray successor could otherwise take a lease on it. Monotonic: once the
+        # claim is `started` the takeover has happened and a cancel is refused instead.
+        def _cancel(state):
+            pend = state.get("handoff_pending")
+            if not isinstance(pend, dict) or pend.get("generation") != generation:
+                return None
+            claim = state.get("handoff_claim")
+            if isinstance(claim, dict) and claim.get("generation") == generation \
+                    and claim.get("started"):
+                return None
+            new = dict(state)
+            new["handoff_pending"] = {**pend, "cancelled": True}
+            return new
+
+        _locked_state_update(args.driver_state, _cancel)
+
+    print(json.dumps({"generation": generation,
+                      **{k: out[k] for k in ("ok", "results", "failed_step", "new_pane",
+                                             "session_id", "truncated", "cleanup",
+                                             "teardown_skipped")}}, indent=2))
+    return 0 if out["ok"] else 4
+
+
+def _cmd_retire_predecessor(args) -> int:
+    """The SUCCESSOR's side: the only command that clears a live guard and closes a pane."""
+    session_id = _own_session_id(args.session_id)
+    if not session_id:
+        print("no --session-id and CLAUDE_CODE_SESSION_ID is unset — refusing to guess which "
+              "session is the successor", file=sys.stderr)
+        return 2
+    out = retire_predecessor(
+        driver_state_path=args.driver_state, session_id=session_id,
+        anchor_pane=args.anchor_pane, transcript_dir=args.transcript_dir,
+        registry_path=args.registry)
+    print(json.dumps({k: out[k] for k in ("ok", "outcome", "reason", "results", "failed_step",
+                                          "generation")}, indent=2))
+    if out["ok"]:
+        return 0
+    return 3 if out["outcome"] in ("refused", "claim_refused", "teardown_refused") else 4
+
+
 # ---------------------------------------------------------------------------
 # thin CLI
 # ---------------------------------------------------------------------------
@@ -1343,6 +1876,45 @@ def main(argv: list[str] | None = None) -> int:
     p_ho.add_argument("--no-teardown", action="store_true",
                       help="verify everything but leave the predecessor running")
 
+    # #665 — the mid-child pair. Two commands, run by two different sessions, because the
+    # handover and the retirement have different owners: only the successor may retire.
+    p_mc = sub.add_parser("mid-child-handoff",
+                          help="hand this mid-child session over to a fresh successor (#665)")
+    p_mc.add_argument("--driver-state", required=True)
+    p_mc.add_argument("--anchor-pane", required=True, help="THIS session's pane id")
+    p_mc.add_argument("--name", required=True, help="herdr agent name for the successor")
+    p_mc.add_argument("--project-root", required=True)
+    p_mc.add_argument("--cwd", required=True)
+    p_mc.add_argument("--registry", required=True)
+    p_mc.add_argument("--transcript-dir", required=True)
+    p_mc.add_argument("--issue", required=True, type=int, help="the in-progress child")
+    p_mc.add_argument("--step", required=True, help="the WF2 step being interrupted")
+    p_mc.add_argument("--branch", required=True)
+    p_mc.add_argument("--test-baseline", required=True,
+                      help="the RECORDED baseline, verbatim — the successor must not re-measure")
+    p_mc.add_argument("--project", required=True)
+    p_mc.add_argument("--project-path", required=True,
+                      help="as the registry records it, e.g. ./projects/rawgentic")
+    p_mc.add_argument("--repo-root", required=True)
+    p_mc.add_argument("--predecessor-session", default=None,
+                      help="defaults to $CLAUDE_CODE_SESSION_ID")
+    p_mc.add_argument("--launch-mode", default="fresh", choices=sorted(LAUNCH_MODES))
+    mc_cond = p_mc.add_mutually_exclusive_group(required=True)
+    mc_cond.add_argument("--goal-condition")
+    mc_cond.add_argument("--goal-condition-from", metavar="OWN_TRANSCRIPT",
+                         help="read THIS session's last unmet goal condition, verbatim")
+
+    p_rp = sub.add_parser("retire-predecessor",
+                          help="retire the predecessor after a mid-child handoff (#665) — the "
+                               "successor runs this, and only after its position is rebuilt")
+    p_rp.add_argument("--driver-state", required=True)
+    p_rp.add_argument("--session-id", default=None,
+                      help="THIS session's id; defaults to $CLAUDE_CODE_SESSION_ID")
+    p_rp.add_argument("--anchor-pane", required=True,
+                      help="the PREDECESSOR's pane; must equal the recorded predecessor_pane")
+    p_rp.add_argument("--transcript-dir", required=True)
+    p_rp.add_argument("--registry", required=True)
+
     p_read = sub.add_parser("read-goal-condition",
                             help="the predecessor's last unmet goal condition, verbatim (AC6)")
     p_read.add_argument("--transcript", required=True)
@@ -1376,6 +1948,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.cmd == "handoff":
             return _cmd_handoff(args)
+        if args.cmd == "mid-child-handoff":
+            return _cmd_mid_child_handoff(args)
+        if args.cmd == "retire-predecessor":
+            return _cmd_retire_predecessor(args)
         if args.cmd == "read-goal-condition":
             with open(args.transcript, encoding="utf-8") as fh:
                 condition = last_unmet_goal_condition(fh.read())
