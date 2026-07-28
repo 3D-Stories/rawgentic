@@ -84,7 +84,10 @@ def test_every_asset_digest_is_a_bare_lowercase_sha256(pin: dict) -> None:
         assert not digest.startswith("sha256:"), (
             f"{platform}: store the bare hex digest, not the API's prefixed form"
         )
-        assert _SHA256_RE.match(digest), f"{platform}: {digest!r} is not 64 lowercase hex chars"
+        # fullmatch, NOT match: Python's `$` also matches immediately before a trailing
+        # newline, so `match()` accepted "a"*64 + "\n" (65 chars) with span (0, 64) —
+        # exactly the wrong-length value this guard exists to reject (#609 Step 11, Low).
+        assert _SHA256_RE.fullmatch(digest), f"{platform}: {digest!r} is not 64 lowercase hex chars"
         assert isinstance(asset["size"], int) and asset["size"] > 0
         assert asset["name"] and asset["url"].endswith(asset["name"])
 
