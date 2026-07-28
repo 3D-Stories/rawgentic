@@ -334,8 +334,18 @@ def open_handoff(state: dict, disposition: dict, *, now_ts: int) -> dict:
     gen = disposition["generation"]
     new = dict(state)
     new["generation"] = gen
-    new["handoff_pending"] = {"generation": gen, "next_issue": disposition["next_issue"],
-                              "written_ts": now_ts}
+    pending = {"generation": gen, "next_issue": disposition["next_issue"],
+               "written_ts": now_ts}
+    # #665: a mid-child disposition carries a `kind` discriminator and a durable `position`.
+    # Both are copied through ONLY when present, so a #569 child-boundary handoff writes the
+    # exact three-key record it always did (pinned by test_shape_is_byte_identical...).
+    kind = disposition.get("kind")
+    if kind is not None:
+        pending["kind"] = kind
+    position = disposition.get("position")
+    if position is not None:
+        pending["position"] = dict(position) if isinstance(position, dict) else position
+    new["handoff_pending"] = pending
     return new
 
 
@@ -427,6 +437,119 @@ def handoff_ack_started(state: dict, generation: int, claimant: str) -> tuple[bo
     new = dict(state)
     new["handoff_claim"] = {**claim, "started": True}
     return (True, new)
+
+
+# --------------------------------------------------------------------------- #
+# #665: interactive mid-child handoff — the case #569 deliberately does not cover
+# --------------------------------------------------------------------------- #
+# #569 crosses a CHILD BOUNDARY: a child ends, the session ends, a fresh one starts the next
+# child. This is the other case — "I am mid-child, out of context, hand me over and keep going"
+# — whose trigger is context exhaustion, never cron (epic #667, owner decision D-16).
+#
+# It reuses #569's primitives rather than adding a second mechanism: the disposition below is
+# shaped so `open_handoff` consumes it unchanged, and the successor claims/acks through
+# `handoff_claim`/`handoff_ack_started` exactly as a fresh-session successor does. A parallel
+# handoff path is the defect the issue's own rewrite exists to prevent.
+MID_CHILD_HANDOFF_KIND = "mid_child"
+
+# Every field is required. A PARTIAL position is worse than none: the successor rebuilds from
+# it, and the teardown gate compares live state against it — a hole there reads as agreement.
+_MID_CHILD_POSITION_FIELDS: tuple[str, ...] = (
+    "issue", "step", "branch", "test_baseline", "predecessor_pane",
+    "predecessor_session", "goal_condition", "project", "project_path", "repo_root",
+)
+
+
+def mid_child_marker(issue: int, generation: int) -> str:
+    """The token the launcher's `prompt_landed` check matches on.
+
+    Generation-bound deliberately: an unqualified marker would also match a PREVIOUS handoff's
+    resume prompt still present in the same transcript, so "the prompt landed" could pass on
+    evidence produced by a handoff that already failed.
+    """
+    return f"[rawgentic-midchild:{issue}:{generation}]"
+
+
+def validate_mid_child_position(position) -> tuple[bool, list[str]]:
+    """Fail-closed structural check of a mid-child position record.
+
+    Deliberately does NOT validate the pane id's grammar: that is
+    `launcher_lib.validate_pane_id`'s job and it runs there before any herdr call. Importing
+    launcher_lib here would invert the lazy-import direction that keeps launcher_lib optional.
+    """
+    if not isinstance(position, dict):
+        return (False, ["position must be a JSON object"])
+    errors: list[str] = []
+    for field in _MID_CHILD_POSITION_FIELDS:
+        if field not in position:
+            errors.append(f"position.{field} is required")
+            continue
+        value = position[field]
+        if field == "issue":
+            if not _is_int(value):
+                errors.append("position.issue must be an int")
+        elif not isinstance(value, str) or not value.strip():
+            errors.append(f"position.{field} must be a non-empty string")
+    return (not errors, errors)
+
+
+def _build_mid_child_resume_prompt(state: dict, position: dict, generation: int) -> str:
+    """The successor's instructions, built HERE next to `_build_resume_prompt` so the two
+    cannot drift. It re-derives position from durable state — never a copied task list, which
+    is session-scoped and, measured live on 2026-07-27, held 30 subjects spanning three
+    unrelated projects.
+    """
+    epic = state.get("epic")
+    epic_ref = f"epic #{epic}" if _is_int(epic) else state.get("campaign", "the campaign")
+    return (
+        f"{mid_child_marker(position['issue'], generation)} Mid-child resume for {epic_ref}, "
+        f"child #{position['issue']}, interrupted at WF2 step {position['step']}. "
+        "FIRST bind the project (/rawgentic:switch) — an unbound session cannot read inside "
+        f"projects/. Then `git fetch origin && git checkout {position['branch']}`: that branch "
+        "already carries this child's committed work, so do not re-implement it. The recorded "
+        f"test baseline is {position['test_baseline']} — diff against it; do not re-measure it "
+        "as if it were fresh. Re-derive every other fact from claude_docs/.driver-state and the "
+        "epic autorun log, never from in-context memory, and never re-do a merged or closed "
+        "child. Claim this handoff, and only once you are actually on that branch with position "
+        "rebuilt, retire the predecessor LAST via "
+        "`python3 hooks/launcher_lib.py retire-predecessor`. On a blocker, post the ERROR "
+        "comment on the child issue and end so the next session can continue."
+    )
+
+
+def mid_child_handoff(state: dict, *, position) -> dict:
+    """Decide a mid-child (context-driven) handoff. Mirrors `fresh_session_handoff`'s
+    disposition contract so `open_handoff` consumes the result unchanged.
+
+    Outcomes: ``invalid_position`` (with ``errors``), ``no_active_child``,
+    ``position_mismatch`` (with ``errors``), or ``ready``.
+
+    Unlike `fresh_session_handoff` this does NOT gate on ``mode == FRESH_SESSION_MODE``: a
+    context-driven handover is cron-free, and gating on that mode would refuse exactly the
+    in-session campaigns it exists to serve. That is also why this is a sibling function
+    rather than a flag on `fresh_session_handoff`, whose ``single_session`` verdict is
+    load-bearing for #569 and must keep its meaning.
+    """
+    ok, errors = validate_mid_child_position(position)
+    if not ok:
+        return {"outcome": "invalid_position", "errors": errors}
+    issues = state.get("issues", [])
+    _numbers(issues)  # fail-closed on missing/non-int/duplicate number
+    active = [i["number"] for i in issues
+              if isinstance(i, dict) and i.get("status") == "in_progress"]
+    if not active:
+        return {"outcome": "no_active_child"}
+    # More than one in_progress is corrupt state (validate_driver_state flags it too), so the
+    # position cannot identify THE active child even if it names one of them.
+    if len(active) != 1 or position["issue"] != active[0]:
+        return {"outcome": "position_mismatch",
+                "errors": [f"position.issue {position['issue']} is not the single in_progress "
+                           f"child {active}"]}
+    generation = (state.get("generation") if _is_int(state.get("generation")) else 0) + 1
+    return {"outcome": "ready", "next_issue": active[0], "generation": generation,
+            "campaign": state.get("campaign", ""), "kind": MID_CHILD_HANDOFF_KIND,
+            "position": dict(position),
+            "resume_prompt": _build_mid_child_resume_prompt(state, position, generation)}
 
 
 def validate_driver_state(state: dict) -> tuple[bool, list[str]]:

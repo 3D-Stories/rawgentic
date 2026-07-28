@@ -663,3 +663,133 @@ def test_validate_tolerates_fresh_session_fields():
             extra={"handoff_pending": {"generation": 2, "next_issue": 3}, "handoff_claimed": 1})
     ok, errs = dl.validate_driver_state(s)
     assert ok is True and errs == []
+
+
+# --------------------------------------------------------------------------- #
+# #665: mid-child handoff — the interactive, context-driven case #569 does not cover
+# --------------------------------------------------------------------------- #
+
+def _position(**over):
+    """A complete mid-child position. Every field is required, so the base is complete and
+    each test removes or corrupts exactly one thing."""
+    p = {
+        "issue": 665,
+        "step": "8",
+        "branch": "feat/665-mid-child-handoff",
+        "test_baseline": "5362 passed, 21 skipped, 0 failed, exit 0",
+        "predecessor_pane": "w1:p1",
+        "predecessor_session": "aaaaaaaa-1111-2222-3333-444444444444",
+        "goal_condition": "PR open with green CI, or a blocker is posted via the ERROR protocol",
+        "project": "rawgentic",
+        "project_path": "./projects/rawgentic",
+        "repo_root": "/home/x/rawgentic/projects/rawgentic",
+    }
+    p.update(over)
+    return p
+
+
+class TestValidateMidChildPosition:
+    def test_complete_position_validates(self):
+        ok, errors = dl.validate_mid_child_position(_position())
+        assert (ok, errors) == (True, [])
+
+    @pytest.mark.parametrize("field", [
+        "issue", "step", "branch", "test_baseline", "predecessor_pane",
+        "predecessor_session", "goal_condition", "project", "project_path", "repo_root",
+    ])
+    def test_every_field_is_required(self, field):
+        p = _position()
+        del p[field]
+        ok, errors = dl.validate_mid_child_position(p)
+        assert ok is False and any(field in e for e in errors)
+
+    def test_empty_string_is_not_a_value(self):
+        ok, errors = dl.validate_mid_child_position(_position(branch="   "))
+        assert ok is False and any("branch" in e for e in errors)
+
+    def test_issue_must_be_an_int_and_not_a_bool(self):
+        assert dl.validate_mid_child_position(_position(issue="665"))[0] is False
+        # bool is an int subclass in Python; a True issue number is nonsense.
+        assert dl.validate_mid_child_position(_position(issue=True))[0] is False
+
+    def test_non_dict_is_refused(self):
+        ok, errors = dl.validate_mid_child_position("nope")
+        assert ok is False and errors
+
+
+class TestMidChildHandoff:
+    def test_ready_carries_the_in_progress_child_and_bumps_the_generation(self):
+        s = _st([_iss(1, "merged"), _iss(665, "in_progress"), _iss(2, "queued")], generation=4)
+        disp = dl.mid_child_handoff(s, position=_position())
+        assert disp["outcome"] == "ready"
+        assert disp["next_issue"] == 665          # the ACTIVE child, not the next queued one
+        assert disp["generation"] == 5
+        assert disp["kind"] == dl.MID_CHILD_HANDOFF_KIND
+        assert disp["position"]["branch"] == "feat/665-mid-child-handoff"
+        assert disp["resume_prompt"]
+
+    def test_no_active_child(self):
+        s = _st([_iss(1, "merged"), _iss(2, "queued")], generation=4)
+        assert dl.mid_child_handoff(s, position=_position())["outcome"] == "no_active_child"
+
+    def test_invalid_position_reports_errors(self):
+        s = _st([_iss(665, "in_progress")], generation=4)
+        p = _position()
+        del p["goal_condition"]
+        disp = dl.mid_child_handoff(s, position=p)
+        assert disp["outcome"] == "invalid_position" and disp["errors"]
+
+    def test_position_for_a_different_issue_is_a_mismatch(self):
+        s = _st([_iss(665, "in_progress")], generation=4)
+        disp = dl.mid_child_handoff(s, position=_position(issue=612))
+        assert disp["outcome"] == "position_mismatch" and disp["errors"]
+
+    def test_does_not_require_fresh_session_mode(self):
+        """A context-driven handover is cron-free (D-16) and must work for a campaign that
+        loops in-session — gating on FRESH_SESSION_MODE would refuse exactly the runs it serves."""
+        s = _st([_iss(665, "in_progress")], generation=1)   # no session_mode key at all
+        assert dl.mid_child_handoff(s, position=_position())["outcome"] == "ready"
+
+    def test_resume_prompt_names_branch_step_and_baseline_and_carries_the_marker(self):
+        s = _st([_iss(665, "in_progress")], generation=4, extra={"epic": 667})
+        disp = dl.mid_child_handoff(s, position=_position())
+        prompt = disp["resume_prompt"]
+        assert "feat/665-mid-child-handoff" in prompt
+        assert "5362 passed" in prompt
+        assert "#665" in prompt and "667" in prompt
+        assert dl.mid_child_marker(665, 5) in prompt
+
+    def test_marker_is_generation_bound(self):
+        """The marker is the prompt_landed evidence, so it must not match a PRIOR handoff's
+        prompt sitting in the same transcript."""
+        assert dl.mid_child_marker(665, 5) != dl.mid_child_marker(665, 6)
+
+
+class TestOpenHandoffCarriesMidChildFields:
+    def test_position_and_kind_are_persisted(self):
+        s = _st([_iss(665, "in_progress")], generation=4)
+        disp = dl.mid_child_handoff(s, position=_position())
+        new = dl.open_handoff(s, disp, now_ts=1000)
+        pend = new["handoff_pending"]
+        assert pend["generation"] == 5 and pend["next_issue"] == 665
+        assert pend["kind"] == dl.MID_CHILD_HANDOFF_KIND
+        assert pend["position"]["predecessor_session"] == _position()["predecessor_session"]
+
+    def test_shape_is_byte_identical_when_no_position_is_supplied(self):
+        """The #569 contract must not shift under this change: a child-boundary disposition
+        carries no position, and its written record keeps exactly the three original keys."""
+        s = _st([_iss(1, "merged"), _iss(2, "queued")], mode="fresh-session", generation=4)
+        disp = dl.fresh_session_handoff(s, mode="fresh-session")
+        new = dl.open_handoff(s, disp, now_ts=1000)
+        assert new["handoff_pending"] == {"generation": 5, "next_issue": 2, "written_ts": 1000}
+
+    def test_claim_and_ack_work_against_a_mid_child_pending_record(self):
+        """The reuse AC1 demands: the SAME #569 primitives operate on the mid-child record."""
+        s = _st([_iss(665, "in_progress")], generation=4)
+        new = dl.open_handoff(s, dl.mid_child_handoff(s, position=_position()), now_ts=1000)
+        ok, claimed = dl.handoff_claim(new, 5, claimant="succ-1", now_ts=1100)
+        assert ok is True
+        ok2, acked = dl.handoff_ack_started(claimed, 5, "succ-1")
+        assert ok2 is True and acked["handoff_claim"]["started"] is True
+        # the position survives claim + ack untouched
+        assert acked["handoff_pending"]["position"]["branch"] == "feat/665-mid-child-handoff"
