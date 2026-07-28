@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>5,702 tests — rawgentic test suite review, 28 July 2026</title>
+<meta name="description" content="Keep 5,687. Fix 15. Delete none. A summary review of rawgentic's CI test suite.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Mono:wght@400;600&family=Public+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --void:#080B1E; --surface:#141A3A; --surface-2:#1C2450; --line:#2A3468;
+  --ink:#EDF0FF; --ink-2:#A3ABD8; --ink-3:#6B75A8;
+  --hot:#D96A15; --cool:#0FA78D; --violet:#8B7BF5;
+  --hot-lift:#FF9A47; --cool-lift:#3FD9BC;
+  --display:"Bricolage Grotesque",system-ui,sans-serif;
+  --body:"Public Sans",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html{overflow-x:clip}
+body{margin:0;background:var(--void);color:var(--ink);font-family:var(--body);
+  font-size:17px;line-height:1.65;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1120px;margin:0 auto;padding:0 clamp(20px,5vw,60px)}
+:focus-visible{outline:2px solid var(--hot-lift);outline-offset:3px}
+
+.hero{padding:clamp(46px,9vw,104px) 0 clamp(34px,5vw,56px);position:relative}
+.hero::after{content:"";position:absolute;inset:auto 0 0 0;height:1px;
+  background:linear-gradient(90deg,var(--hot) 0,var(--violet) 40%,transparent 80%)}
+.tag{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-3);display:flex;gap:12px;flex-wrap:wrap;margin-bottom:26px}
+.tag b{color:var(--cool-lift);font-weight:600}
+h1{font-family:var(--display);font-weight:800;font-size:clamp(42px,8vw,98px);line-height:.95;
+  letter-spacing:-.03em;margin:0 0 24px;max-width:15ch}
+h1 em{font-style:normal;color:var(--hot-lift)}
+.deck{font-size:clamp(18px,2vw,22px);line-height:1.5;color:var(--ink-2);max-width:58ch;margin:0}
+.deck strong{color:var(--ink);font-weight:600}
+
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1px;
+  background:var(--line);border:1px solid var(--line);border-radius:14px;overflow:hidden;
+  margin:clamp(34px,6vw,64px) 0}
+.stat{background:var(--surface);padding:24px 22px}
+.stat .k{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--ink-3);margin-bottom:11px}
+.stat .v{font-family:var(--display);font-weight:800;font-size:clamp(28px,4.2vw,44px);
+  line-height:1;letter-spacing:-.02em}
+.stat .v small{font-size:.42em;font-weight:600;color:var(--ink-2)}
+.stat .n{font-size:13.5px;color:var(--ink-3);margin-top:9px;line-height:1.45}
+.stat.good .v{color:var(--cool-lift)}
+
+section{padding:clamp(42px,7vw,80px) 0;border-top:1px solid var(--line)}
+.qh{font-family:var(--mono);font-size:12px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--hot-lift);margin:0 0 13px}
+h2{font-family:var(--display);font-weight:700;font-size:clamp(27px,3.9vw,42px);line-height:1.09;
+  letter-spacing:-.02em;margin:0 0 16px;max-width:22ch}
+.lede{font-size:17.5px;color:var(--ink-2);max-width:64ch;margin:0 0 32px}
+
+/* buckets */
+.buckets{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+@media(max-width:800px){.buckets{grid-template-columns:1fr}}
+.bk{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:26px 24px;
+  border-top:4px solid var(--line)}
+.bk.keep{border-top-color:var(--cool)}
+.bk.change{border-top-color:var(--hot-lift)}
+.bk.del{border-top-color:var(--ink-3)}
+.bk .lab{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-3);margin-bottom:12px}
+.bk .num{font-family:var(--display);font-weight:800;font-size:clamp(42px,6vw,62px);line-height:1;
+  letter-spacing:-.03em}
+.bk.keep .num{color:var(--cool-lift)}
+.bk.change .num{color:var(--hot-lift)}
+.bk.del .num{color:var(--ink-3)}
+.bk p{font-size:14.5px;color:var(--ink-2);margin:14px 0 0}
+
+.prop{margin-top:28px}
+.prop .bar{display:flex;gap:2px;height:44px;border-radius:8px;overflow:hidden}
+.prop .a{flex:0 0 0.26%;min-width:5px;background:var(--hot-lift)}
+.prop .b{flex:1;background:var(--surface-2);border:1px solid var(--line);border-left:0}
+.prop .cap{font-size:14px;color:var(--ink-3);margin-top:12px}
+.prop .cap b{color:var(--hot-lift);font-family:var(--mono);font-weight:600}
+
+/* outliers */
+.outliers{display:grid;gap:15px;margin-top:8px}
+.o .meta{display:flex;align-items:baseline;gap:12px;margin-bottom:7px}
+.o .nm{font-family:var(--mono);font-size:13px;color:var(--ink);flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.o .sec{font-family:var(--mono);font-size:13.5px;color:var(--ink-2);flex:none}
+.o.first .nm{color:var(--hot-lift)}
+.o.first .sec{color:var(--hot-lift);font-weight:600}
+.o .track{background:var(--surface);border-radius:5px;height:10px;overflow:hidden}
+.o .fill{height:100%;background:var(--hot);border-radius:5px}
+.o.first .fill{background:var(--hot-lift)}
+.pill{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
+  padding:3px 10px;border-radius:999px;border:1px solid;flex:none}
+.pill.fix{color:var(--hot-lift);border-color:var(--hot-lift)}
+.pill.keep{color:var(--cool-lift);border-color:var(--cool-lift)}
+@media(max-width:640px){.o .nm{font-size:11.5px}}
+
+/* growth */
+.growth{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:clamp(22px,4vw,48px)}
+@media(max-width:860px){.growth{grid-template-columns:1fr}}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:clamp(14px,2.4vw,24px)}
+svg{display:block;width:100%;height:auto}
+.ratio{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);
+  border-radius:14px;overflow:hidden}
+.ratio div{background:var(--surface);display:flex;justify-content:space-between;
+  align-items:baseline;padding:14px 18px}
+.ratio .d{font-family:var(--mono);font-size:13px;color:var(--ink-3)}
+.ratio .r{font-family:var(--display);font-weight:700;font-size:23px}
+.ratio div:first-child .r{color:var(--hot-lift)}
+.ratio div:last-child{background:var(--surface-2)}
+.ratio div:last-child .r{color:var(--cool-lift)}
+.note{font-size:14px;color:var(--ink-3);margin-top:16px;line-height:1.6}
+
+/* verdict */
+.verdict{background:linear-gradient(148deg,var(--surface-2),var(--surface) 62%);
+  border:1px solid var(--line);border-left:4px solid var(--cool);border-radius:16px;
+  padding:clamp(24px,4vw,42px)}
+.verdict h3{font-family:var(--display);font-weight:800;font-size:clamp(25px,3.5vw,36px);
+  line-height:1.1;letter-spacing:-.02em;margin:0 0 15px;color:var(--cool-lift)}
+.verdict p{color:var(--ink-2);max-width:62ch;margin:0 0 13px}
+.levers{display:grid;gap:13px;margin-top:30px}
+.lever{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px 22px;
+  display:grid;grid-template-columns:auto minmax(0,1fr);gap:18px;align-items:start}
+.lever .amt{font-family:var(--display);font-weight:800;font-size:25px;color:var(--hot-lift);
+  line-height:1.1;white-space:nowrap}
+.lever h4{margin:0 0 6px;font-size:16.5px;font-weight:600}
+.lever p{margin:0;font-size:14.5px;color:var(--ink-2)}
+.lever code{font-family:var(--mono);font-size:12.5px;background:var(--surface-2);
+  padding:2px 6px;border-radius:4px;color:var(--ink)}
+.flag{display:inline-block;font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--violet);border:1px solid var(--violet);
+  border-radius:999px;padding:2px 9px;margin-left:7px;vertical-align:middle}
+@media(max-width:560px){.lever{grid-template-columns:1fr;gap:9px}}
+
+.method{border-top:1px solid var(--line);padding:clamp(34px,5vw,54px) 0 78px}
+.method h2{font-size:clamp(19px,2.3vw,25px);margin-bottom:20px}
+.method dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:11px 24px;margin:0;font-size:14.5px}
+.method dt{font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-3);padding-top:3px}
+.method dd{margin:0;color:var(--ink-2);word-break:break-word}
+.method code{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
+@media(max-width:620px){.method dl{grid-template-columns:1fr;gap:3px 0}.method dd{margin-bottom:13px}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="tag"><span>rawgentic</span><span>·</span><span>test-suite review</span><span>·</span>
+      <span>28 July 2026</span><span>·</span><span><b>5,681 passed · 0 failed</b></span></div>
+    <h1>5,702 tests. <em>Delete none.</em></h1>
+    <p class="deck">The count is not the cost. The whole suite finishes in <strong>2 minutes 39
+    seconds</strong>, and more than a quarter of that is spent by <strong>fifteen tests</strong>.
+    Fix those fifteen and keep the rest.</p>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><div class="k">Collected</div><div class="v">5,702</div>
+      <div class="n">143 test files. Only 1,168 come from parametrized cases.</div></div>
+    <div class="stat good"><div class="k">Full run</div><div class="v">159.0<small>s</small></div>
+      <div class="n">5,681 passed, 21 skipped, 0 failed. Exit 0.</div></div>
+    <div class="stat good"><div class="k">Per test</div><div class="v">0.028<small>s</small></div>
+      <div class="n">Twenty-eight milliseconds each. These are cheap unit tests.</div></div>
+    <div class="stat"><div class="k">Test-to-source</div><div class="v">2.24<small>×</small></div>
+      <div class="n">Down from 5.31× in May — proportionally leaner than three months ago.</div></div>
+  </div>
+
+  <section>
+    <p class="qh">The recommendation, in three buckets</p>
+    <h2>Fifteen tests need attention. Nothing needs deleting.</h2>
+    <div class="buckets">
+      <div class="bk keep"><div class="lab">Keep — no action</div><div class="num">5,687</div>
+        <p>Fast, green, and load-bearing. A large share are guard tests protecting failures that
+        already happened once and were written down.</p></div>
+      <div class="bk change"><div class="lab">Change — worth fixing</div><div class="num">15</div>
+        <p>The slowest tests, together 43.8s. Six of them are deliberately slow and should be left
+        alone; the other nine are fixable.</p></div>
+      <div class="bk del"><div class="lab">Delete</div><div class="num">0</div>
+        <p>No dead tests, no runaway parametrize matrix, no filler. All 21 skips are correct
+        environment guards, not abandoned code.</p></div>
+    </div>
+
+    <div class="prop">
+      <div class="bar"><div class="a"></div><div class="b"></div></div>
+      <p class="cap"><b>15 tests</b> (that thin bar) versus <b>5,687</b>. Fifteen tests are
+      0.26% of the suite and 27.4% of the runtime.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="qh">The outliers</p>
+    <h2>Eight slowest tests, and what to do with each.</h2>
+    <p class="lede">One test costs 15.43 seconds — about a tenth of the entire suite — to assert a
+    single integer. Full list of all fifteen is in the companion document.</p>
+    <div class="outliers" id="outliers"></div>
+  </section>
+
+  <section>
+    <p class="qh">Why there are so many</p>
+    <h2>The suite did not bloat. The project quadrupled in July.</h2>
+    <p class="lede">Source went from 5,844 to 26,821 lines in twenty-seven days — a 4.6× jump.
+    Tests grew 4.8× over the same window, which is why the ratio between them barely moved.</p>
+    <div class="growth">
+      <div class="card">
+        <svg id="growth" viewBox="0 0 900 300" role="img" aria-label="Lines of code April to July 2026. Test code rises from 4,679 to 60,150 lines; source code rises from 1,054 to 26,821. Both rise steeply in July."></svg>
+      </div>
+      <div>
+        <div class="ratio">
+          <div><span class="d">1 May 2026</span><span class="r">5.31×</span></div>
+          <div><span class="d">1 June 2026</span><span class="r">3.59×</span></div>
+          <div><span class="d">1 July 2026</span><span class="r">2.16×</span></div>
+          <div><span class="d">28 July 2026</span><span class="r">2.24×</span></div>
+        </div>
+        <p class="note">Lines of test code per line of source. A suite that was genuinely bloating
+        would show this climbing. It fell by more than half since May, then held — the shape of
+        tests keeping pace with code, not outrunning it.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="verdict">
+      <h3>Do not trim.</h3>
+      <p>There is no bloat to cut. The suite is green, cheap per test, and proportionally leaner
+      than it was in May. The number is large because the project is large.</p>
+      <p>If CI time is the real concern, two fixes are worth more than any amount of deleting —
+      and neither costs a single assertion.</p>
+      <div class="levers">
+        <div class="lever"><div class="amt">−15.4s</div><div>
+          <h4>Fix the one outlier</h4>
+          <p><code>test_cli_dispatch_single_workspace_read</code> takes 15.43s to assert that
+          dispatch reads the workspace exactly once. The cost is the real dispatch call it wraps,
+          not the check.</p></div></div>
+        <div class="lever"><div class="amt">~4×</div><div>
+          <h4>Run the suite in parallel <span class="flag">unverified</span></h4>
+          <p>Ideal shape for <code>pytest-xdist</code>, which is not installed. The estimate comes
+          from workload shape, not measurement — and the suite has real file-lock and cross-process
+          tests that must be checked first. Confirm with <code>pytest -n auto</code> against the
+          5,681-passed baseline.</p></div></div>
+        <div class="lever"><div class="amt">Risk</div><div>
+          <h4>What deleting would actually cost</h4>
+          <p>Version-surface checks, skill-registration counts, changelog and diagram-drift guards.
+          Each exists because that failure happened before. Removing one to save 20 milliseconds
+          re-opens a known wound.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="method">
+    <h2>How this was measured</h2>
+    <dl>
+      <dt>Count</dt><dd><code>pytest tests/ -q --collect-only</code> — 5,702 across 143 files,
+        verified on <code>origin/main</code> @ <code>ae26701</code>.</dd>
+      <dt>Full run</dt><dd><code>pytest tests/ -q</code> on <code>origin/main</code> @ <code>ae26701</code> in a clean
+        worktree — <strong>5,681 passed, 21 skipped, 0 failed, 159.03s, exit 0</strong>. An earlier
+        run on a sibling branch gave 159.52s; the two agree within half a second.</dd>
+      <dt>CI</dt><dd>Run 30395284615 — the test step took 135s of a ~155s job, about 87%. Last ten
+        runs all passed, 130–172s.</dd>
+      <dt>Growth</dt><dd><code>git ls-tree</code> at the last commit before each date on
+        <code>main</code>, over <code>hooks/*.py</code> and <code>tests/**/*.py</code>.</dd>
+      <dt>Detail</dt><dd>Full per-test tables, the delete-bucket reasoning and the cleanup work
+        order: <code>docs/planning/2026-07-28-test-suite-review.md</code></dd>
+      <dt>Unverified</dt><dd>The parallel-execution speedup — an estimate from workload shape, not
+        a measurement. No test or source file was changed to produce this review.</dd>
+    </dl>
+  </section>
+
+</div>
+<script>
+(function(){
+  "use strict";
+  var O=[["test_cli_dispatch_single_workspace_read",15.43,"fix"],
+         ["TestRealToolSmoke::test_scan_repo_does_not_crash",6.66,"keep"],
+         ["TestMemorypalaceIngestion::test_no_server_call_under_threshold",3.07,"fix"],
+         ["test_await_timeout_writes_supervisor_timeout_obs",2.23,"fix"],
+         ["test_launch_threads_correlation_id_into_spec_and_timeout_obs",2.23,"fix"],
+         ["test_run_timeout_is_timeout",2.01,"fix"],
+         ["TestProposeDispositionCLI::test_declined_never_reproposed",1.86,"fix"],
+         ["TestHugeCommandDeny::test_headless_huge_deny_still_audits",1.74,"fix"]];
+  var mx=O[0][1];
+  document.getElementById("outliers").innerHTML=O.map(function(d,i){
+    return '<div class="o'+(i===0?' first':'')+'">'+
+      '<div class="meta"><span class="nm">'+d[0]+'</span>'+
+      '<span class="sec">'+d[1].toFixed(2)+'s</span>'+
+      '<span class="pill '+d[2]+'">'+d[2]+'</span></div>'+
+      '<div class="track"><div class="fill" style="width:'+(d[1]/mx*100)+'%"></div></div></div>';
+  }).join("");
+
+  var X=[70,270.8,478.4,679.2,860],
+      SRC=[246.15,246.72,244.07,228.63,151.91],
+      TST=[232.89,232.60,228.74,203.77,30],
+      L=["1 Apr","1 May","1 Jun","1 Jul","28 Jul"];
+  function p(a){return a.map(function(y,i){return (i?"L":"M")+X[i]+" "+y}).join(" ")}
+  function dots(a,c){return a.map(function(y,i){
+    return '<circle cx="'+X[i]+'" cy="'+y+'" r="4" fill="'+c+'" stroke="#141A3A" stroke-width="2"/>'}).join("")}
+  document.getElementById("growth").innerHTML=
+    '<line x1="70" y1="250" x2="860" y2="250" stroke="#2A3468"/>'+
+    '<line x1="70" y1="30" x2="860" y2="30" stroke="#2A3468" stroke-dasharray="3 4"/>'+
+    '<text x="62" y="34" text-anchor="end" fill="#6B75A8" font-family="IBM Plex Mono,monospace" font-size="12">60k</text>'+
+    '<text x="62" y="254" text-anchor="end" fill="#6B75A8" font-family="IBM Plex Mono,monospace" font-size="12">0</text>'+
+    '<path d="'+p(TST)+'" fill="none" stroke="#8B7BF5" stroke-width="2.5" stroke-linejoin="round"/>'+
+    '<path d="'+p(SRC)+'" fill="none" stroke="#0FA78D" stroke-width="2.5" stroke-linejoin="round"/>'+
+    dots(TST,"#8B7BF5")+dots(SRC,"#0FA78D")+
+    '<text x="852" y="20" text-anchor="end" fill="#8B7BF5" font-family="IBM Plex Mono,monospace" font-size="13" font-weight="600">tests 60,150</text>'+
+    '<text x="852" y="142" text-anchor="end" fill="#0FA78D" font-family="IBM Plex Mono,monospace" font-size="13" font-weight="600">source 26,821</text>'+
+    X.map(function(x,i){return '<text x="'+x+'" y="274" text-anchor="middle" fill="#6B75A8" font-family="IBM Plex Mono,monospace" font-size="12">'+L[i]+'</text>'}).join("");
+})();
+</script>
+</body>
+</html>
