@@ -124,9 +124,15 @@ put a list up by hand).
   after starting the child (a claim that crashes before `started` is reclaimed after the lease, so
   a failed takeover never strands the run). On `complete` (every child merged) do Step 5; on
   `blocked` (unmerged children remain but none ready) leave the epic OPEN with an honest summary
-  and end — never conflate `blocked` with `complete`. **Fail-open:** if
-  `driver_lib.fresh_session_available` is false (no launcher / no fresh-launch support / handoff
-  path unwritable), degrade to the single-session loop with the visible marker `### epic-run:
+  and end — never conflate `blocked` with `complete`. **The terminal-backend verdict is part of
+  this decision, not a later one (#611).** Resolve it first —
+  `python3 hooks/launcher_lib.py select-mode --terminal-backend <backend> [--herdr-available]
+  [--launcher-herdr]` — and pass it as `fresh_session_available`'s `launch_mode`. Deciding it
+  only inside the launcher is too late: the driver would end the session believing the boundary
+  was available, and "keep the current loop" is no longer possible once the loop has ended.
+  **Fail-open:** if `driver_lib.fresh_session_available` is false (no launcher / no fresh-launch
+  support / handoff path unwritable / the launch mode cannot cross the boundary), degrade to the
+  single-session loop with the visible marker `### epic-run:
   fresh-session unavailable — single-session fallback (<reason>)`; the run never aborts for lack
   of the boundary. Each fresh session builds its OWN Step-3b task list from `.driver-state` (the
   harness Task tools are session-scoped — no list carries across the boundary). Full contract:

@@ -274,6 +274,11 @@ def _is_int(x) -> bool:
 # --------------------------------------------------------------------------- #
 FRESH_SESSION_MODE = "fresh-session"
 
+# Terminal-backend verdicts (`launcher_lib.select_launch_mode`) that CAN cross the process
+# boundary. `single_session` is deliberately absent: it is the verdict's way of saying "keep the
+# current loop". Anything unrecognised is treated the same way — see `fresh_session_available`.
+LAUNCHABLE_MODES = frozenset({"herdr", "pane_less"})
+
 
 def _build_resume_prompt(state: dict, next_issue: int) -> str:
     """The canonical idempotent, state-re-deriving resume prompt for a fresh session (no
@@ -335,19 +340,43 @@ def open_handoff(state: dict, disposition: dict, *, now_ts: int) -> dict:
 
 
 def fresh_session_available(state: dict, *, launcher_armed: bool, handoff_writable: bool,
-                            fresh_launch_supported: bool) -> tuple[bool, str]:
+                            fresh_launch_supported: bool,
+                            launch_mode: str | None = None) -> tuple[bool, str]:
     """Pre-launch AC6 check (pure over injected probes): can the process boundary be crossed?
     **Step-11 F1 (Critical) fix:** an armed launcher is NOT enough — it must POSITIVELY advertise
     fresh-launch (no-`--resume`) support, else fresh-session mode would falsely activate on the
     resume-first launcher and SILENTLY defeat AC1 (the successor reloads the prior transcript).
     Fail-open — a False result degrades to the single-session loop with a visible marker, never
-    aborts. Until the launcher advertises support, this returns False → single-session (safe)."""
+    aborts. Until the launcher advertises support, this returns False → single-session (safe).
+
+    ``launch_mode`` (#611) is the terminal-backend verdict from
+    ``launcher_lib.select_launch_mode``. It is OPTIONAL so every #569 caller keeps its exact
+    contract by omitting it. When supplied it is enforced HERE because this — not the launcher —
+    is the boundary the driver actually consults: a herdr-gated project with no reachable pane
+    yields ``single_session``, and handing it a pane-less successor would retire a working
+    predecessor for one already known to die at its first build-seat dispatch. An unrecognised
+    mode fails CLOSED to the single-session loop; fail-open means degrading, never launching on
+    a verdict nobody understands.
+    """
     if not launcher_armed:
         return (False, "no durable launcher armed")
     if not fresh_launch_supported:
         return (False, "launcher does not advertise fresh-launch (no-resume) support")
     if not handoff_writable:
         return (False, "handoff path not writable")
+    if launch_mode is None:
+        # #611 Step-11 pass-4 High 2: for a campaign that HAS a process boundary, an omitted
+        # verdict must not read as "launchable". Leaving it optional made the guard depend on
+        # skill prose remembering to pass it — and by the time the launcher discovers the truth
+        # the driver has already written `handoff_pending` and ended, so "keep the current
+        # loop" is no longer possible. Callers with no boundary (single-session) are unaffected.
+        if state.get("session_mode") == FRESH_SESSION_MODE:
+            return (False, "terminal-backend launch verdict not supplied — refusing to cross "
+                           "the boundary on an unknown backend; keeping the single-session loop")
+        return (True, "ok")
+    if launch_mode not in LAUNCHABLE_MODES:
+        return (False, f"launch mode {launch_mode!r} cannot cross the process boundary — "
+                       "keeping the single-session loop")
     return (True, "ok")
 
 

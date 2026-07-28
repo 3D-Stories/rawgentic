@@ -93,5 +93,14 @@ class TestFreshSessionPerChild:
         assert "Fresh-session boundary" in s
         assert "with NO `--resume`" in s, (
             "the fresh successor must launch without --resume (else AC1 fails, #569)")
+
+    def test_step4_resolves_the_terminal_backend_verdict_at_the_boundary(self):
+        """#611 Step-11 pass-3 High 2: deciding the launch mode only inside the launcher is too
+        late — by then the driver has already ended the session believing the boundary was
+        available, and 'keep the current loop' is no longer possible."""
+        s = _section(_text(), "## Step 4:", "## Step 5:")
+        assert "select-mode" in s, "the boundary must resolve the terminal-backend verdict"
+        assert "`launch_mode`" in s, (
+            "the verdict must be passed to fresh_session_available as launch_mode")
         assert "fail-open" in s.lower() and "single-session fallback" in s, (
             "the boundary must fail-open to single-session (#569 AC6)")
