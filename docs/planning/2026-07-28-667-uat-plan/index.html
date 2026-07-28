@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Epic #667 — UAT Plan · Nothing here has flown</title>
-<meta name="description" content="Acceptance-test plan for epic #667: 30 checks, split by who can technically run them — 24 agent, 6 human.">
+<title>Epic #667 — UAT Results · 13 pass, 8 blocked on one Critical</title>
+<meta name="description" content="Epic #667 UAT results: 24 agent checks run — 13 pass, 8 blocked on one Critical, 3 inconclusive, 0 failed.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2308090C'/%3E%3Crect x='4' y='6' width='9' height='20' fill='%2322D3EE'/%3E%3Crect x='15' y='6' width='4' height='20' fill='%23FFB020'/%3E%3Crect x='23' y='6' width='5' height='20' fill='%23FF3B47'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -210,50 +210,76 @@ footer .row{display:flex;flex-wrap:wrap;gap:8px 26px}
     <span><b>7</b> children merged</span><span class="sep">/</span>
     <span>plugin <b>3.103.0</b></span><span class="sep">/</span>
     <span><b>5,612</b> tests green</span><span class="sep">/</span>
-    <span><b>0</b> live runs</span>
+    <span><b>24/24</b> checks run</span>
   </p>
 
-  <h1>Nothing here has <span class="strike">flown.</span></h1>
+  <h1>It flew. It did not <span class="strike">work.</span></h1>
 
   <p class="lede">
-    Seven issues merged, 5,612 tests passing, four CI lanes green. Every herdr-facing
-    path was tested through <b>injected runners</b> — none has ever talked to a real
-    server. The one time part of this stack ran live, it failed in its
-    <b>first 30 seconds</b>, on a condition all 145 of its tests had passed over.
-    That is the base rate this plan exists to respect.
+    Seven issues merged with 5,612 tests passing and <b>zero live runs</b>. This is what happened when they were finally run: <b>13 pass, 8 blocked on a single Critical, 3 inconclusive, 0 failed</b>. The gate passed — a pane really does reach <b>blocked</b> — and then the transport underneath it turned out to be dead, which no unit test could have seen.
   </p>
 
   <section class="gate" aria-labelledby="gate-h">
     <div class="gate-top">
       <span class="dot" aria-hidden="true"></span>
-      <span class="gate-tag">Go / no-go gate</span>
-      <span class="gate-holds">holds 8 downstream checks</span>
+      <span class="gate-tag">Answered — premise holds, transport is dead</span>
+      <span class="gate-holds">issue #679</span>
     </div>
-    <h2 id="gate-h">Does a pane ever actually report <code>blocked</code>?</h2>
-    <p>
-      Never once observed. Right now: 6 idle, 1 working, 1 unknown. The status is real —
-      <code style="font-family:var(--mono);font-size:.9em;color:#9FD8E4">herdr agent wait --until blocked</code>
-      accepts it and returns a clean&nbsp;timeout — but whether herdr's claude integration
-      <b>sets</b> it when Claude Code shows an approval prompt has never been seen.
-      <code style="font-family:var(--mono);font-size:.9em;color:#9FD8E4">pane.agent_status_changed</code>
-      produced <b>0 frames in 225&nbsp;s</b> of subscribed probing. If it never fires,
-      <b>#612 is a correct implementation of an event that does not happen</b> — and its
-      96 tests all pass because they synthesise the frame themselves.
+    <h2 id="gate-h">The premise holds. The transport does&nbsp;not.</h2>
+    <p style="margin-top:0">
+      <b>A pane does reach <code style="font-family:var(--mono);color:var(--pass);background:rgba(61,220,132,.10)">blocked</code></b> —
+      rule <code style="font-family:var(--mono);font-size:.9em;color:#9FD8E4">bash_permission_prompt</code>
+      (priority 850), <code style="font-family:var(--mono);font-size:.9em;color:#9FD8E4">revision</code>
+      1→3, <code style="font-family:var(--mono);font-size:.9em;color:#9FD8E4">state_change_seq</code>
+      2076→2078. Predicted by reading herdr's detection manifest <em>before</em> spawning anything,
+      then confirmed live. #612's design intent was right.
+      <br><br>
+      But <code style="font-family:var(--mono);font-size:.9em;color:#9FD8E4">events.subscribe</code>
+      delivers a <b>~39-frame backlog burst in under 3 seconds, then nothing, ever.</b> The shipped
+      watcher drains the replay and sits silent forever — heartbeating, reporting healthy, never
+      notifying. Five instruments agree, including a controlled stimulus (three
+      <code style="font-family:var(--mono);font-size:.9em;color:#9FD8E4">pane rename</code> calls I
+      made myself produced <b>0 frames</b>) and duration-independence: <b>39 events at 12&nbsp;s, 39 at
+      12&nbsp;s, 39 at 50&nbsp;s</b>. A keepalive is impossible —
+      <code style="font-family:var(--mono);font-size:.9em;color:#9FD8E4">ping</code> on a subscribed
+      socket returns <b>Connection reset by peer</b>. <b>#612 cannot fire in production, and its 96
+      tests pass because they inject frames straight into
+      <code style="font-family:var(--mono);font-size:.9em">watch_stream</code>.</b>
     </p>
   </section>
 
   <section class="split">
     <div class="split-head">
-      <span class="n">24<i>&thinsp;/&thinsp;30</i></span>
-      <span class="cap">checks I could run myself,<br>given permission</span>
+      <span class="n">13<i>&thinsp;pass</i></span>
+      <span class="cap">24 / 24 agent checks terminal<br><b style="color:var(--pass)">0 failed</b></span>
     </div>
-    <div class="bar" role="img" aria-label="24 of 30 checks are agent-runnable; 6 require a human">
-      <span class="b-agent"></span><span class="b-human"></span>
+    <div class="bar" role="img" aria-label="13 pass, 8 blocked, 3 inconclusive of 24 agent checks">
+      <span style="width:54.2%;background:linear-gradient(90deg,var(--pass),#2FB86C)"></span>
+      <span style="width:33.3%;background:linear-gradient(90deg,var(--hold),#C42B35)"></span>
+      <span style="width:12.5%;background:linear-gradient(90deg,var(--human),#E0930A)"></span>
     </div>
     <div class="keys">
-      <span class="k-agent"><i></i><b>24 agent</b> — technically mine to execute</span>
-      <span class="k-human"><i></i><b>6 human</b> — no permission would help</span>
+      <span><i style="background:var(--pass)"></i><b>13 pass</b></span>
+      <span><i style="background:var(--hold)"></i><b>8 blocked</b> — every one on #679</span>
+      <span><i style="background:var(--human)"></i><b>3 inconclusive</b> — reasons stated</span>
+      <span><i style="background:var(--human)"></i><b>6 human</b> — no permission would help</span>
     </div>
+    <p style="margin:24px 0 0;font-size:15.5px;color:#A4AEBD;max-width:76ch">
+      Four issues filed: <b>#679</b> the transport Critical · <b>#680</b> herdr's manifest matches a
+      dead string · <b>#681</b> the <code style="font-family:var(--mono);font-size:.9em">audit_completeness</code>
+      theory refuted with evidence · <b>#682</b> a confounded switch-window observation. <b>W1 shipped</b>
+      as PR #683, suite <b>5612→5618</b> — it is what made observing the watcher possible at all.
+    </p>
+    <p style="margin:18px 0 0;font-size:15px;color:#8B94A3;max-width:76ch;border-left:2px solid var(--rule);padding-left:15px">
+      <b style="color:var(--ink)">Four times my first reading was wrong, and checking caught it — not a reviewer.</b>
+      My probe used <code style="font-family:var(--mono);font-size:.9em">event</code> where the server
+      wants <code style="font-family:var(--mono);font-size:.9em">type</code>, so I nearly filed a
+      Critical against code that was already correct. Two handoff “failures” were my own fixture: a
+      transcript dir pointing at an empty scratch folder, then a goal ordering the successor to do
+      nothing while I checked that it did something. And one FAIL was me comparing a
+      <code style="font-family:var(--mono);font-size:.9em">(bool, reason)</code> tuple to
+      <code style="font-family:var(--mono);font-size:.9em">False</code>.
+    </p>
   </section>
 </header>
 
