@@ -929,3 +929,58 @@ class TestAnAC5RefusalIsNeverRetriedWithTheOffendingLabel:
                                  heartbeat_s=1.0)
         assert report["pending_at_exit"] == ["w1:pA"], report
         assert "SECRET" not in json.dumps(report), report
+
+
+class TestSafeRecordSanitizesAtTheBoundary:
+    """Step 11 pass-9: `safe_record` retaining a `label` while stripping `terminal_title` was the
+    SINGLE root cause behind three separately-reported leaks — every later consumer had the offending
+    label but not the field to compare it against, so the check silently could not fire. Sanitizing
+    here kills the whole class."""
+
+    def test_a_screen_derived_label_is_DROPPED_not_carried(self):
+        rec = pw.safe_record({"pane_id": "w1:pA", "label": "SECRET prompt text",
+                              "terminal_title": "SECRET prompt text", "workspace_id": "w1"})
+        assert "SECRET" not in json.dumps(rec), rec
+        assert rec["pane_id"] == "w1:pA"
+
+    def test_a_screen_derived_NAME_is_also_dropped(self):
+        rec = pw.safe_record({"pane_id": "w1:pA", "name": "SECRET prompt text",
+                              "terminal_title_stripped": "SECRET prompt text"})
+        assert "SECRET" not in json.dumps(rec), rec
+
+    def test_a_genuine_label_survives(self):
+        rec = pw.safe_record({"pane_id": "w1:pA", "label": "lumenquire-s9",
+                              "terminal_title": "SECRET prompt text"})
+        assert rec["label"] == "lumenquire-s9"
+        assert "SECRET" not in json.dumps(rec)
+
+    def test_a_body_built_from_a_sanitized_record_cannot_leak(self):
+        rec = pw.safe_record({"pane_id": "w1:pA", "label": "SECRET prompt text",
+                              "terminal_title": "SECRET prompt text"})
+        body = pw.body_for_pane(rec, status="blocked")
+        assert "SECRET" not in body and "w1:pA" in body
+
+    def test_the_deferred_sweep_failure_branch_cannot_leak_on_retry(self):
+        """The exact pass-9 reproduction: the deferred sweep refuses, its failure branch queues the
+        record, and the immediately following drain sends it."""
+        rec = pw.Reconciler(_snapshot([("w1:pA", "working", 5, "alpha")]))
+        sent = []
+        ticks = iter([1000.0, 1000.0, 2000.0, 3000.0])
+        live_calls = {"n": 0}
+
+        def live():
+            live_calls["n"] += 1
+            return set() if live_calls["n"] == 1 else {"w1:pA", "w1:pNEW"}
+
+        def current(_pid):
+            return {"pane_id": "w1:pNEW", "workspace_id": "w1", "agent_status": "blocked",
+                    "label": "SECRET prompt text", "terminal_title": "SECRET prompt text",
+                    "revision": 4}
+
+        report = pw.watch_stream(
+            [_created("w1:pNEW"), None, None], reconciler=rec,
+            sender=lambda b: (sent.append(b), 0)[1], clock=lambda: next(ticks),
+            debouncer=pw.Debouncer(window_s=0.0), emit=lambda m: sent.append(f"LOG:{m}"),
+            heartbeat_s=1.0, live_panes=live, current_pane=current)
+        assert all("SECRET" not in x for x in sent), sent
+        assert "SECRET" not in json.dumps(report), report

@@ -383,9 +383,23 @@ def safe_record(pane) -> dict:
     is one too.
     """
     pane = pane if isinstance(pane, dict) else {}
-    return {k: pane[k] for k in
-            ("pane_id", "label", "name", "workspace_id", "tab_id", "agent", "agent_status")
-            if isinstance(pane.get(k), str)}
+    out = {k: pane[k] for k in
+           ("pane_id", "label", "name", "workspace_id", "tab_id", "agent", "agent_status")
+           if isinstance(pane.get(k), str)}
+    # SANITIZE AT THE BOUNDARY, once (Step 11 pass-9). Retaining a `label` while stripping
+    # `terminal_title` was the single root cause behind three separate reported leaks: any later
+    # consumer — the pending retry, the deferred sweep's failure branch, the stall warning reading
+    # cached metadata — had the offending label but no longer had the field to compare it against, so
+    # the provenance check silently could not fire and the screen text went out. Dropping an
+    # unverifiable identity HERE means no stored record can carry one, on any path, ever. The identity
+    # then falls back to `name` or `pane_id`, which are not screen-derived.
+    contents = {pane[f].strip() for f in CONTENT_FIELDS
+                if isinstance(pane.get(f), str) and pane[f].strip()}
+    for field in ("label", "name"):
+        value = out.get(field)
+        if isinstance(value, str) and value.strip() in contents:
+            out.pop(field)
+    return out
 
 
 def body_for_pane(pane, *, status) -> str:
@@ -720,6 +734,9 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
                              "— keeping it pending for the next heartbeat")
                         continue
                     pending_registrations.pop(pane_id, None)
+                    # Install the FRESH record (pass-9): the reconciler otherwise holds the scrubbed
+                    # creation metadata, and `stall_warning` reads from there.
+                    reconciler.register_pane(safe_record(current), live_pane_ids={pane_id})
                     emit(f"pane-watch: registered {pane_id} on retry")
                     if current.get("agent_status") == BLOCKED and prior.get(pane_id) != BLOCKED:
                         if debouncer.allow(pane_id, now):
