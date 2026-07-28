@@ -624,15 +624,18 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     timeout — best-effort closes it before returning. Cleanup is skipped only once ownership
     has actually transferred (all verifications passed).
 
-    When herdr does NOT name it, the pane is reported and left alone, never guessed at: see
-    `_report_possible_orphan`. So the honest guarantee is narrower than "every post-split
-    failure closes the pane" — it is "every post-split failure either closes a pane we can
-    prove is ours, or names what appeared so an operator can". A returned id equal to the
-    anchor, or one that already existed before the split, is not provably ours and takes the
-    reporting path (`split_response_not_new`).
+    "Ours" means PROVEN new: herdr named it, it is not the anchor, and it was absent from the
+    mandatory pre-split pane inventory. Anything else is reported and left alone, never guessed
+    at (see `_report_possible_orphan`). So the honest guarantee is narrower than "every
+    post-split failure closes the pane" — it is "every post-split failure either closes a pane
+    proven to be ours, or names what appeared so an operator can". A returned id equal to the
+    anchor or already present in the inventory takes the reporting path
+    (`split_response_not_new`), and an inventory that cannot be taken at all refuses before the
+    split (`pane_inventory_unavailable`).
 
-    Every CALLER-SUPPLIED field is validated before the split, so a bad argument cannot create
-    a pane and then fail. The id herdr RETURNS is necessarily validated after it.
+    Every caller-supplied field — including `transcript_path_for`, which is probed — is
+    validated before the split, so a bad argument cannot create a pane and then fail. The id
+    herdr RETURNS is necessarily validated after it.
 
     Returns a dict with `ok`, `steps`, `results`, `truncated`, `failed_step`, `new_pane`,
     `session_id`, and `cleanup` (what happened to the tentative pane, if anything).
@@ -660,6 +663,14 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     if not isinstance(resume_prompt, str) or not resume_prompt.strip():
         raise LauncherError("resume_prompt is empty — a guarded successor with no work would "
                             "sit idle while the predecessor is retired")
+    # Exercised BEFORE the split (#611 Step-11 pass-6 Medium 2): its first real use is after the
+    # pane exists, so a broken path builder would otherwise create a pane and then fail.
+    probe = transcript_path_for("probe-session-id")
+    if not isinstance(probe, str) or not probe:
+        raise LauncherError("transcript_path_for must return a non-empty path string")
+    if not os.path.isdir(os.path.dirname(probe) or "."):
+        raise LauncherError(f"transcript directory {os.path.dirname(probe)!r} does not exist — "
+                            "the goal_armed check could never read anything")
 
     # Captured BEFORE the split so nothing already on disk can be mistaken for this launch's
     # evidence (#611 Step-11 Medium 4). A registry that exists but cannot be read yields no
@@ -669,9 +680,15 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         out["failed_step"] = "registry_baseline_unreadable"
         return out
 
-    # Pane inventory before the split, so an uncertain split response can at least be REPORTED
-    # (#611 Step-11 pass-3 Medium 3). Best-effort: if this fails we simply have no inventory.
+    # Pane inventory before the split. REQUIRED, not best-effort (#611 Step-11 pass-6 High 1):
+    # it is the only thing that can later show a returned pane id is genuinely NEW. Without it,
+    # a well-formed response naming a pre-existing foreign pane would be claimed as ours and
+    # closed on the next failure. Refusing here is also the honest reading of the situation — if
+    # `herdr pane list` does not work, herdr is not healthy enough to be splitting panes in.
     panes_before = _pane_inventory(runner)
+    if panes_before is None:
+        out["failed_step"] = "pane_inventory_unavailable"
+        return out
 
     transferred = False
     split_attempted = False
@@ -695,7 +712,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         # split, then claiming it as "ours" would point the cleanup branch at a live pane —
         # possibly the predecessor itself, the exact destructive outcome the report-only path
         # exists to avoid. Ownership stays unknown and the leak is reported instead.
-        if new_pane == anchor_pane or (panes_before is not None and new_pane in panes_before):
+        if new_pane == anchor_pane or new_pane in panes_before:
             out["failed_step"] = "split_response_not_new"
             return out
         out["new_pane"] = new_pane

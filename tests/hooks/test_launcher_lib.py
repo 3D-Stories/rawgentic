@@ -125,7 +125,8 @@ def _handoff(**over):
     kw = dict(
         anchor_pane="w1:p1", cwd=str(REPO_ROOT), project_root=str(REPO_ROOT),
         name="child4", goal_condition=GOAL_CONDITION, resume_prompt=RESUME_PROMPT,
-        registry_path=REGISTRY_PATH, transcript_path_for=lambda s: f"/t/{s}.jsonl",
+        registry_path=REGISTRY_PATH,
+        transcript_path_for=lambda s: f"/tmp/{s}.jsonl",
         read_text=Artifacts(), sleeper=lambda _s: None,
     )
     kw.update(over)
@@ -710,6 +711,8 @@ class TestOwnershipDiscipline:
 
         def boom(argv, timeout=180):
             calls.append(argv)
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return FakeProc(0, PANE_LIST_ANCHOR_ONLY)
             if argv[:3] == ["herdr", "pane", "split"]:
                 return FakeProc(0, SPLIT_OK)
             if argv[:3] == ["herdr", "pane", "close"]:
@@ -764,6 +767,8 @@ class TestResumePrompt:
 
         def runner(argv, timeout=180):
             calls.append(argv)
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return FakeProc(0, PANE_LIST_ANCHOR_ONLY)
             if argv[:3] == ["herdr", "pane", "split"]:
                 return FakeProc(0, SPLIT_OK)
             if argv[:3] == ["herdr", "pane", "get"]:
@@ -1026,16 +1031,39 @@ class TestUncertainSplitReporting:
         assert out["cleanup"] is None
         assert not any(c[:3] == ["herdr", "pane", "close"] for c in r.calls)
 
-    def test_no_inventory_is_reported_not_guessed(self) -> None:
+    def test_no_inventory_refuses_BEFORE_the_split(self) -> None:
+        """#611 Step-11 pass-6 High 1. The inventory is the only thing that can later show a
+        returned pane id is genuinely NEW, so it is required rather than best-effort: without it
+        a well-formed response naming a pre-existing FOREIGN pane would be claimed as ours and
+        closed on the next failure. Refusing is also the honest reading — if `pane list` does
+        not work, herdr is not healthy enough to be splitting panes in."""
+        calls = []
+
         def runner(argv, timeout=180):
+            calls.append(list(argv))
             if argv[:3] == ["herdr", "pane", "list"]:
                 return FakeProc(1)
-            if argv[:3] == ["herdr", "pane", "split"]:
-                return FakeProc(0, "not json")
-            return FakeProc(0)
+            return FakeProc(0, SPLIT_OK)
 
         out = ll.perform_handoff(runner=runner, **_handoff())
-        assert out["cleanup"] and "cannot tell whether one leaked" in out["cleanup"]
+        assert out["ok"] is False and out["failed_step"] == "pane_inventory_unavailable"
+        assert not any(c[:3] == ["herdr", "pane", "split"] for c in calls), \
+            "nothing may be created when ownership could never be proven"
+        assert out["cleanup"] is None
+
+    def test_a_foreign_pane_is_not_claimed_when_the_inventory_is_missing(self) -> None:
+        """The exact pass-6 scenario: inventory fails, then the split returns a well-formed
+        pre-existing FOREIGN id. Nothing may be closed."""
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return FakeProc(0, "malformed")
+            if argv[:3] == ["herdr", "pane", "split"]:
+                return FakeProc(0, json.dumps({"result": {"pane_id": "w1:pFOREIGN"}}))
+            return FakeProc(1)
+
+        out = ll.perform_handoff(runner=runner, **_handoff())
+        assert out["ok"] is False and out["failed_step"] == "pane_inventory_unavailable"
+        assert out["new_pane"] is None
 
     def test_a_split_TIMEOUT_after_creation_still_reports(self) -> None:
         """#611 Step-11 pass-4 Medium 4: the split used to run OUTSIDE the ownership
