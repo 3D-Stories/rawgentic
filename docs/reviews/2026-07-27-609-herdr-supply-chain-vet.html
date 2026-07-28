@@ -37,7 +37,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-27 17:58 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-27 18:13 MDT</div>
 <h1>herdr supply-chain vet + pinned install (#609)</h1>
 
 </header>
@@ -81,27 +81,47 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p><strong>Drift guard.</strong> <code>HERDR_VERSION_FLOOR = (0, 7, 5)</code> already ships at <code>phase_executor/src/phase_executor/herdr_backend.py:84</code> (from #633, &quot;qualified live, 40/40 PID-identity reps&quot;). Two independent pins for one fact is exactly the mirrored-constant hazard the repo operating manual names, so a test asserts <code>herdr-pin.json</code>&#x27;s version equals <code>HERDR_VERSION_FLOOR</code>. Neither pin can move without the other.</p>
 <h2>3. Reproducible checksummed install (AC1, AC5)</h2>
 <p><strong><code>curl | sh</code> is never used in this workspace</strong> (plan §1.6 states this explicitly). The sanctioned path is the <strong>pinned release binary verified against its published digest</strong> — the decision plan §1.6 left to this epic.</p>
-<pre><code># 1. Read the pin (never hardcode the version or hash)
+<pre><code>#!/usr/bin/env bash
+set -euo pipefail   # load-bearing: without it a failed fetch falls through to the compare
+
+PLATFORM=linux-x86_64                  # the key in the pin&#x27;s `assets` map
+ASSET=herdr-$PLATFORM                  # the release asset&#x27;s filename — NOT the same string
 PIN=hooks/herdr-pin.json
-VER=$(python3 -c &quot;import json;print(json.load(open(&#x27;$PIN&#x27;))[&#x27;pin&#x27;][&#x27;version&#x27;])&quot;)
-TAG=$(python3 -c &quot;import json;print(json.load(open(&#x27;$PIN&#x27;))[&#x27;pin&#x27;][&#x27;tag&#x27;])&quot;)
-REPO=$(python3 -c &quot;import json;print(json.load(open(&#x27;$PIN&#x27;))[&#x27;pin&#x27;][&#x27;repo&#x27;])&quot;)
-WANT=$(python3 -c &quot;import json;print(json.load(open(&#x27;$PIN&#x27;))[&#x27;pin&#x27;][&#x27;assets&#x27;][&#x27;linux-x86_64&#x27;][&#x27;sha256&#x27;])&quot;)
+WORK=$(mktemp -d)                      # never a fixed /tmp path: world-writable dir + predictable
+trap &#x27;rm -rf &quot;$WORK&quot;&#x27; EXIT             # name = symlink/pre-seed surface
 
-# 2. Fetch the asset AND the upstream published digest for the same tag
-gh release download &quot;$TAG&quot; --repo &quot;$REPO&quot; --pattern &#x27;herdr-linux-x86_64&#x27; --dir /tmp/herdr-install
+# 1. Read the pin (never hardcode the version or hash)
+read -r VER TAG REPO WANT &lt; &lt;(python3 - &quot;$PIN&quot; &quot;$PLATFORM&quot; &lt;&lt;&#x27;PY&#x27;
+import json, sys
+p = json.load(open(sys.argv[1]))[&quot;pin&quot;]
+print(p[&quot;version&quot;], p[&quot;tag&quot;], p[&quot;repo&quot;], p[&quot;assets&quot;][sys.argv[2]][&quot;sha256&quot;])
+PY
+)
+
+# 2. Fetch the asset AND the upstream published digest for the same tag.
+#    NOTE: `gh api --jq` takes exactly ONE argument, so --arg must go to a real jq.
+gh release download &quot;$TAG&quot; --repo &quot;$REPO&quot; --pattern &quot;$ASSET&quot; --dir &quot;$WORK&quot;
 UPSTREAM=$(gh api &quot;repos/$REPO/releases/tags/$TAG&quot; \
-  --jq &#x27;.assets[] | select(.name==&quot;herdr-linux-x86_64&quot;) | .digest&#x27; | sed &#x27;s/^sha256://&#x27;)
+  | jq -r --arg a &quot;$ASSET&quot; &#x27;.assets[] | select(.name==$a) | .digest&#x27; | sed &#x27;s/^sha256://&#x27;)
+GOT=$(sha256sum &quot;$WORK/$ASSET&quot; | cut -d&#x27; &#x27; -f1)
 
-# 3. Three-way agreement REQUIRED: pin == upstream == downloaded bytes. Any mismatch aborts.
-GOT=$(sha256sum /tmp/herdr-install/herdr-linux-x86_64 | cut -d&#x27; &#x27; -f1)
+# 3. Reject EMPTY values before comparing. Skipping this is the trap: if the pin were
+#    unreadable and the API returned nothing, `[ &quot;&quot; = &quot;&quot; ]` passes and the guard reports
+#    success having verified nothing.
+for v in VER TAG REPO WANT UPSTREAM GOT; do
+  [ -n &quot;${!v}&quot; ] || { echo &quot;ABORT: $v is empty — verified nothing&quot;; exit 1; }
+done
+
+# 4. Three-way agreement REQUIRED: pin == upstream == downloaded bytes.
 [ &quot;$WANT&quot; = &quot;$UPSTREAM&quot; ] || { echo &quot;ABORT: pin disagrees with upstream ($WANT vs $UPSTREAM)&quot;; exit 1; }
-[ &quot;$WANT&quot; = &quot;$GOT&quot; ]      || { echo &quot;ABORT: downloaded bytes do not match the pin&quot;; exit 1; }
+[ &quot;$WANT&quot; = &quot;$GOT&quot; ]      || { echo &quot;ABORT: downloaded bytes do not match the pin ($WANT vs $GOT)&quot;; exit 1; }
 
-# 4. Only now install
-install -m 0755 /tmp/herdr-install/herdr-linux-x86_64 ~/.local/bin/herdr
-herdr --version   # must print exactly: herdr &lt;VER&gt;</code></pre>
+# 5. Only now install
+install -m 0755 &quot;$WORK/$ASSET&quot; ~/.local/bin/herdr
+[ &quot;$(herdr --version)&quot; = &quot;herdr $VER&quot; ] || { echo &quot;ABORT: installed binary reports the wrong version&quot;; exit 1; }
+echo &quot;OK: herdr $VER installed, sha256 $GOT verified against pin and upstream&quot;</code></pre>
 <p>The three-way check is the point: comparing the download against the pin alone would still install a tampered artifact if the pin itself were edited, and comparing against upstream alone would drift silently when upstream re-tags. Requiring pin == upstream == bytes catches both.</p>
+<p><strong>Why the empty-value loop in step 3 exists</strong> (a real defect found reviewing this procedure, not a hypothetical): string equality in shell is happy to compare two empty strings. A cascade where the pin is unreadable *and* the API call yields nothing would leave <code>WANT</code> and <code>UPSTREAM</code> both empty, <code>[ &quot;&quot; = &quot;&quot; ]</code> would pass, and the script would print no ABORT — reporting a successful verification that checked nothing. <code>set -euo pipefail</code> plus the explicit non-empty assertions close it. The version assertion in step 5 is the same instinct applied at the other end: an install that silently put the wrong binary in place should fail loudly, not print &quot;OK&quot;.</p>
 <p><strong>To verify an already-installed binary</strong> (what this vet did — no download, no mutation):</p>
 <pre><code>sha256sum ~/.local/bin/herdr | cut -d&#x27; &#x27; -f1
 gh api repos/ogulcancelik/herdr/releases/tags/v0.7.5 \
@@ -170,7 +190,7 @@ herdr server reload-config  # apply to the running server</code></pre>
 <p><code>herdr server reload-config</code> is deliberately absent from the declaration above: #609 ships no code that invokes it. It is a documented manual step for the owner&#x27;s apply moment, and §6 names it as this document&#x27;s one unproven claim rather than dressing it as verified.</p>
 
 </main>
-<footer>Last updated: 2026-07-27 17:58 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-27 18:13 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

@@ -83,31 +83,58 @@ path is the **pinned release binary verified against its published digest** — 
 §1.6 left to this epic.
 
 ```bash
-# 1. Read the pin (never hardcode the version or hash)
+#!/usr/bin/env bash
+set -euo pipefail   # load-bearing: without it a failed fetch falls through to the compare
+
+PLATFORM=linux-x86_64                  # the key in the pin's `assets` map
+ASSET=herdr-$PLATFORM                  # the release asset's filename — NOT the same string
 PIN=hooks/herdr-pin.json
-VER=$(python3 -c "import json;print(json.load(open('$PIN'))['pin']['version'])")
-TAG=$(python3 -c "import json;print(json.load(open('$PIN'))['pin']['tag'])")
-REPO=$(python3 -c "import json;print(json.load(open('$PIN'))['pin']['repo'])")
-WANT=$(python3 -c "import json;print(json.load(open('$PIN'))['pin']['assets']['linux-x86_64']['sha256'])")
+WORK=$(mktemp -d)                      # never a fixed /tmp path: world-writable dir + predictable
+trap 'rm -rf "$WORK"' EXIT             # name = symlink/pre-seed surface
 
-# 2. Fetch the asset AND the upstream published digest for the same tag
-gh release download "$TAG" --repo "$REPO" --pattern 'herdr-linux-x86_64' --dir /tmp/herdr-install
+# 1. Read the pin (never hardcode the version or hash)
+read -r VER TAG REPO WANT < <(python3 - "$PIN" "$PLATFORM" <<'PY'
+import json, sys
+p = json.load(open(sys.argv[1]))["pin"]
+print(p["version"], p["tag"], p["repo"], p["assets"][sys.argv[2]]["sha256"])
+PY
+)
+
+# 2. Fetch the asset AND the upstream published digest for the same tag.
+#    NOTE: `gh api --jq` takes exactly ONE argument, so --arg must go to a real jq.
+gh release download "$TAG" --repo "$REPO" --pattern "$ASSET" --dir "$WORK"
 UPSTREAM=$(gh api "repos/$REPO/releases/tags/$TAG" \
-  --jq '.assets[] | select(.name=="herdr-linux-x86_64") | .digest' | sed 's/^sha256://')
+  | jq -r --arg a "$ASSET" '.assets[] | select(.name==$a) | .digest' | sed 's/^sha256://')
+GOT=$(sha256sum "$WORK/$ASSET" | cut -d' ' -f1)
 
-# 3. Three-way agreement REQUIRED: pin == upstream == downloaded bytes. Any mismatch aborts.
-GOT=$(sha256sum /tmp/herdr-install/herdr-linux-x86_64 | cut -d' ' -f1)
+# 3. Reject EMPTY values before comparing. Skipping this is the trap: if the pin were
+#    unreadable and the API returned nothing, `[ "" = "" ]` passes and the guard reports
+#    success having verified nothing.
+for v in VER TAG REPO WANT UPSTREAM GOT; do
+  [ -n "${!v}" ] || { echo "ABORT: $v is empty — verified nothing"; exit 1; }
+done
+
+# 4. Three-way agreement REQUIRED: pin == upstream == downloaded bytes.
 [ "$WANT" = "$UPSTREAM" ] || { echo "ABORT: pin disagrees with upstream ($WANT vs $UPSTREAM)"; exit 1; }
-[ "$WANT" = "$GOT" ]      || { echo "ABORT: downloaded bytes do not match the pin"; exit 1; }
+[ "$WANT" = "$GOT" ]      || { echo "ABORT: downloaded bytes do not match the pin ($WANT vs $GOT)"; exit 1; }
 
-# 4. Only now install
-install -m 0755 /tmp/herdr-install/herdr-linux-x86_64 ~/.local/bin/herdr
-herdr --version   # must print exactly: herdr <VER>
+# 5. Only now install
+install -m 0755 "$WORK/$ASSET" ~/.local/bin/herdr
+[ "$(herdr --version)" = "herdr $VER" ] || { echo "ABORT: installed binary reports the wrong version"; exit 1; }
+echo "OK: herdr $VER installed, sha256 $GOT verified against pin and upstream"
 ```
 
 The three-way check is the point: comparing the download against the pin alone would still install
 a tampered artifact if the pin itself were edited, and comparing against upstream alone would drift
 silently when upstream re-tags. Requiring pin == upstream == bytes catches both.
+
+**Why the empty-value loop in step 3 exists** (a real defect found reviewing this procedure, not a
+hypothetical): string equality in shell is happy to compare two empty strings. A cascade where the
+pin is unreadable *and* the API call yields nothing would leave `WANT` and `UPSTREAM` both empty,
+`[ "" = "" ]` would pass, and the script would print no ABORT — reporting a successful verification
+that checked nothing. `set -euo pipefail` plus the explicit non-empty assertions close it. The
+version assertion in step 5 is the same instinct applied at the other end: an install that silently
+put the wrong binary in place should fail loudly, not print "OK".
 
 **To verify an already-installed binary** (what this vet did — no download, no mutation):
 
