@@ -788,10 +788,17 @@ class TestLaunchModes:
                                          claude_args=ll.claude_args_for_launch_mode("fresh"))
         assert "--" not in argv and "--continue" not in argv
 
-    def test_resume_carries_continue(self) -> None:
-        assert ll.claude_args_for_launch_mode("resume") == ["--continue"]
+    def test_resume_mode_was_removed_not_merely_discouraged(self) -> None:
+        """#611 Step-11 pass-4 High 1. A resumed successor can already own a registry row and an
+        unmet goal row, so its evidence is temporal, never causally bound to THIS handoff.
+        #569's contract is a FRESH successor with no `--resume`, so the mode was never needed —
+        deleting it removes the whole stale-evidence class rather than documenting around it."""
+        assert "resume" not in ll.LAUNCH_MODES
+        with pytest.raises(ll.LauncherError):
+            ll.claude_args_for_launch_mode("resume")
 
-    @pytest.mark.parametrize("bad", ["", None, "FRESH", "--permission-mode", "print", 7])
+    @pytest.mark.parametrize("bad", ["", None, "FRESH", "--permission-mode", "print", 7,
+                                     "resume"])
     def test_an_unknown_launch_mode_is_refused(self, bad) -> None:
         with pytest.raises(ll.LauncherError):
             ll.claude_args_for_launch_mode(bad)
@@ -912,15 +919,40 @@ class TestBaselineIntegrity:
 
     def test_a_missing_file_is_still_offset_zero_not_a_refusal(self) -> None:
         """`FileNotFoundError` is the ONE case where 'unreadable' honestly means 'empty'."""
-        assert ll._artifact_offset(_raise(FileNotFoundError("nope")), "/x") == 0
-        assert ll._artifact_offset(_raise(PermissionError("locked")), "/x") is None
-        assert ll._artifact_offset(lambda _p: "abcd", "/x") == 4
+        assert ll._baseline(_raise(FileNotFoundError("nope")), "/x") == (0, ll._digest(""))
+        assert ll._baseline(_raise(PermissionError("locked")), "/x") is None
+        assert ll._baseline(_raise(UnicodeDecodeError("utf-8", b"\xf0", 0, 1, "x")), "/x") is None
+        assert ll._baseline(lambda _p: "abcd", "/x") == (4, ll._digest("abcd"))
 
     def test_a_shrunken_artifact_voids_the_baseline(self) -> None:
         """Rotation or truncation makes the offset point somewhere else entirely, so positional
         evidence is meaningless — it must fail, not compare against the wrong region."""
-        assert ll._tail("short", 100) is None
-        assert ll._tail("abcdef", 3) == "def"
+        assert ll._tail("short", (100, ll._digest("x" * 100))) is None
+        assert ll._tail("abcdef", (3, ll._digest("abc"))) == "def"
+
+    def test_a_same_length_replacement_voids_the_baseline(self) -> None:
+        """#611 Step-11 pass-4 High 1: length alone cannot see a file REPLACED at the same or a
+        greater length — and `registry_prune.py` legitimately rewrites the registry wholesale
+        via `os.replace`. The prefix digest is what notices."""
+        assert ll._tail("XXXdef", (3, ll._digest("abc"))) is None
+        assert ll._tail("abcdef", (3, ll._digest("abc"))) == "def"
+
+    def test_a_replaced_registry_does_not_authorize_teardown(self) -> None:
+        reads = {"n": 0}
+        arts = Artifacts()
+
+        def reader(path):
+            if path != REGISTRY_PATH:
+                return arts(path)
+            reads["n"] += 1
+            # baseline is one history; a concurrent prune then replaces the whole file with a
+            # LONGER one that happens to carry the successor's id
+            return "old-history\n" if reads["n"] == 1 else "pruned-and-rebuilt\n" + REGISTRY_OK
+
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff(read_text=reader))
+        assert out["ok"] is False and out["failed_step"] == "project_switched"
+        assert not _predecessor_closed(r)
 
     def test_a_rotated_registry_does_not_authorize_teardown(self) -> None:
         reads = {"n": 0}
@@ -941,9 +973,12 @@ class TestBaselineIntegrity:
         assert not _predecessor_closed(r)
 
 
-class TestUncertainSplitReconcile:
-    """#611 Step-11 pass-3 Medium 3: herdr can CREATE a pane and still fail to describe it.
-    Returning without looking leaked one pane per cron fire."""
+class TestUncertainSplitReporting:
+    """#611 Step-11 pass-3 Medium 3 and pass-4 High 3. herdr can CREATE a pane and still fail
+    to describe it, so the leak must be SURFACED — but it must never be guessed at. Pass 3
+    closed the single new pane in the inventory diff; pass 4 showed that is unsound, because
+    cardinality is not attribution: if our split created nothing and an unrelated session split
+    concurrently, that one new pane is someone else's live session."""
 
     def _runner(self, split_stdout, split_rc=0, before=("w1:p1",), after=("w1:p1", "w1:pNEW")):
         listings = [json.dumps({"result": {"panes": [{"pane_id": p} for p in before]}}),
@@ -963,32 +998,32 @@ class TestUncertainSplitReconcile:
         runner.calls = []
         return runner
 
-    def test_an_unparseable_split_response_still_closes_the_created_pane(self) -> None:
-        r = self._runner("not json")
+    @pytest.mark.parametrize("stdout,rc,step", [
+        ("not json", 0, "split_response_unparseable"),
+        ("", 1, "split"),
+    ])
+    def test_a_pane_that_appeared_is_reported_and_NEVER_closed(self, stdout, rc, step) -> None:
+        r = self._runner(stdout, split_rc=rc)
         out = ll.perform_handoff(runner=r, **_handoff())
-        assert out["failed_step"] == "split_response_unparseable"
-        assert out["cleanup"] and "closed tentative pane w1:pNEW" in out["cleanup"]
-        assert any(c[:4] == ["herdr", "pane", "close", "w1:pNEW"] for c in r.calls)
-        assert not any(c[:4] == ["herdr", "pane", "close", "w1:p1"] for c in r.calls)
+        assert out["failed_step"] == step
+        assert out["cleanup"] and "POSSIBLE ORPHAN" in out["cleanup"]
+        assert "w1:pNEW" in out["cleanup"], "the operator must be told which pane to check"
+        assert not any(c[:3] == ["herdr", "pane", "close"] for c in r.calls), \
+            "ownership is unprovable here — closing ANY pane risks killing a live session"
 
-    def test_a_failed_split_that_still_created_a_pane_is_reconciled(self) -> None:
-        r = self._runner("", split_rc=1)
+    def test_a_concurrent_foreign_pane_is_not_closed(self) -> None:
+        """The pass-4 finding in its exact shape: our split creates nothing, an unrelated
+        session splits between the two inventories, and the diff is exactly one pane. Pass 3
+        would have closed it."""
+        r = self._runner("not json", after=("w1:p1", "w1:pSOMEONE_ELSE"))
         out = ll.perform_handoff(runner=r, **_handoff())
-        assert out["failed_step"] == "split"
-        assert out["cleanup"] and "closed tentative pane w1:pNEW" in out["cleanup"]
+        assert not any(c[:3] == ["herdr", "pane", "close"] for c in r.calls)
+        assert out["cleanup"] and "w1:pSOMEONE_ELSE" in out["cleanup"]
 
-    def test_nothing_created_means_nothing_to_clean_up(self) -> None:
+    def test_nothing_created_means_nothing_to_report(self) -> None:
         r = self._runner("not json", after=("w1:p1",))
         out = ll.perform_handoff(runner=r, **_handoff())
         assert out["cleanup"] is None
-        assert not any(c[:3] == ["herdr", "pane", "close"] for c in r.calls)
-
-    def test_an_ambiguous_diff_closes_NOTHING(self) -> None:
-        """Another session splitting concurrently must not have its pane closed by ours —
-        that is strictly worse than leaking one."""
-        r = self._runner("not json", after=("w1:p1", "w1:pNEW", "w1:pOTHER"))
-        out = ll.perform_handoff(runner=r, **_handoff())
-        assert out["cleanup"] and "ambiguous" in out["cleanup"]
         assert not any(c[:3] == ["herdr", "pane", "close"] for c in r.calls)
 
     def test_no_inventory_is_reported_not_guessed(self) -> None:
@@ -1000,7 +1035,35 @@ class TestUncertainSplitReconcile:
             return FakeProc(0)
 
         out = ll.perform_handoff(runner=runner, **_handoff())
-        assert out["cleanup"] and "cannot reconcile" in out["cleanup"]
+        assert out["cleanup"] and "cannot tell whether one leaked" in out["cleanup"]
+
+    def test_a_split_TIMEOUT_after_creation_still_reports(self) -> None:
+        """#611 Step-11 pass-4 Medium 4: the split used to run OUTSIDE the ownership
+        try/finally, so a client timeout after herdr had already created the pane skipped
+        cleanup entirely."""
+        listings = [json.dumps({"result": {"panes": [{"pane_id": "w1:p1"}]}}),
+                    json.dumps({"result": {"panes": [{"pane_id": p}
+                                                     for p in ("w1:p1", "w1:pNEW")]}})]
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return FakeProc(0, listings.pop(0) if listings else listings[-1:] and "")
+            if argv[:3] == ["herdr", "pane", "split"]:
+                raise subprocess.TimeoutExpired(cmd="herdr", timeout=180)
+            return FakeProc(0)
+
+        out = ll.perform_handoff(runner=runner, **_handoff())
+        assert out["ok"] is False
+        assert out["cleanup"] and "POSSIBLE ORPHAN" in out["cleanup"]
+
+    def test_an_invalid_returned_pane_id_still_reports(self) -> None:
+        """A pane id that parses but fails validation left `new_pane` unset, so the `finally`
+        saw nothing to clean up (pass-4 Medium 4, second half)."""
+        r = self._runner(json.dumps({"result": {"pane_id": "-evil"}}))
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["ok"] is False
+        assert out["cleanup"] and "POSSIBLE ORPHAN" in out["cleanup"]
+        assert not any(c[:3] == ["herdr", "pane", "close"] for c in r.calls)
 
 
 class TestBoundedPolling:

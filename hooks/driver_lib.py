@@ -364,7 +364,17 @@ def fresh_session_available(state: dict, *, launcher_armed: bool, handoff_writab
         return (False, "launcher does not advertise fresh-launch (no-resume) support")
     if not handoff_writable:
         return (False, "handoff path not writable")
-    if launch_mode is not None and launch_mode not in LAUNCHABLE_MODES:
+    if launch_mode is None:
+        # #611 Step-11 pass-4 High 2: for a campaign that HAS a process boundary, an omitted
+        # verdict must not read as "launchable". Leaving it optional made the guard depend on
+        # skill prose remembering to pass it — and by the time the launcher discovers the truth
+        # the driver has already written `handoff_pending` and ended, so "keep the current
+        # loop" is no longer possible. Callers with no boundary (single-session) are unaffected.
+        if state.get("session_mode") == FRESH_SESSION_MODE:
+            return (False, "terminal-backend launch verdict not supplied — refusing to cross "
+                           "the boundary on an unknown backend; keeping the single-session loop")
+        return (True, "ok")
+    if launch_mode not in LAUNCHABLE_MODES:
         return (False, f"launch mode {launch_mode!r} cannot cross the process boundary — "
                        "keeping the single-session loop")
     return (True, "ok")

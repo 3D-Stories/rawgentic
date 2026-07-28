@@ -556,11 +556,21 @@ class TestFreshSessionAvailable:
 
     # --- #611 Step-11 High 1: the herdr decision belongs at THIS boundary ---------------
 
-    def test_launch_mode_defaults_to_unspecified_and_changes_nothing(self):
-        """Back-compat: every #569 caller omits the argument and keeps its exact contract."""
+    def test_launch_mode_omitted_on_a_single_session_campaign_changes_nothing(self):
+        """Back-compat: a campaign with no process boundary is unaffected by the new argument."""
         ok, _ = dl.fresh_session_available(
             _st([]), launcher_armed=True, handoff_writable=True, fresh_launch_supported=True)
         assert ok is True
+
+    def test_an_omitted_launch_mode_fails_CLOSED_for_a_fresh_session_campaign(self):
+        """#611 Step-11 pass-4 High 2: leaving the verdict optional made the guard depend on
+        skill prose remembering to pass it. By the time the launcher discovers the truth the
+        driver has written `handoff_pending` and ended, so 'keep the current loop' is already
+        impossible. For a campaign that HAS a boundary, silence must not read as launchable."""
+        ok, reason = dl.fresh_session_available(
+            _st([], mode="fresh-session"), launcher_armed=True, handoff_writable=True,
+            fresh_launch_supported=True)
+        assert ok is False and "verdict not supplied" in reason
 
     def test_single_session_launch_mode_refuses(self):
         """A herdr-gated project with no reachable pane must keep its current loop. Deciding

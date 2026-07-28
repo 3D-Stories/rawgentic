@@ -57,6 +57,7 @@ parameters, so tests drive it without a herdr server.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -95,7 +96,15 @@ _ALLOWED_CLAUDE_ARGS = frozenset({"--continue", "--resume"})
 # Typed launch modes replace caller-supplied `claude_args` on the wired path (#611 Step-11
 # High 1). `fresh` is the mode `driver_lib.fresh_session_available` gates on: it advertises a
 # no-`--resume` launch, so passing `--continue` here would silently defeat AC1.
-LAUNCH_MODES: dict[str, tuple[str, ...]] = {"fresh": (), "resume": ("--continue",)}
+#
+# `resume` was offered here and has been REMOVED (#611 Step-11 pass-4 High 1). A resumed
+# successor can carry a session id that already owns a registry row and an unmet goal row, so
+# its evidence is only ever temporal — "appeared after the baseline" — never causally tied to
+# THIS handoff. Binding it properly needs a nonce the successor echoes into an artifact, which
+# does not exist yet. Since #569's whole contract is a FRESH successor launched with NO
+# `--resume`, resume mode was never the point; removing it deletes the entire stale-evidence
+# class instead of documenting around it.
+LAUNCH_MODES: dict[str, tuple[str, ...]] = {"fresh": ()}
 
 # Bounded polling. The second revision read each artifact ONCE, immediately after `send-keys`,
 # which races the hooks that write them. The two budgets differ by an order of magnitude
@@ -543,35 +552,47 @@ def _poll_for(check, *, attempts: int, delay_s: float, sleeper) -> bool:
     return False
 
 
-def _artifact_offset(read_text, path) -> int | None:
-    """Size of an artifact BEFORE the launch, so only what lands after it counts as evidence.
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _baseline(read_text, path) -> tuple[int, str] | None:
+    """An artifact's state BEFORE the launch: (length, digest of that prefix).
 
     Returns None when no baseline could be established — the caller must then REFUSE.
 
-    The distinction matters and was wrong in the previous revision, which mapped every
-    `OSError` to 0 (#611 Step-11 pass-3 High 1). "Does not exist" is expected and means zero:
-    the successor's transcript genuinely does not exist until it is spawned. "Exists but could
-    not be read" is entirely different — offset 0 would then let the WHOLE pre-existing file
-    count as this launch's evidence, and under `--launch-mode resume` (where the successor can
-    reuse a session id that already owns a registry row) that alone would authorise retiring
-    the predecessor.
+    The read-failure distinction was wrong two revisions ago, which mapped every `OSError` to
+    offset 0 (#611 Step-11 pass-3 High 1). "Does not exist" is expected and means zero: the
+    successor's transcript genuinely does not exist until it is spawned. "Exists but could not
+    be read" is entirely different — offset 0 would let the WHOLE pre-existing file count as
+    this launch's evidence.
+
+    The DIGEST is the pass-4 addition (High 1). Length alone cannot notice a file replaced at
+    the same or a greater length, and the registry is legitimately replaced wholesale via
+    `os.replace` by `registry_prune.py`. If a prune rewrites it mid-handoff, a positional
+    offset silently points into unrelated content.
     """
     try:
-        return len(read_text(path))
+        text = read_text(path)
     except FileNotFoundError:
-        return 0
+        return (0, _digest(""))
     except (OSError, UnicodeDecodeError):
         return None
+    return (len(text), _digest(text))
 
 
-def _tail(text: str, offset: int) -> str | None:
+def _tail(text: str, baseline: tuple[int, str]) -> str | None:
     """The part of an artifact written AFTER the baseline, or None if the baseline is void.
 
-    A file shorter than its own baseline was rewritten, rotated or truncated, so the offset no
-    longer points at what it did. Positional evidence is meaningless at that point; returning
-    None makes the check fail rather than silently comparing against the wrong region.
+    Void means the file is no longer an append-only extension of what we measured: shorter than
+    its own baseline (truncated or rotated), or the same prefix length but different content
+    (replaced). Positional evidence is meaningless then, so this returns None and the check
+    fails rather than comparing against the wrong region.
     """
+    offset, digest = baseline
     if len(text) < offset:
+        return None
+    if _digest(text[:offset]) != digest:
         return None
     return text[offset:]
 
@@ -638,31 +659,31 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     # Captured BEFORE the split so nothing already on disk can be mistaken for this launch's
     # evidence (#611 Step-11 Medium 4). A registry that exists but cannot be read yields no
     # baseline at all, and without a baseline there is no such thing as fresh evidence.
-    registry_offset = _artifact_offset(read_text, registry_path)
-    if registry_offset is None:
+    registry_baseline = _baseline(read_text, registry_path)
+    if registry_baseline is None:
         out["failed_step"] = "registry_baseline_unreadable"
         return out
 
-    # Pane inventory before the split, so an uncertain split response can still be reconciled
+    # Pane inventory before the split, so an uncertain split response can at least be REPORTED
     # (#611 Step-11 pass-3 Medium 3). Best-effort: if this fails we simply have no inventory.
     panes_before = _pane_inventory(runner)
 
-    proc = runner(split_argv)
-    record("split", split_argv, proc)
-    if getattr(proc, "returncode", 1) != 0:
-        out["failed_step"] = "split"
-        out["cleanup"] = _reconcile_orphan_pane(panes_before, runner, record, anchor_pane)
-        return out
-    new_pane = _extract_pane_id(getattr(proc, "stdout", "") or "")
-    if new_pane is None:
-        # herdr may well have CREATED the pane and merely failed to describe it. Returning here
-        # without looking would leak one pane per cron fire.
-        out["failed_step"] = "split_response_unparseable"
-        out["cleanup"] = _reconcile_orphan_pane(panes_before, runner, record, anchor_pane)
-        return out
-
     transferred = False
+    split_attempted = False
     try:
+        # The split runs INSIDE the ownership state machine (#611 Step-11 pass-4 Medium 4). It
+        # used to run before the `try`, so a client timeout after herdr had already created the
+        # pane — or a pane id that parsed but failed validation — skipped cleanup entirely.
+        split_attempted = True
+        proc = runner(split_argv)
+        record("split", split_argv, proc)
+        if getattr(proc, "returncode", 1) != 0:
+            out["failed_step"] = "split"
+            return out
+        new_pane = _extract_pane_id(getattr(proc, "stdout", "") or "")
+        if new_pane is None:
+            out["failed_step"] = "split_response_unparseable"
+            return out
         validate_pane_id(new_pane)
         out["new_pane"] = new_pane
 
@@ -693,8 +714,8 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             return out
 
         transcript_path = transcript_path_for(session_id)
-        transcript_offset = _artifact_offset(read_text, transcript_path)
-        if transcript_offset is None:
+        transcript_baseline = _baseline(read_text, transcript_path)
+        if transcript_baseline is None:
             out["failed_step"] = "transcript_baseline_unreadable"
             return out
 
@@ -712,7 +733,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         expected, _ = armed_condition(goal_condition)
 
         def _goal_is_armed() -> bool:
-            tail = _tail(read_text(transcript_path), transcript_offset)
+            tail = _tail(read_text(transcript_path), transcript_baseline)
             return tail is not None and transcript_has_unmet_goal(
                 tail, expected_condition=expected)
 
@@ -734,7 +755,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                 return out
 
         def _project_switched() -> bool:
-            tail = _tail(read_text(registry_path), registry_offset)
+            tail = _tail(read_text(registry_path), registry_baseline)
             return tail is not None and registry_has_session(tail, session_id)
 
         out["results"]["project_switched"] = _poll_for(
@@ -751,8 +772,14 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         out["failed_step"] = out["failed_step"] or f"exception: {exc}"
         return out
     finally:
-        if not transferred and out["new_pane"]:
-            out["cleanup"] = _close_tentative_pane(out["new_pane"], runner, record)
+        if not transferred:
+            if out["new_pane"]:
+                # Ownership is provable: herdr told us this pane id, so close it.
+                out["cleanup"] = _close_tentative_pane(out["new_pane"], runner, record)
+            elif split_attempted:
+                # A pane may exist that we cannot name. Report it; never guess (see
+                # `_report_possible_orphan`).
+                out["cleanup"] = _report_possible_orphan(panes_before, runner, anchor_pane)
 
     # Teardown LAST, only when authorized, and its result is NOT ignored (Step-11 Medium 5).
     allowed, reason = teardown_allowed(out["results"])
@@ -789,28 +816,35 @@ def _pane_inventory(runner) -> set[str] | None:
             if isinstance(p, dict) and isinstance(p.get("pane_id"), str)}
 
 
-def _reconcile_orphan_pane(panes_before, runner, record, anchor_pane: str) -> str | None:
-    """Close a pane the split created but never told us about (#611 Step-11 pass-3 Medium 3).
+def _report_possible_orphan(panes_before, runner, anchor_pane: str) -> str | None:
+    """REPORT — never close — a pane the split may have created but never told us about.
 
-    A split can create a pane and still fail — a non-zero exit after server-side creation, or
-    rc 0 with truncated JSON. The previous revision returned immediately in both cases, so
-    every cron fire could leak one pane. Reconciling by inventory diff is only safe when it is
-    UNAMBIGUOUS: exactly one new pane, and not the anchor. Zero new panes means nothing was
-    created; more than one means another session split concurrently, and closing someone
-    else's pane is far worse than leaking one — so that case is reported, never acted on.
+    A split can create a pane and still fail: a non-zero exit after server-side creation, rc 0
+    with truncated JSON, or a client timeout after the server acted. Returning without a word
+    would leak one pane per cron fire silently, so this says what it sees.
+
+    **It deliberately does not close anything, because it cannot prove ownership**
+    (#611 Step-11 pass-4 High 3). An earlier revision closed the pane when the inventory diff
+    contained exactly one addition — but cardinality is not attribution: if our split created
+    nothing and an unrelated session split concurrently, that diff is exactly one pane and it
+    is someone else's. The inventory is server-wide, so the stray pane need not even share our
+    workspace. Attribution would need a token the split could stamp and a later read could
+    verify; `herdr pane split` accepts `--env`, but herdr 0.7.5's `pane get`/`pane list` expose
+    no environment (verified against the live server), so no such round trip exists. Closing a
+    live session's pane is far worse than leaking one, so the leak is surfaced for an operator
+    instead of guessed at.
     """
     if panes_before is None:
-        return "no pane inventory taken before the split — cannot reconcile"
+        return "no pane inventory taken before the split — cannot tell whether one leaked"
     panes_after = _pane_inventory(runner)
     if panes_after is None:
-        return "pane inventory unavailable after the split — cannot reconcile"
+        return "pane inventory unavailable after the split — cannot tell whether one leaked"
     new = sorted(panes_after - panes_before - {anchor_pane})
     if not new:
         return None
-    if len(new) > 1:
-        return (f"ambiguous split reconcile: {len(new)} new panes ({', '.join(new)}) — "
-                "leaving them alone rather than closing another session's pane")
-    return _close_tentative_pane(new[0], runner, record)
+    return (f"POSSIBLE ORPHAN: {len(new)} pane(s) appeared during a failed split "
+            f"({', '.join(new)}) — NOT closed, because herdr 0.7.5 offers no way to prove "
+            "which is ours; check `herdr pane list` and close by hand if orphaned")
 
 
 def _close_tentative_pane(pane: str, runner, record) -> str:
