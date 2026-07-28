@@ -14,17 +14,17 @@
     "defaultBranch": "main"
   },
   "phaseExecutorTable": {
-    "$comment": "OPTIONAL versioned descriptor naming the project-owned phase-executor seat-table file (#445): a project-relative path to a routing-table JSON (phase_executor routing-table.schema.json) that is a complete replacement for the package default, never a merge overlay. Absent section = package default. The answered-defaults sentinel {\"version\": 1, \"file\": null} (#531) also resolves package-default — setup Step 2i stages it on decline/keep-defaults so key presence records the answer and the staleness nudge stops. This template is a reference example only — the executable validation contract lives in capabilities_lib (derive fails closed on any present-but-invalid section: version must be 1; file must be a relative path with no '..' — or the explicit null sentinel). Seeded/tweaked by /rawgentic:setup (#446).",
+    "$comment": "OPTIONAL versioned descriptor naming the project-owned phase-executor seat-table file (#445): a project-relative path to a routing-table JSON (phase_executor routing-table.schema.json) that is a complete replacement for the package default, never a merge overlay. Absent section = package default. The answered-defaults sentinel {\"version\": 1, \"file\": null} (#531) also resolves package-default \u2014 setup Step 2i stages it on decline/keep-defaults so key presence records the answer and the staleness nudge stops. This template is a reference example only \u2014 the executable validation contract lives in capabilities_lib (derive fails closed on any present-but-invalid section: version must be 1; file must be a relative path with no '..' \u2014 or the explicit null sentinel). Seeded/tweaked by /rawgentic:setup (#446).",
     "version": 1,
     "file": "claude_docs/routing/phase-executor-table.json"
   },
   "executorTerminalBackend": {
-    "$comment": "OPTIONAL versioned descriptor selecting which TerminalBackend the executor's build seat launches under (#638, epic #635 C2): \"tmux\" (package default) or \"herdr\" — tmux stays the default until herdr is independently proven; every other seat is unaffected. Absent section = \"tmux\", the only silent default. This template is a reference example only — the executable validation contract lives in capabilities_lib (derive fails closed on any present-but-invalid section: version must be 1; build must be \"tmux\" or \"herdr\").",
+    "$comment": "OPTIONAL versioned descriptor selecting which TerminalBackend the executor's build seat launches under (#638, epic #635 C2): \"tmux\" (package default) or \"herdr\" \u2014 tmux stays the default until herdr is independently proven; every other seat is unaffected. Absent section = \"tmux\", the only silent default. This template is a reference example only \u2014 the executable validation contract lives in capabilities_lib (derive fails closed on any present-but-invalid section: version must be 1; build must be \"tmux\" or \"herdr\").",
     "version": 1,
     "build": "tmux"
   },
   "telemetryAlerts": {
-    "$comment": "OPTIONAL per-project config for the #473 I3 seat-outcomes advisory alerts (AC-K5). ADVISORY only — no rule here can ever gate/block a run. Absent section (or the answered-defaults sentinel {\"version\": 1}) = all defaults. `enabled: false` disables evaluation (harvest still runs). windowSize (int 1..1000, default 30) + minSamples (int 1..windowSize, default 5) size the rolling baselines. thresholds: COUNT rules (fallback_fired, dispatch_failures) take false|non-negative-int (false disables that rule); TOGGLE rules (model_mismatch, parse_failure, seat_wall_time_p90, seat_cost_p90, review_findings_p90) take a bool. This template is a reference example only — the executable STRICT validation contract lives in hooks/seat_outcomes_lib.py (validate_telemetry_alerts; the `validate-config` CLI verb; setup Step 2j stages it, runtime load_thresholds fails open to these defaults). Seeded/tweaked by /rawgentic:setup Step 2j (#446).",
+    "$comment": "OPTIONAL per-project config for the #473 I3 seat-outcomes advisory alerts (AC-K5). ADVISORY only \u2014 no rule here can ever gate/block a run. Absent section (or the answered-defaults sentinel {\"version\": 1}) = all defaults. `enabled: false` disables evaluation (harvest still runs). windowSize (int 1..1000, default 30) + minSamples (int 1..windowSize, default 5) size the rolling baselines. thresholds: COUNT rules (fallback_fired, dispatch_failures) take false|non-negative-int (false disables that rule); TOGGLE rules (model_mismatch, parse_failure, seat_wall_time_p90, seat_cost_p90, review_findings_p90) take a bool. This template is a reference example only \u2014 the executable STRICT validation contract lives in hooks/seat_outcomes_lib.py (validate_telemetry_alerts; the `validate-config` CLI verb; setup Step 2j stages it, runtime load_thresholds fails open to these defaults). Seeded/tweaked by /rawgentic:setup Step 2j (#446).",
     "version": 1,
     "enabled": true,
     "windowSize": 30,
@@ -39,8 +39,21 @@
       "review_findings_p90": true
     }
   },
+  "contextMeter": {
+    "$comment": "OPTIONAL context-pressure trigger tuning (#687, hooks/context_meter.py). Absent section = defaults (200000/60/70/5/300). Each key has an env twin that takes precedence (RAWGENTIC_CONTEXT_WINDOW, _CHECKIN_PCT, _ACT_PCT, _EVERY_TURNS, _EVERY_SECONDS). windowSize is the one worth setting: a session's model name does not reveal its context window, so it is declared and defaults conservatively to 200000. See docs/context-meter.md.",
+    "windowSize": 1000000,
+    "checkInPercent": 60,
+    "actPercent": 70,
+    "everyTurns": 5,
+    "everySeconds": 300
+  },
   "$comment:techStack": "Languages, frameworks, and infrastructure technologies. Consumed by setup, create-issue, implement-feature, optimize-perf, and update-deps for tooling selection.",
-  "techStack": ["typescript", "react", "postgres", "docker"],
+  "techStack": [
+    "typescript",
+    "react",
+    "postgres",
+    "docker"
+  ],
   "testing": {
     "$comment": "Test frameworks and commands. Consumed by implement-feature, fix-bug, refactor, optimize-perf, update-deps, update-docs, security-audit, and incident for test execution and CI verification.",
     "frameworks": [
@@ -101,8 +114,14 @@
     ],
     "docker": {
       "composeFiles": [
-        { "name": "infra", "path": "docker-compose.infra.yml" },
-        { "name": "engine", "path": "docker-compose.engine.yml" }
+        {
+          "name": "infra",
+          "path": "docker-compose.infra.yml"
+        },
+        {
+          "name": "engine",
+          "path": "docker-compose.engine.yml"
+        }
       ]
     }
   },
@@ -117,17 +136,27 @@
     "authMechanisms": [
       {
         "type": "JWT",
-        "appliesTo": ["dashboard", "socketio"],
+        "appliesTo": [
+          "dashboard",
+          "socketio"
+        ],
         "middlewarePath": "src/middleware/auth.ts"
       },
       {
         "type": "api-key",
-        "appliesTo": ["engine"],
+        "appliesTo": [
+          "engine"
+        ],
         "headerName": "X-API-Key"
       }
     ],
     "validationLibrary": "zod",
-    "dataChannels": ["rest", "socketio", "redis-pubsub", "engine-http"]
+    "dataChannels": [
+      "rest",
+      "socketio",
+      "redis-pubsub",
+      "engine-http"
+    ]
   },
   "ci": {
     "$comment": "CI provider and workflow directory. Consumed by all SDLC skills for the CI verification gate after PR creation.",
@@ -142,16 +171,32 @@
   },
   "documentation": {
     "$comment": "Documentation file locations and format. Primary consumer is update-docs; also used by setup for initial doc detection.",
-    "primaryFiles": ["README.md", "docs/"],
+    "primaryFiles": [
+      "README.md",
+      "docs/"
+    ],
     "format": "markdown"
   },
   "$comment:protectionLevel": "Per-project guard protection level preset. Controls which WAL and security guards are active. Values: sandbox (nothing blocked), standard (production data-transfer + orchestration + common code patterns), strict (all guards active). Default when missing: strict. Consumed by wal-guard and security-guard hooks.",
   "protectionLevel": "standard",
   "guards": {
     "$comment": "Explicit guard overrides. When present, overrides protectionLevel preset for the specified guard type. guards.wal lists active WAL guard rule names, guards.security lists active security guard rule names, guards.securityExcludePaths lists glob patterns for files excluded from security checks.",
-    "wal": ["scp-prod", "rsync-prod", "docker-prod-destroy", "ansible-prod-mutate"],
-    "security": ["eval_injection", "innerHTML_xss", "document_write_xss"],
-    "securityExcludePaths": ["tests/**", "**/*.test.*", "**/*.spec.*"]
+    "wal": [
+      "scp-prod",
+      "rsync-prod",
+      "docker-prod-destroy",
+      "ansible-prod-mutate"
+    ],
+    "security": [
+      "eval_injection",
+      "innerHTML_xss",
+      "document_write_xss"
+    ],
+    "securityExcludePaths": [
+      "tests/**",
+      "**/*.test.*",
+      "**/*.spec.*"
+    ]
   },
   "$comment:custom": "Free-form project-specific metadata (e.g., security debt, feature flags). Any skill may read; security-audit checks for known debt items.",
   "custom": {}
