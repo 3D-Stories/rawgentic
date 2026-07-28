@@ -94,7 +94,7 @@
         ]
       },
       {
-        "matcher": "Bash|Edit|Write|NotebookEdit|Task",
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",

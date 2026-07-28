@@ -128,8 +128,15 @@ def nag_text(*, tier, used, window, provenance, seam, seam_reason,
              headless, fresh_handoff_capable) -> str
     # two independent capability values, never one `unattended` boolean
 
-def evaluate(payload, *, read_text, glob_fn, now, env, cfg, pointer) -> Decision
-    # Decision = (emit_text | None, next_state | None, tier). The whole pipeline, pure.
+# NOTE: an earlier draft specified one pure `evaluate(...) -> Decision` wrapping the whole
+# pipeline. What SHIPPED keeps the decision helpers pure (usage_total, read_used_tokens,
+# resolve_window, thresholds, cadence, tier_for_tokens, seam_verdict, should_check, nag_text)
+# and sequences them inside `cmd_hook`, which also owns the reads, the secure writes and the
+# reservation. The Step-11 review flagged the gap honestly: ordering and trust-boundary
+# behaviour cannot be unit-tested independently of the filesystem. Extracting a total pure
+# `evaluate` over already-validated facts is a FOLLOW-UP, deliberately not done here — it is a
+# refactor of the very code the security fixes had just reshaped, and doing both at once is
+# how a fix gets lost. Recorded rather than quietly dropped.
 ```
 
 ### The production adapter — how `main()` actually obtains `cfg` and `pointer`
@@ -428,13 +435,13 @@ durable store for state the handoff file already carries — the duplication AC8
 
 ```json
 {"schema_version": 1, "session_id": "…", "turns": 42, "last_check_turn": 40,
- "last_check_ts": 1785275399,
- "emitted": {"1000000": ["advisory"]},
+ "last_check_ts": 1785275399, "every_turns": 5, "every_seconds": 300,
  "assumed_window": 1000000, "window_provenance": "escalated",
- "seam_search": {"armed_at": 1785275100, "pointer": {"workflow": "wf2", "step": 8, "entered_at": "…"}}}
+ "seam_search": {"armed_at": 1785275100, "window": 1000000,
+                 "pointer": {"workflow": "wf2", "step": 8, "entered_at": "…"}}}
 ```
 
-**`emitted` is keyed by EFFECTIVE WINDOW, and that is a bug fix, not decoration.** The adversarial review
+**The once-per-tier record is a reservation MARKER per (session, window, tier) — nothing in the JSON — and it is keyed by EFFECTIVE WINDOW, which is a bug fix, not decoration.** The adversarial review
 found the flat `tiers_emitted: [...]` list broken: an unconfigured 1M session crosses 60% *of the assumed
 200k* at 120k tokens, records `advisory`, then escalates to a 1M window at 200k — and the flat record
 suppresses the **real** advisory at 600k for the rest of the session. Keying by window means an escalation
@@ -749,3 +756,56 @@ Third: **that the 200k window behaves like the 1M one.** Unmeasurable here (zero
 266-transcript corpus), so it rests on the inference that Claude Code compacts near-full on both. If 200k
 compacts at 65%, the directive is late and useless on that window — the config key is the escape, and the
 scan is one 200k session away from settling it.
+
+## Step 11 pre-PR code review — 21 findings, 1 Critical, 6 High, both verdicts BLOCK
+
+Two reviewers over the real diff (executor `review` seat, `gpt-5.6-sol`): R1 on mechanical +
+bug/logic, R2 on architecture + security. **This is the gate that earns its cost.** Both returned
+BLOCK, and between them they found one Critical, six High and a dozen Medium/Low — several of which
+would have shipped a feature that was quietly broken in its main case.
+
+The ones that mattered most, all fixed with a regression test each:
+
+| Sev | Finding | Why it mattered | Fix |
+|---|---|---|---|
+| **Critical** | The step-state pointer's `workflow`/`step` were interpolated **verbatim** into `additionalContext` | The pointer is a project-controlled FILE, and `additionalContext` is read by the model as trustworthy. A hostile repo could put instruction text in it and have a session act on it — a prompt-injection channel straight into the next turn. | Every value echoed to the model is allowlisted through `_echo_safe` to `[A-Za-z0-9._-]{1,32}`, else `?`. Test asserts an injection string never reaches the reason text. |
+| **High** ×2 (both reviewers) | The `PostToolUse` matcher was `Bash\|Edit\|Write\|NotebookEdit\|Task` | It omits `Read`, `Grep`, `Glob`. A long autonomous run spent reading and searching fires **no** invocation — so the 5-minute arm, the entire justification for riding `PostToolUse`, was **dead in exactly the case it exists for**. I had copied `wal-post`'s matcher without thinking about it. | Wildcard matcher `*`, with a test that fails on any narrowing. |
+| **High** | `canary._add_record`'s duplicate branch returned **before** the symlink and containment checks | My own dedup fix introduced it: a path could be a regular file on first reference and an out-of-root symlink with identical bytes on the second, and `read_bytes()` follows symlinks. | Checks moved above the duplicate branch and made unconditional. |
+| **High** | Registry-derived `project` and `project_path` were neither validated nor contained | `project` becomes a *filename* and `project_path` is *read from* — both come from a file a repo controls. `project="/tmp/payload"` or `project_path="../../victim"` redirects the reads. | `_PROJECT_RE` on the name; absolute rejected; resolved path must be contained under the workspace and be a real directory. |
+| **High** | State containment was pathname-based and checked **after** `mkdir`+`chmod`; only the final component was symlink-checked | A symlinked `~/.rawgentic` passes a realpath check against `$HOME` while redirecting every write, and an escaping path was created and chmod'ed before being refused. | Both components symlink-checked and contained **before** any mutation; `lstat` confirms a real directory. |
+| **High** | Unbounded reads — stdin, the whole registry, config, pointer, and non-regular files | The hook runs per tool call under a 5 s timeout. A committed hostile registry prefix, a huge config, or a **FIFO** turns it into a self-inflicted timeout. | Every read byte-capped; registry read from the **tail**; `_read_capped` refuses non-regular files and opens `O_NOFOLLOW\|O_NONBLOCK`. |
+
+**`O_NONBLOCK` deserves its own line, because the test found it, not the review.** The reviewer said a
+FIFO could hang the hook. I added a regular-file check via `fstat` — and the FIFO test then **hung the
+whole suite for five minutes**, because opening a FIFO for reading blocks *at `open()`*, before any
+check can run. The check was in the wrong place entirely and only running it proved that.
+
+Mediums also fixed: window overflow past the largest known tier pinned to that tier (it had used the
+observed count as the window, so the marker key changed every reading and the directive re-delivered
+forever — both reviewers); the armed seam search is dropped when pressure falls back below the advisory
+band; the 7-day sweep no longer deletes a live session's markers (the marker *is* the record); `reserve`
+unlinks the marker if a post-create step fails; tier comparison is integer-exact
+(`116000/200000*100` computes as `57.99999999999999`, so an exact 58% boundary would not have fired);
+a throttled `PostToolUse` now writes nothing at all; and the stderr diagnostic no longer prints an
+absolute path or unescaped control characters.
+
+**R1's testability finding was the sharpest, and it was about my own test.**
+`test_a_failed_delivery_releases_the_reservation` redirected stdout to `/dev/null`, where printing
+*succeeds* — so deleting the production `release()` call would have left it green. It now drives
+`cmd_hook` with a stdout object that raises, and asserts both that no marker survives and that the
+retry emits.
+
+**Two findings deferred, with reasons rather than silence:**
+
+- **No single pure `evaluate()`** (R2, Medium). Real drift from this design's own module surface, now
+  corrected in that section. Extracting it is a follow-up: it is a refactor of the very code the
+  security fixes had just reshaped, and doing both in one pass is how a fix gets lost.
+- **A remaining check/use race on the transcript path** (R2, Medium). `resolve_transcript` validates
+  then `read_used_tokens` reopens by pathname. Mitigated — the reader now opens `O_NOFOLLOW`, so the
+  symlink swap it describes fails — but a fully fd-based read relative to a trusted directory
+  descriptor is the complete fix, and that is a follow-up.
+
+One policy contradiction was also resolved rather than argued: R2 was right that `CLAUDE.md` called
+`capabilities_lib derive` the "ONLY sanctioned way" to read `.rawgentic.json` while seven hooks read it
+directly. The manual now states the real rule and its narrow exception, so the next author is not
+choosing between a doc and the tree.

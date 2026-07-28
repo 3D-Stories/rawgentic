@@ -36,6 +36,7 @@ import glob as _glob
 import json
 import os
 import re
+import stat
 import sys
 import time
 from datetime import datetime, timezone
@@ -61,8 +62,78 @@ _BLOCK = 65536
 DEFAULT_MAX_BYTES = 4 * 1024 * 1024   # the largest transcript here is 83 MB
 
 _SESSION_RE = re.compile(r"[A-Za-z0-9-]{8,64}\Z")
+# A project name reaches a FILENAME (the step-state pointer) — same bare-name contract
+# step_state.sanitize_project enforces, but rejecting rather than sanitizing.
+_PROJECT_RE = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
+# Anything echoed into the model's context is allowlisted to this shape. The step-state
+# pointer is a project-controlled FILE, so its strings are untrusted input, and
+# additionalContext is read by the model as if it were trustworthy (#687 Step-11 review,
+# Critical: a hostile pointer could smuggle instruction text into a session's next turn).
+_ECHO_SAFE_RE = re.compile(r"[A-Za-z0-9._-]{1,32}\Z")
 STATE_DIRNAME = "context-meter"
 SWEEP_AGE_S = 7 * 24 * 3600
+# Every file this hook reads is attacker-influenceable and it runs on every tool call under a
+# 5 s timeout, so each read is byte-capped and refuses anything that is not a regular file.
+MAX_JSON_BYTES = 256 * 1024
+MAX_REGISTRY_BYTES = 2 * 1024 * 1024
+MAX_STDIN_BYTES = 4 * 1024 * 1024
+
+
+def _echo_safe(value, fallback="?"):
+    """Allowlist a value before it can reach the model's context."""
+    text = str(value) if value is not None else ""
+    return text if _ECHO_SAFE_RE.match(text) else fallback
+
+
+def _read_capped(path, limit, *, tail=False):
+    """Read at most `limit` bytes from a REGULAR file, else None.
+
+    Refuses symlinks and non-regular files (a FIFO would otherwise block until the hook's
+    timeout) and never follows a symlink between the check and the open — the descriptor is
+    opened with O_NOFOLLOW and stat'ed through itself.
+    """
+    fd = None
+    try:
+        # O_NONBLOCK is load-bearing, not belt-and-braces: opening a FIFO for reading
+        # BLOCKS until a writer appears, so without it the hook would hang at open() —
+        # before any fstat could reject the file — and burn its whole timeout. Found by
+        # this module's own FIFO test, which hung the suite until this flag was added.
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK
+                     | getattr(os, "O_NOFOLLOW", 0))
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        if tail and info.st_size > limit:
+            os.lseek(fd, info.st_size - limit, os.SEEK_SET)
+        data = os.read(fd, limit)
+        return data.decode("utf-8", "replace")
+    except (OSError, ValueError):
+        return None
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _load_json_capped(path, limit=MAX_JSON_BYTES):
+    text = _read_capped(path, limit)
+    if text is None:
+        return None
+    try:
+        return json.loads(text)
+    except (ValueError, TypeError):
+        return None
+
+
+def _contained(child, parent) -> bool:
+    try:
+        child_real = os.path.realpath(child)
+        parent_real = os.path.realpath(parent)
+        return os.path.commonpath([child_real, parent_real]) == parent_real
+    except (OSError, ValueError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +321,11 @@ def resolve_window(cfg_value, env_value, observed_tokens, *, warn=None):
         for candidate in KNOWN_WINDOWS:
             if candidate > observed:
                 return candidate, "escalated"
-        return observed, "escalated"
+        # Past the largest KNOWN tier, PIN to that tier. Returning the observed count
+        # would make the effective window change on every reading, and the window is the
+        # key of the once-per-tier marker — so each check would open a fresh namespace and
+        # re-deliver the directive forever (#687 Step-11 review, found by both reviewers).
+        return KNOWN_WINDOWS[-1], "escalated"
     return window, provenance
 
 
@@ -319,6 +394,9 @@ def cadence(cfg, env, *, warn=None):
 
 
 def tier_for(fraction, check_in_pct, act_pct) -> str:
+    """Tier for a used/window fraction. Prefer `tier_for_tokens` — float arithmetic
+    puts an exact boundary a hair under itself (116000/200000*100 computes as
+    57.99999999999999, so an exact 58% configured boundary would not fire)."""
     try:
         pct = float(fraction) * 100.0
     except (TypeError, ValueError):
@@ -326,6 +404,20 @@ def tier_for(fraction, check_in_pct, act_pct) -> str:
     if pct >= act_pct:
         return "directive"
     if pct >= check_in_pct:
+        return "advisory"
+    return "none"
+
+
+def tier_for_tokens(used, window, check_in_pct, act_pct) -> str:
+    """Integer-exact tier: compares `used * 100` against `pct * window`, so a
+    configured boundary is honoured exactly rather than approximately."""
+    used_i, window_i = _as_int(used), _as_int(window)
+    if used_i is None or not window_i or window_i <= 0:
+        return "none"
+    scaled = used_i * 100
+    if scaled >= act_pct * window_i:
+        return "directive"
+    if scaled >= check_in_pct * window_i:
         return "advisory"
     return "none"
 
@@ -380,8 +472,12 @@ def seam_verdict(armed, current):
         return "wait", "step-state pointer has not advanced"
     if _identity(armed) == _identity(current):
         return "wait", "step-state pointer unchanged"
-    return "seam", (f"step-state moved to {current.get('workflow')} step "
-                    f"{current.get('step')}")
+    # The pointer is a project-controlled FILE, so `workflow` and `step` are UNTRUSTED
+    # strings, and this reason string is injected into the model's next turn. Echoing them
+    # verbatim let a hostile pointer smuggle instruction text into a session
+    # (#687 Step-11 review, CRITICAL). Allowlisted to a short identifier shape instead.
+    return "seam", (f"step-state moved to {_echo_safe(current.get('workflow'))} step "
+                    f"{_echo_safe(current.get('step'))}")
 
 
 def should_check(state, *, now, every_turns, every_seconds) -> bool:
@@ -425,20 +521,32 @@ def load_state(path):
 
 
 def _ensure_dir(home):
-    """Create the state dir PRIVATE. `~/.rawgentic` is 0775 on this host, so a
-    plain mkdir would leave session state group/world readable; and a symlinked
-    state dir would defeat the containment claim entirely."""
+    """Create the state dir PRIVATE, validating BEFORE mutating anything.
+
+    `~/.rawgentic` is 0775 on this host, so a plain mkdir would leave session state
+    group/world readable. Two ordering bugs the Step-11 review found, both fixed here:
+    the containment check ran AFTER mkdir+chmod (so a path that escapes $HOME was
+    created and chmod'ed before being refused), and only the final component was
+    symlink-checked (so a symlinked `~/.rawgentic` passed a realpath containment test
+    against $HOME while redirecting every write).
+    """
+    parent = os.path.join(home, ".rawgentic")
     target = state_dir(home)
-    if os.path.islink(target):
-        raise OSError(f"{target} is a symlink")
-    parent = os.path.dirname(target)
+    # Validate every component we did not create, before touching the filesystem.
+    for path in (parent, target):
+        if os.path.islink(path):
+            raise OSError(f"{path} is a symlink")
+    if os.path.exists(parent) and not _contained(parent, home):
+        raise OSError(f"{parent} escapes {home}")
     os.makedirs(parent, exist_ok=True)
     if not os.path.isdir(target):
         os.mkdir(target, 0o700)
-    os.chmod(target, 0o700)
-    real_home = os.path.realpath(home)
-    if os.path.commonpath([os.path.realpath(target), real_home]) != real_home:
+    if not _contained(target, home):
         raise OSError(f"{target} escapes {home}")
+    info = os.lstat(target)
+    if not stat.S_ISDIR(info.st_mode):
+        raise OSError(f"{target} is not a directory")
+    os.chmod(target, 0o700)
     return target
 
 
@@ -460,19 +568,39 @@ def save_state(home, session_id, state) -> bool:
 
 
 def _sweep(home):
-    """Bounded growth: one file per session, so drop week-old siblings."""
+    """Bounded growth: one file per session, so drop week-old siblings.
+
+    A session's marker files are dropped ONLY when that session's own state file is
+    also stale. Sweeping markers by their own mtime would let a session alive for
+    more than seven days lose its emission record and get nagged a second time for a
+    tier it already delivered (#687 Step-11 review) — the marker is the once-per-tier
+    record, so deleting it under a live session breaks the guarantee.
+    """
     try:
         cutoff = time.time() - SWEEP_AGE_S
         target = state_dir(home)
-        for name in os.listdir(target):
-            full = os.path.join(target, name)
-            try:
-                if os.path.isfile(full) and os.path.getmtime(full) < cutoff:
-                    os.unlink(full)
-            except OSError:
-                continue
+        names = os.listdir(target)
     except OSError:
         return
+    fresh = set()
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        try:
+            if os.path.getmtime(os.path.join(target, name)) >= cutoff:
+                fresh.add(name[: -len(".json")])
+        except OSError:
+            fresh.add(name[: -len(".json")])       # unknown age => treat as live
+    for name in names:
+        full = os.path.join(target, name)
+        session = name.split(".", 1)[0]
+        if session in fresh:
+            continue
+        try:
+            if os.path.isfile(full) and os.path.getmtime(full) < cutoff:
+                os.unlink(full)
+        except OSError:
+            continue
 
 
 def has_marker(home, session_id, window, tier) -> bool:
@@ -499,15 +627,25 @@ def reserve(home, session_id, window, tier) -> bool:
     duplicate decision. An O_EXCL create is a filesystem compare-and-swap:
     exactly one process wins, the loser stays silent. No lock needed.
     """
+    path = marker_path(home, session_id, window, tier)
+    created = False
     try:
         _ensure_dir(home)
-        fd = os.open(marker_path(home, session_id, window, tier),
-                     os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        created = True
         os.close(fd)
         return True
     except FileExistsError:
         return False
     except OSError:
+        # If the create SUCCEEDED and a later step (os.close) failed, the marker must not
+        # survive a False return — it would suppress every retry for the rest of the
+        # session while nothing was ever delivered (#687 Step-11 review).
+        if created:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
         return False
 
 
@@ -548,28 +686,38 @@ def bound_project(workspace_root, session_id):
     """(name, abs_path) for the LAST registry row matching this session."""
     registry = os.path.join(workspace_root, "claude_docs",
                             "session_registry.jsonl")
-    found = None
-    try:
-        with open(registry, encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(row, dict) and row.get("session_id") == session_id:
-                    found = row
-    except OSError:
+    # Read only the TAIL, byte-capped. The registry is append-only and a workspace can
+    # commit a huge hostile prefix; scanning all of it on every due check is a
+    # self-inflicted timeout on a hook that runs per tool call (#687 Step-11 review).
+    text = _read_capped(registry, MAX_REGISTRY_BYTES, tail=True)
+    if text is None:
         return None, None
+    found = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue          # a truncated first line from the tail read lands here
+        if isinstance(row, dict) and row.get("session_id") == session_id:
+            found = row
     if not found:
         return None, None
     name = found.get("project")
     rel = found.get("project_path") or ""
-    if not isinstance(name, str) or not name:
+    # The project NAME becomes a filename (the step-state pointer) and the PATH is read
+    # from — both come from a file a repo controls, so both are validated rather than
+    # trusted: a name like "/tmp/payload" or a path like "../../victim" would otherwise
+    # redirect the reads (#687 Step-11 review, High).
+    if not isinstance(name, str) or not _PROJECT_RE.match(name):
         return None, None
-    path = os.path.normpath(os.path.join(workspace_root, rel)) if rel else None
+    if not isinstance(rel, str) or not rel or os.path.isabs(rel):
+        return name, None
+    path = os.path.normpath(os.path.join(workspace_root, rel))
+    if not _contained(path, workspace_root) or not os.path.isdir(path):
+        return name, None
     return name, path
 
 
@@ -586,12 +734,7 @@ def read_meter_config(project_path):
     """
     if not project_path:
         return {}
-    try:
-        with open(os.path.join(project_path, ".rawgentic.json"),
-                  encoding="utf-8") as handle:
-            cfg = json.load(handle)
-    except (OSError, ValueError):
-        return {}
+    cfg = _load_json_capped(os.path.join(project_path, ".rawgentic.json"))
     block = cfg.get("contextMeter") if isinstance(cfg, dict) else None
     return block if isinstance(block, dict) else {}
 
@@ -601,15 +744,11 @@ def read_pointer(workspace_root, project, session_id):
 
     Another session's pointer is not evidence about this one.
     """
-    if not workspace_root or not project:
+    if not workspace_root or not project or not _PROJECT_RE.match(str(project)):
         return None
     path = os.path.join(workspace_root, "claude_docs", "wal",
                         f"{project}.state.json")
-    try:
-        with open(path, encoding="utf-8") as handle:
-            record = json.load(handle)
-    except (OSError, ValueError):
-        return None
+    record = _load_json_capped(path)
     if not isinstance(record, dict):
         return None
     if record.get("session_id") != session_id:
@@ -705,7 +844,11 @@ def nag_text(*, tier, used, window, provenance, seam, seam_reason,
 # ---------------------------------------------------------------------------
 
 def _warn(message):
-    print(message, file=sys.stderr)
+    # Control characters are stripped: a hostile directory component could otherwise
+    # forge log lines or drive terminal escapes through captured hook stderr
+    # (#687 Step-11 review, Low).
+    print("".join(ch for ch in str(message) if ch == " " or ch.isprintable()),
+          file=sys.stderr)
 
 
 def _is_subagent(payload) -> bool:
@@ -739,7 +882,9 @@ def _diagnose(state, kind, message) -> bool:
 
 def cmd_hook(argv) -> int:
     try:
-        payload = json.load(sys.stdin)
+        # Byte-capped: a huge tool_response should not be able to make a hook that runs on
+        # every tool call chew its 5 s timeout (#687 Step-11 review).
+        payload = json.loads(sys.stdin.read(MAX_STDIN_BYTES))
     except (ValueError, OSError):
         return 0
     if not isinstance(payload, dict):
@@ -765,15 +910,20 @@ def cmd_hook(argv) -> int:
 
     env = os.environ
     now = int(time.time())
-    # The throttle uses cadence CACHED in state, so the cheap path costs one
-    # small JSON read and two integer compares — no workspace walk, no config
-    # read, no transcript open. It rides every tool call, so this matters.
+    # The throttle uses cadence CACHED in state, so the cheap path costs one small JSON
+    # read and two integer compares — no workspace walk, no config read, no transcript
+    # open. It rides every tool call, so this matters.
     every_turns = _as_int(state.get("every_turns")) or DEFAULT_EVERY_TURNS
     every_seconds = (_as_int(state.get("every_seconds"))
                      or DEFAULT_EVERY_SECONDS)
     if not should_check(state, now=now, every_turns=every_turns,
                         every_seconds=every_seconds):
-        save_state(home, session_id, state)
+        # Write ONLY when there is something to record. A throttled PostToolUse changes no
+        # state, so writing would mean an atomic rewrite + rename + chmod + a directory
+        # sweep on every covered tool call — which is not the cheap path this claims to be
+        # (#687 Step-11 review). UserPromptSubmit did bump `turns`, so it still persists.
+        if event == "UserPromptSubmit":
+            save_state(home, session_id, state)
         return 0
 
     workspace = find_workspace(payload.get("cwd"))
@@ -799,7 +949,7 @@ def cmd_hook(argv) -> int:
         return 0
     if used is None:
         _diagnose(state, "no_usage_row",
-                  f"no parseable message.usage row in {transcript} "
+                  f"no parseable message.usage row in {session_id}.jsonl "
                   "— the meter is inactive for this session")
         save_state(home, session_id, state)
         return 0
@@ -809,9 +959,14 @@ def cmd_hook(argv) -> int:
                                         used, warn=_warn)
     state["assumed_window"] = window
     state["window_provenance"] = provenance
-    tier = tier_for(used / window, check_in_pct, act_pct)
+    tier = tier_for_tokens(used, window, check_in_pct, act_pct)
 
     if tier == "none":
+        # Pressure fell back below the advisory band, so DROP any armed seam search: a
+        # snapshot taken at the previous crossing would otherwise be compared against a
+        # much later pointer and report a long-past transition as "the current seam"
+        # (#687 Step-11 review).
+        state.pop("seam_search", None)
         save_state(home, session_id, state)
         return 0
     # The reservation MARKERS are the once-per-tier record, and they are keyed by

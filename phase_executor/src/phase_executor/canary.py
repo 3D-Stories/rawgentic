@@ -38,7 +38,7 @@ POLICY_REVISION = 1
 EXPECTED_PLUGIN_VERSION = "3.105.0"
 # Computed live over hooks/hooks.json + the scripts referenced in its command fields (the
 # canonical length-framed encoding below). test_canary_digest_pin.py asserts pin == live.
-EXPECTED_REGISTRATION_DIGEST = "sha256:b642c9065f1a79cf583c3d86e513bd2d14144537aa703ff5d56365ffe3791dfe"
+EXPECTED_REGISTRATION_DIGEST = "sha256:4567501b8f6f1341ce47c5f541ff2a0c2ffcd0ead071f325f196eceeb75a7c04"
 
 # The mutating tool/matcher classes to positive-deny-probe are DERIVED from hooks.json's
 # PreToolUse matchers (never invented) — each matcher whose command is an ENFORCING guard. The
@@ -209,16 +209,21 @@ def _add_record(records: dict, root_p: Path, rel_path: str) -> None:
     if os.path.isabs(norm) or norm == ".." or norm.startswith(".." + os.sep):
         raise ValueError(f"registration digest: referenced path {rel_path!r} escapes root")
     target = root_p / norm
-    if norm in records:
-        if records[norm] != target.read_bytes():
-            raise ValueError(f"registration digest: conflicting content for {norm!r}")
-        return
+    # The fail-closed checks run BEFORE the duplicate branch, and unconditionally. Returning
+    # early on a repeat would otherwise skip them: a path could be a plain file on its first
+    # reference and an out-of-root symlink with identical bytes on its second, and
+    # `read_bytes()` follows symlinks (#687 Step-11 review, High).
     if target.is_symlink():
         raise ValueError(f"registration digest: symlink rejected: {rel_path!r}")
     resolved = target.resolve()
     if resolved != root_p and root_p not in resolved.parents:
         raise ValueError(f"registration digest: path {rel_path!r} resolves outside root")
-    records[norm] = target.read_bytes()
+    content = target.read_bytes()
+    if norm in records:
+        if records[norm] != content:
+            raise ValueError(f"registration digest: conflicting content for {norm!r}")
+        return
+    records[norm] = content
 
 
 def compute_registration_digest(root) -> str:
