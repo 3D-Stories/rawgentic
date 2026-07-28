@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Epic #667 — UAT Plan · Nothing here has flown</title>
+<meta name="description" content="Acceptance-test plan for epic #667: 30 checks, split by who can technically run them — 24 agent, 6 human.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2308090C'/%3E%3Crect x='4' y='6' width='9' height='20' fill='%2322D3EE'/%3E%3Crect x='15' y='6' width='4' height='20' fill='%23FFB020'/%3E%3Crect x='23' y='6' width='5' height='20' fill='%23FF3B47'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --void:#08090C;
+  --deck:#101318;
+  --deck-hi:#151A21;
+  --rule:#1E242E;
+  --agent:#22D3EE;
+  --human:#FFB020;
+  --hold:#FF3B47;
+  --pass:#3DDC84;
+  --ink:#E8EDF5;
+  --dim:#7C8798;
+  --faint:#4A5464;
+  --display:"Space Grotesk",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html{overflow-x:hidden;-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--void);color:var(--ink);
+  font:400 16px/1.62 var(--body);
+  -webkit-font-smoothing:antialiased;
+  background-image:
+    radial-gradient(1100px 520px at 78% -8%, rgba(34,211,238,.09), transparent 62%),
+    radial-gradient(760px 420px at 6% 4%, rgba(255,176,32,.055), transparent 66%);
+  background-repeat:no-repeat;
+}
+.wrap{max-width:1140px;margin:0 auto;padding:0 28px}
+a{color:var(--agent)}
+
+/* ── eyebrow / meta ── */
+.eyebrow{
+  font:500 11.5px/1 var(--mono);letter-spacing:.19em;text-transform:uppercase;
+  color:var(--dim);display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;
+}
+.eyebrow b{color:var(--ink);font-weight:500}
+.eyebrow .sep{color:var(--faint)}
+
+/* ── hero ── */
+header{padding:74px 0 0}
+h1{
+  font:700 clamp(38px,7.4vw,86px)/0.98 var(--display);
+  letter-spacing:-.035em;margin:26px 0 0;max-width:16ch;
+}
+h1 .strike{color:var(--hold)}
+.lede{
+  margin:22px 0 0;max-width:60ch;font-size:clamp(16.5px,2vw,19.5px);
+  color:#B6C0CE;line-height:1.58;
+}
+.lede b{color:var(--ink);font-weight:600}
+
+/* ── the gate (klaxon) ── */
+.gate{
+  margin:46px 0 0;background:
+    linear-gradient(180deg,rgba(255,59,71,.10),rgba(255,59,71,.02) 55%,transparent),
+    var(--deck);
+  border:1px solid rgba(255,59,71,.34);border-left:4px solid var(--hold);
+  border-radius:3px;padding:26px 30px 28px;position:relative;
+  box-shadow:0 0 0 1px rgba(255,59,71,.06),0 26px 70px -34px rgba(255,59,71,.5);
+}
+.gate-top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--hold);flex:none;
+  box-shadow:0 0 0 0 rgba(255,59,71,.65);animation:pulse 2.1s ease-out infinite}
+@keyframes pulse{
+  0%{box-shadow:0 0 0 0 rgba(255,59,71,.6)}
+  70%{box-shadow:0 0 0 13px rgba(255,59,71,0)}
+  100%{box-shadow:0 0 0 0 rgba(255,59,71,0)}
+}
+.gate-tag{font:500 11.5px/1 var(--mono);letter-spacing:.2em;color:var(--hold);text-transform:uppercase}
+.gate-holds{margin-left:auto;font:400 12.5px/1 var(--mono);color:var(--dim)}
+.gate h2{font:500 clamp(21px,3vw,30px)/1.26 var(--display);margin:0;letter-spacing:-.018em;max-width:30ch}
+.gate h2 code{font-family:var(--mono);font-size:.86em;color:var(--hold);background:rgba(255,59,71,.10);
+  padding:.08em .3em;border-radius:2px}
+.gate p{margin:14px 0 0;color:#AEB8C6;max-width:66ch;font-size:15.5px}
+.gate p b{color:var(--ink);font-weight:600}
+
+/* ── ownership split bar (the thesis, quantified) ── */
+.split{margin:52px 0 0;padding:0 0 76px}
+.split-head{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:14px}
+.split-head .n{font:700 clamp(40px,6vw,62px)/1 var(--display);letter-spacing:-.04em}
+.split-head .n i{font-style:normal;color:var(--faint);font-weight:400}
+.split-head .cap{font:500 12px/1.4 var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--dim);padding-bottom:5px}
+.bar{display:flex;height:12px;border-radius:2px;overflow:hidden;background:var(--deck);
+  border:1px solid var(--rule)}
+.bar span{display:block}
+.bar .b-agent{width:80%;background:linear-gradient(90deg,var(--agent),#0FB6D0)}
+.bar .b-human{width:20%;background:linear-gradient(90deg,var(--human),#E0930A)}
+.keys{display:flex;gap:26px;flex-wrap:wrap;margin-top:15px;
+  font:400 13px/1.5 var(--mono);color:var(--dim)}
+.keys i{font-style:normal;width:9px;height:9px;border-radius:2px;display:inline-block;margin-right:8px}
+.keys .k-agent i{background:var(--agent)}
+.keys .k-human i{background:var(--human)}
+.keys b{color:var(--ink);font-weight:500}
+
+/* ── tiers ── */
+.tier{border-top:1px solid var(--rule);padding:44px 0 8px}
+.tier-head{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;margin-bottom:26px}
+.tier-id{font:500 12px/1 var(--mono);letter-spacing:.2em;color:var(--faint);text-transform:uppercase;flex:none}
+.tier-head h3{font:500 clamp(22px,3.2vw,31px)/1.2 var(--display);margin:0;letter-spacing:-.022em}
+.tier-count{margin-left:auto;font:400 12.5px/1 var(--mono);color:var(--dim);white-space:nowrap}
+.tier-count em{font-style:normal;color:var(--agent)}
+.tier-count strong{font-weight:400;color:var(--human)}
+.tier-note{font-size:15px;color:#A4AEBD;max-width:74ch;margin:-14px 0 26px}
+.badge{font:500 10.5px/1 var(--mono);letter-spacing:.15em;text-transform:uppercase;
+  padding:5px 8px;border-radius:2px;flex:none}
+.badge.destructive{color:var(--hold);background:rgba(255,59,71,.12);border:1px solid rgba(255,59,71,.34)}
+.badge.gated{color:var(--hold);background:rgba(255,59,71,.10);border:1px solid rgba(255,59,71,.28)}
+
+/* ── check rows: the ownership rail is the signature ── */
+.check{
+  background:var(--deck);border:1px solid var(--rule);border-left:3px solid var(--faint);
+  border-radius:2px;padding:18px 22px;margin-bottom:10px;transition:background .16s,border-color .16s;
+}
+.check:hover{background:var(--deck-hi)}
+.check.agent{border-left-color:var(--agent)}
+.check.human{border-left-color:var(--human)}
+.c-top{display:flex;align-items:baseline;gap:13px;flex-wrap:wrap}
+.c-id{font:500 12px/1.5 var(--mono);color:var(--faint);flex:none;min-width:2.4em}
+.c-title{font-size:16.5px;font-weight:500;color:var(--ink);flex:1 1 340px;line-height:1.42}
+.c-title code{font-family:var(--mono);font-size:.87em;color:var(--agent);
+  background:rgba(34,211,238,.09);padding:.06em .3em;border-radius:2px}
+.chip{font:500 10.5px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;
+  padding:5px 9px;border-radius:2px;flex:none;white-space:nowrap}
+.chip.agent{color:var(--agent);background:rgba(34,211,238,.10);border:1px solid rgba(34,211,238,.3)}
+.chip.human{color:var(--human);background:rgba(255,176,32,.10);border:1px solid rgba(255,176,32,.32)}
+.cmd{
+  margin:13px 0 0;font:400 12.8px/1.68 var(--mono);color:#9FD8E4;
+  background:#0B0D11;border:1px solid var(--rule);border-radius:2px;
+  padding:11px 14px;overflow-x:auto;white-space:pre;
+}
+.cmd.human-cmd{color:#E5C48A}
+.pass{margin:12px 0 0;font-size:14.5px;color:#9AA5B4;display:flex;gap:9px;align-items:flex-start}
+.pass::before{content:"PASS";font:500 10px/1.72 var(--mono);letter-spacing:.13em;color:var(--pass);flex:none}
+.pass.fail::before{content:"FAIL";color:var(--hold)}
+.pass b{color:#C6D0DC;font-weight:500}
+.done{margin:12px 0 0;font:500 12px/1.5 var(--mono);color:var(--pass);letter-spacing:.05em}
+.why{margin:12px 0 0;font-size:14.5px;color:#A88A4E;border-left:2px solid rgba(255,176,32,.3);padding-left:12px}
+.why b{color:var(--human);font-weight:600}
+
+/* ── human-only block ── */
+.human-only{
+  margin:78px 0 0;background:linear-gradient(180deg,rgba(255,176,32,.075),transparent 60%),var(--deck);
+  border:1px solid rgba(255,176,32,.3);border-top:3px solid var(--human);
+  border-radius:3px;padding:38px 34px 34px;
+}
+.human-only h3{font:500 clamp(23px,3.4vw,33px)/1.18 var(--display);margin:0;letter-spacing:-.024em;color:var(--human)}
+.human-only .sub{margin:14px 0 30px;color:#B9AF98;max-width:72ch;font-size:15.5px}
+.ho-list{display:grid;gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:2px}
+.ho{background:var(--deck);padding:18px 21px}
+.ho .t{font-size:16px;font-weight:600;color:var(--ink);margin:0 0 7px;line-height:1.4}
+.ho .t span{font:500 11.5px/1 var(--mono);color:var(--faint);margin-right:10px;letter-spacing:.1em}
+.ho .r{margin:0;font-size:14.5px;color:#A0A9B7}
+.ho .r b{color:var(--human);font-weight:600}
+
+/* ── order of play ── */
+.order{margin:76px 0 0}
+.order h3{font:500 clamp(23px,3.4vw,33px)/1.18 var(--display);margin:0 0 10px;letter-spacing:-.024em}
+.order .sub{color:#A4AEBD;max-width:70ch;margin:0 0 28px;font-size:15.5px}
+.steps{display:grid;gap:10px}
+.step{display:flex;gap:18px;align-items:flex-start;background:var(--deck);
+  border:1px solid var(--rule);border-radius:2px;padding:17px 21px}
+.step .num{font:700 15px/1.3 var(--display);color:var(--faint);flex:none;min-width:1.6em}
+.step .txt{flex:1}
+.step .txt b{display:block;font-size:16px;color:var(--ink);font-weight:600;margin-bottom:5px}
+.step .txt span{font-size:14.5px;color:#9AA5B4}
+.step .cost{font:400 12px/1.5 var(--mono);color:var(--dim);flex:none;white-space:nowrap}
+.step.first{border-color:rgba(255,59,71,.34);border-left:3px solid var(--hold)}
+
+/* ── footer ── */
+footer{margin:82px 0 0;border-top:1px solid var(--rule);padding:30px 0 66px;
+  font:400 13px/1.85 var(--mono);color:var(--faint)}
+footer b{color:var(--dim);font-weight:400}
+footer .row{display:flex;flex-wrap:wrap;gap:8px 26px}
+
+@media (max-width:720px){
+  .wrap{padding:0 19px}
+  header{padding:48px 0 0}
+  .gate{padding:22px 20px 24px}
+  .gate-holds{margin-left:0;flex-basis:100%}
+  .tier-count{margin-left:0;flex-basis:100%}
+  .human-only,.gate{border-radius:2px}
+  .human-only{padding:30px 21px 26px}
+  .step{flex-wrap:wrap;gap:10px}
+  .c-title{flex-basis:100%}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
+:focus-visible{outline:2px solid var(--agent);outline-offset:3px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">
+    <span>Epic <b>#667</b></span><span class="sep">/</span>
+    <span><b>7</b> children merged</span><span class="sep">/</span>
+    <span>plugin <b>3.103.0</b></span><span class="sep">/</span>
+    <span><b>5,612</b> tests green</span><span class="sep">/</span>
+    <span><b>0</b> live runs</span>
+  </p>
+
+  <h1>Nothing here has <span class="strike">flown.</span></h1>
+
+  <p class="lede">
+    Seven issues merged, 5,612 tests passing, four CI lanes green. Every herdr-facing
+    path was tested through <b>injected runners</b> — none has ever talked to a real
+    server. The one time part of this stack ran live, it failed in its
+    <b>first 30 seconds</b>, on a condition all 145 of its tests had passed over.
+    That is the base rate this plan exists to respect.
+  </p>
+
+  <section class="gate" aria-labelledby="gate-h">
+    <div class="gate-top">
+      <span class="dot" aria-hidden="true"></span>
+      <span class="gate-tag">Go / no-go gate</span>
+      <span class="gate-holds">holds 8 downstream checks</span>
+    </div>
+    <h2 id="gate-h">Does a pane ever actually report <code>blocked</code>?</h2>
+    <p>
+      Never once observed. Right now: 6 idle, 1 working, 1 unknown. The status is real —
+      <code style="font-family:var(--mono);font-size:.9em;color:#9FD8E4">herdr agent wait --until blocked</code>
+      accepts it and returns a clean&nbsp;timeout — but whether herdr's claude integration
+      <b>sets</b> it when Claude Code shows an approval prompt has never been seen.
+      <code style="font-family:var(--mono);font-size:.9em;color:#9FD8E4">pane.agent_status_changed</code>
+      produced <b>0 frames in 225&nbsp;s</b> of subscribed probing. If it never fires,
+      <b>#612 is a correct implementation of an event that does not happen</b> — and its
+      96 tests all pass because they synthesise the frame themselves.
+    </p>
+  </section>
+
+  <section class="split">
+    <div class="split-head">
+      <span class="n">24<i>&thinsp;/&thinsp;30</i></span>
+      <span class="cap">checks I could run myself,<br>given permission</span>
+    </div>
+    <div class="bar" role="img" aria-label="24 of 30 checks are agent-runnable; 6 require a human">
+      <span class="b-agent"></span><span class="b-human"></span>
+    </div>
+    <div class="keys">
+      <span class="k-agent"><i></i><b>24 agent</b> — technically mine to execute</span>
+      <span class="k-human"><i></i><b>6 human</b> — no permission would help</span>
+    </div>
+  </section>
+</header>
+
+<main>
+
+<!-- ══ TIER 0 ══ -->
+<section class="tier">
+  <div class="tier-head">
+    <span class="tier-id">Tier 0</span>
+    <h3>Premise</h3>
+    <span class="badge gated">gates tier 1</span>
+    <span class="tier-count"><em>3 agent</em> · <strong>0 human</strong> · ~15 min · zero risk</span>
+  </div>
+  <p class="tier-note">
+    Cheapest tests that can invalidate the most. All three run against one throwaway pane and
+    send nothing. If P1 fails, tier 1 is void and #612 needs a different signal.
+  </p>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">P1</span>
+      <span class="c-title">Does a Claude pane enter <code>blocked</code> on an approval prompt?</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">herdr pane split; herdr agent start &lt;newpane&gt; --agent claude   # default perms, not auto
+# park it on a gate: ask it to run something the classifier denies
+herdr agent wait &lt;newpane&gt; --until blocked --timeout 120000</pre>
+    <p class="pass">Wait returns before timeout while the pane sits on a prompt.</p>
+    <p class="pass fail"><b>Times out</b> while the pane is visibly prompting → the signal #612 watches does not exist.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">P2</span>
+      <span class="c-title">Which frame carries the transition, and does <code>revision</code> advance?</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">python3 hooks/pane_watch_lib.py watch --dry-run   # frame shape already verified
+# subscribe to pane.updated AND pane.agent_status_changed at once, dump raw frames
+# during P1, then diff which event fired</pre>
+    <p class="pass">≥1 frame carries <code style="font-family:var(--mono);color:#9FD8E4">agent_status: blocked</code>, and the recorded event name plus <code style="font-family:var(--mono);color:#9FD8E4">revision</code> delta confirm or refute #612's choice of <code style="font-family:var(--mono);color:#9FD8E4">pane.updated</code> as the carrier.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">P3</span>
+      <span class="c-title">Does <code>blocked</code> clear when the prompt is answered?</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">herdr pane send-keys &lt;newpane&gt; --keys Enter
+herdr pane list | grep &lt;newpane&gt;</pre>
+    <p class="pass">Status leaves <code style="font-family:var(--mono);color:#9FD8E4">blocked</code>. Required for the debounce release path — without a clear, W4 can never re-notify.</p>
+  </div>
+</section>
+
+<!-- ══ TIER 1 ══ -->
+<section class="tier">
+  <div class="tier-head">
+    <span class="tier-id">Tier 1</span>
+    <h3>Blocked-pane watcher <span style="color:var(--faint);font-weight:400">#612</span></h3>
+    <span class="tier-count"><em>7 agent</em> · <strong>1 human</strong> · ~45 min</span>
+  </div>
+  <p class="tier-note">
+    Void until P1 passes. W1 is a prerequisite, not a test: the watcher currently cannot run
+    without paging your phone for real.
+  </p>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">W1</span>
+      <span class="c-title">Add <code>--sender-cmd</code> so the watcher can be tested without paging you</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd"># hooks/pane_watch_lib.py:495 — _default_sender hardcodes notify.sh
+# --dry-run only prints the subscribe frame and exits; there is no send override</pre>
+    <p class="pass">~5 lines plus one test. Sender points at a log file; every check below reads that file instead of your phone.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">W2</span>
+      <span class="c-title">Exactly one notification per block transition</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">python3 hooks/pane_watch_lib.py watch --sender-cmd 'cat &gt;&gt; /tmp/uat.log'</pre>
+    <p class="pass">One line in the log per block. Not zero, not two.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">W3</span>
+      <span class="c-title">Re-observing the same block does not re-notify</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd"># force repeat pane.updated frames while status stays blocked</pre>
+    <p class="pass">Log stays at one line. This is the debounce; a broken one pages you every frame.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">W4</span>
+      <span class="c-title">Unblock, then re-block, <em>does</em> notify again</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">herdr pane send-keys &lt;pane&gt; --keys Enter   # clear, then re-trigger a gate</pre>
+    <p class="pass">Second line appears. The failure mode is a debounce that latches forever and silently stops warning you.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">W5</span>
+      <span class="c-title">No pane content in the notification body</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">printf '\033]0;UATSECRET-9f3a\007'     # unique string into the pane title
+grep -c UATSECRET-9f3a /tmp/uat.log     # must be 0</pre>
+    <p class="pass">Body carries the label only; the sentinel never appears. This is the leak I created at pass 7 and fixed at pass 9 — worth re-proving live, not just in tests.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">W6</span>
+      <span class="c-title">Heartbeat advances; stall warning fires past its window</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">watch -n5 stat -c %y &lt;heartbeat-path&gt;
+# then stop the event source and wait out --stall-s</pre>
+    <p class="pass">mtime advances each heartbeat; a stalled feed emits the warning once.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">W7</span>
+      <span class="c-title">Startup sweep catches a pane already blocked before the watcher starts</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd"># block the pane FIRST, then launch the watcher</pre>
+    <p class="pass">One notification on startup. Otherwise a watcher restart goes blind to anything already waiting.</p>
+  </div>
+
+  <div class="check human">
+    <div class="c-top"><span class="c-id">W8</span>
+      <span class="c-title">The message reaches your phone, and reads usefully at 3&nbsp;a.m.</span>
+      <span class="chip human">Human</span></div>
+    <p class="why"><b>Why not me:</b> I see <code style="font-family:var(--mono);color:#E5C48A">notify.sh</code>'s exit code, never delivery — and whether <em>“pane w1:pB8 blocked”</em> is enough to act on half-asleep is a judgement only the person being woken can make.</p>
+  </div>
+</section>
+
+<!-- ══ TIER 2 ══ -->
+<section class="tier">
+  <div class="tier-head">
+    <span class="tier-id">Tier 2</span>
+    <h3>Mid-child handoff <span style="color:var(--faint);font-weight:400">#665 · #673</span></h3>
+    <span class="badge destructive">destructive</span>
+    <span class="tier-count"><em>6 agent</em> · <strong>1 human</strong> · ~1 h</span>
+  </div>
+  <p class="tier-note">
+    <code style="font-family:var(--mono);color:#9FD8E4">retire-predecessor</code> closes a pane.
+    Every check below runs on a scratch campaign and throwaway panes. Expect the first live run
+    to fail — that is exactly how #673 was found.
+  </p>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">H1</span>
+      <span class="c-title">Scratch campaign fixture with one <code>in_progress</code> child</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">claude_docs/.driver-state/uat-scratch.json    # never committed</pre>
+    <p class="pass">Fixture loads; no real epic touched.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">H2</span>
+      <span class="c-title">Reproduce <code>agent_pane_busy</code>, then confirm #673's readiness wait fixes it</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">herdr agent start &lt;busy-pane&gt;    # expect {"error":{"code":"agent_pane_busy"}}
+# then the same through the readiness wait</pre>
+    <p class="pass">Bare call refuses instantly; the wrapped call waits and succeeds. Reproduce the symptom before trusting the fix.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">H3</span>
+      <span class="c-title">Successor spawns, receives the goal text, binds the project</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">python3 hooks/launcher_lib.py mid-child-handoff --help   # then run on the scratch campaign</pre>
+    <p class="pass">New pane exists, goal text arrives verbatim, and the registry shows it bound to the right project. All three failed the one time this was done by hand.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">H4</span>
+      <span class="c-title"><code>retire-predecessor</code> clears the guard and closes the pane</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">python3 hooks/launcher_lib.py retire-predecessor ...</pre>
+    <p class="pass">Guard cleared, pane gone, driver state consistent.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">H5</span>
+      <span class="c-title">The predecessor's Stop actually releases</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd"># the original failure: an unmet goal blocked Stop nine times,
+# leaving the session alive and idle</pre>
+    <p class="pass">Stop succeeds on the first attempt after retirement. This is the bug that made #665 exist.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">H6</span>
+      <span class="c-title">Ladder refuses teardown while successor-owned checks are unmet</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">python3 hooks/launcher_lib.py verification-steps</pre>
+    <p class="pass">Teardown stays off until the successor's own checks report. The <code style="font-family:var(--mono);color:#9FD8E4">owner</code> key is load-bearing — this proves it is, live.</p>
+  </div>
+
+  <div class="check human">
+    <div class="c-top"><span class="c-id">H7</span>
+      <span class="c-title">Run it on a real epic child</span>
+      <span class="chip human">Human</span></div>
+    <p class="why"><b>Why not me:</b> authorisation is not capability. A real handoff kills a live session mid-work; only you can decide that a run is expendable, and only you can watch it from outside.</p>
+  </div>
+</section>
+
+<!-- ══ TIER 3 ══ -->
+<section class="tier">
+  <div class="tier-head">
+    <span class="tier-id">Tier 3</span>
+    <h3>Supply-chain pin <span style="color:var(--faint);font-weight:400">#609</span></h3>
+    <span class="tier-count"><em>2 agent</em> · <strong>1 human</strong> · ~15 min · zero risk</span>
+  </div>
+  <p class="tier-note">A pin that never fails is not a pin. I only ever watched this one pass.</p>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">V1</span>
+      <span class="c-title">A fake herdr reporting <code>0.7.4</code> must <em>fail</em> the doctor check</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">printf '#!/bin/sh\necho 0.7.4\n' &gt; /tmp/fakeherdr/herdr &amp;&amp; chmod +x ...
+PATH=/tmp/fakeherdr:$PATH  # then run workspace-doctor check 8</pre>
+    <p class="pass">Check 8 fails and names the version mismatch. If it passes, the pin is decorative.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">V2</span>
+      <span class="c-title">Installed binary's sha256 matches the GitHub release digest</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">sha256sum ~/.local/bin/herdr
+gh api repos/&lt;repo&gt;/releases/tags/v0.7.5 --jq '.assets[].digest'</pre>
+    <p class="pass">Digests equal. The procedure is already written in <code style="font-family:var(--mono);color:#9FD8E4">hooks/herdr-pin.json</code> — this executes it rather than citing it.</p>
+  </div>
+
+  <div class="check human">
+    <div class="c-top"><span class="c-id">V3</span>
+      <span class="c-title">Policy when upstream ships 0.7.6</span>
+      <span class="chip human">Human</span></div>
+    <p class="why"><b>Why not me:</b> pure judgement — auto-follow, pin-and-review, or hold. A supply-chain policy is a risk position, not a check.</p>
+  </div>
+</section>
+
+<!-- ══ TIER 4 ══ -->
+<section class="tier">
+  <div class="tier-head">
+    <span class="tier-id">Tier 4</span>
+    <h3>Launcher herdr mode <span style="color:var(--faint);font-weight:400">#611 · partial</span></h3>
+    <span class="tier-count"><em>2 agent</em> · <strong>1 human</strong> · ~30 min</span>
+  </div>
+  <p class="tier-note">Shipped ACs 1/4/6/7/8 only. Four remain open by design.</p>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">L1</span>
+      <span class="c-title">Read-only subcommands return sane output</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">python3 hooks/launcher_lib.py verification-steps | select-mode | build-split | goal-text</pre>
+    <p class="done">✓ Already run this session — <code style="font-family:var(--mono)">verification-steps</code> returns a 3-step ladder; <code style="font-family:var(--mono)">watch --dry-run</code> emits a well-formed subscribe frame.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">L2</span>
+      <span class="c-title"><code>handoff</code> live in fresh-session mode on a throwaway campaign</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">python3 hooks/launcher_lib.py handoff ...   # scratch campaign only</pre>
+    <p class="pass">Fresh session starts and adopts the campaign. This is the path whose first live run died in 30 seconds.</p>
+  </div>
+
+  <div class="check human">
+    <div class="c-top"><span class="c-id">L3</span>
+      <span class="c-title">Re-scope or close #611's four deferred ACs, and #666's dissolved premise</span>
+      <span class="chip human">Human</span></div>
+    <p class="why"><b>Why not me:</b> scope is yours. #666 is the epic's one unticked box — D-16 decoupled cron from the handoff, so a guard that refuses <em>fresh-session mode</em> now protects nothing. Whether that is re-scoped or closed is a product call.</p>
+  </div>
+</section>
+
+<!-- ══ TIER 5 ══ -->
+<section class="tier">
+  <div class="tier-head">
+    <span class="tier-id">Tier 5</span>
+    <h3>Documentation <span style="color:var(--faint);font-weight:400">#613 · #654 Q1 · #610</span></h3>
+    <span class="tier-count"><em>2 agent</em> · <strong>1 human</strong> · ~40 min · zero risk</span>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">D1</span>
+      <span class="c-title">Every command in the runbook executes verbatim</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd"># docs/runbooks/herdr.md §7.1, §8, §9–§12 — run each line exactly as written</pre>
+    <p class="pass">Every command exits as documented. Catches <em>broken</em> commands. Cannot catch <em>unclear</em> prose.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">D2</span>
+      <span class="c-title">Reproduce #654 Q1's context measurement independently</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd"># sum the last message.usage row:
+# input_tokens + cache_read_input_tokens + cache_creation_input_tokens</pre>
+    <p class="pass">Lands within the claimed 0.18% of the statusline figure on a fresh session.</p>
+  </div>
+
+  <div class="check human">
+    <div class="c-top"><span class="c-id">D3</span>
+      <span class="c-title">A cold operator follows the runbook without help</span>
+      <span class="chip human">Human</span></div>
+    <p class="why"><b>Why not me:</b> structurally impossible. I wrote these docs; I cannot un-know what they omit. Every gap they contain is invisible to their author and obvious to a stranger.</p>
+  </div>
+</section>
+
+<!-- ══ TIER 6 ══ -->
+<section class="tier">
+  <div class="tier-head">
+    <span class="tier-id">Tier 6</span>
+    <h3>Regression &amp; install</h3>
+    <span class="tier-count"><em>2 agent</em> · <strong>1 human</strong> · ~30 min</span>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">R1</span>
+      <span class="c-title">Whole suite plus both lint lanes on <code>main</code></span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd">pytest tests/ -q
+pylint hooks/*.py --disable=all --enable=E,unreachable,f-string-without-interpolation --disable=import-error</pre>
+    <p class="pass">5,612 passing, exit 0, both lanes clean.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">R2</span>
+      <span class="c-title">Reproduce the <code>driver_bench_lib.py</code> parallel-run race</span>
+      <span class="chip agent">Agent</span></div>
+    <pre class="cmd"># pre-existing, filed as a follow-up. Could not reproduce in 4 full-suite runs;
+# two reviewers found no ordering that triggers it. Try under parallel load.</pre>
+    <p class="pass">Either a reproducer exists, or the follow-up is downgraded with the evidence recorded. The reported <code style="font-family:var(--mono);color:#9FD8E4">audit_completeness: 0.75</code> is still unexplained.</p>
+  </div>
+
+  <div class="check human">
+    <div class="c-top"><span class="c-id">R3</span>
+      <span class="c-title">Reinstall the plugin and confirm a new session loads 3.103.0</span>
+      <span class="chip human">Human</span></div>
+    <p class="why"><b>Why not me:</b> the reinstall requires every hook-using session to exit first — and only you know what is running in the other seven panes. Doing this mid-session corrupts live sessions.</p>
+  </div>
+</section>
+
+<!-- ══ HUMAN-ONLY ══ -->
+<section class="human-only" aria-labelledby="ho-h">
+  <h3 id="ho-h">The six no amount of permission would fix</h3>
+  <p class="sub">
+    You asked for technical capability, not permission. These are the ones where the limit is
+    real: I have no eyes on your phone, no authority to spend your risk, and no way to
+    un-read my own documentation.
+  </p>
+  <div class="ho-list">
+    <div class="ho">
+      <p class="t"><span>W8</span>Did the message arrive, and was it useful?</p>
+      <p class="r">I observe an <b>exit code</b>, not a delivery. And “useful at 3 a.m.” is only answerable by the person woken up.</p>
+    </div>
+    <div class="ho">
+      <p class="t"><span>H7</span>Authorise a real handoff on a live epic child</p>
+      <p class="r">I can execute it. I cannot <b>decide the run is expendable</b> — that is spending your risk, not mine.</p>
+    </div>
+    <div class="ho">
+      <p class="t"><span>V3</span>Version policy when 0.7.6 lands</p>
+      <p class="r">A <b>risk position</b>, not a test. Auto-follow, pin-and-review, or hold.</p>
+    </div>
+    <div class="ho">
+      <p class="t"><span>L3</span>#611's deferred ACs and #666's dissolved premise</p>
+      <p class="r"><b>Scope is yours.</b> I reported that #666's premise dissolved rather than ticking its box; what replaces it is a product call.</p>
+    </div>
+    <div class="ho">
+      <p class="t"><span>D3</span>Cold read of the runbook</p>
+      <p class="r">I wrote it. <b>Its gaps are invisible to me</b> and obvious to a stranger — the one test I am structurally disqualified from.</p>
+    </div>
+    <div class="ho">
+      <p class="t"><span>R3</span>Coordinate the plugin reinstall</p>
+      <p class="r">Needs every hook-using session dead first. <b>Only you know what is running</b> in the other panes.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══ ORDER OF PLAY ══ -->
+<section class="order">
+  <h3>Order of play</h3>
+  <p class="sub">Sequenced so the cheapest test that can invalidate the most runs first.</p>
+  <div class="steps">
+    <div class="step first">
+      <span class="num">01</span>
+      <span class="txt"><b>Tier 0 alone — P1, P2, P3</b>
+      <span>Do this before anything else and before writing another line of #612. It is the only check that can void a whole tier.</span></span>
+      <span class="cost">15 min · agent</span>
+    </div>
+    <div class="step">
+      <span class="num">02</span>
+      <span class="txt"><b>Branch on the result</b>
+      <span>P1 passes → tier 1. P1 fails → stop, and the fork is yours: scrape <code style="font-family:var(--mono);font-size:.9em;color:#9FD8E4">terminal_title</code>, ask upstream, or drop #612.</span></span>
+      <span class="cost">your call</span>
+    </div>
+    <div class="step">
+      <span class="num">03</span>
+      <span class="txt"><b>Tiers 3, 5, 6 — the free ones</b>
+      <span>Zero-risk and independent of the gate. The pin negative test is the highest value per minute on the page.</span></span>
+      <span class="cost">85 min · agent</span>
+    </div>
+    <div class="step">
+      <span class="num">04</span>
+      <span class="txt"><b>Tier 1, once W1 exists</b>
+      <span>Add <code style="font-family:var(--mono);font-size:.9em;color:#9FD8E4">--sender-cmd</code> first, or every check pages your phone.</span></span>
+      <span class="cost">45 min · agent</span>
+    </div>
+    <div class="step">
+      <span class="num">05</span>
+      <span class="txt"><b>Tier 2 last, on scratch state only</b>
+      <span>Destructive, and the likeliest to surface something real. Never first-run it on a live epic.</span></span>
+      <span class="cost">60 min · agent</span>
+    </div>
+    <div class="step">
+      <span class="num">06</span>
+      <span class="txt"><b>Then the six that are yours</b>
+      <span>Phone check, cold read, and the three scope calls.</span></span>
+      <span class="cost">human</span>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="row">
+    <span>Epic <b>#667</b> · closed 2026-07-28</span>
+    <span><b>origin/main</b> 9e680a9</span>
+    <span>plugin <b>3.103.0</b></span>
+    <span>suite <b>5189 → 5612</b>, 0 failing</span>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <span>Confirmed live: <b>blocked is a valid herdr status</b> (wait accepts it, returns clean timeout)</span>
+  </div>
+  <div class="row">
+    <span>Unverified: <b>that herdr ever sets it</b> — the whole of Tier 0</span>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <span><b>30 checks · 24 agent · 6 human</b></span>
+  </div>
+</footer>
+
+</div>
+</body>
+</html>
