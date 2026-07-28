@@ -86,6 +86,24 @@ def record(check_id, verdict, note, evidence=None):
         print(f"unknown check id {check_id}", file=sys.stderr)
         return 2
     tier, claim = CHECKS[check_id]
+    # Step-11 finding: the README and the plan both claimed "a verdict cannot be recorded without the
+    # evidence that produced it", and that was FALSE — `evidence` was written unconditionally as None
+    # and `--evidence` was never checked, so a converted agent check could be marked PASS with no
+    # artifact at all. A PASS is the verdict that closes a gate, so a PASS now requires a readable,
+    # non-empty evidence file. The other verdicts require a note instead: BLOCKED and INCONCLUSIVE are
+    # claims ABOUT missing evidence, and demanding an artifact for "I could not run this" is incoherent.
+    if verdict == "PASS":
+        if not evidence:
+            print(f"{check_id}: a PASS needs --evidence <file> — the plan and this harness both "
+                  "claim a verdict cannot be recorded without the evidence that produced it",
+                  file=sys.stderr)
+            return 2
+        if not os.path.isfile(evidence) or os.path.getsize(evidence) == 0:
+            print(f"{check_id}: evidence file {evidence!r} is missing or empty", file=sys.stderr)
+            return 2
+    elif not (note or "").strip():
+        print(f"{check_id}: a {verdict} verdict needs a note saying why", file=sys.stderr)
+        return 2
     _append({"id": check_id, "tier": tier, "claim": claim, "verdict": verdict,
              "note": note, "evidence": evidence, "ts": time.time()})
     print(f"{verdict:13} {check_id}  {note}")

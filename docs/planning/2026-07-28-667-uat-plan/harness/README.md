@@ -14,7 +14,7 @@ python3 harness.py record <id> <PASS|FAIL|BLOCKED|INCONCLUSIVE> <note> [--eviden
 python3 harness.py summary                            # exits NON-ZERO while any FAIL or NOT RUN
 ```
 
-Its whole job is that **a verdict cannot be recorded without the evidence that produced it**, and
+Its whole job is that **a PASS cannot be recorded without a readable, non-empty evidence file** — enforced since 2026-07-28, because a Step-11 review found the claim was previously false (`evidence` was written unconditionally as `None` and `--evidence` was never checked). Other verdicts require a NOTE instead: BLOCKED and INCONCLUSIVE are claims *about* missing evidence, so demanding an artifact for them would be incoherent. And
 that `summary` names every check that has NOT run — a harness which only lists what it tried reads
 as complete when it isn't. `summary`'s non-zero exit is the DONE gate.
 

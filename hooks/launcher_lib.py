@@ -897,6 +897,9 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     # expensive failure: a clean-looking `failed_step`, a closed pane, and the successor's completed
     # work lost. Checked HERE with the other caller-mismatch validations, before the split, so a
     # refusal never leaves a pane behind.
+    # `expected_project` is REQUIRED for this check, not optional. Step-11 finding: with it absent
+    # the guard fell back to "does the command have any argument", which accepts the English word
+    # after a bare directive — a guard that admits the very defect it exists to stop.
     binds_first, why_not = _driver_lib().resume_prompt_binds_first(
         resume_prompt, project=expected_project)
     if not binds_first:
@@ -2065,7 +2068,7 @@ def _driver_lib():
     return driver_lib
 
 
-def resume_prompt_for_state(state: dict) -> str | None:
+def resume_prompt_for_state(state: dict, project: str | None = None) -> str | None:
     """The canonical resume prompt for the next ready child, or None when nothing is ready.
 
     Deliberately delegated to `driver_lib._build_resume_prompt` via `fresh_session_handoff`
@@ -2074,7 +2077,8 @@ def resume_prompt_for_state(state: dict) -> str | None:
     nothing to hand off, and the caller must not spawn a successor with no work.
     """
     driver_lib = _driver_lib()
-    disposition = driver_lib.fresh_session_handoff(state, mode=driver_lib.FRESH_SESSION_MODE)
+    disposition = driver_lib.fresh_session_handoff(
+        state, mode=driver_lib.FRESH_SESSION_MODE, project=project)
     if disposition.get("outcome") != "ready":
         return None
     return disposition["resume_prompt"]
@@ -2141,7 +2145,8 @@ def _cmd_handoff(args) -> int:
     # to loop in-session — `fresh_session_handoff` returns `single_session` for exactly that
     # case, and overriding it discards the answer (#611 Step-11 pass-3 High 2).
     mode = state.get("session_mode", "single-session")
-    disposition = driver_lib.fresh_session_handoff(state, mode=mode)
+    disposition = driver_lib.fresh_session_handoff(state, mode=mode,
+                                                  project=getattr(args, "project", None))
     if disposition.get("outcome") != "ready":
         print(f"no handoff: campaign disposition is {disposition.get('outcome')!r} "
               f"(session_mode {mode!r})")
@@ -2180,7 +2185,8 @@ def _cmd_handoff(args) -> int:
         name=args.name, goal_condition=condition,
         resume_prompt=disposition["resume_prompt"],
         registry_path=args.registry, transcript_dir=args.transcript_dir,
-        launch_mode=args.launch_mode, teardown=not args.no_teardown)
+        launch_mode=args.launch_mode, expected_project=getattr(args, "project", None),
+        teardown=not args.no_teardown)
     print(json.dumps({k: out[k] for k in
                       ("ok", "results", "failed_step", "new_pane", "session_id",
                        "truncated", "cleanup")}, indent=2))
@@ -2408,6 +2414,13 @@ def main(argv: list[str] | None = None) -> int:
     p_ho.add_argument("--anchor-pane", required=True, help="the PREDECESSOR's pane id")
     p_ho.add_argument("--name", required=True, help="herdr agent name for the successor")
     p_ho.add_argument("--project-root", required=True)
+    # #682: REQUIRED. The resume prompt has to open with `/rawgentic:switch <project>`, and a bare
+    # bind enters the switch skill's list mode and waits for a human — so a handoff with no project
+    # name cannot produce a workable prompt and must refuse at the CLI rather than spawn a doomed
+    # successor. Step-11 finding: this argument did not exist, so the documented child-boundary path
+    # could never have produced a valid bind at all.
+    p_ho.add_argument("--project", required=True,
+                      help="the rawgentic project NAME the successor must bind (not its path)")
     p_ho.add_argument("--cwd", required=True)
     p_ho.add_argument("--registry", required=True,
                       help="claude_docs/session_registry.jsonl")

@@ -485,8 +485,15 @@ class TestCampaignGoalText:
 # ======================================================================= #
 # #569: fresh-session-per-child handoff helpers
 # ======================================================================= #
-def _st(issues, *, mode=None, generation=None, campaign="epic-475", extra=None):
+def _st(issues, *, mode=None, generation=None, campaign="epic-475", extra=None,
+        project="rawgentic"):
+    # #682: `project` is part of a workable campaign state — without it there is no valid
+    # `/rawgentic:switch <project>` to put at the head of a resume prompt, so
+    # `fresh_session_handoff` returns `no_project` rather than `ready`. Default it here so existing
+    # tests keep testing what they were written to test; pass `project=None` to exercise the refusal.
     s = {"schema_version": 2, "campaign": campaign, "issues": issues}
+    if project is not None:
+        s["project"] = project
     if mode is not None:
         s["session_mode"] = mode
     if generation is not None:
@@ -796,96 +803,109 @@ class TestOpenHandoffCarriesMidChildFields:
 
 
 class TestTheResumePromptBindsFirst:
-    """#682: `project_switched` allows `SWITCH_POLL_ATTEMPTS (40) x SWITCH_POLL_DELAY_S (3.0)` =
-    120 s for a fresh successor to bind and append to the registry, then declares
+    """#682: `perform_handoff` gives a fresh successor `SWITCH_POLL_ATTEMPTS (40) x
+    SWITCH_POLL_DELAY_S (3.0)` = 120 s to bind and append to the session registry, then declares
     `failed_step: project_switched` and CLOSES ITS PANE. Observed live three times (epic #667 UAT,
-    check L2), with the successor's transcript showing it was executing the bind when its pane closed.
+    check L2). The observation is CONFOUNDED and the issue says so — a synthetic issue 99998 sent the
+    successor investigating a nonexistent issue — but the unconfounded concern stands: the budget
+    assumes the bind comes first and nothing enforced it.
 
-    The observation is CONFOUNDED and the issue says so (a synthetic issue 99998 sent the successor
-    investigating a nonexistent issue). What is NOT confounded: the budget assumes the bind comes
-    first, and nothing enforced it.
+    **This class is shaped by three review passes, each of which refuted the previous attempt:**
 
-    **The Step-4 review then found that the first version of this fix would not have worked at all**,
-    which is why these tests exist in this shape.
+    1. A bare `/rawgentic:switch` does not bind at all — the skill enters LIST MODE and waits for a
+       human, so the first version of the fix would not have fixed anything.
+    2. A keyword-position classifier is unsound: it refused "Do not run git fetch before binding.
+       FIRST run /rawgentic:switch rawgentic" and accepted "First read the handoff; then switch".
+    3. Substring matching accepted `rawgentic-next` for `rawgentic`, and an optional `project`
+       degraded the check to "has any argument", which accepts the English word after a bare
+       directive.
+
+    So the contract is now a PREFIX check with an EXACT token compare and a REQUIRED project — no
+    classification of prose anywhere.
     """
 
-    def test_the_bind_carries_a_project_argument(self):
-        """THE finding. A bare `/rawgentic:switch` does not bind: the skill enters LIST MODE and asks
-        a human which project to use, so an unattended successor sits at a question, never appends the
-        registry row, and has its pane closed when the budget exhausts."""
+    def test_the_canonical_prompt_opens_with_the_bind(self):
         s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684, "project": "rawgentic"})
         prompt = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE)["resume_prompt"]
-        assert "/rawgentic:switch rawgentic" in prompt
-        assert dl.resume_prompt_binds_first(prompt)[0]
+        assert prompt.startswith("/rawgentic:switch rawgentic")
+        assert dl.resume_prompt_binds_first(prompt, project="rawgentic")[0]
 
-    def test_a_bare_bind_command_is_refused_when_the_project_is_known(self):
-        """With the project known the check is a LITERAL match, so this is fully sound."""
-        ok, why = dl.resume_prompt_binds_first(
-            "FIRST run /rawgentic:switch to bind, then work.", project="rawgentic")
-        assert not ok and "list mode" in why
-
-    def test_without_a_known_project_the_argument_test_has_a_stated_limit(self):
-        """Earned in testing, and recorded rather than hidden: with no project to compare against,
-        "switch to bind" is indistinguishable from "switch <project>" — the next English word looks
-        exactly like an argument. That is precisely why callers pass `project`, and why
-        `perform_handoff` does."""
-        ok, _why = dl.resume_prompt_binds_first("FIRST run /rawgentic:switch to bind, then work.")
-        assert ok, "the documented limit changed — update the docstring, do not just flip this"
-
-    def test_switch_off_is_not_a_bind(self):
-        """`/rawgentic:switch off <name>` DEACTIVATES a project. It matches a naive
-        "directive plus an argument" rule while doing the opposite of binding."""
-        ok, _why = dl.resume_prompt_binds_first("FIRST run /rawgentic:switch off rawgentic.")
-        assert not ok
-
-    def test_the_mid_child_prompt_also_carries_the_project(self):
+    def test_the_mid_child_prompt_opens_with_its_marker_then_the_bind(self):
+        """The marker must stay first — it is the `prompt_landed` evidence — so the prefix check
+        skips exactly one marker and no more."""
         s = _st([_iss(665, "in_progress")], generation=4, extra={"epic": 667})
         prompt = dl.mid_child_handoff(s, position=_position())["resume_prompt"]
-        assert dl.resume_prompt_binds_first(prompt)[0], prompt
-        assert "/rawgentic:switch " in prompt
+        assert prompt.startswith(dl.mid_child_marker(665, 5))
+        assert dl.resume_prompt_binds_first(prompt, project=_position()["project"])[0], prompt
 
-    def test_a_handoff_with_no_project_produces_a_prompt_that_is_refused(self):
-        """Fail-closed rather than spawning a doomed successor: with no project name there is no
-        valid bind command to send, so the handoff must refuse."""
-        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684})   # no project key
-        prompt = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE)["resume_prompt"]
-        ok, why = dl.resume_prompt_binds_first(prompt)
-        assert not ok and "never tells the successor to bind" in why
+    def test_a_bare_bind_is_refused_with_the_list_mode_reason(self):
+        ok, why = dl.resume_prompt_binds_first("/rawgentic:switch then work.", project="rawgentic")
+        assert not ok and ("list mode" in why or "not the expected project" in why)
 
-    def test_the_no_project_clause_does_not_match_the_validator_it_warns_about(self):
-        """Earned by a live mistake during this fix: the clause explaining the bare-command trap
-        NAMED the command, and the explanation matched the guard's own pattern — the prose about the
-        bug became a false positive for the guard against it."""
-        assert not dl.resume_prompt_binds_first(dl._bind_clause(None))[0]
+    def test_a_prompt_that_reads_before_binding_is_refused(self):
+        """The case every softer rule accepted, and the reason the check is a prefix: 'bind
+        eventually' is exactly the ordering that burns the budget."""
+        ok, why = dl.resume_prompt_binds_first(
+            "Read the handoff first, then run /rawgentic:switch rawgentic.", project="rawgentic")
+        assert not ok and "does not OPEN with" in why
 
-    def test_a_prompt_with_no_bind_at_all_is_refused(self):
-        ok, why = dl.resume_prompt_binds_first("Resume the run and get on with the next child.")
-        assert not ok and "never tells the successor to bind" in why
+    def test_a_prefix_sharing_project_is_refused(self):
+        """Substring matching bound the successor to the WRONG project: `/rawgentic:switch
+        rawgentic-next` satisfied a `find()` for `/rawgentic:switch rawgentic`."""
+        ok, why = dl.resume_prompt_binds_first(
+            "/rawgentic:switch rawgentic-next — go.", project="rawgentic")
+        assert not ok and "rawgentic-next" in why
 
-    def test_a_non_string_is_refused_rather_than_crashing(self):
+    def test_switch_off_is_not_a_bind(self):
+        """`/rawgentic:switch off <name>` DEACTIVATES a project — it satisfies a naive
+        directive-plus-argument rule while doing the opposite of binding."""
+        assert not dl.resume_prompt_binds_first("/rawgentic:switch off rawgentic.",
+                                               project="rawgentic")[0]
+
+    def test_the_project_is_required_not_optional(self):
+        """An optional project degraded the check to "has any argument", which accepts the English
+        word after a bare directive — a guard admitting the defect it exists to stop."""
+        ok, why = dl.resume_prompt_binds_first("/rawgentic:switch rawgentic.", project=None)
+        assert not ok and "no valid project name was supplied" in why
+
+    @pytest.mark.parametrize("bad", ["", "   ", "../etc", "a b", "x" * 70, "-lead", None, 42])
+    def test_a_project_name_must_look_like_a_project_name(self, bad):
+        """The name is interpolated into prompt text sent to a pane with `send-text`, and was
+        validated only as "a non-empty string" — so control characters or instruction-like prose
+        could ride in. Step-11 provenance finding."""
+        assert not dl.valid_project_name(bad)
+
+    def test_ordinary_project_names_are_accepted(self):
+        for good in ("rawgentic", "rawgentic-next", "3dstories-studio", "chore_board", "a"):
+            assert dl.valid_project_name(good), good
+
+    def test_a_non_string_prompt_is_refused_rather_than_crashing(self):
         for bad in (None, 42, [], {}):
-            assert not dl.resume_prompt_binds_first(bad)[0]
+            assert not dl.resume_prompt_binds_first(bad, project="rawgentic")[0]
 
-    def test_a_late_bind_is_refused_by_the_positional_proxy(self):
-        late = ("x" * (dl.BIND_MUST_APPEAR_WITHIN + 50)) + " /rawgentic:switch rawgentic"
-        ok, why = dl.resume_prompt_binds_first(late)
-        assert not ok and "past the first" in why
+    def test_a_handoff_with_no_project_never_reaches_ready(self):
+        """Step-11 finding: the guard used to run inside `perform_handoff`, i.e. AFTER the contract
+        has the predecessor call `open_handoff` — which bumps `generation` and writes
+        `handoff_pending`. A refusal there stranded an unclaimed generation that every retry refused
+        identically. Refusing at DISPOSITION time means nothing is persisted at all."""
+        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684}, project=None)
+        disp = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE)
+        assert disp["outcome"] == "no_project" and disp["errors"]
+        # `open_handoff` acts only on "ready", so there is nothing to roll back.
+        assert dl.open_handoff(s, disp, now_ts=1000) == s
 
-    def test_the_positional_check_is_a_documented_proxy_not_a_semantic_claim(self):
-        """The Step-4 review refuted the previous prose classifier by producing BOTH a false positive
-        and a false negative in one pass. These two cases pin the honest limit rather than pretending
-        it is gone: a prompt that mentions other work before an early bind is ACCEPTED, and that is a
-        known bound of a positional proxy — the structural fix (the launcher sending the bind as its
-        own verified turn) is the recorded follow-up."""
-        accepted = "Read the handoff first, then run /rawgentic:switch rawgentic."
-        assert dl.resume_prompt_binds_first(accepted)[0]
-        # And the false positive the old rule produced is now correctly accepted.
-        was_wrongly_refused = ("Do not run git fetch before binding. FIRST run "
-                               "/rawgentic:switch rawgentic.")
-        assert dl.resume_prompt_binds_first(was_wrongly_refused)[0]
+    def test_an_explicit_project_overrides_a_stateless_campaign(self):
+        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684}, project=None)
+        disp = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE, project="rawgentic")
+        assert disp["outcome"] == "ready"
+        assert dl.resume_prompt_binds_first(disp["resume_prompt"], project="rawgentic")[0]
 
-    def test_the_prompt_says_why_the_bind_comes_first(self):
+    def test_the_prompt_still_carries_every_instruction_it_used_to(self):
+        """A reviewer checked this by hand; pinning it so a future reword cannot quietly drop one."""
         s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684, "project": "rawgentic"})
         prompt = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE)["resume_prompt"]
-        low = prompt.lower()
-        assert "before" in low and ("unbound" in low or "cannot read" in low)
+        for needle in ("durable state", "never in-context memory", "merged/closed child",
+                       "auth grant", "ERROR comment", "git fetch origin", "#682"):
+            if needle == "#682":
+                continue
+            assert needle in prompt, needle

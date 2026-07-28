@@ -82,12 +82,13 @@ GOAL_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "herdr" / "goal_status_transcr
 TRANSCRIPT_OK = GOAL_FIXTURE.read_text(encoding="utf-8")
 GOAL_CONDITION = ("PR open with green CI, or a blocker is posted to the issue via the ERROR "
                   "protocol")
-# #682: a realistic prompt BINDS FIRST. The old fixture said only "Re-bind the project" with no
-# `/rawgentic:switch` directive at all, which is exactly the unrealism that let an
-# ordering-free prompt ship — `perform_handoff` now refuses one, fail-closed.
-RESUME_PROMPT = ("Fresh-session resume for epic #667. FIRST, before reading any file: run "
-                 "/rawgentic:switch to bind the project — an unbound session cannot Read "
-                 "under projects/. THEN run the next child.")
+# #682: a realistic prompt OPENS with `/rawgentic:switch <project>`. The original fixture said only
+# "Re-bind the project" with no directive at all, so 55 `perform_handoff` tests passed against a
+# prompt that could never have made `project_switched` succeed — the unrealism that let an
+# ordering-free prompt ship. `perform_handoff` now refuses anything that does not open with the bind.
+PROJECT = "rawgentic"
+RESUME_PROMPT = ("/rawgentic:switch rawgentic — run this FIRST, before reading any file. An unbound "
+                 "session cannot Read under projects/. THEN run the next child.")
 REGISTRY_PATH = "/reg.jsonl"
 
 
@@ -130,7 +131,7 @@ def _handoff(**over):
     kw = dict(
         anchor_pane="w1:p1", cwd=str(REPO_ROOT), project_root=str(REPO_ROOT),
         name="child4", goal_condition=GOAL_CONDITION, resume_prompt=RESUME_PROMPT,
-        registry_path=REGISTRY_PATH,
+        expected_project=PROJECT, registry_path=REGISTRY_PATH,
         transcript_dir="/tmp",
         read_text=Artifacts(), sleeper=lambda _s: None,
     )
@@ -532,6 +533,9 @@ def test_cli_goal_text_reports_truncation() -> None:
 
 def _state(tmp_path, **over):
     state = {"campaign": "epic-667", "epic": 667, "generation": 3,
+             # #682: a campaign state needs the project, or there is no valid
+             # `/rawgentic:switch <project>` to head the resume prompt with.
+             "project": PROJECT,
              "session_mode": "fresh-session",
              "issues": [{"number": 611, "status": "merged"},
                         {"number": 612, "status": "queued"}]}
@@ -543,7 +547,7 @@ def _state(tmp_path, **over):
 
 def _handoff_argv(state, tmp_path, **over):
     kw = {"--driver-state": str(state), "--anchor-pane": "w1:p1", "--name": "child4",
-          "--project-root": str(REPO_ROOT), "--cwd": str(REPO_ROOT),
+          "--project-root": str(REPO_ROOT), "--project": PROJECT, "--cwd": str(REPO_ROOT),
           "--registry": "/reg.jsonl", "--transcript-dir": str(tmp_path),
           "--goal-condition": "keep going", "--launch-mode": "fresh",
           "--herdr-mode": "herdr"}
@@ -618,7 +622,7 @@ class TestHandoffCLI:
         state = json.loads(_state(tmp_path).read_text(encoding="utf-8"))
         disposition = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE)
         assert disposition["outcome"] == "ready"
-        assert ll.resume_prompt_for_state(state) == disposition["resume_prompt"]
+        assert ll.resume_prompt_for_state(state, project=PROJECT) == disposition["resume_prompt"]
         assert "612" in disposition["resume_prompt"]
 
     def test_the_condition_can_be_read_verbatim_from_a_transcript(self, tmp_path) -> None:
@@ -769,7 +773,7 @@ class TestResumePrompt:
         r = Runner({"herdr pane split": SPLIT_OK})
         with pytest.raises(ll.LauncherError, match="does not bind first"):
             ll.perform_handoff(runner=r, **_handoff(
-                resume_prompt="Resume epic #667: git fetch origin, then /rawgentic:switch."))
+                resume_prompt="Resume epic #667: git fetch origin, then /rawgentic:switch rawgentic."))
         assert r.calls == [], "a pane was created before the ordering was validated"
 
     def test_a_prompt_with_no_bind_directive_at_all_is_refused(self) -> None:
