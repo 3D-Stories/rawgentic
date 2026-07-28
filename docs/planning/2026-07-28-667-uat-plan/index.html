@@ -215,6 +215,17 @@ footer .row{display:flex;flex-wrap:wrap;gap:8px 26px}
 
   <h1>It flew. It did not <span class="strike">work.</span></h1>
 
+  <p class="why" style="border-left:3px solid var(--human);padding:14px 18px;margin:22px 0 0;
+     background:rgba(224,147,10,.07);max-width:82ch">
+    <b>Plan reworked 2026-07-28 for run 2.</b> The results below are <em>run 1's</em> and stand as
+    history. Since then: <b>#679 is fixed and merged</b> (two root causes, not one — the dead transport
+    AND <code style="font-family:var(--mono)">revision</code> not bumping on every status change), a new
+    <b>tier 7</b> was added for #687's context-pressure trigger, and <b>six checks moved from human to
+    agent</b> after the owner authorised the handoff and the plugin reinstall. Six owner tasks became
+    four owner judgements. Run 2 has <b>37 agent checks</b>; the four owner ids are deliberately not
+    registered in the harness, so an agent cannot record them.
+  </p>
+
   <p class="lede">
     Seven issues merged with 5,612 tests passing and <b>zero live runs</b>. This is what happened when they were finally run: <b>13 pass, 8 blocked on a single Critical, 3 inconclusive, 0 failed</b>. The gate passed — a pane really does reach <b>blocked</b> — and then the transport underneath it turned out to be dead, which no unit test could have seen.
   </p>
@@ -262,7 +273,7 @@ footer .row{display:flex;flex-wrap:wrap;gap:8px 26px}
       <span><i style="background:var(--pass)"></i><b>13 pass</b></span>
       <span><i style="background:var(--hold)"></i><b>8 blocked</b> — every one on #679</span>
       <span><i style="background:var(--human)"></i><b>3 inconclusive</b> — reasons stated</span>
-      <span><i style="background:var(--human)"></i><b>6 human</b> — no permission would help</span>
+      <span><i style="background:var(--human)"></i><b>4 human</b> — re-triaged down from 6 on 2026-07-28; see below</span>
     </div>
     <p style="margin:24px 0 0;font-size:15.5px;color:#A4AEBD;max-width:76ch">
       Four issues filed: <b>#679</b> the transport Critical · <b>#680</b> herdr's manifest matches a
@@ -334,7 +345,7 @@ herdr pane list | grep &lt;newpane&gt;</pre>
   <div class="tier-head">
     <span class="tier-id">Tier 1</span>
     <h3>Blocked-pane watcher <span style="color:var(--faint);font-weight:400">#612</span></h3>
-    <span class="tier-count"><em>7 agent</em> · <strong>1 human</strong> · ~45 min</span>
+    <span class="tier-count"><em>8 agent</em> · <strong>1 human</strong> · ~50 min</span>
   </div>
   <p class="tier-note">
     Void until P1 passes. W1 is a prerequisite, not a test: the watcher currently cannot run
@@ -400,11 +411,18 @@ grep -c UATSECRET-9f3a /tmp/uat.log     # must be 0</pre>
     <p class="pass">One notification on startup. Otherwise a watcher restart goes blind to anything already waiting.</p>
   </div>
 
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">W8a</span>
+      <span class="c-title">The notification is actually <em>delivered</em>, not merely sent</span>
+      <span class="chip agent">Agent</span></div>
+    <p class="why"><b>Re-triaged 2026-07-28 — SPLIT:</b> the delivery half is testable — drive one real block through the production transport and confirm the transport's own success signal rather than just an exit code.</p>
+  </div>
+
   <div class="check human">
-    <div class="c-top"><span class="c-id">W8</span>
-      <span class="c-title">The message reaches your phone, and reads usefully at 3&nbsp;a.m.</span>
+    <div class="c-top"><span class="c-id">W8b</span>
+      <span class="c-title">…and it reads usefully at 3&nbsp;a.m.</span>
       <span class="chip human">Human</span></div>
-    <p class="why"><b>Why not me:</b> I see <code style="font-family:var(--mono);color:#E5C48A">notify.sh</code>'s exit code, never delivery — and whether <em>“pane w1:pB8 blocked”</em> is enough to act on half-asleep is a judgement only the person being woken can make.</p>
+    <p class="why"><b>Why not me:</b> whether <em>“pane w1:pB8 blocked”</em> is enough to act on half-asleep is answerable only by the person being woken. One line to read — not a task.</p>
   </div>
 </section>
 
@@ -414,7 +432,7 @@ grep -c UATSECRET-9f3a /tmp/uat.log     # must be 0</pre>
     <span class="tier-id">Tier 2</span>
     <h3>Mid-child handoff <span style="color:var(--faint);font-weight:400">#665 · #673</span></h3>
     <span class="badge destructive">destructive</span>
-    <span class="tier-count"><em>6 agent</em> · <strong>1 human</strong> · ~1 h</span>
+    <span class="tier-count"><em>7 agent</em> · <strong>0 human</strong> · ~1¼ h</span>
   </div>
   <p class="tier-note">
     <code style="font-family:var(--mono);color:#9FD8E4">retire-predecessor</code> closes a pane.
@@ -472,11 +490,11 @@ grep -c UATSECRET-9f3a /tmp/uat.log     # must be 0</pre>
     <p class="pass">Teardown stays off until the successor's own checks report. The <code style="font-family:var(--mono);color:#9FD8E4">owner</code> key is load-bearing — this proves it is, live.</p>
   </div>
 
-  <div class="check human">
+  <div class="check agent">
     <div class="c-top"><span class="c-id">H7</span>
       <span class="c-title">Run it on a real epic child</span>
-      <span class="chip human">Human</span></div>
-    <p class="why"><b>Why not me:</b> authorisation is not capability. A real handoff kills a live session mid-work; only you can decide that a run is expendable, and only you can watch it from outside.</p>
+      <span class="chip agent">Agent</span></div>
+    <p class="why"><b>Re-triaged 2026-07-28 — now MINE:</b> the blocker was never capability, it was permission — granted 2026-07-28 (D-3). This run's own session handover at the epic seam <em>is</em> the check: a real handoff on a real child, verified through the #665 ladder's own on-disk artifacts.</p>
   </div>
 </section>
 
@@ -485,7 +503,7 @@ grep -c UATSECRET-9f3a /tmp/uat.log     # must be 0</pre>
   <div class="tier-head">
     <span class="tier-id">Tier 3</span>
     <h3>Supply-chain pin <span style="color:var(--faint);font-weight:400">#609</span></h3>
-    <span class="tier-count"><em>2 agent</em> · <strong>1 human</strong> · ~15 min · zero risk</span>
+    <span class="tier-count"><em>3 agent</em> · <strong>1 human</strong> · ~25 min · zero risk</span>
   </div>
   <p class="tier-note">A pin that never fails is not a pin. I only ever watched this one pass.</p>
 
@@ -507,11 +525,18 @@ gh api repos/&lt;repo&gt;/releases/tags/v0.7.5 --jq '.assets[].digest'</pre>
     <p class="pass">Digests equal. The procedure is already written in <code style="font-family:var(--mono);color:#9FD8E4">hooks/herdr-pin.json</code> — this executes it rather than citing it.</p>
   </div>
 
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">V3a</span>
+      <span class="c-title">0.7.6 compatibility evidence</span>
+      <span class="chip agent">Agent</span></div>
+    <p class="why"><b>Re-triaged 2026-07-28 — SPLIT:</b> does 0.7.6 exist, what changed, and do BOTH pinned gates — the AC1 harness and <code style="font-family:var(--mono);color:#E5C48A">HerdrBackend.preflight</code> — still behave correctly against it? All checkable.</p>
+  </div>
+
   <div class="check human">
-    <div class="c-top"><span class="c-id">V3</span>
-      <span class="c-title">Policy when upstream ships 0.7.6</span>
+    <div class="c-top"><span class="c-id">V3b</span>
+      <span class="c-title">…and the upgrade decision itself</span>
       <span class="chip human">Human</span></div>
-    <p class="why"><b>Why not me:</b> pure judgement — auto-follow, pin-and-review, or hold. A supply-chain policy is a risk position, not a check.</p>
+    <p class="why"><b>Why not me:</b> auto-follow, pin-and-review, or hold is a risk position. One sentence, with V3a's evidence attached.</p>
   </div>
 </section>
 
@@ -520,7 +545,7 @@ gh api repos/&lt;repo&gt;/releases/tags/v0.7.5 --jq '.assets[].digest'</pre>
   <div class="tier-head">
     <span class="tier-id">Tier 4</span>
     <h3>Launcher herdr mode <span style="color:var(--faint);font-weight:400">#611 · partial</span></h3>
-    <span class="tier-count"><em>2 agent</em> · <strong>1 human</strong> · ~30 min</span>
+    <span class="tier-count"><em>3 agent</em> · <strong>1 human</strong> · ~40 min</span>
   </div>
   <p class="tier-note">Shipped ACs 1/4/6/7/8 only. Four remain open by design.</p>
 
@@ -540,11 +565,18 @@ gh api repos/&lt;repo&gt;/releases/tags/v0.7.5 --jq '.assets[].digest'</pre>
     <p class="pass">Fresh session starts and adopts the campaign. This is the path whose first live run died in 30 seconds.</p>
   </div>
 
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">L3a</span>
+      <span class="c-title">A recommendation per item, with evidence</span>
+      <span class="chip agent">Agent</span></div>
+    <p class="why"><b>Re-triaged 2026-07-28 — SPLIT:</b> reading #611's four deferred ACs and #666's dissolved premise and recommending re-scope / close / keep for each, with evidence, is work I can do. #666 is the epic's one unticked box — D-16 decoupled cron from the handoff, so a guard refusing <em>fresh-session mode</em> now protects nothing.</p>
+  </div>
+
   <div class="check human">
-    <div class="c-top"><span class="c-id">L3</span>
-      <span class="c-title">Re-scope or close #611's four deferred ACs, and #666's dissolved premise</span>
+    <div class="c-top"><span class="c-id">L3b</span>
+      <span class="c-title">…and the scope call</span>
       <span class="chip human">Human</span></div>
-    <p class="why"><b>Why not me:</b> scope is yours. #666 is the epic's one unticked box — D-16 decoupled cron from the handoff, so a guard that refuses <em>fresh-session mode</em> now protects nothing. Whether that is re-scoped or closed is a product call.</p>
+    <p class="why"><b>Why not me:</b> scope is yours. One sentence per item, against L3a's recommendation.</p>
   </div>
 </section>
 
@@ -553,7 +585,7 @@ gh api repos/&lt;repo&gt;/releases/tags/v0.7.5 --jq '.assets[].digest'</pre>
   <div class="tier-head">
     <span class="tier-id">Tier 5</span>
     <h3>Documentation <span style="color:var(--faint);font-weight:400">#613 · #654 Q1 · #610</span></h3>
-    <span class="tier-count"><em>2 agent</em> · <strong>1 human</strong> · ~40 min · zero risk</span>
+    <span class="tier-count"><em>3 agent</em> · <strong>0 human</strong> · ~50 min · zero risk</span>
   </div>
 
   <div class="check agent">
@@ -573,11 +605,11 @@ gh api repos/&lt;repo&gt;/releases/tags/v0.7.5 --jq '.assets[].digest'</pre>
     <p class="pass">Lands within the claimed 0.18% of the statusline figure on a fresh session.</p>
   </div>
 
-  <div class="check human">
+  <div class="check agent">
     <div class="c-top"><span class="c-id">D3</span>
-      <span class="c-title">A cold operator follows the runbook without help</span>
-      <span class="chip human">Human</span></div>
-    <p class="why"><b>Why not me:</b> structurally impossible. I wrote these docs; I cannot un-know what they omit. Every gap they contain is invisible to their author and obvious to a stranger.</p>
+      <span class="c-title">A cold reader follows the runbook without help</span>
+      <span class="chip agent">Agent</span></div>
+    <p class="why"><b>Re-triaged 2026-07-28 — now MINE:</b> the disqualification was real but it applied to <em>me</em>, not to every agent. A fresh subagent with no authoring context is a genuine cold reader — the independent-reviewer substitution this workspace already sanctions. <b>Honest limit:</b> it will not stumble exactly where a human would, but it does catch missing prerequisites, undefined terms and commands that do not exist.</p>
   </div>
 </section>
 
@@ -586,7 +618,7 @@ gh api repos/&lt;repo&gt;/releases/tags/v0.7.5 --jq '.assets[].digest'</pre>
   <div class="tier-head">
     <span class="tier-id">Tier 6</span>
     <h3>Regression &amp; install</h3>
-    <span class="tier-count"><em>2 agent</em> · <strong>1 human</strong> · ~30 min</span>
+    <span class="tier-count"><em>3 agent</em> · <strong>0 human</strong> · ~45 min</span>
   </div>
 
   <div class="check agent">
@@ -607,48 +639,143 @@ pylint hooks/*.py --disable=all --enable=E,unreachable,f-string-without-interpol
     <p class="pass">Either a reproducer exists, or the follow-up is downgraded with the evidence recorded. The reported <code style="font-family:var(--mono);color:#9FD8E4">audit_completeness: 0.75</code> is still unexplained.</p>
   </div>
 
-  <div class="check human">
+  <div class="check agent">
     <div class="c-top"><span class="c-id">R3</span>
-      <span class="c-title">Reinstall the plugin and confirm a new session loads 3.103.0</span>
-      <span class="chip human">Human</span></div>
-    <p class="why"><b>Why not me:</b> the reinstall requires every hook-using session to exit first — and only you know what is running in the other seven panes. Doing this mid-session corrupts live sessions.</p>
+      <span class="c-title">Reinstall the plugin; a fresh session loads the shipped version</span>
+      <span class="chip agent">Agent</span></div>
+    <p class="why"><b>Re-triaged 2026-07-28 — now MINE:</b> authorised 2026-07-28 (D-3) — and “only you know what is running” turned out to be false: <code style="font-family:var(--mono);color:#E5C48A">pgrep -fa claude</code>, <code style="font-family:var(--mono);color:#E5C48A">herdr pane list</code> and the session registry enumerate it between them. Still ordered LAST, behind a written handoff, because reinstalling under a live session is workspace mistake&nbsp;#9.</p>
   </div>
 </section>
 
-<!-- ══ HUMAN-ONLY ══ -->
+<!-- ══ TIER 7 ══ -->
+<section class="tier">
+  <div class="tier-head">
+    <span class="tier-id">Tier 7</span>
+    <h3>Context-pressure trigger #687 · <em>void until #687 ships</em></h3>
+    <span class="tier-count"><em>7 agent</em> · <strong>1 human</strong> · ~1 h · <strong>restarts this session</strong></span>
+  </div>
+
+  <p class="why" style="margin-top:0">Added 2026-07-28 at the owner's instruction. Every check here is
+  void until #687 merges — they test a trigger that does not exist yet. The risk note is literal: C7
+  cannot be tested without actually handing a session over.</p>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">C1</span>
+      <span class="c-title">The meter's reading agrees with an independently computed one</span>
+      <span class="chip agent">Agent</span></div>
+    <p class="pass">Agreement within cache-read drift. Disagreement beyond that is a FAIL.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">C2</span>
+      <span class="c-title">A crossing emits <em>once per tier</em>, not once per turn</span>
+      <span class="chip agent">Agent</span></div>
+    <p class="pass">Record-before-emit. A second identical nag inside an unchanged tier is a FAIL.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">C3</span>
+      <span class="c-title">Cadence: every 5 turns or 5 minutes, whichever comes first</span>
+      <span class="chip agent">Agent</span></div>
+    <p class="pass">A check on consecutive turns inside the window is a FAIL. Records the honest
+    constraint that hooks fire on <em>events</em>, not timers, so the 5-minute arm is evaluated at the
+    next event rather than at the 5-minute mark.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">C4</span>
+      <span class="c-title">A mid-phase break is refused; a step-boundary break fires</span>
+      <span class="chip agent">Agent</span></div>
+    <p class="pass">The check that separates this feature from a blunt “you are at 80%, stop now”.
+    Driven off the step-state pointer that #480/#499/#502 already ship.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">C5</span>
+      <span class="c-title">Thresholds are relative, never absolute</span>
+      <span class="chip agent">Agent</span></div>
+    <p class="pass">The same token count must tier differently against 200k and 1M. #654 measured the
+    real case: 173,667 tokens is 17.4% of 1M but <b>86.8%</b> of 200k.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">C6</span>
+      <span class="c-title">Fail-open on a bad transcript</span>
+      <span class="chip agent">Agent</span></div>
+    <p class="pass">Absent, truncated or corrupt: emits nothing, blocks nothing. A convenience nag
+    must never be able to wedge a turn.</p>
+  </div>
+
+  <div class="check agent">
+    <div class="c-top"><span class="c-id">C7</span>
+      <span class="c-title">End to end, on a real session</span>
+      <span class="chip agent">Agent</span></div>
+    <p class="pass">Over the hard threshold at a safe seam: handoff written, successor pane created,
+    bound, prompted, given the goal and the task list, predecessor retired <b>last</b>. Reuses the
+    #665 ladder and #682's bind-first ordering — no second mechanism. Deliberately the final check in
+    the whole plan, because whatever runs after it is a different session.</p>
+  </div>
+
+  <div class="check human">
+    <div class="c-top"><span class="c-id">C8</span>
+      <span class="c-title">Did the break land where you would have chosen?</span>
+      <span class="chip human">Human</span></div>
+    <p class="why"><b>Why not me:</b> the only irreducibly subjective part of the feature. Everything
+    above it is mechanical.</p>
+  </div>
+</section>
+
+<!-- ══ RE-TRIAGE ══ -->
 <section class="human-only" aria-labelledby="ho-h">
-  <h3 id="ho-h">The six no amount of permission would fix</h3>
+  <h3 id="ho-h">Four judgements, not six tasks</h3>
   <p class="sub">
-    You asked for technical capability, not permission. These are the ones where the limit is
-    real: I have no eyes on your phone, no authority to spend your risk, and no way to
-    un-read my own documentation.
+    You asked whether more of the human list could become mine. Most of those six were not one
+    indivisible check — they were an <b>agent-checkable fact welded to an owner judgement</b>. Split
+    apart, four move to me and what remains is four short decisions, each arriving with its evidence
+    already gathered.
   </p>
   <div class="ho-list">
     <div class="ho">
-      <p class="t"><span>W8</span>Did the message arrive, and was it useful?</p>
-      <p class="r">I observe an <b>exit code</b>, not a delivery. And “useful at 3 a.m.” is only answerable by the person woken up.</p>
+      <p class="t"><span>H7</span>→ MINE</p>
+      <p class="r">“Authorisation is not capability” — and you gave the authorisation (D-3). This run's
+      own handover is the check.</p>
     </div>
     <div class="ho">
-      <p class="t"><span>H7</span>Authorise a real handoff on a live epic child</p>
-      <p class="r">I can execute it. I cannot <b>decide the run is expendable</b> — that is spending your risk, not mine.</p>
+      <p class="t"><span>R3</span>→ MINE</p>
+      <p class="r">“Only you know what is running” was <b>false</b>: <code>pgrep</code>,
+      <code>herdr pane list</code> and the session registry enumerate it.</p>
     </div>
     <div class="ho">
-      <p class="t"><span>V3</span>Version policy when 0.7.6 lands</p>
-      <p class="r">A <b>risk position</b>, not a test. Auto-follow, pin-and-review, or hold.</p>
+      <p class="t"><span>D3</span>→ MINE, by substitution</p>
+      <p class="r">The disqualification applied to <b>me</b>, not to every agent. A fresh subagent with
+      no authoring context is a real cold reader.</p>
     </div>
     <div class="ho">
-      <p class="t"><span>L3</span>#611's deferred ACs and #666's dissolved premise</p>
-      <p class="r"><b>Scope is yours.</b> I reported that #666's premise dissolved rather than ticking its box; what replaces it is a product call.</p>
+      <p class="t"><span>W8b</span>still yours</p>
+      <p class="r">I proved delivery (W8a). Whether one line reads well <b>half-asleep</b> is yours —
+      and it is a read, not a task.</p>
     </div>
     <div class="ho">
-      <p class="t"><span>D3</span>Cold read of the runbook</p>
-      <p class="r">I wrote it. <b>Its gaps are invisible to me</b> and obvious to a stranger — the one test I am structurally disqualified from.</p>
+      <p class="t"><span>V3b</span>still yours</p>
+      <p class="r">I gather the 0.7.6 compatibility evidence (V3a). The <b>risk position</b> is yours,
+      in a sentence.</p>
     </div>
     <div class="ho">
-      <p class="t"><span>R3</span>Coordinate the plugin reinstall</p>
-      <p class="r">Needs every hook-using session dead first. <b>Only you know what is running</b> in the other panes.</p>
+      <p class="t"><span>L3b</span>still yours</p>
+      <p class="r">I recommend per item with evidence (L3a). <b>Scope</b> is yours.</p>
+    </div>
+    <div class="ho">
+      <p class="t"><span>C8</span>still yours</p>
+      <p class="r">Whether the break landed <b>where you would have chosen</b>. Irreducible.</p>
     </div>
   </div>
+  <p class="sub" style="margin-top:18px">
+    <b>None of this weakens a check.</b> A converted check still produces evidence and records a
+    verdict through a harness that refuses unknown ids — and the judgement halves were split
+    <em>out</em> rather than absorbed, precisely so “the agent thought it looked fine” can never stand
+    in for your call. The four owner ids are deliberately <b>not registered</b> in the harness, so they
+    cannot be recorded by an agent at all.
+  </p>
 </section>
 
 <!-- ══ ORDER OF PLAY ══ -->
@@ -688,9 +815,9 @@ pylint hooks/*.py --disable=all --enable=E,unreachable,f-string-without-interpol
     </div>
     <div class="step">
       <span class="num">06</span>
-      <span class="txt"><b>Then the six that are yours</b>
-      <span>Phone check, cold read, and the three scope calls.</span></span>
-      <span class="cost">human</span>
+      <span class="txt"><b>Tier 7 after #687 merges — C7 dead last</b>
+      <span>C7 hands this session over, so whatever runs after it is a different session.</span></span>
+      <span class="cost">60 min · agent</span>
     </div>
   </div>
 </section>
@@ -711,7 +838,7 @@ pylint hooks/*.py --disable=all --enable=E,unreachable,f-string-without-interpol
     <span>Unverified: <b>that herdr ever sets it</b> — the whole of Tier 0</span>
   </div>
   <div class="row" style="margin-top:12px">
-    <span><b>30 checks · 24 agent · 6 human</b></span>
+    <span><b>run 1: 30 checks · 24 agent · 6 human</b> — <b style="color:var(--pass)">run 2: 41 · 37 agent · 4 owner</b></span>
   </div>
 </footer>
 

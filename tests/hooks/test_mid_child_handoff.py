@@ -207,7 +207,7 @@ class TestCmdHandoffRefusesForeignKinds:
         state = self._state(tmp_path, kind)
         proc = subprocess.run(
             [sys.executable, str(CLI), "handoff", "--driver-state", str(state),
-             "--anchor-pane", "w1:p1", "--name", "succ", "--project-root", str(tmp_path),
+             "--anchor-pane", "w1:p1", "--name", "succ", "--project", "rawgentic", "--project-root", str(tmp_path),
              "--cwd", str(tmp_path), "--registry", str(tmp_path / "reg.jsonl"),
              "--transcript-dir", str(tmp_path), "--goal-condition", "c",
              "--herdr-mode", "herdr"],
@@ -222,7 +222,7 @@ class TestCmdHandoffRefusesForeignKinds:
         p.write_text(json.dumps(state), encoding="utf-8")
         proc = subprocess.run(
             [sys.executable, str(CLI), "handoff", "--driver-state", str(p),
-             "--anchor-pane", "w1:p1", "--name", "succ", "--project-root", str(tmp_path),
+             "--anchor-pane", "w1:p1", "--name", "succ", "--project", "rawgentic", "--project-root", str(tmp_path),
              "--cwd", str(tmp_path), "--registry", str(tmp_path / "reg.jsonl"),
              "--transcript-dir", str(tmp_path), "--goal-condition", "c",
              "--herdr-mode", "herdr"],
@@ -1399,7 +1399,8 @@ class TestAnUnrecordableSuccessorIsAFailedLaunch:
         (tmp_path / "t").mkdir()
         out = ll.perform_handoff(
             anchor_pane=ANCHOR, cwd=str(tmp_path), project_root=str(tmp_path), name="succ",
-            goal_condition=COND, resume_prompt="marker-x do the thing",
+            expected_project="rawgentic",
+            goal_condition=COND, resume_prompt="marker-x /rawgentic:switch rawgentic — bind first, then do the thing",
             registry_path=str(tmp_path / "reg.jsonl"), transcript_dir=str(tmp_path / "t"),
             runner=runner, sleeper=lambda _s: None, read_text=lambda p: "",
             prompt_marker="marker-x", steps=ll.mid_child_verification_steps(),
@@ -1420,7 +1421,7 @@ class TestTheGoalConditionIsBoundToTheLiveGuard:
         `--goal-condition-from` while the parser made them mutually exclusive), so the check it
         claimed to pin was unreachable in production."""
         return ["mid-child-handoff", "--driver-state", str(state), "--anchor-pane", ANCHOR,
-                "--name", "succ", "--project-root", str(tmp_path), "--cwd", str(tmp_path),
+                "--name", "succ", "--project", "rawgentic", "--project-root", str(tmp_path), "--cwd", str(tmp_path),
                 "--registry", str(tmp_path / "reg.jsonl"),
                 "--transcript-dir", str(tmp_path / "transcripts"),
                 "--issue", str(ISSUE), "--step", "8", "--branch", BRANCH,

@@ -485,8 +485,15 @@ class TestCampaignGoalText:
 # ======================================================================= #
 # #569: fresh-session-per-child handoff helpers
 # ======================================================================= #
-def _st(issues, *, mode=None, generation=None, campaign="epic-475", extra=None):
+def _st(issues, *, mode=None, generation=None, campaign="epic-475", extra=None,
+        project="rawgentic"):
+    # #682: `project` is part of a workable campaign state — without it there is no valid
+    # `/rawgentic:switch <project>` to put at the head of a resume prompt, so
+    # `fresh_session_handoff` returns `no_project` rather than `ready`. Default it here so existing
+    # tests keep testing what they were written to test; pass `project=None` to exercise the refusal.
     s = {"schema_version": 2, "campaign": campaign, "issues": issues}
+    if project is not None:
+        s["project"] = project
     if mode is not None:
         s["session_mode"] = mode
     if generation is not None:
@@ -793,3 +800,112 @@ class TestOpenHandoffCarriesMidChildFields:
         assert ok2 is True and acked["handoff_claim"]["started"] is True
         # the position survives claim + ack untouched
         assert acked["handoff_pending"]["position"]["branch"] == "feat/665-mid-child-handoff"
+
+
+class TestTheResumePromptBindsFirst:
+    """#682: `perform_handoff` gives a fresh successor `SWITCH_POLL_ATTEMPTS (40) x
+    SWITCH_POLL_DELAY_S (3.0)` = 120 s to bind and append to the session registry, then declares
+    `failed_step: project_switched` and CLOSES ITS PANE. Observed live three times (epic #667 UAT,
+    check L2). The observation is CONFOUNDED and the issue says so — a synthetic issue 99998 sent the
+    successor investigating a nonexistent issue — but the unconfounded concern stands: the budget
+    assumes the bind comes first and nothing enforced it.
+
+    **This class is shaped by three review passes, each of which refuted the previous attempt:**
+
+    1. A bare `/rawgentic:switch` does not bind at all — the skill enters LIST MODE and waits for a
+       human, so the first version of the fix would not have fixed anything.
+    2. A keyword-position classifier is unsound: it refused "Do not run git fetch before binding.
+       FIRST run /rawgentic:switch rawgentic" and accepted "First read the handoff; then switch".
+    3. Substring matching accepted `rawgentic-next` for `rawgentic`, and an optional `project`
+       degraded the check to "has any argument", which accepts the English word after a bare
+       directive.
+
+    So the contract is now a PREFIX check with an EXACT token compare and a REQUIRED project — no
+    classification of prose anywhere.
+    """
+
+    def test_the_canonical_prompt_opens_with_the_bind(self):
+        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684, "project": "rawgentic"})
+        prompt = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE)["resume_prompt"]
+        assert prompt.startswith("/rawgentic:switch rawgentic")
+        assert dl.resume_prompt_binds_first(prompt, project="rawgentic")[0]
+
+    def test_the_mid_child_prompt_opens_with_its_marker_then_the_bind(self):
+        """The marker must stay first — it is the `prompt_landed` evidence — so the prefix check
+        skips exactly one marker and no more."""
+        s = _st([_iss(665, "in_progress")], generation=4, extra={"epic": 667})
+        prompt = dl.mid_child_handoff(s, position=_position())["resume_prompt"]
+        assert prompt.startswith(dl.mid_child_marker(665, 5))
+        assert dl.resume_prompt_binds_first(prompt, project=_position()["project"])[0], prompt
+
+    def test_a_bare_bind_is_refused_with_the_list_mode_reason(self):
+        ok, why = dl.resume_prompt_binds_first("/rawgentic:switch then work.", project="rawgentic")
+        assert not ok and ("list mode" in why or "not the expected project" in why)
+
+    def test_a_prompt_that_reads_before_binding_is_refused(self):
+        """The case every softer rule accepted, and the reason the check is a prefix: 'bind
+        eventually' is exactly the ordering that burns the budget."""
+        ok, why = dl.resume_prompt_binds_first(
+            "Read the handoff first, then run /rawgentic:switch rawgentic.", project="rawgentic")
+        assert not ok and "does not OPEN with" in why
+
+    def test_a_prefix_sharing_project_is_refused(self):
+        """Substring matching bound the successor to the WRONG project: `/rawgentic:switch
+        rawgentic-next` satisfied a `find()` for `/rawgentic:switch rawgentic`."""
+        ok, why = dl.resume_prompt_binds_first(
+            "/rawgentic:switch rawgentic-next — go.", project="rawgentic")
+        assert not ok and "rawgentic-next" in why
+
+    def test_switch_off_is_not_a_bind(self):
+        """`/rawgentic:switch off <name>` DEACTIVATES a project — it satisfies a naive
+        directive-plus-argument rule while doing the opposite of binding."""
+        assert not dl.resume_prompt_binds_first("/rawgentic:switch off rawgentic.",
+                                               project="rawgentic")[0]
+
+    def test_the_project_is_required_not_optional(self):
+        """An optional project degraded the check to "has any argument", which accepts the English
+        word after a bare directive — a guard admitting the defect it exists to stop."""
+        ok, why = dl.resume_prompt_binds_first("/rawgentic:switch rawgentic.", project=None)
+        assert not ok and "no valid project name was supplied" in why
+
+    @pytest.mark.parametrize("bad", ["", "   ", "../etc", "a b", "x" * 70, "-lead", None, 42])
+    def test_a_project_name_must_look_like_a_project_name(self, bad):
+        """The name is interpolated into prompt text sent to a pane with `send-text`, and was
+        validated only as "a non-empty string" — so control characters or instruction-like prose
+        could ride in. Step-11 provenance finding."""
+        assert not dl.valid_project_name(bad)
+
+    def test_ordinary_project_names_are_accepted(self):
+        for good in ("rawgentic", "rawgentic-next", "3dstories-studio", "chore_board", "a"):
+            assert dl.valid_project_name(good), good
+
+    def test_a_non_string_prompt_is_refused_rather_than_crashing(self):
+        for bad in (None, 42, [], {}):
+            assert not dl.resume_prompt_binds_first(bad, project="rawgentic")[0]
+
+    def test_a_handoff_with_no_project_never_reaches_ready(self):
+        """Step-11 finding: the guard used to run inside `perform_handoff`, i.e. AFTER the contract
+        has the predecessor call `open_handoff` — which bumps `generation` and writes
+        `handoff_pending`. A refusal there stranded an unclaimed generation that every retry refused
+        identically. Refusing at DISPOSITION time means nothing is persisted at all."""
+        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684}, project=None)
+        disp = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE)
+        assert disp["outcome"] == "no_project" and disp["errors"]
+        # `open_handoff` acts only on "ready", so there is nothing to roll back.
+        assert dl.open_handoff(s, disp, now_ts=1000) == s
+
+    def test_an_explicit_project_overrides_a_stateless_campaign(self):
+        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684}, project=None)
+        disp = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE, project="rawgentic")
+        assert disp["outcome"] == "ready"
+        assert dl.resume_prompt_binds_first(disp["resume_prompt"], project="rawgentic")[0]
+
+    def test_the_prompt_still_carries_every_instruction_it_used_to(self):
+        """A reviewer checked this by hand; pinning it so a future reword cannot quietly drop one."""
+        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684, "project": "rawgentic"})
+        prompt = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE)["resume_prompt"]
+        for needle in ("durable state", "never in-context memory", "merged/closed child",
+                       "auth grant", "ERROR comment", "git fetch origin", "#682"):
+            if needle == "#682":
+                continue
+            assert needle in prompt, needle
