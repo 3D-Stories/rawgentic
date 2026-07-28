@@ -875,3 +875,57 @@ class TestAnAC5RefusalStillLeavesEvidence:
         assert report["pending_at_exit"] == ["w1:pA"], report
         assert any("AC5 refusal" in e for e in report["errors"]), report
         assert "SECRET" not in json.dumps(report), report
+
+
+class TestAnAC5RefusalIsNeverRetriedWithTheOffendingLabel:
+    """Step 11 pass-8 CRITICAL, and this leak was created BY my own pass-7 fix. `safe_record` kept the
+    offending `label` while stripping `terminal_title`, so the retry could no longer repeat the
+    provenance comparison and DELIVERED the screen text. Reproduced by the reviewer on both paths."""
+
+    def _leaky_line(self):
+        pane = json.loads(_updated("w1:pA", "blocked", 6))["data"]["pane"]
+        pane["label"] = pane["terminal_title"]          # identity == screen text
+        return json.dumps({"event": "pane_updated", "data": {"pane": pane}})
+
+    def test_the_retry_after_a_refusal_never_sends_the_screen_text(self):
+        rec = pw.Reconciler(_snapshot([("w1:pA", "working", 5, "alpha")]))
+        sent = []
+        ticks = iter([1000.0, 1000.0, 99999.0])
+        report = pw.watch_stream([self._leaky_line(), None], reconciler=rec,
+                                 sender=lambda b: (sent.append(b), 0)[1],
+                                 clock=lambda: next(ticks), debouncer=pw.Debouncer(window_s=0.0),
+                                 emit=lambda _m: None, heartbeat_s=1.0)
+        assert all("SECRET" not in b for b in sent), sent
+        assert any("AC5 refusal" in e for e in report["errors"]), report
+
+    def test_a_startup_refusal_reaches_the_TOP_LEVEL_report(self):
+        """Pass-8: startup refusals were stranded in `sweep["errors"]`, so the top-level accounting the
+        previous pass claimed was simply not there."""
+        pane = {"pane_id": "w1:pA", "workspace_id": "w1", "agent_status": "blocked",
+                "label": "SECRET prompt text", "terminal_title": "SECRET prompt text",
+                "revision": 6}
+        rec = pw.Reconciler({"snapshot": {"panes": [pane]}})
+        sweep = pw.startup_sweep(rec, sender=lambda b: 0, now=1000.0, emit=lambda _m: None)
+        assert sweep.get("errors"), sweep
+        report = pw.watch_stream([], reconciler=rec, sender=lambda b: 0, clock=lambda: 1000.0,
+                                 emit=lambda _m: None, pending=sweep["pending"],
+                                 pending_errors=sweep.get("errors"))
+        assert any("AC5 refusal" in e for e in report["errors"]), report
+        assert "SECRET" not in json.dumps(report), report
+
+    def test_a_stall_refusal_does_not_destroy_the_report(self):
+        """Pass-8: an unhandled refusal in the stall loop aborted everything, so a DIFFERENT pane's
+        stale label destroyed the accounting for a genuinely blocked one."""
+        panes = [{"pane_id": "w1:pIDLE", "workspace_id": "w1", "agent_status": "idle",
+                  "label": "SECRET prompt text", "terminal_title": "SECRET prompt text",
+                  "revision": 1},
+                 {"pane_id": "w1:pA", "workspace_id": "w1", "agent_status": "working",
+                  "revision": 5, "name": "alpha"}]
+        rec = pw.Reconciler({"snapshot": {"panes": panes}})
+        ticks = iter([1000.0, 1000.0, 99999.0])
+        report = pw.watch_stream([_updated("w1:pA", "blocked", 6, name="alpha"), None],
+                                 reconciler=rec, sender=lambda b: 1,
+                                 clock=lambda: next(ticks), emit=lambda _m: None,
+                                 heartbeat_s=1.0)
+        assert report["pending_at_exit"] == ["w1:pA"], report
+        assert "SECRET" not in json.dumps(report), report

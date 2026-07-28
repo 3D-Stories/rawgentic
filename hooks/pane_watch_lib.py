@@ -588,7 +588,8 @@ def startup_sweep(reconciler, *, sender, now, debouncer=None, emit=print) -> dic
             rc = int(sender(body_for_pane(pane, status=BLOCKED)))
         except WatchError as exc:
             # Same as the stream path: a refusal is a failed send, recorded, never an abort.
-            out.setdefault("errors", []).append(f"AC5 refusal for a blocked pane: {exc}")
+            out.setdefault("errors", []).append(
+                f"AC5 refusal for a blocked pane {pane_id}: {exc}")
             emit(f"pane-watch: startup AC5 refusal — {exc}")
             rc = 1
         except Exception as exc:  # pylint: disable=broad-except
@@ -607,7 +608,9 @@ def startup_sweep(reconciler, *, sender, now, debouncer=None, emit=print) -> dic
             # Step 11 pass-3 BLOCKER: releasing the window scheduled no retry, and a stable blocked
             # pane emits nothing newer — so the owner was never told. Hand it to the stream as
             # PENDING so the heartbeat retries it.
-            out["pending"][pane_id] = safe_record(pane)
+            out["pending"][pane_id] = ({"pane_id": pane_id} if out.get("errors") and
+                                       any(pane_id in e for e in out["errors"])
+                                       else safe_record(pane))
             emit(f"pane-watch: startup sweep SEND FAILED for {pane_id} (rc={rc}) — pending retry")
     return out
 
@@ -615,12 +618,14 @@ def startup_sweep(reconciler, *, sender, now, debouncer=None, emit=print) -> dic
 def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
                  heartbeat_s: float = DEFAULT_HEARTBEAT_S, stall_s: float = DEFAULT_STALL_S,
                  emit=print, beat=None, live_panes=None, already_notified=None,
-                 pending=None, current_pane=None) -> dict:
+                 pending=None, current_pane=None, pending_errors=None) -> dict:
     """Drive a stream of wire lines. All I/O is via `sender`, `clock`, `emit` and `beat`.
 
     A `None` line is a read timeout, not an event: it exists so the heartbeat fires during silence.
     Never calls sys.exit — the caller decides the exit code.
     """
+    refused_identity: set = set()
+
     def _send(pane_rec) -> int:
         """Every sender call goes through here. Step 11 pass-4: the calls were unguarded and `main`
         catches only `WatchError`, so the real sender's `TimeoutExpired` killed the watcher and the
@@ -632,8 +637,15 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
             # Step 11 pass-7: re-raising bypassed report finalization, so a pane whose label equals
             # its `terminal_title` ended with NO notification and NO structured evidence — the
             # refusal was right, but it destroyed the accounting that proves something was owed.
+            #
+            # Step 11 pass-8 (CRITICAL, and this was MY leak): the pending record kept the offending
+            # `label` while `safe_record` stripped `terminal_title`, so the retry could no longer
+            # repeat the provenance comparison and DELIVERED the screen text. A refused pane is
+            # therefore re-queued by pane_id ALONE — its identity falls back to the pane id, which is
+            # never screen-derived.
             report["errors"].append(f"AC5 refusal for a blocked pane: {exc}")
             emit(f"pane-watch: AC5 refusal — cannot safely name this pane: {exc}")
+            refused_identity.add(pane_rec.get("pane_id"))
             return 1
         except Exception as exc:  # pylint: disable=broad-except
             emit(f"pane-watch: sender raised {type(exc).__name__} — treating as a failed send")
@@ -648,6 +660,7 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
     # and the heartbeat retries it, so delivery no longer depends on another frame arriving —
     # which was the hole pass-3 found on both the sweep and the new-pane paths.
     pending_sends: dict[str, dict] = dict(pending or {})
+    sweep_errors: list = list((pending_errors or []))
     # A creation refused because the live-pane set could not be read. Retried the same way, so a
     # transient snapshot failure no longer blinds the watcher to that pane forever.
     pending_registrations: dict[str, dict] = {}
@@ -660,6 +673,7 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
     report = {"subscribed": False, "events": 0, "notified": [], "suppressed": 0,
               "dropped": 0, "errors": [], "heartbeats": 0, "send_failures": 0, "stalls": [],
               "pending_at_exit": []}
+    report["errors"].extend(sweep_errors)     # pass-8: startup refusals were stranded in the sweep
     last_beat = clock()
     for pane_id in reconciler.known_panes():
         since.setdefault(pane_id, last_beat)
@@ -743,8 +757,14 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
                     debouncer.release(pane_id)
                     emit(f"pane-watch: retry failed for {pane_id} — still pending")
             for pane_id, first_seen in list(since.items()):
-                warning = stall_warning(pane=reconciler.meta(pane_id), since=first_seen, now=now,
-                                        threshold_s=stall_s)
+                try:
+                    warning = stall_warning(pane=reconciler.meta(pane_id), since=first_seen,
+                                            now=now, threshold_s=stall_s)
+                except WatchError as exc:
+                    # Step 11 pass-8: an unhandled refusal here aborted the whole loop, so a DIFFERENT
+                    # pane's stale-label problem destroyed the accounting for a genuinely blocked one.
+                    report["errors"].append(f"AC5 refusal while warning about {pane_id}: {exc}")
+                    continue
                 if warning is not None and pane_id not in report["stalls"]:
                     report["stalls"].append(pane_id)
                     emit(warning)
@@ -835,8 +855,9 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
             # more subtly. Neither the window nor the transition state is consumed by a failed send.
             debouncer.release(event.pane_id)
             reconciler.rollback(event.pane_id, was_revision)
-            pending_sends[event.pane_id] = safe_record(
-                event.pane or reconciler.meta(event.pane_id))
+            pending_sends[event.pane_id] = (
+                {"pane_id": event.pane_id} if event.pane_id in refused_identity
+                else safe_record(event.pane or reconciler.meta(event.pane_id)))
             report["send_failures"] += 1
             emit(f"pane-watch: SEND FAILED for {event.pane_id} (rc={rc}) — pending retry")
     # Step 11 pass-6: this reported only `pending_sends`, so an unresolved DEFERRED REGISTRATION left
@@ -872,7 +893,8 @@ def _cmd_watch(args) -> int:
         debouncer=debouncer, heartbeat_s=args.heartbeat_s, stall_s=args.stall_s,
         beat=lambda now, rep: write_heartbeat(args.heartbeat_path, now=now, report=rep),
         live_panes=live_pane_ids, already_notified=sweep["notified"],
-        pending=sweep["pending"], current_pane=current_pane_record)
+        pending=sweep["pending"], current_pane=current_pane_record,
+        pending_errors=sweep.get("errors"))
     report["startup_sweep"] = sweep
     print(json.dumps(report, indent=2))
     return 0 if report["subscribed"] and not report["errors"] else 4
