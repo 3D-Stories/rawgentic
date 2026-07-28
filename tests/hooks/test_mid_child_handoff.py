@@ -1593,3 +1593,99 @@ class TestAnExplicitlyAssertedReplacedGuardIsRefused:
         rc = ll.main(TestTheGoalConditionIsBoundToTheLiveGuard()._argv(
             tmp_path, state, transcript, "--goal-condition", COND))
         assert rc == 3
+
+
+class TestNothingHappensBetweenTheBaselineAndTheClearSend:
+    """Step 11 pass-4 (Critical). The pass-3 restructure claimed `fence → probe → baseline → send`,
+    but `_destructive_call` re-ran its own fence AND a whole `herdr pane get` between the baseline
+    and the transport — so a `met:true` row for the RECORDED condition landing during those reads
+    sat below the baseline and confirmed a clear herdr never executed. This pins the ORDERING
+    structurally, because the timing itself is not observable from a test."""
+
+    def test_no_pane_get_occurs_between_the_last_probe_and_the_clear_text(self, tmp_path):
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "retired", out
+        kinds = world.kinds()
+        i_clear = kinds.index("clear_text")
+        assert kinds[i_clear - 1] == "pane_get", kinds
+        # exactly one probe immediately before the send — not two, and nothing else between
+        assert "pane_get" not in kinds[i_clear - 1:i_clear][1:], kinds
+
+    def test_a_matching_row_appearing_before_the_send_cannot_confirm(self, tmp_path):
+        """The residual is now baseline→syscall only. Prove the guard still refuses when the row
+        that would confirm us is already present BEFORE the send: the predecessor's guard is then
+        provably not unmet, so the pre-clear check refuses and nothing is transported."""
+        world = _world(tmp_path)
+        world.pred_transcript.write_text(
+            "\n".join([_goal_row(COND, met=False), _goal_row(COND, met=True)]) + "\n",
+            encoding="utf-8")
+        state = _write_state(tmp_path, world)
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "refused", out
+        assert "clear_text" not in world.kinds() and "pane_close" not in world.kinds()
+
+
+class TestTheReceiptComparisonActuallyBites:
+    def test_a_stale_receipt_with_a_wrong_baseline_fails_position_rebuilt(self, tmp_path,
+                                                                        monkeypatch):
+        """Step 11 pass-4: the echo test could not fail if the read-back comparison were deleted,
+        because the implementation writes the value it then compares. This blocks the refresh so a
+        genuinely stale receipt — right generation and claimant, WRONG baseline — is read back."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        _mutate_state(state, lambda s: s["handoff_pending"].update(
+            rebuild_receipt={"generation": GEN, "claimant": SUCC, "branch_observed": BRANCH,
+                             "repo_root_observed": world.repo, "step": "8",
+                             "test_baseline_observed": "9999 passed — a stale baseline", "ts": 1}))
+        real = ll._locked_state_update
+
+        def blocking_update(path, mutate):
+            probe = mutate(json.loads(Path(path).read_text(encoding="utf-8")))
+            if isinstance(probe, dict) \
+                    and isinstance(probe.get("handoff_pending"), dict) \
+                    and "5362" in str(probe["handoff_pending"].get("rebuild_receipt", {})
+                                      .get("test_baseline_observed", "")):
+                return None                       # the refresh cannot be persisted
+            return real(path, mutate)
+
+        monkeypatch.setattr(ll, "_locked_state_update", blocking_update)
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "teardown_refused"
+        assert out["failed_step"] == "position_rebuilt", out
+        assert "clear_text" not in world.kinds() and "pane_close" not in world.kinds()
+
+
+class TestAReArmedPredecessorIsNotClosed:
+    """Step 11 pass-4 (Critical, reproduced by a reviewer): the close path re-checked driver state
+    and pane identity but never GUARD state, so a predecessor that armed a new guard between the
+    confirmed clear and the close was closed anyway — destroying a live guarded context. The
+    declared clear-to-close window assumes it stays unguarded; this is the case where it does not."""
+
+    def test_a_new_guard_after_the_confirmed_clear_stops_the_close(self, tmp_path):
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+
+        def runner(argv, timeout=180):
+            result = world(argv, timeout)
+            # after the clear is confirmed, the predecessor is prompted and arms a NEW guard
+            if argv[:3] == ["herdr", "pane", "send-keys"]:
+                world._append_pred(_goal_row("a brand new guard it just armed", met=False))
+            return result
+
+        out = _retire(state, world, tmp_path, runner=runner)
+        assert out["outcome"] == "predecessor_re_armed", out
+        assert "pane_close" not in world.kinds(), world.kinds()
+        assert "rearm_text" not in world.kinds(), world.kinds()
+        assert _state_of(state)["handoff_pending"]["teardown_phase"] == "predecessor_re_armed"
+        assert out["ok"] is False
+
+    def test_a_normally_cleared_predecessor_is_still_closed(self, tmp_path):
+        """The check must not block the ordinary path: after a confirmed clear the newest row is
+        our own met:true, which is not a re-arm."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "retired", out
+        assert world.kinds().count("pane_close") == 1

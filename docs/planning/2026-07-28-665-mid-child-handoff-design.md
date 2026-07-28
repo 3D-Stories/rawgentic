@@ -214,7 +214,7 @@ text.
 | 2 | `goal_armed` | successor transcript below the pre-launch offset: a `goal_status` attachment with `met:false` whose condition equals the one actually armed | both |
 | 3 | `prompt_landed` | successor transcript below the offset: the handoff marker token, matched as a plain SUBSTRING | both |
 | 4 | `project_switched` | `claude_docs/session_registry.jsonl` below the offset: ONE line carrying the NEW session id AND `project` AND `project_path` equal to the recorded values | both |
-| 5 | `position_rebuilt` | a REBUILD RECEIPT the successor writes into `.driver-state` under the lock, carrying `{generation, claimant, branch_observed, repo_root_observed, step, ts}`, validated against `handoff_pending.position` and against the claim's generation + claimant. The two `git -C <repo_root> rev-parse` readings (`--show-toplevel`, `--abbrev-ref HEAD`) are recorded IN the receipt as corroboration | successor |
+| 5 | `position_rebuilt` | a REBUILD RECEIPT the successor writes into `.driver-state` under the lock, carrying `{generation, claimant, branch_observed, repo_root_observed, step, test_baseline_observed, ts}`, validated against `handoff_pending.position` and against the claim's generation + claimant. The two `git -C <repo_root> rev-parse` readings (`--show-toplevel`, `--abbrev-ref HEAD`) are recorded IN the receipt as corroboration | successor |
 | 6 | `state_claimed` | `.driver-state` `handoff_claim` with the matching generation and claimant and `started: true` | successor |
 
 `evaluate_verifications` and `teardown_allowed` take an optional `steps` argument defaulting to
@@ -237,7 +237,7 @@ predecessor was working there. A successor that did nothing at all would pass. T
 state "can only be made true by actually doing the checkout" was simply false.
 
 So `position_rebuilt` is now a **rebuild receipt**: the successor writes
-`{generation, claimant, branch_observed, repo_root_observed, step, ts}` into `.driver-state` under
+`{generation, claimant, branch_observed, repo_root_observed, step, test_baseline_observed, ts}` into `.driver-state` under
 the lock, and teardown validates it against `handoff_pending.position` AND against the claim's own
 generation and claimant. The two `git -C <repo_root> rev-parse` readings are recorded inside the
 receipt as corroboration rather than treated as proof.
@@ -321,7 +321,7 @@ launch mode `fresh` carries no `--resume`, so its transcript contains only its o
 6. **Gate.** `teardown_allowed(results, steps=<the six-step ladder>)`. Not allowed means return now: **the predecessor is left running AND still guarded** (AC6).
 7. **Prove the target's identity before touching it.** `herdr pane get <anchor>` must return `agent_session.value` EXACTLY equal to `position.predecessor_session`. A pane id is a reusable handle and syntax validation cannot detect a stale or recycled one. The successor must also PASS `--anchor-pane`, and it must equal `position.predecessor_pane`: two independent sources must agree before anything destructive happens. Any mismatch, or a missing session value, refuses both destructive steps.
 8. **Re-check that the guard is still in force,** per §5's current-state rule: the LATEST `goal_status` row for the armed condition must still be `met:false`. If it is not, refuse — retiring the predecessor when the continuing session is already unguarded is the original defect.
-9. **Record the phase, then clear the guard, then CONFIRM it cleared.** Persist `teardown_phase: "clearing"` under the lock BEFORE sending anything (R4 — so a crash in the window below is discoverable rather than invisible). Then send `herdr pane send-text <anchor> "/goal clear"` and `herdr pane send-keys <anchor> Enter` — both return codes checked, failure of either aborts before `pane close` — and **poll the predecessor's transcript below a baseline taken before the send for a `goal_status` row with `met:true` and `sentinel:true`**. A zero return code proves only that keystrokes were transported, not that the slash command was parsed or that the guard changed state; without the semantic confirmation a silently ignored `/goal clear` reaches exactly the close-before-clear outcome this design forbids with every check green. On timeout or malformed evidence: report `clear_unconfirmed` and **leave the pane open**.
+9. **Record the phase, then clear the guard, then CONFIRM it cleared.** Persist `teardown_phase: "clearing"` under the lock BEFORE sending anything (R4 — so a crash in the window below is discoverable rather than invisible). Then send `herdr pane send-text <anchor> "/goal clear"` and `herdr pane send-keys <anchor> Enter` — both return codes checked, failure of either aborts before `pane close` — and **poll the predecessor's transcript below a baseline taken IMMEDIATELY before the send for a `goal_status` row with `met:true`, `sentinel:true` AND the recorded condition** (Step 11 pass-3: an unbound row let a REPLACEMENT guard's own clear confirm ours, and a live pane was closed). A zero return code proves only that keystrokes were transported, not that the slash command was parsed or that the guard changed state; without the semantic confirmation a silently ignored `/goal clear` reaches exactly the close-before-clear outcome this design forbids with every check green. On timeout or malformed evidence: report `clear_unconfirmed` and **leave the pane open**.
 10. **Close the pane** — `herdr pane close <anchor>`, return code checked, bounded retries (2) — then clear `teardown_phase` under the lock.
 
 **The partial-success state is named and contained.** If the clear is confirmed but the close then
@@ -347,7 +347,7 @@ earlier revision claimed a successor dying mid-teardown always leaves the predec
 guarded. That is false between a CONFIRMED clear (step 9) and a successful close (step 10): in that
 window the predecessor is alive and **unguarded**, and if the successor dies there, nothing re-arms
 it. The window is now (a) bounded — up to three close attempts, each preceded by its own identity probe and state fence, with the clear already confirmed — and
-(b) **discoverable**, because `teardown_phase: "clearing"` is persisted before the clear is sent, so
+(b) **discoverable in the normal case**, because `teardown_phase: "clearing"` is persisted before the clear is sent, so
 an operator or a later handoff generation reads the state and knows exactly what was in flight
 instead of inferring it. The consequence is a stalled run, not lost work: the predecessor's context
 and its branch are intact, and recovery is a new handoff generation.
@@ -448,11 +448,11 @@ platform_apis:
 | a previous handoff aborted (`cancelled: true`) | both `retire_predecessor` and `_cmd_handoff` refuse the record; no lease can be taken on it |
 | the caller is not the recorded successor session | refused at step 2, before any claim; predecessor untouched |
 | the successor's guard is no longer in force at the pre-clear re-check | refused; predecessor alive and guarded (retiring it here would leave the run unguarded) |
-| successor crashes between a CONFIRMED clear and a successful close | predecessor alive and **UNGUARDED** — the one window where that is true; `teardown_phase: "clearing"` is on disk so the state is discoverable; the run stalls, the branch and context survive, recovery is a new handoff generation |
+| successor crashes between a CONFIRMED clear and a successful close | predecessor alive and **UNGUARDED** — the one window where that is true; `teardown_phase: "clearing"` is on disk so the state is discoverable — except when a newer generation owns the record, where the write is correctly refused and only the returned report carries the incident; the run stalls, the branch and context survive, recovery is a new handoff generation |
 | pane inventory unavailable, or split response not provably new | refuse before or instead of claiming ownership; possible orphan REPORTED, never closed (#611 discipline, unchanged) |
 | goal never arms | successor pane closed (ownership proven), predecessor alive and guarded |
 | resume prompt never lands, or project/path never matches | same as above |
-| successor is not on the recorded branch, is not in the recorded repository, or its receipt disagrees with the record on generation, claimant or step | `position_rebuilt` fails; teardown refused; predecessor alive, guarded, and still holding the live context. (The receipt carries no `test_baseline` — an earlier revision of this row implied it did, corrected at Step 11) |
+| successor is not on the recorded branch, is not in the recorded repository, or its receipt disagrees with the record on generation, claimant or step | `position_rebuilt` fails; teardown refused; predecessor alive, guarded, and still holding the live context. (The receipt carries `test_baseline_observed` and compares it, added at Step 11 pass-3 because #665's own AC4 addendum required it) |
 | successor cannot claim (stale generation, foreign claimant) | predecessor alive and guarded; the run continues in place |
 | pre-teardown identity check fails (pane no longer hosts the recorded session, or the anchor argument disagrees with durable state) | both destructive steps refused; predecessor alive and guarded; reported loudly |
 | `send-text` for `/goal clear` returns a definite failure | abort BEFORE `pane close`; nothing transported; predecessor alive and STILL guarded |

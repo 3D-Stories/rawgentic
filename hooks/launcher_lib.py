@@ -1817,7 +1817,18 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
 
         text_landed = False
         for kind, argv in (("clear_text", clear_text), ("clear_keys", clear_keys)):
-            proc, refusal_why, _refusal_kind = _destructive_call(argv, kind)
+            if kind == "clear_text":
+                # `_run` DIRECTLY, not `_destructive_call` (Step 11 pass-4). The fence and the
+                # identity probe already ran immediately above, and `_destructive_call` would run
+                # them AGAIN — a state-file round-trip plus a whole `herdr pane get` subprocess —
+                # between the baseline and the transport. A reviewer showed that reopened the hole
+                # pass 3 was meant to close: a `met:true` row for the RECORDED condition landing
+                # during those duplicated reads sits below the baseline, so it confirms a clear that
+                # herdr never executed. Now nothing at all happens between the baseline and this
+                # send, which is what the docs claim.
+                proc, refusal_why, _refusal_kind = (_run(argv, kind), None, None)
+            else:
+                proc, refusal_why, _refusal_kind = _destructive_call(argv, kind)
             if refusal_why is not None:
                 # Step 11 pass-2 (fixes 3): if the TEXT already landed, a refusal here must not
                 # erase the staged-command warning — the `/goal clear` is sitting unsubmitted and a
@@ -1892,12 +1903,46 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
         # already belong to an unrelated session. Closing on an old proof would kill that session
         # and report `retired`. Re-arming would paste into it too, so when the target stops being
         # provably the predecessor's, nothing further is done.
+        def _predecessor_re_armed() -> str | None:
+            """Has the predecessor become GUARDED AGAIN since we cleared it?
+
+            Step 11 pass-4 (Critical, reproduced): the close path re-checked driver state and pane
+            identity but never guard state. So a predecessor that armed a NEW guard between the
+            confirmed clear and the close — it is a live session and can be prompted — was closed
+            anyway, destroying a guarded working context. The declared clear-to-close window assumes
+            the predecessor stays unguarded; this is the case where it does not.
+
+            Returns a refusal reason when it is guarded again, else None. Fail-safe on an unreadable
+            transcript: no evidence of a re-arm is not evidence of one, and the clear was already
+            confirmed, so treating an unreadable read as "re-armed" would strand every teardown
+            behind a transient I/O error.
+            """
+            rows = [r for r in _iter_goal_status(read_or_empty(pred_transcript))]
+            if not rows:
+                return None
+            newest = rows[-1]
+            if newest.get("met") is False:
+                return (f"the predecessor has ARMED A NEW GUARD since the clear was confirmed "
+                        f"(newest condition {newest.get('condition')!r} is unmet) — it is a live "
+                        "guarded session again, so closing it would destroy a working context this "
+                        "teardown was never authorised to touch")
+            return None
+
         close_argv = build_teardown_argv(anchor_pane)
         closed = False
         target_lost: str | None = None
         for attempt in range(CLOSE_ATTEMPTS):
             if attempt:
                 sleeper(CLOSE_RETRY_DELAY_S)
+            re_armed = _predecessor_re_armed()
+            if re_armed is not None:
+                phase_ok, phase_why = _phase("predecessor_re_armed", fenced=False)
+                out["outcome"] = "predecessor_re_armed"
+                out["reason"] = (
+                    re_armed + ". Refusing to close or re-arm."
+                    + ("" if phase_ok else
+                       f" WARNING: not persisted to teardown_phase ({phase_why})."))
+                return out
             proc, refusal_why, refusal_kind = _destructive_call(
                 close_argv, "pane_close", note=f"attempt {attempt + 1}/{CLOSE_ATTEMPTS}")
             if refusal_kind in ("mismatch", "state"):
