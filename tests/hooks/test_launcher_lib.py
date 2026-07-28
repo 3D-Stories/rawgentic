@@ -1239,3 +1239,78 @@ class TestVerbatimConditionExtraction:
         row = json.dumps({"attachment": {"type": "goal_status", "met": False,
                                          "condition": cond}})
         assert ll.last_unmet_goal_condition(row) == cond
+
+
+# ---------------------------------------------------------------------------
+# A freshly split pane is not immediately an available shell — found LIVE, 2026-07-28
+# ---------------------------------------------------------------------------
+
+# The verbatim refusal herdr 0.7.5 returns when `agent start` targets a pane whose shell has
+# not come up yet. Captured from a real run against the live server during epic #667: the
+# handoff split successfully, `agent start` failed instantly, and the ownership discipline
+# correctly closed the tentative pane — so the whole handoff aborted on a condition that
+# resolves itself in a second or two.
+AGENT_PANE_BUSY = json.dumps({
+    "error": {"code": "agent_pane_busy",
+              "message": "agent target pane w1:pBC is not an available shell"},
+    "id": "cli:agent:start"})
+
+
+class BusyThenReadyRunner(Runner):
+    """`herdr agent start` refuses with agent_pane_busy for the first N calls, then succeeds."""
+
+    def __init__(self, busy_times, **kw):
+        super().__init__(**kw)
+        self.busy_times = busy_times
+        self.start_calls = 0
+
+    def __call__(self, argv, timeout=180):
+        if self.key(argv) == "herdr agent start":
+            self.calls.append(list(argv))
+            self.start_calls += 1
+            if self.start_calls <= self.busy_times:
+                return FakeProc(returncode=1, stdout=AGENT_PANE_BUSY)
+            return FakeProc(returncode=0, stdout="")
+        return super().__call__(argv, timeout=timeout)
+
+
+class TestSplitPaneReadiness:
+    def test_agent_start_is_retried_while_the_pane_is_busy(self) -> None:
+        """The pane becomes available on its own; the handoff must wait for it rather than
+        abort. Before this fix a real handoff died here with the split already done."""
+        r = BusyThenReadyRunner(2, responses={"herdr pane split": SPLIT_OK,
+                                              "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["ok"] is True, out
+        assert r.start_calls == 3, "expected two refusals then a success"
+
+    def test_a_pane_that_never_becomes_available_still_fails_closed(self) -> None:
+        """Bounded, not infinite: a genuinely broken pane must still abort — and must still
+        close the tentative pane, because ownership never transferred."""
+        r = BusyThenReadyRunner(10_000, responses={"herdr pane split": SPLIT_OK,
+                                                   "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["ok"] is False
+        assert out["failed_step"] == "agent_start"
+        assert r.start_calls == ll.PANE_READY_ATTEMPTS
+        assert out["cleanup"] == "closed tentative pane w1:pZZ"
+
+    def test_a_non_busy_failure_is_not_retried(self) -> None:
+        """Only the self-resolving condition is waited on. A different refusal — a bad name, a
+        dead server — is terminal, and retrying it would just delay the abort."""
+        r = Runner(responses={"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK},
+                   fail_on="herdr agent start")
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["ok"] is False and out["failed_step"] == "agent_start"
+        assert r.kinds().count("herdr agent start") == 1
+
+    def test_the_refusal_body_is_recorded_on_the_step(self) -> None:
+        """The live failure cost a manual reproduction to diagnose because the sequence
+        discarded herdr's own error payload. Keep it on the step record."""
+        r = BusyThenReadyRunner(10_000, responses={"herdr pane split": SPLIT_OK,
+                                                   "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff())
+        starts = [s for s in out["steps"] if s["kind"] == "agent_start"]
+        assert starts, "no agent_start step recorded"
+        assert any("agent_pane_busy" in (s.get("note") or "") for s in starts), \
+            "herdr's error code must survive onto the step record"

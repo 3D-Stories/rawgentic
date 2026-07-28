@@ -119,6 +119,20 @@ GOAL_POLL_DELAY_S = 1.5
 SWITCH_POLL_ATTEMPTS = 40
 SWITCH_POLL_DELAY_S = 3.0
 
+# A freshly split pane is NOT immediately an available shell. Found live on 2026-07-28 (epic
+# #667): the split succeeded, `agent start` refused instantly with
+# `{"error":{"code":"agent_pane_busy","message":"agent target pane <id> is not an available
+# shell"}}`, and the whole handoff aborted on a condition that resolves itself in about a
+# second. Every test passed beforehand because an injected runner answers instantly — the gap
+# was between the split and the shell, which only a live run has.
+#
+# So `agent start` is retried while herdr reports exactly this code, and only this code: a
+# different refusal (a malformed name, a dead server) is terminal and retrying it would just
+# postpone the abort. Bounded, because what follows creates a session and arms a guard.
+PANE_READY_ERROR_CODE = "agent_pane_busy"
+PANE_READY_ATTEMPTS = 15
+PANE_READY_DELAY_S = 2.0
+
 # Order is CAUSAL. The guard is armed before the successor is given work — a session handed a
 # resume prompt before its goal exists is an UNGUARDED run — and the registry row cannot appear
 # until the resume prompt has made it run `/rawgentic:switch`. Checking `project_switched`
@@ -729,9 +743,26 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         start_argv = build_agent_start_argv(name=name, pane=new_pane,
                                             claude_args=claude_args,
                                             readiness_timeout_ms=readiness_timeout_ms)
-        proc = runner(start_argv)
-        record("agent_start", start_argv, proc)
-        if getattr(proc, "returncode", 1) != 0:
+        # The pane herdr just created needs a moment before it is an available shell (see
+        # PANE_READY_* above — found live, not in tests). Wait for exactly that condition.
+        started = False
+        for attempt in range(PANE_READY_ATTEMPTS):
+            if attempt:
+                sleeper(PANE_READY_DELAY_S)
+            proc = runner(start_argv)
+            body = f"{getattr(proc, 'stdout', '') or ''}{getattr(proc, 'stderr', '') or ''}"
+            busy = _is_pane_busy(proc, body)
+            if getattr(proc, "returncode", 1) == 0:
+                record("agent_start", start_argv, proc)
+                started = True
+                break
+            record("agent_start", start_argv, proc,
+                   note=(f"herdr refused: {PANE_READY_ERROR_CODE} — waiting for the pane's "
+                         f"shell (attempt {attempt + 1}/{PANE_READY_ATTEMPTS})") if busy
+                   else _error_note(body))
+            if not busy:
+                break
+        if not started:
             out["failed_step"] = "agent_start"
             return out
 
@@ -837,6 +868,43 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             return out
     out["ok"] = True
     return out
+
+
+def _is_pane_busy(proc, body: str) -> bool:
+    """True only when herdr refused with its OWN `agent_pane_busy` code.
+
+    Keyed on the machine-readable code, never on a substring of the human message: the message
+    embeds the pane id and is free to change, while the code is the contract. Anything else —
+    including an unparseable body — is NOT this condition, so it stays terminal.
+    """
+    if getattr(proc, "returncode", 1) == 0:
+        return False
+    try:
+        doc = json.loads(body)
+    except (ValueError, TypeError):
+        return False
+    err = doc.get("error") if isinstance(doc, dict) else None
+    return isinstance(err, dict) and err.get("code") == PANE_READY_ERROR_CODE
+
+
+def _error_note(body: str) -> str | None:
+    """herdr's error payload, preserved on the step record.
+
+    The live 2026-07-28 failure cost a hand reproduction to diagnose purely because this was
+    thrown away: the step said `rc=1` and nothing else, so the actual code — the one thing that
+    identified the condition as self-resolving — was invisible.
+    """
+    body = (body or "").strip()
+    if not body:
+        return None
+    try:
+        doc = json.loads(body)
+        err = doc.get("error") if isinstance(doc, dict) else None
+        if isinstance(err, dict):
+            return f"herdr error: {err.get('code')} — {err.get('message')}"
+    except (ValueError, TypeError):
+        pass
+    return f"herdr said: {body[:200]}"
 
 
 def _pane_inventory(runner) -> set[str] | None:
