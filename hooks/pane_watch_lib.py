@@ -586,8 +586,11 @@ def startup_sweep(reconciler, *, sender, now, debouncer=None, emit=print) -> dic
             continue
         try:
             rc = int(sender(body_for_pane(pane, status=BLOCKED)))
-        except WatchError:
-            raise
+        except WatchError as exc:
+            # Same as the stream path: a refusal is a failed send, recorded, never an abort.
+            out.setdefault("errors", []).append(f"AC5 refusal for a blocked pane: {exc}")
+            emit(f"pane-watch: startup AC5 refusal — {exc}")
+            rc = 1
         except Exception as exc:  # pylint: disable=broad-except
             # Step 11 pass-5: this call was unguarded while the guard lived only in `watch_stream`,
             # and the sweep runs FIRST — so the real sender's `TimeoutExpired` killed the watcher
@@ -625,8 +628,13 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
         prevent. An exception is a failed send, nothing more."""
         try:
             return int(sender(body_for_pane(pane_rec, status=BLOCKED)))
-        except WatchError:
-            raise
+        except WatchError as exc:
+            # Step 11 pass-7: re-raising bypassed report finalization, so a pane whose label equals
+            # its `terminal_title` ended with NO notification and NO structured evidence — the
+            # refusal was right, but it destroyed the accounting that proves something was owed.
+            report["errors"].append(f"AC5 refusal for a blocked pane: {exc}")
+            emit(f"pane-watch: AC5 refusal — cannot safely name this pane: {exc}")
+            return 1
         except Exception as exc:  # pylint: disable=broad-except
             emit(f"pane-watch: sender raised {type(exc).__name__} — treating as a failed send")
             return 1

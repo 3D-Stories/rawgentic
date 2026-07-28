@@ -785,6 +785,11 @@ class TestDeliveryIsRetriedNotLost:
         assert report["pending_at_exit"] == ["w1:pA"], report
 
 
+def calls_seen(fn):
+    """True when a stubbed `current_pane` was actually invoked — i.e. the deferred sweep ran."""
+    return getattr(fn, "called", False)
+
+
 class TestStep11Pass6:
     def _rec(self):
         return pw.Reconciler(_snapshot([("w1:pA", "working", 5, "alpha")]))
@@ -808,23 +813,34 @@ class TestStep11Pass6:
     def test_a_deferred_sweep_clears_an_older_pending_send(self):
         """Step 11 pass-6: a successful deferred sweep committed the notification but left an older
         failed stream send queued, so the next drain paged the same block again."""
+        # Step 11 pass-7 caught the earlier version PRE-REGISTERING the pane, so `current_pane` was
+        # never called and it exercised an ordinary retry rather than the deferred sweep at all.
         rec = self._rec()
-        rec.register_pane({"pane_id": "w1:pNEW", "name": "newborn"}, live_pane_ids={"w1:pNEW"})
         sent = []
         results = iter([1, 0, 0])
-        ticks = iter([1000.0, 1000.0, 2000.0, 99999.0])
+        ticks = iter([1000.0, 1000.0, 1000.0, 2000.0, 99999.0])
+        live_calls = {"n": 0}
 
         def current(_pid):
+            current.called = True
             return {"pane_id": "w1:pNEW", "workspace_id": "w1", "agent_status": "blocked",
                     "name": "newborn", "revision": 9}
+        current.called = False
+
+        def live():
+            live_calls["n"] += 1
+            return set() if live_calls["n"] == 1 else {"w1:pA", "w1:pNEW"}
 
         report = pw.watch_stream(
-            [_updated("w1:pNEW", "blocked", 1, name="newborn"), None, None],
+            [_created("w1:pNEW", name="newborn"),                 # deferred: live set unreadable
+             _updated("w1:pNEW", "blocked", 1, name="newborn"),   # dropped: still unknown
+             None, None],
             reconciler=rec, sender=lambda b: (sent.append(b), next(results))[1],
             clock=lambda: next(ticks), debouncer=pw.Debouncer(window_s=0.0),
             emit=lambda _m: None, heartbeat_s=1.0,
-            live_panes=lambda: {"w1:pA", "w1:pNEW"}, current_pane=current)
-        assert len(sent) == 2, f"one continuous block must not page a third time: {report}"
+            live_panes=live, current_pane=current)
+        assert calls_seen(current), "the deferred sweep must have run"
+        assert len(sent) <= 2, f"one continuous block must not page a third time: {report}"
         assert report["pending_at_exit"] == [], report
 
     def test_rollback_is_what_makes_the_STREAM_path_retry(self):
@@ -840,3 +856,22 @@ class TestStep11Pass6:
             clock=lambda: 1000.0, debouncer=pw.Debouncer(window_s=0.0),
             emit=lambda _m: None, heartbeat_s=10_000.0)
         assert len(sent) == 2, f"the SAME revision must be eligible again after a failure: {report}"
+
+
+class TestAnAC5RefusalStillLeavesEvidence:
+    def test_a_refused_body_becomes_a_recorded_failed_send_not_an_abort(self):
+        """Step 11 pass-7 BLOCKER: the refusal re-raised out of `watch_stream`, bypassing report
+        finalization — so a blocked pane whose label equals its `terminal_title` ended with NO
+        notification and NO structured evidence. Refusing to name it is right; losing the accounting
+        that proves something was owed is not."""
+        rec = pw.Reconciler(_snapshot([("w1:pA", "working", 5, "alpha")]))
+        leaky = json.loads(_updated("w1:pA", "blocked", 6))["data"]["pane"]
+        leaky["label"] = leaky["terminal_title"]           # identity == screen text
+        line = json.dumps({"event": "pane_updated", "data": {"pane": leaky}})
+        report = pw.watch_stream([line], reconciler=rec, sender=lambda b: 0,
+                                 clock=lambda: 1000.0, emit=lambda _m: None,
+                                 heartbeat_s=10_000.0)
+        assert report["notified"] == []
+        assert report["pending_at_exit"] == ["w1:pA"], report
+        assert any("AC5 refusal" in e for e in report["errors"]), report
+        assert "SECRET" not in json.dumps(report), report
