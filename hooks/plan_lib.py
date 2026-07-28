@@ -2259,13 +2259,21 @@ def write_review_state(
 
 
 @contextmanager
-def _file_lock(path: str):
-    """Context manager: hold an exclusive flock on `path` (created if absent).
+def file_lock(path: str):
+    """Context manager: hold an exclusive flock on a SIDECAR of `path` (created if absent).
 
     WF2 is single-writer-per-branch by design (one orchestrator session
-    drives a feature branch at a time), so this lock is a defense-in-depth
-    measure against accidental concurrent invocations rather than a
-    primary correctness mechanism.
+    drives a feature branch at a time), so for the loop-back counters this
+    lock is a defense-in-depth measure against accidental concurrent
+    invocations rather than a primary correctness mechanism.
+
+    Public since #665: `launcher_lib`'s driver-state read-modify-write needs the
+    SAME lock, and a second flock implementation would be exactly the duplication
+    `atomic_write_lib` exists to prevent. The sidecar (`<path>.lock`) rather than
+    `path` itself is load-bearing for that caller: `flock` follows the opened
+    inode, while an atomic write installs a NEW inode at the pathname, so a lock
+    taken on the target would let two waiters hold locks on different inodes and
+    interleave their read-modify-write cycles.
     """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     # Open in append mode so the file is created if missing without
@@ -2405,7 +2413,7 @@ def consume_loopback(path: str, source: str) -> tuple[bool, dict]:
     """
     if source not in _LOOPBACK_SOURCES:
         raise ValueError(f"unknown loopback source: {source!r}")
-    with _file_lock(path):
+    with file_lock(path):
         state = _read_loopback_state(path)
         if state[source] >= _LOOPBACK_SOURCE_MAX[source]:
             return False, state

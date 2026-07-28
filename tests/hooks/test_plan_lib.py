@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -2039,3 +2040,65 @@ class TestBranchProtectionHardening:
         st, details = mod.classify_branch_protection(200, {"enforce_admins": {"enabled": True}})
         assert st == "protected"
         assert details["required_checks"] == []
+
+
+class TestPublicFileLock:
+    """`file_lock` is public because another module now needs it (#665).
+
+    It was `_file_lock`, private, with exactly one internal caller. `retire_predecessor` in
+    `launcher_lib` needs the SAME lock — a second flock implementation would be the duplication
+    `atomic_write_lib` was created to end. These tests pin the two properties that make it usable
+    from outside: it is reachable by a public name, and it locks a STABLE SIDECAR rather than the
+    target file. The sidecar matters more than it looks: `flock` follows the opened inode, while
+    `atomic_write_text` installs a NEW inode at the pathname, so a lock on the target itself would
+    let two waiters hold locks on different inodes and interleave read-modify-write.
+    """
+
+    def test_file_lock_is_public(self):
+        mod = _reload_plan_lib()
+        assert callable(getattr(mod, "file_lock", None)), (
+            "plan_lib.file_lock must be public — launcher_lib's driver-state writer imports it")
+
+    def test_file_lock_locks_a_sidecar_not_the_target(self, tmp_path):
+        mod = _reload_plan_lib()
+        target = tmp_path / "state.json"
+        target.write_text('{"a": 1}', encoding="utf-8")
+        before = target.read_bytes()
+        with mod.file_lock(str(target)):
+            pass
+        assert (tmp_path / "state.json.lock").exists(), "the lock must be a sidecar file"
+        assert target.read_bytes() == before, "locking must not touch the target's content"
+
+    def test_file_lock_serialises_two_writers(self, tmp_path):
+        """A second holder must WAIT. Proven with a real subprocess taking the lock and sleeping:
+        the parent's acquisition can only succeed after the child releases, so the observed order
+        is the evidence, not a timing assumption."""
+        target = tmp_path / "state.json"
+        target.write_text("{}", encoding="utf-8")
+        order = tmp_path / "order.txt"
+        child_src = (
+            "import sys, time\n"
+            f"sys.path.insert(0, {str(HOOKS_DIR)!r})\n"
+            "from plan_lib import file_lock\n"
+            f"with file_lock({str(target)!r}):\n"
+            f"    open({str(order)!r}, 'a').write('child-in\\n')\n"
+            "    time.sleep(1.0)\n"
+            f"    open({str(order)!r}, 'a').write('child-out\\n')\n"
+        )
+        proc = subprocess.Popen([sys.executable, "-c", child_src])
+        try:
+            deadline = time.time() + 10
+            while time.time() < deadline and "child-in" not in (
+                    order.read_text(encoding="utf-8") if order.exists() else ""):
+                time.sleep(0.05)
+            assert order.exists() and "child-in" in order.read_text(encoding="utf-8"), (
+                "child never acquired the lock")
+            mod = _reload_plan_lib()
+            with mod.file_lock(str(target)):
+                order.write_text(order.read_text(encoding="utf-8") + "parent-in\n",
+                                 encoding="utf-8")
+        finally:
+            proc.wait(timeout=15)
+        lines = [ln for ln in order.read_text(encoding="utf-8").splitlines() if ln]
+        assert lines == ["child-in", "child-out", "parent-in"], (
+            f"parent acquired the lock before the child released it: {lines}")

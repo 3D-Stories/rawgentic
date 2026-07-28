@@ -195,7 +195,7 @@ The implementation is `hooks/launcher_lib.py`. `perform_handoff` is the wired se
 1. Record the current size and prefix digest of `session_registry.jsonl` — its **baseline**. Only evidence appearing after it counts (§7.4).
 2. Take a full `herdr pane list` inventory. This is **required**: it is the only thing that can later show a returned pane id is genuinely new, so a `pane list` that fails — or that carries a single malformed record — refuses the handoff before anything is created.
 3. `herdr pane split --pane <anchor> --direction down --cwd <repo>`, then strictly parse the new pane id out of the response. An unparseable response aborts.
-4. `herdr agent start <name> --kind claude --pane <new> --timeout <ms>` — **with no goal** (see §7.2).
+4. `herdr agent start <name> --kind claude --pane <new> --timeout <ms>` — **with no goal** (see §7.2). **A freshly split pane is not yet an available shell**, so this call is retried while — and only while — herdr answers with its own `agent_pane_busy` code (up to 15 attempts, 2 s apart). Any other refusal is terminal, because retrying a malformed name or a dead server would only postpone the abort. A pane that never becomes available still fails closed and still closes the tentative pane. See §7.8 for how this was found.
 5. `herdr agent wait <new> --until idle --timeout <ms>` — readiness, before anything is pasted.
 6. `herdr pane get <new>` → the successor's session id. Record its transcript's pre-launch offset too.
 7. `herdr pane send-text <new> "/goal <condition>"` then `herdr pane send-keys <new> Enter`.
@@ -260,7 +260,7 @@ Pane text is rendered, wrapped, and scrolls away, so it is never the evidence. A
 
 Truncation is surfaced, never silent: if the condition exceeds the 4000-char cap (which includes the `/goal ` prefix and the truncation note, so a 4000-char condition does not itself fit), the wired path reports it on the step record.
 
-The condition itself is read **verbatim** from the predecessor's own last unmet `goal_status` row (`launcher_lib.py read-goal-condition --transcript <file>`), never retyped or summarised. The **last** unmet row wins, because a run can re-arm its goal and only the most recent row states what is still owed. No unmet row is an explicit refusal, not an invented condition.
+The condition itself is read **verbatim** from the predecessor's own last unmet `goal_status` row (`launcher_lib.py read-goal-condition --transcript <file>`), never retyped or summarised. For the mid-child path that is now ENFORCED rather than merely documented (Step 11): an explicitly supplied `--goal-condition` is checked against the transcript, and a condition that a later `met:true` row has satisfied — or that a replacement guard has superseded — is refused, because arming the successor with it would hand over a guard that is not what is owed and would also re-arm the predecessor wrongly on the partial-success path. The **last** unmet row wins, because a run can re-arm its goal and only the most recent row states what is still owed. No unmet row is an explicit refusal, not an invented condition.
 
 ### 7.5 Fallback, and what is deliberately NOT a fallback
 
@@ -274,11 +274,135 @@ The third branch is exactly #666's narrowed condition.
 
 ### 7.6 What is NOT yet proven (#611 ACs 2, 3, 5)
 
-Honest status, so this section is not read as more than it is. The sequence in §7.1 is implemented, has an in-repo entry point, and is driven end to end in tests through an injected runner. It has **not** been executed against a live herdr server or a real cron firing, and no workspace launcher calls it yet (those scripts are not in any git repo).
+Honest status, so this section is not read as more than it is. The sequence in §7.1 is implemented, has an in-repo entry point, and is driven end to end in tests through an injected runner.
 
-- **AC2 (cron to headless-server path) and AC3 (a real resume cycle through cron landing in a pane) are unproven.** Both need an actual cron firing, i.e. a crontab write, which is owner-gated on this host.
-- **AC5 (a real build-seat dispatch inside a cron-spawned successor) is blocked by #671.** The build seat resolves to a Claude model while `MUTATING_FS_SANDBOXED` allowlists `codex` alone, so a mutating dispatch is refused at STEP 0 before pane resolution is reached. Pane availability is necessary but not sufficient until #671 is resolved.
+**Corrected 2026-07-28 (#673):** an earlier revision of this section said the sequence had never been executed against a live herdr server. That is no longer true — it has, twice, and the first run **failed**. §7.8 records what that cost and what it changed. It still has not run under a real cron firing, and no workspace launcher calls it yet (those scripts are not in any git repo).
+
+- **AC2 (cron to headless-server path), AC3 (a real resume cycle through cron landing in a pane) and AC5 (a real build-seat dispatch inside a cron-spawned successor) were WITHDRAWN into the separate 5-hour-cron service** by owner decision (epic #667 autorun log, D-16), not merely left unproven. All three are cron-framed, and the decision decoupled the cron concern from the handover: the cron service resumes the **already-active** session rather than starting a new one, so it needs none of this machinery. AC2 is worse than unproven — rawgentic carries `headlessEnabled: false`, so it would have proved a path this project does not use.
+- **AC5's blocker stands on its own merits and is tracked as #671.** The build seat resolves to a Claude model while `MUTATING_FS_SANDBOXED` allowlists `codex` alone, so a mutating dispatch is refused at STEP 0 before pane resolution is reached. Pane availability is necessary but not sufficient until #671 is resolved. Nothing in the context-driven handover (§8) needs the build seat.
 
 ### 7.7 Correction to a documented gotcha
 
 The top-level `herdr wait` genuinely does not exist in 0.7.5 (tracked as #659), but **`herdr agent wait <target> --until idle|working|blocked|done|unknown --timeout <ms>` does exist** and is the readiness primitive §7.1 step 5 uses. Scope #659 to the top-level form rather than claiming the capability is absent.
+
+### 7.8 The pane-readiness failure, measured (#673)
+
+The first live run of `perform_handoff` on this host aborted at step 4. `herdr pane split` succeeded, then `herdr agent start` refused **instantly** with:
+
+```
+{"error":{"code":"agent_pane_busy","message":"agent target pane w1:pBC is not an available shell"}}
+```
+
+The same call succeeded on the first attempt about 30 seconds later, so the condition is self-resolving: a pane herdr has just created needs a moment before a shell is available in it. All 145 of #611's tests passed beforehand because an injected runner answers instantly — the gap was between the split and the shell, which only a live run has. §7.6 had declared exactly this exposure ("not been executed against a live herdr server"), and the first live execution found a real defect in the first 30 seconds.
+
+Two things were wrong, both fixed in #673:
+
+- The retry did not exist. It now keys on the machine-readable `error.code`, never on the human message — the message embeds the pane id and is free to change, while the code is the contract.
+- **herdr's error payload was thrown away.** The step record said `rc=1` and nothing else, so the one piece of information that identified the condition as self-resolving was invisible and diagnosing it needed a hand reproduction. The payload is now preserved on the step record.
+
+The lesson worth keeping: a sequence whose every effect is injected in tests is verified against the *protocol*, not against the *timing*. Anything with a server on the other end needs one live run before its runbook claims it works.
+
+## 8. Interactive mid-child session handoff (#665)
+
+§7 crosses a **child boundary**: a child reaches a terminal outcome, the session ends, a launcher starts a fresh one, and the successor picks up the next child. This section is the other case — *"I am mid-child, out of context, hand me over and keep going"* — whose trigger is **context exhaustion, never cron** (epic #667, owner decision D-16). The 5-hour cron window is a separate service that resumes the already-active session, so it needs none of this.
+
+Done by hand on 2026-07-27 it half-worked, and the three failures are what this exists to prevent: the goal never armed (an AUTO-MERGE run with no completion guard), the predecessor would not die (its unmet goal blocked Stop nine times, leaving the session alive and idle), and the task list did not transfer. The root cause was not a missing call — it was **no verification between steps**, because the handoff bypassed `driver_lib` entirely.
+
+**Two commands, run by two different sessions**, because the handover and the retirement have different owners:
+
+```bash
+# the PREDECESSOR, out of context, hands over
+python3 hooks/launcher_lib.py mid-child-handoff \
+  --driver-state claude_docs/.driver-state/<campaign>.json \
+  --anchor-pane "$HERDR_PANE_ID" --name succ-665 \
+  --project-root . --cwd . \
+  --registry ../../claude_docs/session_registry.jsonl \
+  --transcript-dir ~/.claude/projects/<slug> \
+  --issue 665 --step 8 --branch feat/665-mid-child-handoff \
+  --test-baseline "5362 passed, 21 skipped, 0 failed, exit 0" \
+  --project rawgentic --project-path ./projects/rawgentic \
+  --repo-root "$PWD" --goal-condition-from ~/.claude/projects/<slug>/<own-session>.jsonl
+
+# the SUCCESSOR, only after it is actually on the branch with position rebuilt
+python3 hooks/launcher_lib.py retire-predecessor \
+  --driver-state claude_docs/.driver-state/<campaign>.json \
+  --anchor-pane w1:p1 --transcript-dir ~/.claude/projects/<slug> \
+  --registry ../../claude_docs/session_registry.jsonl
+```
+
+Both default their own session id to `$CLAUDE_CODE_SESSION_ID` and refuse rather than guess when it is unset.
+
+### 8.1 Durable mid-child position
+
+`.driver-state` gains an optional `position` object **inside the existing `handoff_pending` object** `open_handoff` already writes — not a new top-level key and not a second file. Ten required fields: `issue`, `step`, `branch`, `test_baseline`, `predecessor_pane`, `predecessor_session`, `goal_condition`, `project`, `project_path`, `repo_root`. A partial position is worse than none, because the successor rebuilds from it and the teardown gate compares live state against it — a hole there reads as agreement. When no position is supplied the written record is byte-identical to #569's, which is the compatibility proof.
+
+`goal_condition` is recorded **here, at handoff time, by the predecessor** rather than re-derived later. The partial-success recovery in §8.4 re-arms the predecessor's guard, and reading that condition from the *successor's* transcript would arm the predecessor with the successor's guard — silently truncated if the 4000-char cap applied. The predecessor is the only party that can record its own last unmet condition verbatim.
+
+`project_path` joins `project` because a project *label* is not proof of a repository; nothing establishes that labels are globally unique. Both are matched. The honest bound: an exact string comparison against the value the registry's own producer writes, **not** a filesystem canonicalisation — it claims nothing about symlinks.
+
+**A task list is deliberately not the transfer unit.** The harness task tools are session-scoped, and the live predecessor on 2026-07-27 held 30 task subjects spanning three unrelated projects. The successor rebuilds from `.driver-state` plus the position record and re-derives its own list.
+
+### 8.2 The `kind` discriminator is a CLOSED allowlist
+
+`handoff_pending` used to mean exactly one thing: *start the next child*. It now means two, and §7's entry point reads the same file. So the rule is an allowlist, not an equality test:
+
+| `kind` | `handoff` (§7) behaviour |
+|---|---|
+| absent | legacy child-boundary handoff — proceeds exactly as before |
+| `mid_child` | **REFUSED**: a mid-child resume is already in flight, and a second successor would compete for one generation |
+| any other value — a misspelling, a different case, a non-string | **REFUSED** as an unrecognised handoff kind |
+
+Equality-only matching would let `MID_CHILD` or `42` fall through to the legacy branch and launch a second successor from a record it does not understand.
+
+An **aborted** handoff sets `cancelled: true`, and both commands refuse a cancelled record. This is not cosmetic: the record is written before the pane is split (a successor cannot claim what was never written), and until a later `open_handoff` bumps the counter the abandoned record **is** the current generation and therefore claimable, so a delayed or stray successor could otherwise take a lease on it. The cancel is monotonic — it wins before the claim is `started` and is refused after, because takeover has already happened.
+
+**Every `.driver-state` read-modify-write in this path goes through one locked helper** holding `plan_lib.file_lock` across read → validate → atomic replace. An advisory lock only serialises writers that participate, so a lock held for the write alone would still let another writer's update land between this one's read and its replace. The lock is on a stable `<path>.lock` **sidecar**, because `flock` follows the opened inode while an atomic replace installs a new inode at the pathname. Known boundary, not implied to be solved: the epic-run skill's prose-driven status writers do **not** take this lock. That is tolerable here because the driver and the predecessor are the same session and its status writes happen at child boundaries, while a mid-child handoff by definition happens between them — one writer at a time by construction. Migrating those writers is filed as a follow-up.
+
+### 8.3 The verification ladder — six checks, causal order
+
+| # | check | artifact | who proves it |
+|---|---|---|---|
+| 1 | `spawned` | `herdr pane get <new>` yields a non-empty `agent_session.value`, which the predecessor **records** into `handoff_pending.successor` | predecessor |
+| 2 | `goal_armed` | successor transcript: a `goal_status` attachment with `met:false` whose condition is the one actually armed | predecessor |
+| 3 | `prompt_landed` | successor transcript: the generation-bound handoff marker, matched as a plain **substring** | predecessor |
+| 4 | `project_switched` | `session_registry.jsonl`: ONE line carrying the new session id **and** the recorded project **and** project_path | predecessor |
+| 5 | `position_rebuilt` | a rebuild **receipt** the successor writes under the state lock, validated against the position record and the claim's own generation and claimant | successor |
+| 6 | `state_claimed` | `handoff_claim` with the matching generation and claimant and `started:true` | successor |
+
+Fail-closed is unchanged from §7.4: an unreported step counts as failed. #611's three-step launch ladder is untouched — the mid-child ladder is a separate tuple, and each step carries an `owner`, which is load-bearing rather than documentation: a ladder carrying successor-owned checks forces predecessor-side teardown **off**, so a predecessor can never retire itself after only the four checks it can make.
+
+**Why `prompt_landed` is a substring match.** A live probe on 2026-07-28 searched a real transcript for a phrase from a prompt pasted into a pane. It was present verbatim three times — carried in `{"type":"queue-operation","content":…}` and `{"type":"attachment","attachment":{"type":"queued_command","prompt":…}}` rows, and **not** in a `type:"user"` row. A structured match keyed on row shape would have failed every handoff, which is the same class of defect #611 shipped once with its invented `goal_status` shape. So this check asserts nothing about row shape. An empty marker is refused rather than matched, since `"" in anything` is true.
+
+**Why the successor records its own identity check differently.** A session has no way to discover its own pane id — herdr 0.7.5 exposes no pane environment, the same fact that makes orphan reporting report-only. So the predecessor, which observed both values, writes `successor: {pane, session}` under the lock immediately after its `pane get`, and `retire-predecessor` asserts that its **own** `$CLAUDE_CODE_SESSION_ID` equals the recorded one. That is an identity binding, and it is an INTERLOCK rather than an authentication boundary — see the paragraph below on what it does and does not withstand.
+
+**`position_rebuilt` is an ATTESTATION, and this page will not dress it up as more.** Two earlier attempts were weaker than they read. An echo of values the successor had just copied from the record proved nothing. Live `git rev-parse` readings were then **vacuous**, because the shared checkout is *already* on `position.branch` — the predecessor was working there, so a successor that did nothing at all would pass. What ships is a receipt carrying `{generation, claimant, branch_observed, repo_root_observed, step, test_baseline_observed, ts}`, written under the lock and validated **as read back**. No artifact this platform exposes would give independent proof. What the receipt does buy is bounded and real: a stale or foreign receipt fails it (generation, claimant and step are all compared on read-back), and it cannot race the ack. It is NOT proof of work: running the command writes the receipt, so what it rules out is a receipt from another generation or claimant, not a successor that rebuilt nothing. The remaining protection against premature retirement is structural — teardown is successor-driven, a separate explicit command, runnable only by the recorded successor.
+
+`--show-toplevel` is compared **before** the branch, because a same-named branch in a different repository would otherwise satisfy the check and authorise teardown for the wrong working tree.
+
+### 8.4 Successor-driven teardown
+
+Teardown is the successor's, and the reason is asymmetric risk: the predecessor cannot observe whether the successor really took over, so a predecessor that retires itself on its own optimistic report is how "it would not die" becomes "it died holding the only live context". The order:
+
+1. **Locked read, then refuse** on: a foreign `kind`, a cancelled record, an invalid position, a self-predecessor, a caller that is not the recorded successor session, or an `--anchor-pane` disagreeing with durable state. Two independent sources must agree before anything destructive runs.
+2. **Claim, idempotently.** A refusal whose cause is that the claim is already **ours** for this generation is an accepted continuation. Probed: `handoff_claim` returns False for a same-claimant re-claim inside the lease *and* after `started`, so without this branch one failed teardown would block its own retry for the whole 1800 s lease. Any other refusal touches nothing.
+3. **Verify** checks 1–4 from the successor's own artifacts, then the receipt.
+4. **Ack**, then **gate** on all six. Not allowed returns immediately: the predecessor is left running **and still guarded**.
+5. **Prove the target's identity**: `pane get <anchor>` must still return the recorded predecessor session. A pane id is a reusable handle and syntax validation cannot detect a stale or recycled one.
+6. **Re-check BOTH guards.** The successor's own guard must still be in force (and not replaced), and — added after Step 11 pass-2 — the PREDECESSOR's newest `goal_status` row must still carry the condition this handoff recorded. Without the second check a predecessor that had been re-prompted and re-armed a different guard would have that new guard cleared by a teardown never authorised to touch it. Check 2 proves a guard existed at some point after the baseline; only this proves the run is guarded *now*. A later `met:true` row fails it, and so does a **replacement** guard — a newest row for a different condition means the handed-over condition is stale, so teardown refuses. Retiring the predecessor while the continuing session is unguarded is the original defect.
+7. **Re-validate everything under the lock, then persist `teardown_phase: "clearing"` BEFORE sending anything.** This fence is the one WF2 Step 8a found missing and both reviewers converged on: the entry checks are stale by now, so one locked write re-checks `kind`, `cancelled`, BOTH generations and the claimant, and sets the phase atomically. **Every destructive call re-runs this fence**, not just the first send (Step 11 pass-2 found the original fence covered only up to `send-text`, so a cancellation landing during the Enter, the confirmation poll, or a close retry stopped nothing). A cancel or a superseding generation therefore stops the teardown at whichever step it lands before, and — because every phase write is generation-scoped — the phase can never be stamped onto, or cleared from, a different generation's record. **The honest limit, since an earlier revision of this page overstated it:** a lock cannot be held across a herdr call, so a cancel arriving in the gap between this fence and the send itself is not stopped. Closing that needs a fencing token the destructive call presents — the same mechanism §8.4 lists as out of scope. The ordering is therefore: state fence → identity probe → transcript baseline → send, so the baseline is the LAST read before the transport and the residual gap is between it and the syscall. An earlier revision of this page claimed the gap was "one lock release", which was wrong — a `pane get` subprocess runs after the fence. **A phase write that does not land aborts** — proceeding would open the unguarded window with nothing on disk to find it by, which is the only reason the phase exists. Then `send-text "/goal clear"` + `send-keys Enter` with **both** return codes checked, then poll the predecessor's transcript below a baseline taken immediately before the send for a `met:true, sentinel:true` row **carrying the recorded condition**. Binding it to the condition is not decoration: Step 11 pass-3 reproduced a case where the predecessor had acquired a replacement guard, and clearing THAT produced a `met:true` row which satisfied an unbound confirmation — so the teardown reported success and closed a live pane. A zero return code proves keystrokes were transported, not that the slash command was parsed — without the semantic confirmation a silently ignored `/goal clear` reaches close-before-clear with every other check green. On timeout: `clear_unconfirmed`, and the pane is left **OPEN**.
+8. **Re-prove the target, check for a RE-ARM, then close** with two bounded retries, then clear the phase. Each attempt runs, in this order and with nothing between the last two: the state fence, the identity probe, then a re-arm check — if the predecessor's newest `goal_status` row is UNMET it has armed a new guard since the clear, so it is a live guarded session again and the outcome is `predecessor_re_armed` with neither a close nor a re-arm attempted. That check fails CLOSED on an unreadable transcript (a transient read error costs an attempt, not the teardown), because refusing leaves a recoverable stall while proceeding can irreversibly destroy a live context. The identity proof from step 5 is stale by here: the clear succeeded, so the predecessor may have stopped and exited, and a pane id is a REUSABLE handle. If the pane no longer hosts the recorded session the outcome is `target_changed_after_clear` and **nothing** is done — closing would kill whoever holds it now, and re-arming would paste into them. Runner exceptions in this region (a `pane close` timeout, say) count as failed attempts rather than aborting, because aborting here skips the re-arm and leaves the predecessor unguarded while reporting a generic error.
+9. **A failed Enter is not a clean abort.** If `send-text` succeeded and only `send-keys` failed, the `/goal clear` is sitting UNSUBMITTED in the predecessor's input: it is guarded now, but a later stray Enter would submit it. That is recorded as `teardown_phase: "clear_staged_unsubmitted"` and named in the reason, rather than resetting the phase and reporting "still guarded".
+
+**The partial-success state, named.** If the clear is confirmed but the close then fails, the predecessor may be alive and **no longer guarded** — strictly worse than either failure alone. The close is retried twice; if it still fails, the predecessor is re-armed from `position.goal_condition` (its **own** recorded condition) with confirmation, reporting `alive_and_re_armed`, or `alive_and_unguarded` if the re-arm or its confirmation also fails. `alive_and_unguarded` is the one state treated as an incident.
+
+**The one window a crash leaves the predecessor unguarded, stated plainly.** Between a *confirmed* clear and a successful close, the predecessor is alive and unguarded, and a successor dying there re-arms nothing. The window is bounded — up to three close attempts, each preceded by its own identity probe and state fence, with the clear already confirmed — and **discoverable in the normal case**, because `teardown_phase` is persisted before the clear is sent. The honest exception, found at Step 11 pass-3: phase writes are generation-scoped, so if a NEWER generation has replaced the record by the time a terminal incident is reached, the write is correctly refused and the incident exists only in the command's returned report — which now says so explicitly rather than claiming it was recorded. "Guaranteed discoverable" would be false. The consequence is a stalled run, not lost work: the branch and the context survive, and recovery is a new handoff generation. A fenced recovery *actor* would close this properly; it needs a fencing token, a claimant-liveness test and crash-injection coverage at four boundaries, and it is filed as a follow-up rather than half-built.
+
+**Teardown authority is an INTERLOCK, not an authentication boundary — and this page previously overstated it.** `$CLAUDE_CODE_SESSION_ID` is authoritative and required, and a `--session-id` contradicting it is refused, so the accidental cases are closed: the predecessor cannot retire itself by following its own resume prompt, and an operator cannot retire the wrong session by passing the wrong id. What it does **not** do is withstand a deliberate impersonation, because a caller controls its own child's environment (`env CLAUDE_CODE_SESSION_ID=<recorded successor> …`). Two Step 11 reviewers flagged the earlier "cannot be asserted" wording as false, and they were right. No stronger claim is available here: any party able to set that variable can equally edit `.driver-state` or run `herdr pane close` directly, so there is no boundary to defend — the honest statement is that this prevents mistakes, not attacks.
+
+**Who may complete a retirement: only the claimant.** `handoff_claim` rejects a foreign claimant inside the lease and rejects one unconditionally once `started`. An earlier revision of the design claimed any later session could finish the job; that was false and is withdrawn. The recovery path for a successor that dies mid-teardown is a **new** handoff, which bumps the generation and supersedes the stale record. Until then the predecessor is alive and still guarded — unless the successor died AFTER a confirmed clear, in which case it is alive and UNGUARDED, which is the window named above — the safe state.
+
+### 8.5 The anti-parallel-path guard (AC7)
+
+`tests/hooks/test_mid_child_handoff.py::TestNoParallelHandoffPath` is a **source-level drift guard**, and the claim is exactly that: it makes a second handoff path fail the suite when someone writes one in the obvious ways. It is not a proof of architectural impossibility — Python offers no such enclosure. It asserts that no `hooks/*.py` other than `launcher_lib.py` builds a herdr argv, imports or reaches the launcher's argv builders, or shells out to `herdr` through a command string; that `launcher_lib` holds exactly one `perform_handoff` and one `retire_predecessor`; that it sources the disposition, generation bump and claim/ack from `driver_lib` and defines none of them itself; and that `handoff_pending` has exactly one writer in `driver_lib`.
+
+Its own negative cases are tested — five synthetic modules exercising each bypass form, every one of which must be flagged — because a guard that has never been shown to bite is not a guard. It is also pinned for **precision**: `herdr` is a legitimate terminal-backend *name* in three real hooks, so the scanner keys on a herdr *command* and on argv whose first element is `herdr`, not on the bare word.

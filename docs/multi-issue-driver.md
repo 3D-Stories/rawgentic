@@ -373,3 +373,62 @@ from in-context memory (`validate_driver_state` gate-checks the loaded state). T
 tools are session-scoped, so each session builds its OWN Step-3b task list from `.driver-state`
 (no list crosses the boundary). Each child still runs WF2 FRESH to Step 16 with every gate
 intact — the driver still never reaches into a WF2 step.
+
+## Mid-child handoff (#665) — the other boundary
+
+Fresh-session-per-child above crosses a **child boundary**: a child reaches a terminal outcome,
+the session ends, the successor starts the NEXT child. It does not cover *"I am mid-child, out
+of context, hand me over and keep going"* — the trigger there is **context exhaustion, never
+cron** (epic #667, owner decision D-16; the 5-hour cron window is a separate service that
+resumes the already-active session and needs none of this machinery).
+
+It **reuses the primitives above rather than adding a second mechanism** — that reuse is the
+requirement, not an implementation preference. `driver_lib.mid_child_handoff(state, position=)`
+returns a disposition shaped so the SAME `open_handoff` consumes it unchanged, and the successor
+claims and acks through the same `handoff_claim` / `handoff_ack_started`. `handoff_claim` itself
+is deliberately NOT modified: it is #569's tested primitive, and the new cancelled-record refusal
+lives in the new callers, which is where the new state was introduced.
+
+**What is added to the durable record.** `handoff_pending` gains an optional `kind` discriminator
+and an optional `position` object (ten required fields: `issue`, `step`, `branch`,
+`test_baseline`, `predecessor_pane`, `predecessor_session`, `goal_condition`, `project`,
+`project_path`, `repo_root`), plus `successor`, `rebuild_receipt`, `cancelled` and
+`teardown_phase` as the handoff progresses. When no position is supplied the written shape is
+**byte-identical** to what #569 writes, which is the compatibility proof — and
+`docs/driver-state/queue.schema.json` carries `additionalProperties: true` at root, issue and
+nested level, so the extended keys validate with no schema change.
+
+**`kind` is a CLOSED allowlist, because `handoff_pending` now has two meanings and the
+fresh-session launcher reads the same file.** Absent means the legacy child-boundary handoff;
+`mid_child` is REFUSED there (a mid-child resume is already in flight, and a second successor
+would compete for one generation); any other value — a misspelling, a different case, a
+non-string — is refused as unrecognised. An equality test would let `MID_CHILD` or `42` fall
+through to the legacy branch.
+
+**One deliberate difference from `fresh_session_handoff`:** `mid_child_handoff` does NOT gate on
+`session_mode == "fresh-session"`. A context-driven handover is cron-free, and gating on that
+mode would refuse exactly the in-session campaigns it exists to serve. That is why it is a
+sibling function rather than a flag — `fresh_session_handoff`'s `single_session` verdict is
+load-bearing for #569 and must keep its meaning.
+
+**The successor rebuilds; nothing is copied.** As above, the harness task tools are
+session-scoped (the live predecessor on 2026-07-27 held 30 task subjects across three unrelated
+projects), so the successor re-derives position from `.driver-state` plus the position record and
+builds its own list. Its resume prompt is built by `driver_lib._build_mid_child_resume_prompt`,
+next to #569's `_build_resume_prompt` for the same reason: two copies of that wording would
+drift.
+
+**Teardown is successor-driven and verified against six on-disk artifacts**, and on every refusal BEFORE the clear the
+predecessor is left alive AND still guarded. After a confirmed clear the honest statement is narrower: a
+refusal leaves it alive but possibly unguarded, and a re-armed predecessor is never closed. `.driver-state` writes on this path go through
+one locked read-modify-write helper (`plan_lib.file_lock` on a stable sidecar). The full ladder,
+the destructive sequence, the named partial-success states, and the one window where a crash
+leaves the predecessor unguarded are documented in `docs/runbooks/herdr.md` §8 rather than
+duplicated here.
+
+**Known boundary, stated rather than implied solved:** the epic-run skill's prose-driven status
+writers do not take that lock. Acceptable for a context-driven handover because the driver and
+the predecessor are the same session and its status writes happen at child boundaries, while a
+mid-child handoff by definition happens between them — one writer at a time by construction. A
+second driver session on one campaign is already outside #569's model. Migrating those writers
+onto the locked helper is a filed follow-up.
