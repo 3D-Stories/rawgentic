@@ -281,4 +281,4 @@ Honest status, so this section is not read as more than it is. The sequence in �
 
 ### 7.7 Correction to a documented gotcha
 
-The top-level `herdr wait` genuinely does not exist in 0.7.5 (tracked as #659), but **`herdr agent wait <target> --until idle|working|blocked|done|unknown --timeout <ms>` does exist** and is the readiness primitive §7.1 step 3 uses. Scope #659 to the top-level form rather than claiming the capability is absent.
+The top-level `herdr wait` genuinely does not exist in 0.7.5 (tracked as #659), but **`herdr agent wait <target> --until idle|working|blocked|done|unknown --timeout <ms>` does exist** and is the readiness primitive §7.1 step 5 uses. Scope #659 to the top-level form rather than claiming the capability is absent.
