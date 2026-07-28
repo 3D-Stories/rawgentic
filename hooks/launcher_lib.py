@@ -148,6 +148,42 @@ _VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
                  "carrying the NEW session id"},
 )
 
+# The mid-child ladder (#665). Six checks, still CAUSAL, and every artifact is a file on disk or
+# live git state — none of them reads scraped terminal output, which is why a handoff can be
+# verified at all.
+#
+# `owner` records which side can produce each piece of evidence, and it is load-bearing rather
+# than documentation: the predecessor can prove the first four about the successor it just
+# launched, but the last two are the SUCCESSOR's own (a rebuild receipt and its claim). A
+# predecessor-side gate that demanded all six could never pass, and — worse — a six-step ladder
+# handed to `teardown_allowed` on the predecessor side would authorise a predecessor to retire
+# ITSELF after four checks, which is precisely the ownership inversion approach C was rejected
+# for (design §2).
+_MID_CHILD_VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
+    {"step": "spawned", "owner": "predecessor",
+     "artifact": "herdr pane get <new> -> a non-empty agent_session.value, recorded into "
+                 "handoff_pending.successor so the successor can later bind its own session id "
+                 "to it (a session cannot discover its own pane id, so it cannot re-derive this)"},
+    {"step": "goal_armed", "owner": "predecessor",
+     "artifact": "the successor transcript BELOW the pre-launch offset -> a goal_status "
+                 "attachment with met:false whose condition is the one actually armed"},
+    {"step": "prompt_landed", "owner": "predecessor",
+     "artifact": "the successor transcript BELOW the offset -> the generation-bound handoff "
+                 "marker, matched as a plain SUBSTRING: a live probe found pasted prompts "
+                 "persisted in queue-operation / attachment rows, not a type:user row"},
+    {"step": "project_switched", "owner": "predecessor",
+     "artifact": "claude_docs/session_registry.jsonl BELOW the offset -> ONE line carrying the "
+                 "NEW session id AND the recorded project AND the recorded project_path"},
+    {"step": "position_rebuilt", "owner": "successor",
+     "artifact": ".driver-state -> a rebuild receipt the successor writes under the state lock "
+                 "carrying {generation, claimant, branch_observed, repo_root_observed, step, "
+                 "ts}, validated against handoff_pending.position and against the claim's own "
+                 "generation and claimant"},
+    {"step": "state_claimed", "owner": "successor",
+     "artifact": ".driver-state -> handoff_claim with the matching generation and claimant and "
+                 "started:true"},
+)
+
 
 class LauncherError(ValueError):
     """Any fail-closed validation refusal."""
@@ -416,8 +452,22 @@ def parse_pane_agent_session(pane_get_stdout: str) -> str | None:
     return None
 
 
-def registry_has_session(registry_text: str, session_id: str) -> bool:
-    """A `claude_docs/session_registry.jsonl` line carrying the NEW session id."""
+def registry_has_session(registry_text: str, session_id: str, *,
+                         expected_project: str | None = None,
+                         expected_project_path: str | None = None) -> bool:
+    """A `claude_docs/session_registry.jsonl` line carrying the NEW session id.
+
+    `expected_project` / `expected_project_path` are #665 additions and both default to None, so
+    every #611 caller keeps its exact behaviour. When supplied, all three fields must appear on
+    the SAME line: matching the session id alone let a successor bound to the WRONG project pass
+    this check, claim the handoff, and retire a healthy predecessor before continuing in the
+    wrong repository (design §5, pass-2 finding 2).
+
+    The project pair is matched, not just the label, because nothing here establishes that
+    project labels are globally unique. The honest bound: this is an exact string comparison
+    against the same producer's representation (the switch skill writes a workspace-relative
+    `./projects/<name>`), NOT a filesystem canonicalisation — it claims nothing about symlinks.
+    """
     if not session_id:
         return False
     for line in registry_text.splitlines():
@@ -428,9 +478,78 @@ def registry_has_session(registry_text: str, session_id: str) -> bool:
             rec = json.loads(line)
         except ValueError:
             continue
-        if isinstance(rec, dict) and rec.get("session_id") == session_id:
+        if not isinstance(rec, dict) or rec.get("session_id") != session_id:
+            continue
+        if expected_project is not None and rec.get("project") != expected_project:
+            continue
+        if expected_project_path is not None \
+                and rec.get("project_path") != expected_project_path:
+            continue
+        return True
+    return False
+
+
+def transcript_has_marker(transcript_text: str, marker: str) -> bool:
+    """The handoff marker, matched as a plain SUBSTRING over the transcript tail.
+
+    Deliberately shape-independent, and this is the one check where that is the WHOLE point. A
+    live probe on 2026-07-28 searched a real transcript for a phrase from a prompt pasted into a
+    pane: present verbatim 3 times, but carried in `{"type":"queue-operation",...,"content":…}`
+    and `{"type":"attachment","attachment":{"type":"queued_command","prompt":…}}` rows — never a
+    `type:"user"` row with `message.content`. A structured match keyed on the row shape would
+    therefore have failed EVERY handoff, which is exactly the class of defect #611 shipped once
+    with its invented `goal_status` shape (its tests passed by feeding the invention back).
+
+    So this asserts nothing about row shape. An empty marker is REFUSED rather than treated as
+    absent: `"" in anything` is True, so it would silently pass on every transcript ever.
+    """
+    if not isinstance(marker, str) or not marker.strip():
+        raise LauncherError("refusing to match an empty handoff marker — an empty substring is "
+                            "present in every transcript, so it would pass unconditionally")
+    return marker in (transcript_text or "")
+
+
+def transcript_has_cleared_goal(transcript_text: str) -> bool:
+    """A `met:true, sentinel:true` goal_status row — the SEMANTIC confirmation that a
+    cross-pane `/goal clear` was actually parsed and acted on.
+
+    A zero return code from `send-text`/`send-keys` proves only that keystrokes were
+    transported, not that the slash command was parsed or that the guard changed state. Without
+    this reader a silently ignored `/goal clear` reaches the close-before-clear outcome the
+    design forbids with every other check green (design §6 step 9, feasibility §8).
+
+    `sentinel` is required as well as `met`: it is what distinguishes a goal-guard row from any
+    other record that happens to carry a met flag.
+    """
+    for row in _iter_goal_status(transcript_text):
+        if row.get("met") is True and row.get("sentinel") is True:
             return True
     return False
+
+
+def goal_currently_unmet(transcript_text: str, condition: str) -> bool:
+    """Is the guard for `condition` STILL in force at read time?
+
+    `transcript_has_unmet_goal` answers a strictly weaker question — "was a guard armed and
+    unmet at some point after the baseline" — and the design (§5) is explicit that treating that
+    as sufficient reintroduces the artifact's original failure mode: a later clear can exist
+    while the historical check still passes, so the predecessor could be retired while the
+    continuing session has no live guard. This reads the LAST row and answers "now".
+
+    Scope, stated because the design doc contradicts itself here and the tests pin this side:
+    "latest" is scoped to rows matching `condition`, so a row for a DIFFERENT condition does not
+    decide this answer. Design §5's stricter reading — any later row, whatever its condition,
+    fails — is about a *replacement* guard, which is a different question from whether THIS
+    condition is still owed. That refusal therefore lives at the destructive gate in
+    `retire_predecessor`, where a replacement guard means the armed condition is stale, rather
+    than being folded into this predicate where it would conflate the two.
+    """
+    latest: dict | None = None
+    for row in _iter_goal_status(transcript_text):
+        cond = row.get("condition")
+        if isinstance(cond, str) and cond.strip() == (condition or "").strip():
+            latest = row
+    return latest is not None and latest.get("met") is False
 
 
 def transcript_has_unmet_goal(transcript_text: str, *,
@@ -517,19 +636,41 @@ def handoff_verification_steps() -> list[dict[str, str]]:
     return [dict(s) for s in _VERIFICATION_STEPS]
 
 
-def evaluate_verifications(results: dict[str, bool]) -> tuple[bool, str | None, list[str]]:
+def mid_child_verification_steps() -> list[dict[str, str]]:
+    """The six-step mid-child ladder (#665). A SEPARATE tuple, not a mutation of #611's three:
+    that contract is pinned by its own test and a launch handoff still has exactly three checks
+    to make."""
+    return [dict(s) for s in _MID_CHILD_VERIFICATION_STEPS]
+
+
+def _predecessor_steps(steps) -> list[dict[str, str]]:
+    """The subset of a ladder the PREDECESSOR can actually produce evidence for.
+
+    An absent `owner` means predecessor, so #611's three-step tuple is unaffected.
+    """
+    return [dict(s) for s in steps if s.get("owner") != "successor"]
+
+
+def evaluate_verifications(results: dict[str, bool],
+                           steps=None) -> tuple[bool, str | None, list[str]]:
     """Walk the ladder in order, stopping at the first failure. FAIL-CLOSED: a step with no
-    reported result counts as FAILED — an unreported check is not evidence of success."""
+    reported result counts as FAILED — an unreported check is not evidence of success.
+
+    `steps` defaults to #611's three-step launch ladder, so every existing caller and its pinned
+    contract are untouched; the mid-child path passes `mid_child_verification_steps()`. The
+    ladder LOGIC stays single-sourced here rather than being copied per ladder.
+    """
+    ladder = _VERIFICATION_STEPS if steps is None else steps
     checked: list[str] = []
-    for step in (s["step"] for s in _VERIFICATION_STEPS):
+    for step in (s["step"] for s in ladder):
         checked.append(step)
         if results.get(step) is not True:
             return (False, step, checked)
     return (True, None, checked)
 
 
-def teardown_allowed(results: dict[str, bool]) -> tuple[bool, str]:
-    ok, failed, _ = evaluate_verifications(results)
+def teardown_allowed(results: dict[str, bool], steps=None) -> tuple[bool, str]:
+    ok, failed, _ = evaluate_verifications(results, steps=steps)
     if not ok:
         return (False, f"refusing teardown: verification {failed!r} has not passed — the "
                        "predecessor stays alive and still guarded")
@@ -620,7 +761,9 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     transcript_dir: str, launch_mode: str = "fresh",
                     readiness_timeout_ms: int = 30000,
                     runner=_default_runner, read_text=None, sleeper=time.sleep,
-                    teardown: bool = True) -> dict:
+                    teardown: bool = True, prompt_marker: str | None = None,
+                    expected_project: str | None = None,
+                    expected_project_path: str | None = None, steps=None) -> dict:
     """Execute the ordered handoff. Effects are injected so tests drive the whole sequence.
 
     THE ORDER, and why each position is load-bearing:
@@ -657,8 +800,20 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
 
     `transcript_dir` is where `<session-id>.jsonl` lives (`~/.claude/projects/<slug>/`).
 
+    #665 additions, all defaulting to the #611 behaviour when omitted: `prompt_marker` adds the
+    `prompt_landed` check (the resume prompt is verified to have ARRIVED, not merely to have
+    been transported with rc 0); `expected_project`/`expected_project_path` bind
+    `project_switched` to the right repository; `steps` selects the ladder to gate on.
+
+    A ladder carrying successor-owned checks forces `teardown` OFF. For a mid-child handoff the
+    predecessor is the thing being retired, and retirement is the SUCCESSOR's call — letting the
+    predecessor close its own pane after the four checks it can make is the ownership inversion
+    approach C was rejected for, and it is how "the predecessor cannot observe whether the
+    successor really took over" becomes unrecoverable.
+
     Returns a dict with `ok`, `steps`, `results`, `truncated`, `failed_step`, `new_pane`,
-    `session_id`, and `cleanup` (what happened to the tentative pane, if anything).
+    `session_id`, `cleanup` (what happened to the tentative pane, if anything), and
+    `teardown_skipped`.
     """
     if read_text is None:
         def read_text(path):  # pragma: no cover - trivial default
@@ -667,7 +822,15 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
 
     out: dict = {"ok": False, "steps": [], "results": {}, "truncated": False,
                  "failed_step": None, "new_pane": None, "session_id": None,
-                 "cleanup": None}
+                 "cleanup": None, "teardown_skipped": None}
+
+    ladder = _VERIFICATION_STEPS if steps is None else steps
+    gate_steps = _predecessor_steps(ladder)
+    if teardown and len(gate_steps) != len(list(ladder)):
+        teardown = False
+        out["teardown_skipped"] = (
+            "ladder carries successor-owned checks — retirement belongs to the successor "
+            "(`retire-predecessor`), not to the session being retired")
 
     def record(kind, argv, proc=None, note=None):
         out["steps"].append({"kind": kind, "argv": argv,
@@ -683,6 +846,17 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     if not isinstance(resume_prompt, str) or not resume_prompt.strip():
         raise LauncherError("resume_prompt is empty — a guarded successor with no work would "
                             "sit idle while the predecessor is retired")
+    if prompt_marker is not None:
+        if not isinstance(prompt_marker, str) or not prompt_marker.strip():
+            raise LauncherError("prompt_marker must be a non-empty string when supplied")
+        # Checked BEFORE the split, because the failure is a caller mismatch and not a runtime
+        # condition: a marker that is not in the prompt can never appear in the successor's
+        # transcript, so `prompt_landed` would burn its whole poll budget and fail closed after
+        # a pane, a session and an armed guard already existed.
+        if prompt_marker not in resume_prompt:
+            raise LauncherError(
+                f"prompt_marker {prompt_marker!r} does not appear in the resume prompt — "
+                "prompt_landed could never pass")
     # Validated BEFORE the split: its first real use is after the pane exists, so a bad
     # directory would otherwise create a pane and then fail. An earlier revision took a
     # `transcript_path_for` CALLBACK and probed it with an invented session id, which both
@@ -829,15 +1003,33 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                 out["failed_step"] = "send_resume_prompt"
                 return out
 
+        # `prompt_landed` (#665) — rc 0 on send-text proves TRANSPORT, not arrival. Checked
+        # before `project_switched` because the registry row is a downstream consequence of this
+        # prompt: verifying the consequence while the cause is unproven can only pass on stale
+        # evidence, which is the ordering defect #611's own ladder was rewritten to fix.
+        if prompt_marker is not None:
+            def _prompt_landed() -> bool:
+                tail = _tail(read_text(transcript_path), transcript_baseline)
+                return tail is not None and transcript_has_marker(tail, prompt_marker)
+
+            out["results"]["prompt_landed"] = _poll_for(
+                _prompt_landed,
+                attempts=GOAL_POLL_ATTEMPTS, delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
+            if not out["results"]["prompt_landed"]:
+                out["failed_step"] = "prompt_landed"
+                return out
+
         def _project_switched() -> bool:
             tail = _tail(read_text(registry_path), registry_baseline)
-            return tail is not None and registry_has_session(tail, session_id)
+            return tail is not None and registry_has_session(
+                tail, session_id, expected_project=expected_project,
+                expected_project_path=expected_project_path)
 
         out["results"]["project_switched"] = _poll_for(
             _project_switched,
             attempts=SWITCH_POLL_ATTEMPTS, delay_s=SWITCH_POLL_DELAY_S, sleeper=sleeper)
 
-        ok, failed, _ = evaluate_verifications(out["results"])
+        ok, failed, _ = evaluate_verifications(out["results"], steps=gate_steps)
         if not ok:
             out["failed_step"] = failed
             return out
@@ -857,7 +1049,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                 out["cleanup"] = _report_possible_orphan(panes_before, runner, anchor_pane)
 
     # Teardown LAST, only when authorized, and its result is NOT ignored (Step-11 Medium 5).
-    allowed, reason = teardown_allowed(out["results"])
+    allowed, reason = teardown_allowed(out["results"], steps=gate_steps)
     if teardown and allowed:
         td_argv = build_teardown_argv(anchor_pane)
         proc = runner(td_argv)
@@ -1040,6 +1232,35 @@ def _cmd_handoff(args) -> int:
     driver_lib = _driver_lib()
     with open(args.driver_state, encoding="utf-8") as fh:
         state = json.load(fh)
+
+    # #665 — the `kind` discriminator is a CLOSED allowlist, checked FIRST.
+    #
+    # `handoff_pending` used to have exactly one meaning: start the next child. It now has two,
+    # and this entry point reads the same file. The rule is an allowlist rather than an equality
+    # test because equality-only matching lets `"MID_CHILD"`, `"mid-child"` or `42` fall through
+    # to the legacy branch and launch a second successor from a record it does not understand —
+    # two successors competing for one generation. Absent is the only accepted value here; every
+    # present value is refused, naming which case it is.
+    pend = state.get("handoff_pending")
+    if isinstance(pend, dict):
+        if "kind" in pend:
+            if pend["kind"] == driver_lib.MID_CHILD_HANDOFF_KIND:
+                print(f"refusing: handoff_pending.kind is "
+                      f"{driver_lib.MID_CHILD_HANDOFF_KIND!r} — a mid-child resume is already in "
+                      "flight; building a child-boundary handoff from it would put a second "
+                      "successor on one generation", file=sys.stderr)
+            else:
+                print(f"refusing: unrecognised handoff_pending.kind {pend['kind']!r} — this "
+                      "entry point handles only the legacy child-boundary handoff, which carries "
+                      "no kind at all", file=sys.stderr)
+            return 3
+        if pend.get("cancelled") is True:
+            # An aborted handoff cancels its own record, and until a later `open_handoff` bumps
+            # the counter that record IS the current generation and therefore claimable. Refusing
+            # it here is what stops a stray successor taking a lease on an abandoned handoff.
+            print("refusing: handoff_pending is cancelled — an aborted handoff record must not "
+                  "be claimed", file=sys.stderr)
+            return 3
 
     # The campaign's OWN mode decides whether there is a process boundary at all. Forcing
     # FRESH_SESSION_MODE here (the previous revision) would hand off for a campaign documented
