@@ -527,8 +527,10 @@ def _poll_for(check, *, attempts: int, delay_s: float, sleeper) -> bool:
 
     A read error mid-poll is swallowed and retried, not fatal: a JSONL file being appended to
     can momentarily fail to read, and treating that as a verdict would abort a handoff that was
-    about to succeed. Exhausting the budget still FAILS CLOSED — what this gates (predecessor
-    teardown) is irreversible.
+    about to succeed. `UnicodeDecodeError` counts as one of those — a read that lands between
+    the first and last byte of a multi-byte character raises it, and it is a `ValueError`, so
+    catching `OSError` alone let it escape and kill the poll (#611 Step-11 pass-3 Low 5).
+    Exhausting the budget still FAILS CLOSED — what this gates (teardown) is irreversible.
     """
     for attempt in range(attempts):
         if attempt:
@@ -536,21 +538,42 @@ def _poll_for(check, *, attempts: int, delay_s: float, sleeper) -> bool:
         try:
             if check():
                 return True
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             pass
     return False
 
 
-def _artifact_offset(read_text, path) -> int:
+def _artifact_offset(read_text, path) -> int | None:
     """Size of an artifact BEFORE the launch, so only what lands after it counts as evidence.
 
-    Unreadable means "nothing here yet" (offset 0), not failure: the successor's transcript
-    genuinely does not exist until it is spawned.
+    Returns None when no baseline could be established — the caller must then REFUSE.
+
+    The distinction matters and was wrong in the previous revision, which mapped every
+    `OSError` to 0 (#611 Step-11 pass-3 High 1). "Does not exist" is expected and means zero:
+    the successor's transcript genuinely does not exist until it is spawned. "Exists but could
+    not be read" is entirely different — offset 0 would then let the WHOLE pre-existing file
+    count as this launch's evidence, and under `--launch-mode resume` (where the successor can
+    reuse a session id that already owns a registry row) that alone would authorise retiring
+    the predecessor.
     """
     try:
         return len(read_text(path))
-    except OSError:
+    except FileNotFoundError:
         return 0
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _tail(text: str, offset: int) -> str | None:
+    """The part of an artifact written AFTER the baseline, or None if the baseline is void.
+
+    A file shorter than its own baseline was rewritten, rotated or truncated, so the offset no
+    longer points at what it did. Positional evidence is meaningless at that point; returning
+    None makes the check fail rather than silently comparing against the wrong region.
+    """
+    if len(text) < offset:
+        return None
+    return text[offset:]
 
 
 def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
@@ -613,17 +636,29 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                             "sit idle while the predecessor is retired")
 
     # Captured BEFORE the split so nothing already on disk can be mistaken for this launch's
-    # evidence (#611 Step-11 Medium 4).
+    # evidence (#611 Step-11 Medium 4). A registry that exists but cannot be read yields no
+    # baseline at all, and without a baseline there is no such thing as fresh evidence.
     registry_offset = _artifact_offset(read_text, registry_path)
+    if registry_offset is None:
+        out["failed_step"] = "registry_baseline_unreadable"
+        return out
+
+    # Pane inventory before the split, so an uncertain split response can still be reconciled
+    # (#611 Step-11 pass-3 Medium 3). Best-effort: if this fails we simply have no inventory.
+    panes_before = _pane_inventory(runner)
 
     proc = runner(split_argv)
     record("split", split_argv, proc)
     if getattr(proc, "returncode", 1) != 0:
         out["failed_step"] = "split"
+        out["cleanup"] = _reconcile_orphan_pane(panes_before, runner, record, anchor_pane)
         return out
     new_pane = _extract_pane_id(getattr(proc, "stdout", "") or "")
     if new_pane is None:
+        # herdr may well have CREATED the pane and merely failed to describe it. Returning here
+        # without looking would leak one pane per cron fire.
         out["failed_step"] = "split_response_unparseable"
+        out["cleanup"] = _reconcile_orphan_pane(panes_before, runner, record, anchor_pane)
         return out
 
     transferred = False
@@ -659,6 +694,9 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
 
         transcript_path = transcript_path_for(session_id)
         transcript_offset = _artifact_offset(read_text, transcript_path)
+        if transcript_offset is None:
+            out["failed_step"] = "transcript_baseline_unreadable"
+            return out
 
         text_argv, keys_argv, truncated = build_send_text_goal_argv(
             pane=new_pane, goal_condition=goal_condition)
@@ -672,9 +710,14 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                 return out
 
         expected, _ = armed_condition(goal_condition)
+
+        def _goal_is_armed() -> bool:
+            tail = _tail(read_text(transcript_path), transcript_offset)
+            return tail is not None and transcript_has_unmet_goal(
+                tail, expected_condition=expected)
+
         out["results"]["goal_armed"] = _poll_for(
-            lambda: transcript_has_unmet_goal(
-                read_text(transcript_path)[transcript_offset:], expected_condition=expected),
+            _goal_is_armed,
             attempts=GOAL_POLL_ATTEMPTS, delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
         if not out["results"]["goal_armed"]:
             out["failed_step"] = "goal_armed"
@@ -690,8 +733,12 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                 out["failed_step"] = "send_resume_prompt"
                 return out
 
+        def _project_switched() -> bool:
+            tail = _tail(read_text(registry_path), registry_offset)
+            return tail is not None and registry_has_session(tail, session_id)
+
         out["results"]["project_switched"] = _poll_for(
-            lambda: registry_has_session(read_text(registry_path)[registry_offset:], session_id),
+            _project_switched,
             attempts=SWITCH_POLL_ATTEMPTS, delay_s=SWITCH_POLL_DELAY_S, sleeper=sleeper)
 
         ok, failed, _ = evaluate_verifications(out["results"])
@@ -719,6 +766,51 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             return out
     out["ok"] = True
     return out
+
+
+def _pane_inventory(runner) -> set[str] | None:
+    """Every pane id herdr currently knows about, or None if it could not be listed.
+
+    Taken before the split so an uncertain split response can still be reconciled. None is a
+    real answer — "no inventory" — and callers must not treat it as "no panes".
+    """
+    try:
+        proc = runner(["herdr", "pane", "list"])
+        if getattr(proc, "returncode", 1) != 0:
+            return None
+        doc = json.loads(getattr(proc, "stdout", "") or "")
+    except (ValueError, TypeError, OSError, subprocess.SubprocessError):
+        return None
+    node = doc.get("result", doc) if isinstance(doc, dict) else None
+    panes = node.get("panes") if isinstance(node, dict) else None
+    if not isinstance(panes, list):
+        return None
+    return {p["pane_id"] for p in panes
+            if isinstance(p, dict) and isinstance(p.get("pane_id"), str)}
+
+
+def _reconcile_orphan_pane(panes_before, runner, record, anchor_pane: str) -> str | None:
+    """Close a pane the split created but never told us about (#611 Step-11 pass-3 Medium 3).
+
+    A split can create a pane and still fail — a non-zero exit after server-side creation, or
+    rc 0 with truncated JSON. The previous revision returned immediately in both cases, so
+    every cron fire could leak one pane. Reconciling by inventory diff is only safe when it is
+    UNAMBIGUOUS: exactly one new pane, and not the anchor. Zero new panes means nothing was
+    created; more than one means another session split concurrently, and closing someone
+    else's pane is far worse than leaking one — so that case is reported, never acted on.
+    """
+    if panes_before is None:
+        return "no pane inventory taken before the split — cannot reconcile"
+    panes_after = _pane_inventory(runner)
+    if panes_after is None:
+        return "pane inventory unavailable after the split — cannot reconcile"
+    new = sorted(panes_after - panes_before - {anchor_pane})
+    if not new:
+        return None
+    if len(new) > 1:
+        return (f"ambiguous split reconcile: {len(new)} new panes ({', '.join(new)}) — "
+                "leaving them alone rather than closing another session's pane")
+    return _close_tentative_pane(new[0], runner, record)
 
 
 def _close_tentative_pane(pane: str, runner, record) -> str:
@@ -794,14 +886,25 @@ def _cmd_handoff(args) -> int:
     with open(args.driver_state, encoding="utf-8") as fh:
         state = json.load(fh)
 
-    disposition = driver_lib.fresh_session_handoff(state, mode=driver_lib.FRESH_SESSION_MODE)
+    # The campaign's OWN mode decides whether there is a process boundary at all. Forcing
+    # FRESH_SESSION_MODE here (the previous revision) would hand off for a campaign documented
+    # to loop in-session — `fresh_session_handoff` returns `single_session` for exactly that
+    # case, and overriding it discards the answer (#611 Step-11 pass-3 High 2).
+    mode = state.get("session_mode", "single-session")
+    disposition = driver_lib.fresh_session_handoff(state, mode=mode)
     if disposition.get("outcome") != "ready":
-        print(f"no handoff: campaign disposition is {disposition.get('outcome')!r}")
+        print(f"no handoff: campaign disposition is {disposition.get('outcome')!r} "
+              f"(session_mode {mode!r})")
         return 3
 
+    # Probes are DERIVED or asserted by the launcher about itself — never hardcoded True. A
+    # launcher that does not pass --launcher-armed/--fresh-launch-supported is telling us it
+    # cannot do those things; absence must not read as support (the same lesson as the 8a
+    # review's --launcher-herdr default).
+    handoff_writable = os.access(os.path.dirname(os.path.abspath(args.driver_state)), os.W_OK)
     available, reason = driver_lib.fresh_session_available(
-        state, launcher_armed=True, handoff_writable=True, fresh_launch_supported=True,
-        launch_mode=args.herdr_mode)
+        state, launcher_armed=args.launcher_armed, handoff_writable=handoff_writable,
+        fresh_launch_supported=args.fresh_launch_supported, launch_mode=args.herdr_mode)
     if not available:
         print(f"no handoff: {reason} (launch mode {args.herdr_mode!r})")
         return 3
@@ -853,9 +956,16 @@ def main(argv: list[str] | None = None) -> int:
     cond.add_argument("--goal-condition-from", metavar="PREDECESSOR_TRANSCRIPT",
                       help="read the last unmet goal condition VERBATIM (AC6)")
     p_ho.add_argument("--launch-mode", default="fresh", choices=sorted(LAUNCH_MODES))
-    p_ho.add_argument("--herdr-mode", required=True,
-                      choices=("herdr", "pane_less", "single_session"),
-                      help="the verdict from `select-mode`")
+    # Only `herdr` is accepted. `pane_less` is a real verdict but it means "use the retained
+    # claude --print path" (see `build-fallback`) — running the herdr split for it would split
+    # a pane on a project that never wanted one, then retire the predecessor after launching
+    # by a different mechanism entirely (#611 Step-11 pass-3 Medium 4).
+    p_ho.add_argument("--herdr-mode", required=True, choices=("herdr",),
+                      help="the verdict from `select-mode`; only 'herdr' runs this sequence")
+    p_ho.add_argument("--launcher-armed", action="store_true", default=False,
+                      help="the calling launcher asserts it is durably armed")
+    p_ho.add_argument("--fresh-launch-supported", action="store_true", default=False,
+                      help="the calling launcher asserts it can launch with NO --resume")
     p_ho.add_argument("--no-teardown", action="store_true",
                       help="verify everything but leave the predecessor running")
 

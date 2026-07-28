@@ -61,6 +61,10 @@ class Runner:
         k = self.key(argv)
         if self.fail_on and k.startswith(self.fail_on):
             return FakeProc(returncode=1)
+        if k == "herdr pane list" and k not in self.responses:
+            # Default inventory: only the predecessor exists, so an uncertain split reconciles
+            # to "nothing was created". Tests that exercise the reconcile supply their own.
+            return FakeProc(0, PANE_LIST_ANCHOR_ONLY)
         return FakeProc(0, self.responses.get(k, ""))
 
     def kinds(self):
@@ -68,6 +72,7 @@ class Runner:
 
 
 SPLIT_OK = json.dumps({"result": {"pane_id": "w1:pZZ"}})
+PANE_LIST_ANCHOR_ONLY = json.dumps({"result": {"panes": [{"pane_id": "w1:p1"}]}})
 PANE_GET_OK = json.dumps({"result": {"pane": {
     "pane_id": "w1:pZZ",
     "agent_session": {"agent": "claude", "kind": "id", "source": "herdr:claude",
@@ -130,6 +135,12 @@ def _handoff(**over):
 def _sent(runner) -> list[str]:
     """The text of every `herdr pane send-text`, in order."""
     return [c[4] for c in runner.calls if c[:3] == ["herdr", "pane", "send-text"]]
+
+
+def _raise(exc):
+    def reader(_path):
+        raise exc
+    return reader
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +378,7 @@ class TestPerformHandoff:
         assert out["results"] == {"spawned": True, "goal_armed": True,
                                   "project_switched": True}
         assert r.kinds() == [
+            "herdr pane list",                                  # pre-split inventory
             "herdr pane split", "herdr agent start", "herdr agent wait", "herdr pane get",
             "herdr pane send-text", "herdr pane send-keys",     # the goal
             "herdr pane send-text", "herdr pane send-keys",     # the resume prompt
@@ -514,12 +526,26 @@ def test_cli_goal_text_reports_truncation() -> None:
 
 def _state(tmp_path, **over):
     state = {"campaign": "epic-667", "epic": 667, "generation": 3,
+             "session_mode": "fresh-session",
              "issues": [{"number": 611, "status": "merged"},
                         {"number": 612, "status": "queued"}]}
     state.update(over)
     p = tmp_path / "driver-state.json"
     p.write_text(json.dumps(state), encoding="utf-8")
     return p
+
+
+def _handoff_argv(state, tmp_path, **over):
+    kw = {"--driver-state": str(state), "--anchor-pane": "w1:p1", "--name": "child4",
+          "--project-root": str(REPO_ROOT), "--cwd": str(REPO_ROOT),
+          "--registry": "/reg.jsonl", "--transcript-dir": str(tmp_path),
+          "--goal-condition": "keep going", "--launch-mode": "fresh",
+          "--herdr-mode": "herdr"}
+    kw.update(over)
+    argv = ["handoff"]
+    for k, v in kw.items():
+        argv += [k] if v is None else [k, v]
+    return argv
 
 
 class TestHandoffCLI:
@@ -537,26 +563,44 @@ class TestHandoffCLI:
         """Every child merged => `complete`, not `ready`. Splitting a pane here would spawn a
         successor with no work at all."""
         state = _state(tmp_path, issues=[{"number": 611, "status": "merged"}])
-        proc = _cli("handoff", "--driver-state", str(state), "--anchor-pane", "w1:p1",
-                    "--name", "child4", "--project-root", str(REPO_ROOT),
-                    "--cwd", str(REPO_ROOT), "--registry", "/reg.jsonl",
-                    "--transcript-dir", str(tmp_path), "--goal-condition", "x",
-                    "--launch-mode", "fresh", "--herdr-mode", "herdr")
+        proc = _cli(*_handoff_argv(state, tmp_path))
         assert proc.returncode == 3, proc.stderr
         assert "complete" in (proc.stdout + proc.stderr)
 
-    def test_a_single_session_launch_mode_refuses_the_handoff(self, tmp_path) -> None:
-        """The availability decision lives in `driver_lib.fresh_session_available`, so a
-        herdr-gated project that cannot get a pane keeps its predecessor rather than being
-        handed a successor already known to die at its first build-seat dispatch."""
+    @pytest.mark.parametrize("mode", ["single_session", "pane_less"])
+    def test_only_the_herdr_verdict_runs_this_sequence(self, tmp_path, mode) -> None:
+        """`single_session` means keep the current loop; `pane_less` means use the retained
+        `claude --print` path. Accepting either here would split a pane on a project that never
+        wanted one and then retire the predecessor after launching by a different mechanism
+        entirely (#611 Step-11 pass-3 Medium 4)."""
+        proc = _cli(*_handoff_argv(_state(tmp_path), tmp_path, **{"--herdr-mode": mode}))
+        assert proc.returncode == 2, proc.stdout
+        assert "invalid choice" in proc.stderr
+
+    def test_a_single_session_campaign_is_not_handed_off(self, tmp_path) -> None:
+        """A driver-state with no `session_mode` is documented to mean byte-identical
+        single-session behaviour. The previous revision forced FRESH_SESSION_MODE, so it would
+        have launched a successor and retired the predecessor for such a campaign
+        (#611 Step-11 pass-3 High 2)."""
         state = _state(tmp_path)
-        proc = _cli("handoff", "--driver-state", str(state), "--anchor-pane", "w1:p1",
-                    "--name", "child4", "--project-root", str(REPO_ROOT),
-                    "--cwd", str(REPO_ROOT), "--registry", "/reg.jsonl",
-                    "--transcript-dir", str(tmp_path), "--goal-condition", "x",
-                    "--launch-mode", "fresh", "--herdr-mode", "single_session")
-        assert proc.returncode == 3, proc.stderr
-        assert "single_session" in (proc.stdout + proc.stderr)
+        payload = json.loads(state.read_text(encoding="utf-8"))
+        del payload["session_mode"]
+        state.write_text(json.dumps(payload), encoding="utf-8")
+        proc = _cli(*_handoff_argv(state, tmp_path))
+        assert proc.returncode == 3, proc.stdout
+        assert "single_session" in proc.stdout
+
+    def test_an_unarmed_launcher_is_refused(self, tmp_path) -> None:
+        """Absence of the assertion must not read as support — the same lesson the 8a review
+        taught about `--launcher-herdr`."""
+        proc = _cli(*_handoff_argv(_state(tmp_path), tmp_path))
+        assert proc.returncode == 3, proc.stdout
+        assert "launcher" in proc.stdout.lower()
+
+    def test_a_resume_first_launcher_is_refused(self, tmp_path) -> None:
+        proc = _cli(*_handoff_argv(_state(tmp_path), tmp_path, **{"--launcher-armed": None}))
+        assert proc.returncode == 3, proc.stdout
+        assert "fresh" in proc.stdout.lower()
 
     def test_the_resume_prompt_comes_from_driver_lib_not_a_hand_written_string(self,
                                                                                tmp_path) -> None:
@@ -600,12 +644,9 @@ class TestHandoffCLI:
                     "failed_step": None}
 
         monkeypatch.setattr(ll, "perform_handoff", fake)
-        rc = ll.main(["handoff", "--driver-state", str(_state(tmp_path)),
-                      "--anchor-pane", "w1:p1", "--name", "child4",
-                      "--project-root", str(REPO_ROOT), "--cwd", str(REPO_ROOT),
-                      "--registry", "/reg.jsonl", "--transcript-dir", str(tmp_path),
-                      "--goal-condition", "keep going", "--launch-mode", "fresh",
-                      "--herdr-mode", "herdr"])
+        rc = ll.main(_handoff_argv(_state(tmp_path), tmp_path,
+                                   **{"--launcher-armed": None,
+                                      "--fresh-launch-supported": None}))
         assert rc == 0, seen
         assert seen["anchor_pane"] == "w1:p1"
         assert seen["goal_condition"] == "keep going"
@@ -830,12 +871,136 @@ class TestEvidenceIsLaunchBound:
                 return arts(path)
             seen["transcript"] += 1
             if seen["transcript"] == 1:
-                raise OSError("no such file")
+                raise FileNotFoundError("no such file")
             return TRANSCRIPT_OK
 
         r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
         out = ll.perform_handoff(runner=r, **_handoff(read_text=reader))
         assert out["ok"] is True, out
+
+
+class TestBaselineIntegrity:
+    """#611 Step-11 pass-3 High 1. The previous revision mapped EVERY `OSError` to offset 0, so
+    an artifact that exists but is momentarily unreadable was treated as empty — and the whole
+    pre-existing file then counted as this launch's evidence."""
+
+    def test_an_unreadable_registry_refuses_the_handoff(self) -> None:
+        def reader(path):
+            if path == REGISTRY_PATH:
+                raise PermissionError("locked")
+            return TRANSCRIPT_OK
+
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff(read_text=reader))
+        assert out["ok"] is False and out["failed_step"] == "registry_baseline_unreadable"
+        assert r.calls == [] or not any(c[:3] == ["herdr", "pane", "split"] for c in r.calls), \
+            "no baseline means no launch — nothing should have been created"
+
+    def test_an_unreadable_successor_transcript_refuses_after_the_split(self) -> None:
+        arts = Artifacts()
+
+        def reader(path):
+            if path == REGISTRY_PATH:
+                return arts(path)
+            raise PermissionError("locked")
+
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff(read_text=reader))
+        assert out["ok"] is False and out["failed_step"] == "transcript_baseline_unreadable"
+        assert out["cleanup"] and "closed tentative pane" in out["cleanup"]
+        assert not _predecessor_closed(r)
+
+    def test_a_missing_file_is_still_offset_zero_not_a_refusal(self) -> None:
+        """`FileNotFoundError` is the ONE case where 'unreadable' honestly means 'empty'."""
+        assert ll._artifact_offset(_raise(FileNotFoundError("nope")), "/x") == 0
+        assert ll._artifact_offset(_raise(PermissionError("locked")), "/x") is None
+        assert ll._artifact_offset(lambda _p: "abcd", "/x") == 4
+
+    def test_a_shrunken_artifact_voids_the_baseline(self) -> None:
+        """Rotation or truncation makes the offset point somewhere else entirely, so positional
+        evidence is meaningless — it must fail, not compare against the wrong region."""
+        assert ll._tail("short", 100) is None
+        assert ll._tail("abcdef", 3) == "def"
+
+    def test_a_rotated_registry_does_not_authorize_teardown(self) -> None:
+        reads = {"n": 0}
+
+        arts = Artifacts()
+
+        def reader(path):
+            if path != REGISTRY_PATH:
+                return arts(path)
+            reads["n"] += 1
+            # a long history at baseline, then the file is rotated to a short new one that
+            # happens to contain the successor's id
+            return "x" * 500 if reads["n"] == 1 else REGISTRY_OK
+
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff(read_text=reader))
+        assert out["ok"] is False and out["failed_step"] == "project_switched"
+        assert not _predecessor_closed(r)
+
+
+class TestUncertainSplitReconcile:
+    """#611 Step-11 pass-3 Medium 3: herdr can CREATE a pane and still fail to describe it.
+    Returning without looking leaked one pane per cron fire."""
+
+    def _runner(self, split_stdout, split_rc=0, before=("w1:p1",), after=("w1:p1", "w1:pNEW")):
+        listings = [json.dumps({"result": {"panes": [{"pane_id": p} for p in before]}}),
+                    json.dumps({"result": {"panes": [{"pane_id": p} for p in after]}})]
+
+        def runner(argv, timeout=180):
+            runner.calls.append(list(argv))
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return FakeProc(0, listings.pop(0) if listings else listings_last(listings))
+            if argv[:3] == ["herdr", "pane", "split"]:
+                return FakeProc(split_rc, split_stdout)
+            return FakeProc(0)
+
+        def listings_last(_l):
+            return json.dumps({"result": {"panes": [{"pane_id": p} for p in after]}})
+
+        runner.calls = []
+        return runner
+
+    def test_an_unparseable_split_response_still_closes_the_created_pane(self) -> None:
+        r = self._runner("not json")
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["failed_step"] == "split_response_unparseable"
+        assert out["cleanup"] and "closed tentative pane w1:pNEW" in out["cleanup"]
+        assert any(c[:4] == ["herdr", "pane", "close", "w1:pNEW"] for c in r.calls)
+        assert not any(c[:4] == ["herdr", "pane", "close", "w1:p1"] for c in r.calls)
+
+    def test_a_failed_split_that_still_created_a_pane_is_reconciled(self) -> None:
+        r = self._runner("", split_rc=1)
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["failed_step"] == "split"
+        assert out["cleanup"] and "closed tentative pane w1:pNEW" in out["cleanup"]
+
+    def test_nothing_created_means_nothing_to_clean_up(self) -> None:
+        r = self._runner("not json", after=("w1:p1",))
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["cleanup"] is None
+        assert not any(c[:3] == ["herdr", "pane", "close"] for c in r.calls)
+
+    def test_an_ambiguous_diff_closes_NOTHING(self) -> None:
+        """Another session splitting concurrently must not have its pane closed by ours —
+        that is strictly worse than leaking one."""
+        r = self._runner("not json", after=("w1:p1", "w1:pNEW", "w1:pOTHER"))
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["cleanup"] and "ambiguous" in out["cleanup"]
+        assert not any(c[:3] == ["herdr", "pane", "close"] for c in r.calls)
+
+    def test_no_inventory_is_reported_not_guessed(self) -> None:
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return FakeProc(1)
+            if argv[:3] == ["herdr", "pane", "split"]:
+                return FakeProc(0, "not json")
+            return FakeProc(0)
+
+        out = ll.perform_handoff(runner=runner, **_handoff())
+        assert out["cleanup"] and "cannot reconcile" in out["cleanup"]
 
 
 class TestBoundedPolling:
@@ -858,6 +1023,22 @@ class TestBoundedPolling:
         assert out["ok"] is False and out["failed_step"] == "goal_armed"
         assert len(slept) <= ll.GOAL_POLL_ATTEMPTS, "polling must be bounded"
         assert not _predecessor_closed(r)
+
+    def test_a_partial_multibyte_read_is_retried_not_fatal(self) -> None:
+        """`UnicodeDecodeError` is a ValueError, so catching OSError alone let a read that
+        landed mid-character escape the poll and kill the handoff (pass-3 Low 5)."""
+        state = {"n": 0}
+        arts = Artifacts()
+
+        def flaky(path):
+            state["n"] += 1
+            if state["n"] == 3:
+                raise UnicodeDecodeError("utf-8", b"\xf0\x9f", 0, 2, "truncated")
+            return arts(path)
+
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff(read_text=flaky, sleeper=lambda _s: None))
+        assert out["ok"] is True, out
 
     def test_a_read_error_mid_poll_does_not_abort_the_poll(self) -> None:
         state = {"n": 0}

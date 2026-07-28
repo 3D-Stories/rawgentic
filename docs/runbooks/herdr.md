@@ -220,6 +220,12 @@ The send-text route is used instead. It is independently proven for a 2847-char,
 - `cwd` is canonicalized and **confined below the project root**, so a caller cannot move the successor's execution out of the project.
 - Pane ids and agent names are validated fail-closed, option-shaped values refused, control characters rejected. All of it happens **before** the split, so a refusal can never leave an orphan pane behind.
 
+**The uncertain-split window.** herdr can create a pane and still fail to describe it — a non-zero exit after server-side creation, or rc 0 with truncated JSON. Every post-split abort closes the tentative successor, but that only works when its id is known. So a pane inventory is taken **before** the split and, on an uncertain response, diffed against a fresh one. Exactly one new pane is closed; zero means nothing was created; **more than one closes nothing at all** and says so — another session splitting concurrently must never have its pane closed by ours, which is strictly worse than leaking one. If the inventory itself is unavailable the residual leak is reported, not hidden.
+
+**`handoff` accepts only the `herdr` verdict.** `pane_less` means "use the retained `claude --print` path" (`build-fallback`) and `single_session` means "keep the current loop". Running the herdr sequence for either would split a pane on a project that never wanted one and then retire the predecessor after launching by a different mechanism.
+
+**The campaign's own `session_mode` decides whether there is a boundary at all**, and the launcher asserts its own capabilities (`--launcher-armed`, `--fresh-launch-supported`) rather than having them assumed. A driver-state with no `session_mode` means single-session, and `handoff` refuses it.
+
 ### 7.4 Verifying the handoff (never scraped pane text)
 
 Checked in this order — which is causal, not alphabetical:
@@ -234,7 +240,9 @@ Pane text is rendered, wrapped, and scrolls away, so it is never the evidence. A
 
 **Evidence must be launch-bound.** With `--continue`/`--resume` the successor can carry a session id that already owns a registry line and an unmet goal row, so reading whole files would authorise teardown on the predecessor's own history. Each artifact's size is captured before the launch and only what lands after it counts; `goal_armed` additionally matches the row's `condition` against the text actually armed. A capped goal arms the **truncated** text, so that is the form compared — matching the original would fail forever and teardown could never fire.
 
-**Reads are polled, bounded, and fail closed.** The artifacts are written by hooks moments after the paste, so a single read races them. `goal_armed` polls up to 12 times at 1.5 s; `project_switched` polls up to 40 times at 3 s, because it needs the successor to run a whole `/rawgentic:switch` turn first. A read error mid-poll is retried, not fatal — a JSONL file being appended to can momentarily fail to read. Exhausting either budget fails the handoff and leaves the predecessor alive and guarded.
+**A baseline that cannot be established refuses the handoff.** Only `FileNotFoundError` means "empty" — that is the expected state of a successor transcript before the successor exists. Any other read failure on an artifact that *does* exist would otherwise set the offset to zero and let the whole pre-existing file count as this launch's evidence, which under `resume` mode is exactly the stale-evidence path the offsets exist to close. An artifact that later reads back **shorter than its own baseline** was rotated or truncated, so the offset no longer points where it did; that voids the evidence rather than comparing against the wrong region.
+
+**Reads are polled, bounded, and fail closed.** The artifacts are written by hooks moments after the paste, so a single read races them. `goal_armed` polls up to 12 times at 1.5 s; `project_switched` polls up to 40 times at 3 s, because it needs the successor to run a whole `/rawgentic:switch` turn first. A read error mid-poll is retried, not fatal — a JSONL file being appended to can momentarily fail to read, and a read landing mid-character raises `UnicodeDecodeError`, which is retried alongside OS-level errors. Exhausting either budget fails the handoff and leaves the predecessor alive and guarded.
 
 Truncation is surfaced, never silent: if the condition exceeds the 4000-char cap (which includes the `/goal ` prefix and the truncation note, so a 4000-char condition does not itself fit), the wired path reports it on the step record.
 

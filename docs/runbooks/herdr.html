@@ -37,7 +37,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-27 21:47 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-27 22:03 MDT</div>
 <h1>herdr runbook</h1>
 
 </header>
@@ -184,6 +184,9 @@ PY</code></pre>
 <li><code>cwd</code> is canonicalized and <strong>confined below the project root</strong>, so a caller cannot move the successor&#x27;s execution out of the project.</li>
 <li>Pane ids and agent names are validated fail-closed, option-shaped values refused, control characters rejected. All of it happens <strong>before</strong> the split, so a refusal can never leave an orphan pane behind.</li>
 </ul>
+<p><strong>The uncertain-split window.</strong> herdr can create a pane and still fail to describe it — a non-zero exit after server-side creation, or rc 0 with truncated JSON. Every post-split abort closes the tentative successor, but that only works when its id is known. So a pane inventory is taken <strong>before</strong> the split and, on an uncertain response, diffed against a fresh one. Exactly one new pane is closed; zero means nothing was created; <strong>more than one closes nothing at all</strong> and says so — another session splitting concurrently must never have its pane closed by ours, which is strictly worse than leaking one. If the inventory itself is unavailable the residual leak is reported, not hidden.</p>
+<p><strong><code>handoff</code> accepts only the <code>herdr</code> verdict.</strong> <code>pane_less</code> means &quot;use the retained <code>claude --print</code> path&quot; (<code>build-fallback</code>) and <code>single_session</code> means &quot;keep the current loop&quot;. Running the herdr sequence for either would split a pane on a project that never wanted one and then retire the predecessor after launching by a different mechanism.</p>
+<p><strong>The campaign&#x27;s own <code>session_mode</code> decides whether there is a boundary at all</strong>, and the launcher asserts its own capabilities (<code>--launcher-armed</code>, <code>--fresh-launch-supported</code>) rather than having them assumed. A driver-state with no <code>session_mode</code> means single-session, and <code>handoff</code> refuses it.</p>
 <h3>7.4 Verifying the handoff (never scraped pane text)</h3>
 <p>Checked in this order — which is causal, not alphabetical:</p>
 <table>
@@ -196,7 +199,8 @@ PY</code></pre>
 </table>
 <p>Pane text is rendered, wrapped, and scrolls away, so it is never the evidence. A step whose artifact is missing, unreadable, or unparseable counts as <strong>failed</strong>, not passed: an unreported check is not evidence of success, and what it gates is irreversible. <code>goal_armed</code> specifically requires <code>met: false</code> — an already-met goal would not prove the successor is guarded. A live handoff failed on 2026-07-27 precisely because no step was verified and the goal silently never armed.</p>
 <p><strong>Evidence must be launch-bound.</strong> With <code>--continue</code>/<code>--resume</code> the successor can carry a session id that already owns a registry line and an unmet goal row, so reading whole files would authorise teardown on the predecessor&#x27;s own history. Each artifact&#x27;s size is captured before the launch and only what lands after it counts; <code>goal_armed</code> additionally matches the row&#x27;s <code>condition</code> against the text actually armed. A capped goal arms the <strong>truncated</strong> text, so that is the form compared — matching the original would fail forever and teardown could never fire.</p>
-<p><strong>Reads are polled, bounded, and fail closed.</strong> The artifacts are written by hooks moments after the paste, so a single read races them. <code>goal_armed</code> polls up to 12 times at 1.5 s; <code>project_switched</code> polls up to 40 times at 3 s, because it needs the successor to run a whole <code>/rawgentic:switch</code> turn first. A read error mid-poll is retried, not fatal — a JSONL file being appended to can momentarily fail to read. Exhausting either budget fails the handoff and leaves the predecessor alive and guarded.</p>
+<p><strong>A baseline that cannot be established refuses the handoff.</strong> Only <code>FileNotFoundError</code> means &quot;empty&quot; — that is the expected state of a successor transcript before the successor exists. Any other read failure on an artifact that *does* exist would otherwise set the offset to zero and let the whole pre-existing file count as this launch&#x27;s evidence, which under <code>resume</code> mode is exactly the stale-evidence path the offsets exist to close. An artifact that later reads back <strong>shorter than its own baseline</strong> was rotated or truncated, so the offset no longer points where it did; that voids the evidence rather than comparing against the wrong region.</p>
+<p><strong>Reads are polled, bounded, and fail closed.</strong> The artifacts are written by hooks moments after the paste, so a single read races them. <code>goal_armed</code> polls up to 12 times at 1.5 s; <code>project_switched</code> polls up to 40 times at 3 s, because it needs the successor to run a whole <code>/rawgentic:switch</code> turn first. A read error mid-poll is retried, not fatal — a JSONL file being appended to can momentarily fail to read, and a read landing mid-character raises <code>UnicodeDecodeError</code>, which is retried alongside OS-level errors. Exhausting either budget fails the handoff and leaves the predecessor alive and guarded.</p>
 <p>Truncation is surfaced, never silent: if the condition exceeds the 4000-char cap (which includes the <code>/goal </code> prefix and the truncation note, so a 4000-char condition does not itself fit), the wired path reports it on the step record.</p>
 <p>The condition itself is read <strong>verbatim</strong> from the predecessor&#x27;s own last unmet <code>goal_status</code> row (<code>launcher_lib.py read-goal-condition --transcript &lt;file&gt;</code>), never retyped or summarised. The <strong>last</strong> unmet row wins, because a run can re-arm its goal and only the most recent row states what is still owed. No unmet row is an explicit refusal, not an invented condition.</p>
 <h3>7.5 Fallback, and what is deliberately NOT a fallback</h3>
@@ -217,7 +221,7 @@ PY</code></pre>
 <p>The top-level <code>herdr wait</code> genuinely does not exist in 0.7.5 (tracked as #659), but <strong><code>herdr agent wait &lt;target&gt; --until idle|working|blocked|done|unknown --timeout &lt;ms&gt;</code> does exist</strong> and is the readiness primitive §7.1 step 3 uses. Scope #659 to the top-level form rather than claiming the capability is absent.</p>
 
 </main>
-<footer>Last updated: 2026-07-27 21:47 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-27 22:03 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
