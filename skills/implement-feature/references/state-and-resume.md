@@ -22,7 +22,13 @@ P15 (tiered review) introduces session-scoped state files under
   drop a deferred High/Critical from the Step 11 exit gate.
 - `loopback_counters.json` — per-source loop-back counters (`design`, `tdd`,
   `review_design`, `review`) plus `total`. Persisted across sessions via
-  `plan_lib.consume_loopback`.
+  `plan_lib.consume_loopback`, whose read-modify-write is serialised by
+  `plan_lib.file_lock` — an exclusive lock on a stable `<path>.lock` SIDECAR, not
+  on the counters file itself, because `flock` follows the opened inode while an
+  atomic replace installs a new inode at the pathname. Two concurrent invocations
+  would otherwise both read the same budget and one would silently restore spent
+  loop-backs. The same helper guards `.driver-state` writes for the mid-child
+  handoff (#665), which is why it is public rather than module-private.
 
 In addition, a small **local, git-excluded** status pointer lives at
 `.rawgentic/review-state/<branch-sanitized>.json` (single object: `{schema_version,

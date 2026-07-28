@@ -278,7 +278,23 @@ condition**, and requires it to be an unmet row for the ARMED condition. Scoping
 rows matching the armed condition would have missed a *replacement* guard: a session that re-armed
 with a different condition has retired the old one, so the armed condition is stale and teardown
 must refuse. Both a later `met:true` row and a later row for any other condition therefore fail this
-check. The ladder check answers "was a guard ever
+check.
+
+**Implementation note added 2026-07-28, resolving a contradiction inside this revision rather than
+re-opening the design.** §5 above says the latest row decides "whatever its condition", while §6
+step 8 says "the LATEST `goal_status` row **for the armed condition**". Those are different rules,
+and Task 3's written tests pin the second one (`test_a_different_conditions_rows_are_ignored`
+asserts a foreign row is IGNORED). Both requirements are satisfied by splitting them, because they
+answer different questions:
+
+- `goal_currently_unmet(text, condition)` implements §6's condition-scoped reading — "is THIS
+  condition still owed?" — which is what its tests pin.
+- `latest_goal_status_condition(text)` implements §5's replacement rule, and
+  `retire_predecessor` refuses when the newest row belongs to any other condition.
+
+So the strict behaviour §5 asks for is enforced at the destructive gate, where it protects
+something, rather than folded into a predicate where it would conflate "still owed" with "not
+replaced". No behaviour §5 required was dropped; the loop-back budget was not touched. The ladder check answers "was a guard ever
 handed over"; this pre-clear re-check answers "is it still in force right now", and only the second
 one authorises destruction.
 
