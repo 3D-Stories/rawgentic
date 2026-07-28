@@ -273,6 +273,7 @@ class FakeWorld:
         self.confirm_rearm = confirm_rearm
         self.pane_get_rc = pane_get_rc
         self.calls: list[list[str]] = []
+        self._staged = None
         self.pred_transcript = tmp_path / "transcripts" / f"{PRED}.jsonl"
 
     def kinds(self) -> list[str]:
@@ -305,13 +306,20 @@ class FakeWorld:
         if argv[:3] == ["herdr", "pane", "send-text"]:
             text = argv[4]
             if text.startswith("/goal clear"):
-                if self.clear_text_rc == 0 and self.confirm_clear:
-                    self._append_pred(_goal_row(COND, met=True))
+                self._staged = "clear" if self.clear_text_rc == 0 else None
                 return FakeProc(self.clear_text_rc, "")
-            if self.confirm_rearm:                       # the re-arm paste
-                self._append_pred(_goal_row(COND, met=False))
+            self._staged = "rearm"                       # the re-arm paste
             return FakeProc(0, "")
         if argv[:3] == ["herdr", "pane", "send-keys"]:
+            # Step 11 pass-2 caught the old fake confirming the clear on send-TEXT, so its tests
+            # could not tell whether the Enter mattered. A pasted command only takes effect when it
+            # is SUBMITTED, so the row appears here or not at all.
+            staged, self._staged = self._staged, None
+            if self.clear_keys_rc == 0:
+                if staged == "clear" and self.confirm_clear:
+                    self._append_pred(_goal_row(COND, met=True))
+                elif staged == "rearm" and self.confirm_rearm:
+                    self._append_pred(_goal_row(COND, met=False))
             return FakeProc(self.clear_keys_rc, "")
         if argv[:3] == ["herdr", "pane", "close"]:
             rc = self.pane_close_rcs.pop(0) if self.pane_close_rcs else 0
@@ -713,10 +721,18 @@ class TestMidChildHandoffCommand:
               "transcript_dir": str(tmp_path / "transcripts"), "issue": ISSUE, "step": "8",
               "branch": BRANCH, "test_baseline": "5362 passed", "project": "rawgentic",
               "project_path": "./projects/rawgentic", "repo_root": str(tmp_path / "repo"),
-              "predecessor_session": PRED, "launch_mode": "fresh", "goal_condition": COND,
-              "goal_condition_from": None}
+              "predecessor_session": PRED, "launch_mode": "fresh", "goal_condition": None,
+              "goal_condition_from": self._transcript(tmp_path)}
         kw.update(over)
         return SimpleNamespace(**kw)
+
+    def _transcript(self, tmp_path):
+        """The predecessor's own transcript, carrying its live unmet guard. Required since Step 11
+        pass-2: the condition must have provenance, and `--goal-condition` alone cannot supply it."""
+        t = tmp_path / "own-transcript.jsonl"
+        if not t.exists():
+            t.write_text(_goal_row(COND, met=False) + "\n", encoding="utf-8")
+        return str(t)
 
     def _bare_state(self, tmp_path, issues=None):
         state = {"schema_version": 2, "campaign": "epic-667", "epic": 667, "generation": 4,
@@ -1247,7 +1263,10 @@ class TestIdentityIsReProvedBeforeEveryDestructiveCall:
             return world(argv, timeout)
 
         out = _retire(state, world, tmp_path, runner=runner)
-        assert out["outcome"] == "target_changed_after_clear", out
+        # A transient/persistent probe failure is NOT a proven mismatch: the close is retried, the
+        # re-arm is attempted, and when neither can be proved the honest terminal state is the
+        # incident one — never a generic `error`.
+        assert out["outcome"] == "alive_and_unguarded", out
         assert out["outcome"] != "error"
 
 
@@ -1257,16 +1276,31 @@ class TestPhaseWritesAreGenerationScoped:
         CLEAR — teardown_phase on a newer generation's record, hiding its unguarded window."""
         world = _world(tmp_path)
         state = _write_state(tmp_path, world)
-        runner = _spy(world, lambda a: a[:3] == ["herdr", "pane", "send-text"],
-                      lambda: _mutate_state(state, lambda s: (
-                          s.update(generation=GEN + 5),
-                          s["handoff_pending"].update(generation=GEN + 5))))
-        _retire(state, world, tmp_path, runner=runner)
+        def supersede():
+            """What `open_handoff` really does: bump the counter and write a FRESH pending record.
+            (Renaming the existing record in place is not a supersession — it would carry our own
+            teardown_phase across, which is an artifact of the test rather than of the code.)"""
+            _mutate_state(state, lambda s: (
+                s.update(generation=GEN + 5),
+                s.update(handoff_pending={"generation": GEN + 5, "next_issue": ISSUE,
+                                          "written_ts": 2,
+                                          "kind": dl.MID_CHILD_HANDOFF_KIND,
+                                          "cancelled": False, "teardown_phase": None,
+                                          "position": _position(world),
+                                          "successor": {"pane": "w1:pZ",
+                                                        "session": "a-newer-successor"}})))
+
+        runner = _spy(world, lambda a: a[:3] == ["herdr", "pane", "send-text"], supersede)
+        out = _retire(state, world, tmp_path, runner=runner)
+        # the superseded teardown must stop, not clear-and-close for a generation it no longer owns
+        assert out["outcome"] in ("clear_failed", "refused"), out
         # whatever the outcome, the NEW generation's record must not carry our phase
         pend = _state_of(state)["handoff_pending"]
         assert pend["generation"] == GEN + 5
-        assert pend.get("teardown_phase") in (None, "clearing") or True
-        assert pend.get("teardown_phase") != "target_changed_after_clear"
+        # the NEW generation's record must carry none of our phase writes at all
+        assert pend.get("teardown_phase") is None, pend
+        # and the superseded teardown must not have closed anything
+        assert "pane_close" not in world.kinds(), world.kinds()
 
 
 class TestAnAmbiguousClearSendIsTreatedAsStaged:
@@ -1356,6 +1390,22 @@ class TestTheGoalConditionIsBoundToTheLiveGuard:
     def _as_the_predecessor(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", PRED)
 
+    def _argv(self, tmp_path, state, transcript, *extra):
+        """Through the REAL parser. Step 11 pass-2 caught the previous version fabricating an
+        argparse state the CLI could not produce (it set both `--goal-condition` and
+        `--goal-condition-from` while the parser made them mutually exclusive), so the check it
+        claimed to pin was unreachable in production."""
+        return ["mid-child-handoff", "--driver-state", str(state), "--anchor-pane", ANCHOR,
+                "--name", "succ", "--project-root", str(tmp_path), "--cwd", str(tmp_path),
+                "--registry", str(tmp_path / "reg.jsonl"),
+                "--transcript-dir", str(tmp_path / "transcripts"),
+                "--issue", str(ISSUE), "--step", "8", "--branch", BRANCH,
+                "--test-baseline", "5362 passed", "--project", "rawgentic",
+                "--project-path", "./projects/rawgentic",
+                "--repo-root", str(tmp_path / "repo"),
+                "--predecessor-session", PRED,
+                "--goal-condition-from", str(transcript), *extra]
+
     def test_a_condition_that_has_since_been_met_is_refused(self, tmp_path, monkeypatch):
         """Probed on the shipped code: `last_unmet_goal_condition` returns a condition even when a
         LATER met:true row for it exists, so the successor would be armed with a satisfied guard."""
@@ -1363,22 +1413,32 @@ class TestTheGoalConditionIsBoundToTheLiveGuard:
         transcript = tmp_path / "pred.jsonl"
         transcript.write_text("\n".join([_goal_row(COND, met=False),
                                          _goal_row(COND, met=True)]) + "\n", encoding="utf-8")
-        args = TestMidChildHandoffCommand()._args(
-            tmp_path, state, goal_condition=None, goal_condition_from=str(transcript))
         monkeypatch.setattr(ll, "perform_handoff",
                             lambda **kw: pytest.fail("must not launch a successor"))
-        assert ll._cmd_mid_child_handoff(args) == 3
+        assert ll.main(self._argv(tmp_path, state, transcript)) == 3
 
     def test_an_explicit_condition_must_match_the_live_guard(self, tmp_path, monkeypatch):
         state = TestMidChildHandoffCommand()._bare_state(tmp_path)
         transcript = tmp_path / "pred.jsonl"
         transcript.write_text(_goal_row(COND, met=False) + "\n", encoding="utf-8")
-        args = TestMidChildHandoffCommand()._args(
-            tmp_path, state, goal_condition="a weaker typoed condition",
-            goal_condition_from=str(transcript))
         monkeypatch.setattr(ll, "perform_handoff",
                             lambda **kw: pytest.fail("must not launch a successor"))
-        assert ll._cmd_mid_child_handoff(args) == 3
+        assert ll.main(self._argv(tmp_path, state, transcript,
+                                  "--goal-condition", "a weaker typoed condition")) == 3
+
+    def test_the_parser_accepts_both_so_provenance_is_always_available(self, tmp_path):
+        """The two flags must NOT be mutually exclusive any more — that exclusivity is precisely
+        what made the explicit path unverifiable."""
+        state = TestMidChildHandoffCommand()._bare_state(tmp_path)
+        transcript = tmp_path / "pred.jsonl"
+        transcript.write_text(_goal_row(COND, met=False) + "\n", encoding="utf-8")
+        argv = self._argv(tmp_path, state, transcript, "--goal-condition", COND)
+        parser_ok = True
+        try:
+            ll.main(argv + ["--launch-mode", "fresh"])
+        except SystemExit:
+            parser_ok = False       # argparse rejected the combination
+        assert parser_ok, "the CLI must accept a condition together with its provenance"
 
 
 class TestTheReceiptStepIsCompared:
@@ -1394,3 +1454,29 @@ class TestTheReceiptStepIsCompared:
         assert out["outcome"] == "retired"      # our own fresh receipt overwrites the stale one
         receipt = _state_of(state)["handoff_pending"]["rebuild_receipt"]
         assert receipt["step"] == "8"
+
+    def test_a_receipt_that_cannot_be_refreshed_fails_position_rebuilt(self, tmp_path,
+                                                                      monkeypatch):
+        """The rejection path itself, which the first version of this test never reached because
+        our own write always overwrote the stale receipt. Here the write is prevented, so the
+        read-back genuinely sees a receipt for a different step."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        _mutate_state(state, lambda s: s["handoff_pending"].update(
+            rebuild_receipt={"generation": GEN, "claimant": SUCC, "branch_observed": BRANCH,
+                             "repo_root_observed": world.repo, "step": "3", "ts": 1}))
+        real = ll._locked_state_update
+
+        def blocking_update(path, mutate):
+            probe = mutate(json.loads(Path(path).read_text(encoding="utf-8")))
+            if isinstance(probe, dict) \
+                    and isinstance(probe.get("handoff_pending"), dict) \
+                    and probe["handoff_pending"].get("rebuild_receipt", {}).get("step") == "8":
+                return None                       # the receipt refresh cannot be persisted
+            return real(path, mutate)
+
+        monkeypatch.setattr(ll, "_locked_state_update", blocking_update)
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "teardown_refused"
+        assert out["failed_step"] == "position_rebuilt", out
+        assert "clear_text" not in world.kinds() and "pane_close" not in world.kinds()

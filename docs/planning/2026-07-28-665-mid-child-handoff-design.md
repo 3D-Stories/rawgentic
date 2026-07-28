@@ -346,7 +346,7 @@ and the safe state is already the default.
 earlier revision claimed a successor dying mid-teardown always leaves the predecessor alive and
 guarded. That is false between a CONFIRMED clear (step 9) and a successful close (step 10): in that
 window the predecessor is alive and **unguarded**, and if the successor dies there, nothing re-arms
-it. The window is now (a) bounded — it spans two herdr calls with the clear already confirmed — and
+it. The window is now (a) bounded — up to three close attempts, each preceded by its own identity probe and state fence, with the clear already confirmed — and
 (b) **discoverable**, because `teardown_phase: "clearing"` is persisted before the clear is sent, so
 an operator or a later handoff generation reads the state and knows exactly what was in flight
 instead of inferring it. The consequence is a stalled run, not lost work: the predecessor's context
@@ -455,7 +455,8 @@ platform_apis:
 | successor is not on the recorded branch, is not in the recorded repository, or its receipt disagrees with the record on generation, claimant or step | `position_rebuilt` fails; teardown refused; predecessor alive, guarded, and still holding the live context. (The receipt carries no `test_baseline` — an earlier revision of this row implied it did, corrected at Step 11) |
 | successor cannot claim (stale generation, foreign claimant) | predecessor alive and guarded; the run continues in place |
 | pre-teardown identity check fails (pane no longer hosts the recorded session, or the anchor argument disagrees with durable state) | both destructive steps refused; predecessor alive and guarded; reported loudly |
-| `send-text` or `send-keys` for `/goal clear` fails | abort BEFORE `pane close`; predecessor alive and STILL guarded |
+| `send-text` for `/goal clear` returns a definite failure | abort BEFORE `pane close`; nothing transported; predecessor alive and STILL guarded |
+| `send-keys` fails, or either call is AMBIGUOUS (the runner raised) | abort BEFORE `pane close`; the clear may be STAGED unsubmitted in the predecessor's input, so it is guarded now but a later Enter would submit it. `teardown_phase: "clear_staged_unsubmitted"` records exactly this (Step 11 pass-2 — an earlier revision of this row claimed "STILL guarded" for both cases) |
 | `/goal clear` transported but never confirmed (`met:true` never appears) | `clear_unconfirmed`; pane left OPEN. **Guard state genuinely AMBIGUOUS** — the clear may have been parsed while its confirmation was unreadable or arrived after the poll budget, so the predecessor is either still guarded or alive-and-unguarded and this cannot distinguish them. `teardown_phase: "clear_unconfirmed"` is persisted so an operator can. An earlier revision of this table claimed "STILL guarded", which was wrong (Step 11) |
 | `pane close` fails after a CONFIRMED clear | bounded retries, then re-arm from `position.goal_condition` with confirmation; terminal state `alive_and_re_armed`, or `alive_and_unguarded` if the re-arm fails — the one state treated as an incident |
 | successor dies BEFORE the clear is sent | predecessor alive and guarded; recovery is a NEW handoff generation, not a foreign claim |

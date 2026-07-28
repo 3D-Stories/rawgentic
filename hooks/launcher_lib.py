@@ -1085,8 +1085,11 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     finally:
         if not transferred:
             if out["new_pane"]:
-                # Ownership is provable: herdr told us this pane id, so close it.
-                out["cleanup"] = _close_tentative_pane(out["new_pane"], runner, record)
+                # Ownership was provable at split time; `expected_session` re-checks that it still
+                # is, when we got far enough to learn one.
+                out["cleanup"] = _close_tentative_pane(
+                    out["new_pane"], runner, record,
+                    expected_session=out.get("session_id"))
             elif split_attempted:
                 # A pane may exist that we cannot name. Report it; never guess (see
                 # `_report_possible_orphan`).
@@ -1204,13 +1207,29 @@ def _report_possible_orphan(panes_before, runner, anchor_pane: str) -> str | Non
             "which is ours; check `herdr pane list` and close by hand if orphaned")
 
 
-def _close_tentative_pane(pane: str, runner, record) -> str:
+def _close_tentative_pane(pane: str, runner, record, expected_session: str | None = None) -> str:
     """Best-effort close of a successor pane whose ownership never transferred.
 
     Its own failure is RECORDED distinctly rather than raised: the handoff has already failed,
     and masking that with a cleanup error would lose the original cause.
+
+    `expected_session` (#665, Step 11 pass-2 adversarial 3) is checked when known: proof that the
+    id was NEW at split time is not proof that it is still ours at cleanup time, because this
+    module treats pane handles as reusable everywhere else. If a fresh `pane get` shows a different
+    session, the pane is reported rather than closed. When the failure happened before any session
+    was established there is nothing to compare against, and the honest bound is the pre-split
+    inventory alone — herdr 0.7.5 exposes no creation token that would close that gap.
     """
     try:
+        if expected_session is not None:
+            probe = build_pane_get_argv(pane)
+            proc = runner(probe)
+            record("cleanup_identity_probe", probe, proc)
+            live = parse_pane_agent_session(getattr(proc, "stdout", "") or "")
+            if getattr(proc, "returncode", 1) != 0 or live != expected_session:
+                return (f"NOT closed {pane}: it no longer provably hosts {expected_session!r} "
+                        f"(saw {live!r}) — the handle may have been reused, and closing it could "
+                        "kill an unrelated session; check `herdr pane list`")
         argv = build_teardown_argv(pane)
         proc = runner(argv)
         record("cleanup_tentative_pane", argv, proc)
@@ -1559,40 +1578,75 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             # `TimeoutExpired` raised here used to escape to the outer handler — skipping the close
             # AND the re-arm entirely and reporting a generic `error` while the predecessor was
             # alive and unguarded. An unprovable target is a refusal, never an abort.
+            # Tri-state, not a bool (Step 11 pass-2): a TRANSIENT probe failure and a PROVEN
+            # mismatch demand opposite responses. Collapsing them meant one timed-out probe after a
+            # confirmed clear abandoned every remaining close retry and the re-arm, leaving a live
+            # predecessor unguarded when the next probe would have succeeded.
             get_argv = build_pane_get_argv(anchor_pane)
             proc = _run(get_argv, "pane_get_anchor")
             if proc is None:
-                return (False, f"identity check FAILED: `herdr pane get {anchor_pane}` did not "
-                               "complete (the runner raised), so the target is unproven")
+                return ("unavailable", f"`herdr pane get {anchor_pane}` did not complete (the "
+                                       "runner raised), so the target is unproven right now")
             if getattr(proc, "returncode", 1) != 0:
-                return (False, f"identity check FAILED: `herdr pane get {anchor_pane}` returned "
-                               f"rc={getattr(proc, 'returncode', None)} — an unreadable target is "
-                               "not a verified one")
+                return ("unavailable", f"`herdr pane get {anchor_pane}` returned "
+                                       f"rc={getattr(proc, 'returncode', None)} — the target is "
+                                       "unreadable right now")
             live = parse_pane_agent_session(getattr(proc, "stdout", "") or "")
             if live != position["predecessor_session"]:
-                return (False, f"identity check FAILED: pane {anchor_pane} hosts {live!r}, not "
-                               f"the recorded predecessor session "
-                               f"{position['predecessor_session']!r}")
+                return ("mismatch", f"pane {anchor_pane} hosts {live!r}, not the recorded "
+                                    f"predecessor session {position['predecessor_session']!r}")
+            return ("ok", "")
+
+        def _state_fence() -> tuple[bool, str]:
+            """Re-read driver state under the lock and confirm this teardown is still authorised.
+
+            Step 11 pass-2, both reviewers (Critical): the single fence before `send-text` was far
+            too narrow. Every later destructive call — the Enter, and each close attempt — re-proved
+            only the PANE, so a cancellation or a superseding generation landing after the clear was
+            staged, or during the confirmation poll, stopped nothing: the old generation went on to
+            clear and close a predecessor the NEW handoff was already relying on. Checking state
+            before every destructive call is the fix; the residual is now just the gap between this
+            check and the syscall, which no amount of checking can close.
+            """
+            try:
+                snapshot = _locked_state_read(driver_state_path)
+            except (OSError, ValueError) as exc:
+                return (False, f"driver state could not be re-read ({exc})")
+            pend = snapshot.get("handoff_pending")
+            if not isinstance(pend, dict):
+                return (False, "handoff_pending has disappeared from driver state")
+            if pend.get("kind") != driver_lib.MID_CHILD_HANDOFF_KIND:
+                return (False, f"handoff_pending.kind is now {pend.get('kind')!r}")
+            if pend.get("cancelled") is True:
+                return (False, "the handoff has been CANCELLED")
+            if snapshot.get("generation") != generation or pend.get("generation") != generation:
+                return (False, f"generation moved on: ours is {generation}, state now carries "
+                               f"{snapshot.get('generation')!r}/{pend.get('generation')!r}")
+            claim = snapshot.get("handoff_claim")
+            if not (isinstance(claim, dict) and claim.get("generation") == generation
+                    and claim.get("claimant") == session_id):
+                return (False, "the claim is no longer ours")
             return (True, "")
 
         def _destructive_call(argv, kind, note=None):
-            """Re-prove the target, THEN issue one destructive command.
+            """State-fence AND re-prove the target, THEN issue one destructive command.
 
-            Step 11 (prose 1 / fence 3, both Critical): identity was proved once and the handle
-            then reused across the close retries and the re-arm. A pane id is a REUSABLE handle and
-            a close timeout is explicitly treated as ambiguous — so the first close can succeed
-            server-side, the predecessor exits, herdr reassigns the id, and attempt two closes a
-            colleague's pane (or the re-arm pastes into it). Every destructive call therefore gets
-            its own fresh proof. Returns (proc_or_None, identity_reason_or_None).
+            Returns `(proc_or_None, refusal_reason_or_None, refusal_kind)` where `refusal_kind` is
+            `None`, `"unavailable"` (transient — the caller may retry) or `"mismatch"`/`"state"`
+            (terminal — stop).
             """
-            ok_now, why_now = _anchor_hosts_predecessor()
-            if not ok_now:
-                return (None, why_now)
-            return (_run(argv, kind, note=note), None)
+            fence_ok, fence_why = _state_fence()
+            if not fence_ok:
+                return (None, f"state fence REFUSED: {fence_why}", "state")
+            status, why_now = _anchor_hosts_predecessor()
+            if status != "ok":
+                return (None, f"identity check failed: {why_now}", status)
+            return (_run(argv, kind, note=note), None, None)
 
-        ok_identity, why = _anchor_hosts_predecessor()
-        if not ok_identity:
-            return refuse(f"{why} — refusing both destructive steps")
+        status, why = _anchor_hosts_predecessor()
+        if status != "ok":
+            return refuse(f"pre-teardown identity check FAILED: {why} — refusing both "
+                          "destructive steps")
 
         # --- 8. is OUR guard still in force? ---
         own_text = read_or_empty(own_transcript)
@@ -1667,23 +1721,23 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             landed = _locked_state_update(driver_state_path, _mutate) is not None
             return (landed, verdict.get("reason", "the driver-state write did not land"))
 
-        # The baseline is taken FIRST so that the fence and the send are adjacent (Step 11 prose 3
-        # / fence 2). Both reviewers pointed out that the fence releases its lock before the send,
-        # and there was a whole baseline operation in between. Moving the baseline above the fence
-        # shrinks the gap to the fence's own lock release.
-        #
-        # The residual is stated rather than papered over: a lock CANNOT be held across a herdr
-        # call, so a cancel or a superseding generation landing in that final gap is not stopped by
-        # this fence. Closing that needs a fencing token the destructive step itself presents —
-        # the same mechanism the design already lists as out of scope (§10 item 1). What the fence
-        # does buy is that everything BEFORE it is re-validated, and that a stale generation can no
-        # longer write teardown_phase at all.
         pred_transcript = os.path.join(transcript_dir,
                                        f"{position['predecessor_session']}.jsonl")
-        pred_baseline = _baseline(read_text, pred_transcript)
-        if pred_baseline is None:
-            return refuse("cannot baseline the predecessor transcript — without a baseline the "
-                          "clear could never be confirmed, so nothing is sent")
+
+        # --- 8b. is the PREDECESSOR's guard still the one we are about to clear? ---
+        # Step 11 pass-2 (adversarial, High): the gate re-checked only the SUCCESSOR's guard, then
+        # sent an unconditional `/goal clear`. If the predecessor was re-prompted and re-armed a
+        # DIFFERENT guard while the successor was rebuilding, this cleared that replacement guard
+        # and closed a live session anyway. What we are authorised to clear is the condition the
+        # handoff recorded, so that is what must still be in force on the target.
+        pred_text = read_or_empty(pred_transcript)
+        pred_newest = latest_goal_status_condition(pred_text)
+        if pred_newest is not None \
+                and pred_newest.strip() != position["goal_condition"].strip():
+            return refuse(
+                "refusing: the predecessor's newest goal_status row carries a DIFFERENT condition "
+                "than the one this handoff recorded, so it has re-armed since the handover — "
+                "clearing it would remove a guard this teardown was never authorised to touch")
 
         # Persisted BEFORE the send, so the one window where a crash leaves the predecessor
         # alive and UNGUARDED is discoverable on disk instead of invisible (§6 step 9). A write
@@ -1693,12 +1747,35 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
         if not fenced_ok:
             return refuse(f"refusing at the pre-teardown fence: {fence_reason}")
 
+        # The baseline is taken HERE — after the fence and immediately before the send (Step 11
+        # pass-2, High). Taken any earlier, a `met:true` row appended in the interval would sit in
+        # the tail and "confirm" a clear that herdr had in fact ignored.
+        pred_baseline = _baseline(read_text, pred_transcript)
+        if pred_baseline is None:
+            _phase(None, fenced=False)
+            return refuse("cannot baseline the predecessor transcript — without a baseline the "
+                          "clear could never be confirmed, so nothing is sent")
+
         clear_text, clear_keys = build_send_text_argv(pane=anchor_pane, text=_CLEAR_COMMAND)
+        text_landed = False
         for kind, argv in (("clear_text", clear_text), ("clear_keys", clear_keys)):
-            proc, identity_why = _destructive_call(argv, kind)
-            if identity_why is not None:
-                _phase(None, fenced=False)
-                return refuse(f"{identity_why} — refusing to send {_CLEAR_COMMAND!r}")
+            proc, refusal_why, _refusal_kind = _destructive_call(argv, kind)
+            if refusal_why is not None:
+                # Step 11 pass-2 (fixes 3): if the TEXT already landed, a refusal here must not
+                # erase the staged-command warning — the `/goal clear` is sitting unsubmitted and a
+                # later Enter would submit it. Only a refusal before anything was transported may
+                # reset the phase to idle.
+                _phase("clear_staged_unsubmitted" if text_landed else None, fenced=False)
+                out["outcome"] = "clear_failed"
+                out["failed_step"] = kind
+                out["reason"] = (
+                    f"{refusal_why} — refusing to continue {_CLEAR_COMMAND!r}."
+                    + (" The clear text was already transported and is STAGED unsubmitted in the "
+                       "predecessor's input; teardown_phase records this." if text_landed else
+                       " Nothing was transported."))
+                return out
+            if proc is not None and getattr(proc, "returncode", 1) == 0 and kind == "clear_text":
+                text_landed = True
             if proc is None or getattr(proc, "returncode", 1) != 0:
                 # 8a destructive 5: these two failures are NOT equivalent. If `send-text`
                 # succeeded and only the Enter failed, the `/goal clear` is sitting UNSUBMITTED in
@@ -1749,22 +1826,28 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
         for attempt in range(CLOSE_ATTEMPTS):
             if attempt:
                 sleeper(CLOSE_RETRY_DELAY_S)
-            proc, identity_why = _destructive_call(
+            proc, refusal_why, refusal_kind = _destructive_call(
                 close_argv, "pane_close", note=f"attempt {attempt + 1}/{CLOSE_ATTEMPTS}")
-            if identity_why is not None:
-                target_lost = identity_why
+            if refusal_kind in ("mismatch", "state"):
+                target_lost = refusal_why           # proven: stop, and do NOT re-arm
                 break
+            if refusal_kind == "unavailable":
+                continue                            # transient: this attempt failed, keep trying
             if proc is not None and getattr(proc, "returncode", 1) == 0:
                 closed = True
                 break
         if target_lost is not None:
-            _phase("target_changed_after_clear", fenced=False)
+            phase_ok, phase_why = _phase("target_changed_after_clear", fenced=False)
             out["outcome"] = "target_changed_after_clear"
             out["reason"] = (
                 f"{target_lost}. The guard was already cleared, so the predecessor is "
                 "alive-and-unguarded OR has exited on its own — this cannot distinguish them. "
                 "Refusing to close or re-arm, because both would act on a pane that is no longer "
-                "provably the predecessor's. teardown_phase records this for an operator.")
+                "provably the predecessor's."
+                + (" teardown_phase records this for an operator."
+                   if phase_ok else
+                   f" WARNING: the incident could NOT be persisted to teardown_phase "
+                   f"({phase_why}), so this state is visible only in this report."))
             return out
         if closed:
             _phase(None, fenced=False)
@@ -1783,9 +1866,9 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             pane=anchor_pane, goal_condition=position["goal_condition"])
         rearm_sent = True
         for kind, argv in (("rearm_text", rearm_text), ("rearm_keys", rearm_keys)):
-            proc, identity_why = _destructive_call(
+            proc, refusal_why, _kind = _destructive_call(
                 argv, kind, note="goal TRUNCATED" if truncated else None)
-            if identity_why is not None or proc is None \
+            if refusal_why is not None or proc is None \
                     or getattr(proc, "returncode", 1) != 0:
                 rearm_sent = False
                 break
@@ -1804,7 +1887,13 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             "recorded condition" if confirmed else
             "pane close failed after a CONFIRMED clear AND the re-arm could not be confirmed — "
             "the predecessor may be alive and UNGUARDED; this is an incident")
-        _phase(out["outcome"], fenced=False)
+        # A terminal INCIDENT record that cannot be persisted must be said out loud (Step 11
+        # pass-2, fixes 6): a silently-refused write here means the only trace of an unguarded
+        # predecessor is this return value.
+        phase_ok, phase_why = _phase(out["outcome"], fenced=False)
+        if not phase_ok:
+            out["reason"] += (f" WARNING: this outcome could NOT be persisted to teardown_phase "
+                              f"({phase_why}), so nothing on disk records it.")
         return out
     except (LauncherError, OSError, subprocess.SubprocessError, ValueError) as exc:
         out["outcome"] = out["outcome"] or "error"
@@ -1997,18 +2086,23 @@ def _cmd_mid_child_handoff(args) -> int:
     # what is actually owed — and the same wrong value would then be used to re-arm the
     # predecessor on the partial-success path. So whichever way it arrives, it is validated
     # against the transcript as still-unmet.
+    # Step 11 pass-2, BOTH reviewers (High): the previous attempt validated the condition only
+    # when a transcript was supplied — while the parser made `--goal-condition` and
+    # `--goal-condition-from` MUTUALLY EXCLUSIVE, so a production invocation using an explicit
+    # condition could never supply the transcript and was therefore never checked at all. The
+    # regression test had fabricated an argparse state the CLI cannot produce, which is exactly the
+    # test-asserts-the-implementation defect this epic keeps hitting. The transcript is now
+    # REQUIRED for this command, and `--goal-condition` is an optional assertion checked against it.
+    with open(args.goal_condition_from, encoding="utf-8") as fh:
+        transcript_text = fh.read()
     condition = args.goal_condition
-    transcript_text = None
-    if args.goal_condition_from:
-        with open(args.goal_condition_from, encoding="utf-8") as fh:
-            transcript_text = fh.read()
     if condition is None:
-        condition = last_unmet_goal_condition(transcript_text or "")
+        condition = last_unmet_goal_condition(transcript_text)
         if condition is None:
             print("no unmet goal in this session's transcript — refusing to invent a condition "
                   "for the successor", file=sys.stderr)
             return 3
-    if transcript_text is not None and not goal_currently_unmet(transcript_text, condition):
+    if not goal_currently_unmet(transcript_text, condition):
         print("refusing: the supplied/derived goal condition is not the guard currently in force "
               "in this session's transcript (it has been met, or replaced by a different "
               "condition) — arming the successor with it would hand over a guard that is not what "
@@ -2072,6 +2166,26 @@ def _cmd_mid_child_handoff(args) -> int:
     # malformed argument used to bump the generation and leave an uncancelled `mid_child` record
     # that the legacy launcher refuses and no successor can ever satisfy. Every exit from here
     # cancels, not just the ones that return.
+    # An aborted handoff CANCELS its own record. Until a later `open_handoff` bumps the counter the
+    # abandoned record IS the current generation and therefore claimable, so a delayed or stray
+    # successor could otherwise take a lease on it. Monotonic: once the claim is `started` the
+    # takeover has happened and a cancel is refused instead.
+    def _cancel(state):
+        pend = state.get("handoff_pending")
+        if not isinstance(pend, dict) or pend.get("generation") != generation:
+            return None
+        claim = state.get("handoff_claim")
+        if isinstance(claim, dict) and claim.get("generation") == generation \
+                and claim.get("started"):
+            return None
+        new = dict(state)
+        new["handoff_pending"] = {**pend, "cancelled": True}
+        return new
+
+    # `finally`, not `except` (Step 11 pass-2, fixes 8). "Every exit cancels" was still false for
+    # `KeyboardInterrupt` and `SystemExit`, which do not derive from `Exception` — a Ctrl-C during
+    # an interactive handoff left the persisted generation uncancelled and claimable. A `finally`
+    # is the only construct that actually makes the claim true.
     out = None
     try:
         out = perform_handoff(
@@ -2084,31 +2198,13 @@ def _cmd_mid_child_handoff(args) -> int:
             steps=mid_child_verification_steps(), teardown=False,
             on_successor=_record_successor)
     except Exception as exc:  # pylint: disable=broad-except
-        # Deliberately broad (Step 11 fence 9): the contract is "every exit cancels". A narrow
-        # tuple left `UnicodeDecodeError` from `subprocess.run(text=True)` and `JSONDecodeError`
-        # from a state read escaping past the cancellation block, leaving an uncancelled and
-        # therefore CLAIMABLE mid-child record behind a launch that had already failed. The
-        # exception is reported, not swallowed.
+        # Broad on purpose: a narrow tuple let `UnicodeDecodeError` from
+        # `subprocess.run(text=True)` and `JSONDecodeError` from a state read escape. Reported,
+        # never swallowed silently.
         print(f"mid-child handoff aborted: {type(exc).__name__}: {exc}", file=sys.stderr)
-
-    if out is None or not out["ok"]:
-        # An aborted handoff CANCELS its own record. Until a later `open_handoff` bumps the
-        # counter the abandoned record IS the current generation and therefore claimable, so a
-        # delayed or stray successor could otherwise take a lease on it. Monotonic: once the
-        # claim is `started` the takeover has happened and a cancel is refused instead.
-        def _cancel(state):
-            pend = state.get("handoff_pending")
-            if not isinstance(pend, dict) or pend.get("generation") != generation:
-                return None
-            claim = state.get("handoff_claim")
-            if isinstance(claim, dict) and claim.get("generation") == generation \
-                    and claim.get("started"):
-                return None
-            new = dict(state)
-            new["handoff_pending"] = {**pend, "cancelled": True}
-            return new
-
-        _locked_state_update(args.driver_state, _cancel)
+    finally:
+        if out is None or not out.get("ok"):
+            _locked_state_update(args.driver_state, _cancel)
 
     if out is None:
         print(json.dumps({"generation": generation, "ok": False,
@@ -2196,10 +2292,13 @@ def main(argv: list[str] | None = None) -> int:
     p_mc.add_argument("--predecessor-session", default=None,
                       help="defaults to $CLAUDE_CODE_SESSION_ID")
     p_mc.add_argument("--launch-mode", default="fresh", choices=sorted(LAUNCH_MODES))
-    mc_cond = p_mc.add_mutually_exclusive_group(required=True)
-    mc_cond.add_argument("--goal-condition")
-    mc_cond.add_argument("--goal-condition-from", metavar="OWN_TRANSCRIPT",
-                         help="read THIS session's last unmet goal condition, verbatim")
+    # NOT mutually exclusive (Step 11 pass-2): the transcript is the provenance for the condition,
+    # so it is always required, and an explicit `--goal-condition` is an assertion validated
+    # against it rather than a way to bypass it.
+    p_mc.add_argument("--goal-condition-from", metavar="OWN_TRANSCRIPT", required=True,
+                      help="THIS session's transcript — the provenance for the goal condition")
+    p_mc.add_argument("--goal-condition", default=None,
+                      help="optional assertion; must equal the guard currently in force")
 
     p_rp = sub.add_parser("retire-predecessor",
                           help="retire the predecessor after a mid-child handoff (#665) — the "
