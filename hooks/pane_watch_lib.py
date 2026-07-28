@@ -91,6 +91,10 @@ DEFAULT_SOCKET = "~/.config/herdr/herdr.sock"
 DEFAULT_HEARTBEAT_PATH = "~/.claude/rawgentic-pane-watch-heartbeat.json"
 
 
+# A sentinel yielded when the socket closes, so the caller can tell EOF from silence.
+_EOF = object()
+
+
 class WatchError(RuntimeError):
     """A fail-loud refusal: socket failure, subscription refusal, or a redaction violation."""
 
@@ -117,10 +121,14 @@ def build_subscriptions() -> list[dict]:
     (subscriptions are fixed for a connection). `pane.updated` needs no pane id, fires on real
     status changes, and embeds the whole pane record.
 
+    `pane.created` IS requested (Step 11 BLOCKER): registration used to depend on a `pane_created`
+    frame that was never subscribed, so every pane created after the initial snapshot was silently
+    ignored forever — a new pane could go `working -> blocked` and both frames were dropped.
+
     `pane.output_matched` is never requested: it carries `matched_line` and a whole `read.text`, and
     the cheapest way to honour AC5 is to never receive contents at all.
     """
-    return [{"type": "pane.updated"}, {"type": "pane.closed"}]
+    return [{"type": "pane.updated"}, {"type": "pane.created"}, {"type": "pane.closed"}]
 
 
 def subscribe_request(request_id: str = "rawgentic-pane-watch") -> dict:
@@ -328,10 +336,14 @@ def body_for_pane(pane, *, status) -> str:
     for field in CONTENT_FIELDS:
         value = pane.get(field)
         if isinstance(value, str) and value and value.strip() == who:
+            # Step 11 finding 5: this message used to interpolate `who`, and `main` prints the
+            # exception to stderr — so the very screen text being refused (an approval prompt, a
+            # credential) landed in the watcher log. The pane id and the field NAME are enough to
+            # diagnose it; the value is exactly what must not be echoed.
             raise WatchError(
-                f"refusing: the pane identity {who!r} is identical to its {field!r}, which is "
-                "screen-derived — AC5 permits labels only, because screen text can carry prompts "
-                "and credentials")
+                f"refusing to build a body for pane {pane.get('pane_id')!r}: its identity is "
+                f"identical to its {field!r}, which is screen-derived — AC5 permits labels only, "
+                "because screen text can carry prompts and credentials (value withheld)")
     where = " ".join(p for p in (pane.get("workspace_id"), pane.get("tab_id"))
                      if isinstance(p, str) and p)
     agent = pane.get("agent")
@@ -436,6 +448,11 @@ def socket_lines(sock_path: str, request: dict, *, timeout_s: float = 30.0):
                 yield None
                 continue
             if not chunk:
+                # Step 11 finding 4: this used to just return, and `_cmd_watch` then exited 0 —
+                # so an unattended watcher SILENTLY stopped after a herdr restart. A watcher that
+                # has stopped watching must be loud, because a dead watcher and a quiet fleet look
+                # identical from outside.
+                yield _EOF
                 return
             buf += chunk
             while b"\n" in buf:
@@ -446,8 +463,41 @@ def socket_lines(sock_path: str, request: dict, *, timeout_s: float = 30.0):
         conn.close()
 
 
+def startup_sweep(reconciler, *, sender, now, debouncer=None, emit=print) -> dict:
+    """Notify for panes that are ALREADY `blocked` when the watcher starts.
+
+    Step 11 finding 2: without this, the advertised "a first observation of blocked counts" missed
+    precisely the case that matters most — an agent that was already waiting before the watcher
+    existed. The snapshot records it as `blocked`, the replayed frame (if any) is rejected as equal to
+    the baseline, and the transition map starts empty, so nobody was ever told.
+
+    This does mean a watcher restart re-notifies a still-blocked pane. That is the correct trade: an
+    agent still waiting after a restart still needs a human, and a duplicate page is a far smaller
+    harm than silence.
+    """
+    debouncer = debouncer or Debouncer()
+    out = {"notified": [], "send_failures": []}
+    for pane_id in reconciler.known_panes():
+        pane = reconciler.meta(pane_id)
+        if pane.get("agent_status") != BLOCKED:
+            continue
+        if not debouncer.allow(pane_id, now):
+            continue
+        rc = sender(body_for_pane(pane, status=BLOCKED))
+        if rc == 0:
+            debouncer.commit(pane_id, now)
+            out["notified"].append(pane_id)
+            emit(f"pane-watch: startup sweep notified for {pane_id} (already blocked)")
+        else:
+            debouncer.release(pane_id)
+            out["send_failures"].append(pane_id)
+            emit(f"pane-watch: startup sweep SEND FAILED for {pane_id} (rc={rc})")
+    return out
+
+
 def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
-                 heartbeat_s: float = DEFAULT_HEARTBEAT_S, emit=print, beat=None) -> dict:
+                 heartbeat_s: float = DEFAULT_HEARTBEAT_S, stall_s: float = DEFAULT_STALL_S,
+                 emit=print, beat=None) -> dict:
     """Drive a stream of wire lines. All I/O is via `sender`, `clock`, `emit` and `beat`.
 
     A `None` line is a read timeout, not an event: it exists so the heartbeat fires during silence.
@@ -455,16 +505,29 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
     """
     debouncer = debouncer or Debouncer()
     prior: dict[str, str] = {}
+    # Step 11 finding 7: `stall_warning` shipped as dead code — nothing tracked `since` or called it,
+    # so an idle/unknown pane could sit stale forever without the warning AC3 asks for.
+    since: dict[str, float] = {}
     report = {"subscribed": False, "events": 0, "notified": [], "suppressed": 0,
-              "dropped": 0, "errors": [], "heartbeats": 0, "send_failures": 0}
+              "dropped": 0, "errors": [], "heartbeats": 0, "send_failures": 0, "stalls": []}
     last_beat = clock()
     for line in lines:
         now = clock()
+        if line is _EOF:
+            report["errors"].append("socket closed by herdr — the watcher has stopped watching")
+            emit("pane-watch: SOCKET CLOSED — stopping loudly so a supervisor restarts us")
+            break
         if line is None or heartbeat_due(last=last_beat, now=now, interval_s=heartbeat_s):
             last_beat = now
             report["heartbeats"] += 1
             if beat is not None:
                 beat(now, report)
+            for pane_id, first_seen in list(since.items()):
+                warning = stall_warning(pane=reconciler.meta(pane_id), since=first_seen, now=now,
+                                        threshold_s=stall_s)
+                if warning is not None and pane_id not in report["stalls"]:
+                    report["stalls"].append(pane_id)
+                    emit(warning)
             if line is None:
                 continue
         if is_subscription_ack(line):
@@ -489,12 +552,22 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
             reconciler.forget_pane(event.pane_id)
             prior.pop(event.pane_id, None)
             continue
+        # Step 11 finding 6: a frame whose status is absent or unrecognised must not advance the
+        # revision baseline. Advancing it meant a CORRECTED frame at the same revision was then
+        # dropped, so a real block could be lost behind one unparseable status.
+        if event.status is None:
+            report["dropped"] += 1
+            continue
         if not reconciler.accepts(event):
             report["dropped"] += 1
             continue
 
-        was, prior[event.pane_id] = prior.get(event.pane_id), event.status
+        was = prior.get(event.pane_id)
+        if was != event.status:
+            since[event.pane_id] = now
+            report["stalls"] = [p for p in report["stalls"] if p != event.pane_id]
         if not is_blocked_transition(was, event.status):
+            prior[event.pane_id] = event.status
             continue
         if not debouncer.allow(event.pane_id, now):
             report["suppressed"] += 1
@@ -503,14 +576,18 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
         rc = sender(body)
         if rc == 0:
             debouncer.commit(event.pane_id, now)
+            prior[event.pane_id] = event.status
             report["notified"].append({"pane_id": event.pane_id, "rc": rc})
             emit(f"pane-watch: notified for {event.pane_id}")
         else:
-            # NOT committed: a failed send must not consume the window, or one transport hiccup
-            # loses the notification permanently.
+            # Step 11 finding 3: releasing the debounce was not enough. `prior` used to advance to
+            # `blocked` BEFORE the send, so after a failure the next blocked frame was no longer a
+            # transition and the sender was never retried — the notification was still lost, just
+            # more subtly. Neither the window nor the transition state is consumed by a failed send.
             debouncer.release(event.pane_id)
             report["send_failures"] += 1
-            emit(f"pane-watch: SEND FAILED for {event.pane_id} (rc={rc}) — window not consumed")
+            emit(f"pane-watch: SEND FAILED for {event.pane_id} (rc={rc}) — will retry on the next "
+                 "blocked frame")
     return report
 
 
@@ -524,11 +601,15 @@ def _cmd_watch(args) -> int:
         print(json.dumps(request, indent=2))
         return 0
     reconciler = Reconciler(read_snapshot())
+    debouncer = Debouncer(args.debounce_s)
+    sweep = startup_sweep(reconciler, sender=_default_sender, now=time.time(),
+                          debouncer=debouncer)
     lines = socket_lines(args.socket, request, timeout_s=args.heartbeat_s)
     report = watch_stream(
         lines, reconciler=reconciler, sender=_default_sender,
-        debouncer=Debouncer(args.debounce_s), heartbeat_s=args.heartbeat_s,
+        debouncer=debouncer, heartbeat_s=args.heartbeat_s, stall_s=args.stall_s,
         beat=lambda now, rep: write_heartbeat(args.heartbeat_path, now=now, report=rep))
+    report["startup_sweep"] = sweep
     print(json.dumps(report, indent=2))
     return 0 if report["subscribed"] and not report["errors"] else 4
 
@@ -542,6 +623,7 @@ def main(argv: list[str] | None = None) -> int:
     p_watch.add_argument("--debounce-s", type=float, default=DEFAULT_DEBOUNCE_S)
     p_watch.add_argument("--heartbeat-s", type=float, default=DEFAULT_HEARTBEAT_S)
     p_watch.add_argument("--heartbeat-path", default=DEFAULT_HEARTBEAT_PATH)
+    p_watch.add_argument("--stall-s", type=float, default=DEFAULT_STALL_S)
     p_watch.add_argument("--dry-run", action="store_true",
                          help="print the subscribe request and exit; sends nothing")
     args = parser.parse_args(argv)

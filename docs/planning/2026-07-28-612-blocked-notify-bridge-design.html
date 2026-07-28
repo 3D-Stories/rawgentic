@@ -37,7 +37,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-28 05:19 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-28 05:45 MDT</div>
 <h1>#612 — blocked to notify-owner bridge (design R2)</h1>
 
 </header>
@@ -63,10 +63,11 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 </table>
 <p>R1&#x27;s design would therefore have failed in the worst possible way: the event it waited on never arrives, and had it arrived, the dedup key would have been <code>None</code> on every frame — which in R1&#x27;s own reconciler meant *accept*, i.e. page the owner for the entire replay.</p>
 <h2>3. The architecture that follows from those facts</h2>
-<p><strong>Subscribe globally to <code>pane.updated</code> + <code>pane.closed</code>.</strong> Nothing per-pane, so the fact that subscriptions are fixed for a connection stops mattering: a pane created later is covered by the same global feed, and there is no re-subscribe protocol to get wrong.</p>
-<p><strong>Reconcile every frame against <code>session.snapshot</code> before it can notify.</strong> The reconciler holds each pane&#x27;s <code>revision</code> baseline; a frame is accepted only for a known pane with a strictly newer revision. A frame with <strong>no</strong> revision fails CLOSED — without one there is no way to distinguish a replay from a live event, and guessing wrong pages the owner about a dead pane. A genuinely new pane is legitimately absent from the snapshot, so it is learned from the live <code>pane_created</code>/<code>pane_updated</code> feed and its first frame is accepted.</p>
+<p><strong>Subscribe globally to <code>pane.updated</code> + <code>pane.created</code> + <code>pane.closed</code>.</strong> Nothing per-pane, so the fact that subscriptions are fixed for a connection stops mattering: a pane created later is covered by the same global feed, and there is no re-subscribe protocol to get wrong.</p>
+<p><strong>Reconcile every frame against <code>session.snapshot</code> before it can notify.</strong> The reconciler holds each pane&#x27;s <code>revision</code> baseline; a frame is accepted only for a known pane with a strictly newer revision. A frame with <strong>no</strong> revision fails CLOSED — without one there is no way to distinguish a replay from a live event, and guessing wrong pages the owner about a dead pane. A genuinely new pane is legitimately absent from the snapshot, so it is learned from the live <code>pane_created</code> feed — which Step 11 caught was <strong>not actually subscribed</strong> in the first cut, meaning every post-snapshot pane was ignored forever. It is subscribed now.</p>
+<p><strong>Panes already blocked when the watcher starts are swept from the snapshot.</strong> Step 11 found the advertised &quot;first observation of blocked counts&quot; missed exactly that case: the snapshot records <code>blocked</code>, any replayed frame is rejected as equal to the baseline, and the transition map starts empty — so an agent that was already waiting was never reported. A restart therefore re-notifies a still-blocked pane, which is the right trade: it still needs a human, and a duplicate page is a much smaller harm than silence.</p>
 <p><strong>Notify on a transition INTO <code>blocked</code></strong>, tracked from our own observed series. A first observation of <code>blocked</code> counts: an agent already waiting when the watcher starts is exactly the case F2 says to expect, and requiring a known prior status would silently miss it.</p>
-<p><strong>Debounce reserves, and only a CONFIRMED send commits.</strong> A review found R1 could lose a notification permanently — a failed transport consumed the window, and with no further transition the owner never heard. So <code>allow</code> reserves, <code>commit</code> runs after rc 0, and <code>release</code> reopens the window on failure so the next frame retries.</p>
+<p><strong>Debounce reserves, and only a CONFIRMED send commits.</strong> A review found R1 could lose a notification permanently — a failed transport consumed the window, and with no further transition the owner never heard. So <code>allow</code> reserves, <code>commit</code> runs after rc 0, and <code>release</code> reopens the window on failure so the next frame retries. Step 11 found releasing the window was not enough on its own: <code>prior</code> advanced to <code>blocked</code> before the send, so after a failure the next blocked frame was no longer a transition and nothing retried. Neither the window nor the transition state is consumed by a failed send now.</p>
 <h2>4. AC5 is a PROVENANCE boundary, not keyword hygiene</h2>
 <p>R1 refused forbidden keyword arguments. The review pointed out that this stops nothing: a caller can pass <code>label=event.title</code> and every key looks legitimate. Every pane record carries <code>terminal_title</code>/<code>terminal_title_stripped</code>, and a terminal title echoes the current task.</p>
 <p>So <code>body_for_pane</code> is the <strong>only</strong> public builder, it takes a pane RECORD, and it SELECTS <code>label</code>/<code>name</code>/<code>pane_id</code>, <code>workspace_id</code>, <code>tab_id</code>, <code>agent</code> itself. There is no parameter for caller-supplied display text to abuse. One residual hole is closed explicitly: if something upstream copied screen text into <code>label</code>, the body would leak it while every key looked fine — so a label identical to the record&#x27;s own <code>terminal_title</code> is refused. And <code>pane.output_matched</code> is never subscribed at all, so <code>matched_line</code> and <code>read.text</code> never enter the process.</p>
@@ -90,6 +91,8 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <tr><td>label copied from screen text</td><td>body refused rather than leaked</td></tr>
 <tr><td>quiet socket</td><td>read timeout fires the heartbeat and writes it to disk</td></tr>
 <tr><td>watcher dies</td><td>its heartbeat goes stale — detectable only by an external observer (follow-up)</td></tr>
+<tr><td>socket closed by herdr</td><td>reported as an ERROR and the run exits non-zero, so a supervisor restarts it. Step 11 found EOF used to return quietly and exit 0, i.e. an unattended watcher stopped watching in silence</td></tr>
+<tr><td>a frame with an unrecognised status</td><td>dropped WITHOUT advancing the revision, so a corrected frame at the same revision is still seen</td></tr>
 <tr><td>detector misses a prompt (F2)</td><td>stale-pane warning, explicitly not a miss detector</td></tr>
 </tbody>
 </table>
@@ -99,7 +102,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>AC2 asks for representative REAL Claude and Codex approval screens driven through the pinned detection manifests, with a notification asserted within a deadline. <strong>This is not discharged here.</strong> Two reasons, both structural rather than effort: driving a real approval screen means putting a live agent into a blocking prompt on this host, and <code>pane.agent_status_changed</code> — the event whose name suggests it reports exactly that — was never observed firing at all, so what herdr emits when a pane genuinely blocks has not been captured. Every other AC is exercised against observed frame shapes; AC2 needs a live blocked pane and is recorded as verification_deferred with the check to run.</p>
 
 </main>
-<footer>Last updated: 2026-07-28 05:19 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-28 05:45 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

@@ -35,7 +35,7 @@ reconciler meant *accept*, i.e. page the owner for the entire replay.
 
 ## 3. The architecture that follows from those facts
 
-**Subscribe globally to `pane.updated` + `pane.closed`.** Nothing per-pane, so the fact that
+**Subscribe globally to `pane.updated` + `pane.created` + `pane.closed`.** Nothing per-pane, so the fact that
 subscriptions are fixed for a connection stops mattering: a pane created later is covered by the same
 global feed, and there is no re-subscribe protocol to get wrong.
 
@@ -43,8 +43,16 @@ global feed, and there is no re-subscribe protocol to get wrong.
 pane's `revision` baseline; a frame is accepted only for a known pane with a strictly newer revision.
 A frame with **no** revision fails CLOSED — without one there is no way to distinguish a replay from a
 live event, and guessing wrong pages the owner about a dead pane. A genuinely new pane is legitimately
-absent from the snapshot, so it is learned from the live `pane_created`/`pane_updated` feed and its
-first frame is accepted.
+absent from the snapshot, so it is learned from the live `pane_created` feed — which Step 11 caught
+was **not actually subscribed** in the first cut, meaning every post-snapshot pane was ignored
+forever. It is subscribed now.
+
+**Panes already blocked when the watcher starts are swept from the snapshot.** Step 11 found the
+advertised "first observation of blocked counts" missed exactly that case: the snapshot records
+`blocked`, any replayed frame is rejected as equal to the baseline, and the transition map starts
+empty — so an agent that was already waiting was never reported. A restart therefore re-notifies a
+still-blocked pane, which is the right trade: it still needs a human, and a duplicate page is a much
+smaller harm than silence.
 
 **Notify on a transition INTO `blocked`**, tracked from our own observed series. A first observation of
 `blocked` counts: an agent already waiting when the watcher starts is exactly the case F2 says to
@@ -53,7 +61,10 @@ expect, and requiring a known prior status would silently miss it.
 **Debounce reserves, and only a CONFIRMED send commits.** A review found R1 could lose a notification
 permanently — a failed transport consumed the window, and with no further transition the owner never
 heard. So `allow` reserves, `commit` runs after rc 0, and `release` reopens the window on failure so
-the next frame retries.
+the next frame retries. Step 11 found releasing the window was not enough on its own: `prior`
+advanced to `blocked` before the send, so after a failure the next blocked frame was no longer a
+transition and nothing retried. Neither the window nor the transition state is consumed by a failed
+send now.
 
 ## 4. AC5 is a PROVENANCE boundary, not keyword hygiene
 
@@ -103,6 +114,8 @@ caught four times.
 | label copied from screen text | body refused rather than leaked |
 | quiet socket | read timeout fires the heartbeat and writes it to disk |
 | watcher dies | its heartbeat goes stale — detectable only by an external observer (follow-up) |
+| socket closed by herdr | reported as an ERROR and the run exits non-zero, so a supervisor restarts it. Step 11 found EOF used to return quietly and exit 0, i.e. an unattended watcher stopped watching in silence |
+| a frame with an unrecognised status | dropped WITHOUT advancing the revision, so a corrected frame at the same revision is still seen |
 | detector misses a prompt (F2) | stale-pane warning, explicitly not a miss detector |
 
 ## 7. Out of scope

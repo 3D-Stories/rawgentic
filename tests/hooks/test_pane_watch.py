@@ -70,7 +70,7 @@ class TestSubscriptionIsGlobal:
         """`pane.agent_status_changed` needs a pane_id and was never observed firing; subscriptions
         are fixed per connection, so a per-pane design leaves later panes uncovered forever."""
         subs = pw.build_subscriptions()
-        assert {s["type"] for s in subs} == {"pane.updated", "pane.closed"}
+        assert {s["type"] for s in subs} == {"pane.updated", "pane.created", "pane.closed"}
         for s in subs:
             assert "pane_id" not in s
 
@@ -312,16 +312,27 @@ class TestWatchStreamEndToEnd:
         report = self._run(lines, sent, debouncer=pw.Debouncer(window_s=60))
         assert len(sent) == 1 and report["suppressed"] == 1
 
-    def test_a_failed_send_does_NOT_consume_the_window(self):
-        """One transport hiccup must not lose the notification permanently."""
+    def test_a_failed_send_is_retried_on_the_NEXT_blocked_frame(self):
+        """Step 11 finding 3, and the earlier version of this test HID it by inserting a
+        `working` frame in between — which made the second attempt a fresh transition rather than a
+        retry. With two consecutive blocked frames, the retry only happens if a failed send leaves
+        the transition state alone."""
         attempts = []
         report = pw.watch_stream(
-            [_updated("w1:pA", "blocked", 6), _updated("w1:pA", "working", 7),
-             _updated("w1:pA", "blocked", 8)],
+            [_updated("w1:pA", "blocked", 6), _updated("w1:pA", "blocked", 7)],
             reconciler=self._rec(), sender=lambda b: (attempts.append(b), 1)[1],
             clock=lambda: 1000.0, debouncer=pw.Debouncer(window_s=600), emit=lambda _m: None)
-        assert len(attempts) == 2, "the retry must be attempted despite the window"
+        assert len(attempts) == 2, "a failed send must not consume the transition"
         assert report["send_failures"] == 2 and report["notified"] == []
+
+    def test_a_successful_send_DOES_consume_the_transition(self):
+        sent = []
+        report = self._run([_updated("w1:pA", "blocked", 6), _updated("w1:pA", "blocked", 7)], sent,
+                           debouncer=pw.Debouncer(window_s=600))
+        assert len(sent) == 1, sent
+        # Suppression happens at the TRANSITION check, not the debounce: after a confirmed send
+        # `prior` is `blocked`, so a second blocked frame is simply not a transition.
+        assert len(report["notified"]) == 1
 
     def test_a_closed_pane_stops_notifying(self):
         sent = []
@@ -329,6 +340,8 @@ class TestWatchStreamEndToEnd:
         assert sent == []
 
     def test_a_pane_created_after_the_snapshot_can_notify(self):
+        """Legitimate only because `pane.created` IS subscribed now — the Step 11 BLOCKER was that
+        this frame was manufactured by the test and never requested from herdr."""
         sent = []
         self._run([_created("w1:pNEW", name="newborn"),
                    _updated("w1:pNEW", "blocked", 1, name="newborn")], sent)
@@ -367,4 +380,85 @@ class TestCLI:
         req = json.loads(proc.stdout)
         assert req["method"] == "events.subscribe"
         types = {s["type"] for s in req["params"]["subscriptions"]}
-        assert types == {"pane.updated", "pane.closed"}
+        assert types == {"pane.updated", "pane.created", "pane.closed"}
+
+
+class TestStep11Findings:
+    """One test per confirmed Step-11 finding. Several of these fail against the previous commit."""
+
+    def _snap(self, panes):
+        return _snapshot(panes)
+
+    def test_pane_created_is_actually_subscribed(self):
+        """BLOCKER: registration depended on a `pane_created` frame that was never requested, so
+        every pane created after the snapshot was ignored forever."""
+        assert {"type": "pane.created"} in pw.build_subscriptions()
+
+    def test_a_pane_already_blocked_at_startup_is_notified(self):
+        """Finding 2: the snapshot was never examined for blocked panes, the replayed frame is
+        rejected as equal to the baseline, and the transition map starts empty — so an agent already
+        waiting before the watcher existed was never reported."""
+        rec = pw.Reconciler(self._snap([("w1:pA", "blocked", 6, "alpha"),
+                                        ("w1:pB", "working", 2, "beta")]))
+        sent = []
+        out = pw.startup_sweep(rec, sender=lambda b: (sent.append(b), 0)[1], now=1000.0,
+                               emit=lambda _m: None)
+        assert out["notified"] == ["w1:pA"], out
+        assert len(sent) == 1 and "alpha" in sent[0] and "SECRET" not in sent[0]
+
+    def test_the_startup_sweep_ignores_unblocked_panes(self):
+        rec = pw.Reconciler(self._snap([("w1:pA", "working", 6, "alpha")]))
+        sent = []
+        out = pw.startup_sweep(rec, sender=lambda b: (sent.append(b), 0)[1], now=1000.0,
+                               emit=lambda _m: None)
+        assert out["notified"] == [] and sent == []
+
+    def test_the_startup_sweep_does_not_consume_the_window_on_failure(self):
+        rec = pw.Reconciler(self._snap([("w1:pA", "blocked", 6, "alpha")]))
+        d = pw.Debouncer(window_s=600)
+        out = pw.startup_sweep(rec, sender=lambda b: 1, now=1000.0, debouncer=d,
+                               emit=lambda _m: None)
+        assert out["send_failures"] == ["w1:pA"]
+        assert d.allow("w1:pA", now=1001.0) is True
+
+    def test_a_refusal_does_not_echo_the_screen_text_it_refuses(self):
+        """Finding 5: the message interpolated the identity, and `main` prints it to stderr — so the
+        approval text or credential being refused landed in the watcher log."""
+        with pytest.raises(pw.WatchError) as exc:
+            pw.body_for_pane({"pane_id": "w1:pA", "label": "SECRET prompt text",
+                              "terminal_title": "SECRET prompt text"}, status="blocked")
+        assert "SECRET" not in str(exc.value)
+        assert "w1:pA" in str(exc.value) and "terminal_title" in str(exc.value)
+
+    def test_a_statusless_frame_does_not_advance_the_revision(self):
+        """Finding 6: advancing on an unrecognised status meant a CORRECTED frame at the same
+        revision was then dropped, losing a real block behind one bad frame."""
+        rec = pw.Reconciler(self._snap([("w1:pA", "working", 5, "alpha")]))
+        sent = []
+        report = pw.watch_stream([_updated("w1:pA", "banana", 6),
+                                  _updated("w1:pA", "blocked", 6)],
+                                 reconciler=rec, sender=lambda b: (sent.append(b), 0)[1],
+                                 clock=lambda: 1000.0, emit=lambda _m: None)
+        assert len(sent) == 1, "the corrected frame at the same revision must still be seen"
+        assert report["dropped"] >= 1
+
+    def test_socket_close_is_reported_as_an_error(self):
+        """Finding 4: EOF used to return quietly and the CLI exited 0, so an unattended watcher
+        silently stopped after a herdr restart."""
+        report = pw.watch_stream(
+            [json.dumps({"id": "x", "result": {"type": "subscription_started"}}), pw._EOF],
+            reconciler=pw.Reconciler(self._snap([("w1:pA", "working", 5, "alpha")])),
+            sender=lambda b: 0, clock=lambda: 1000.0, emit=lambda _m: None)
+        assert report["errors"] and "socket closed" in report["errors"][0]
+
+    def test_the_stall_warning_is_actually_emitted_by_the_loop(self):
+        """Finding 7: `stall_warning` shipped as dead code — nothing tracked `since` or called it."""
+        emitted = []
+        clock = iter([1000.0, 1000.0, 99999.0, 99999.0, 99999.0])
+        rec = pw.Reconciler(self._snap([("w1:pA", "working", 5, "alpha")]))
+        report = pw.watch_stream([_updated("w1:pA", "idle", 6), None],
+                                 reconciler=rec, sender=lambda b: 0,
+                                 clock=lambda: next(clock), emit=emitted.append,
+                                 heartbeat_s=1.0, stall_s=1800.0)
+        assert report["stalls"] == ["w1:pA"], report
+        assert any("stale-pane warning" in m for m in emitted), emitted
