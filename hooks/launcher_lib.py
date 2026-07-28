@@ -619,15 +619,20 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     Verifying before sending matters too: work handed to a session whose guard never armed is an
     UNGUARDED run.
 
-    Ownership discipline (#611 Step-11 High 3): once the split has created a tentative
-    successor pane, EVERY failure path — a failed command, a failed verification, a validation
-    exception, a runner timeout — best-effort closes that pane before returning. Otherwise
-    repeated cron fires accumulate orphan panes, and a wait/send failure would leave a started
-    but UNGUARDED Claude session running. Cleanup is only skipped once ownership has actually
-    transferred (all verifications passed).
+    Ownership discipline (#611 Step-11 High 3). Once herdr has NAMED a pane it created, every
+    failure path — a failed command, a failed verification, a validation exception, a runner
+    timeout — best-effort closes it before returning. Cleanup is skipped only once ownership
+    has actually transferred (all verifications passed).
 
-    Every caller-supplied field is validated BEFORE the split, so a bad argument cannot create
-    a pane and then fail.
+    When herdr does NOT name it, the pane is reported and left alone, never guessed at: see
+    `_report_possible_orphan`. So the honest guarantee is narrower than "every post-split
+    failure closes the pane" — it is "every post-split failure either closes a pane we can
+    prove is ours, or names what appeared so an operator can". A returned id equal to the
+    anchor, or one that already existed before the split, is not provably ours and takes the
+    reporting path (`split_response_not_new`).
+
+    Every CALLER-SUPPLIED field is validated before the split, so a bad argument cannot create
+    a pane and then fail. The id herdr RETURNS is necessarily validated after it.
 
     Returns a dict with `ok`, `steps`, `results`, `truncated`, `failed_step`, `new_pane`,
     `session_id`, and `cleanup` (what happened to the tentative pane, if anything).
@@ -685,6 +690,14 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             out["failed_step"] = "split_response_unparseable"
             return out
         validate_pane_id(new_pane)
+        # A well-formed response is not by itself proof of ownership (#611 Step-11 pass-5
+        # High 1). If herdr ever returns the anchor, or an id that already existed before the
+        # split, then claiming it as "ours" would point the cleanup branch at a live pane —
+        # possibly the predecessor itself, the exact destructive outcome the report-only path
+        # exists to avoid. Ownership stays unknown and the leak is reported instead.
+        if new_pane == anchor_pane or (panes_before is not None and new_pane in panes_before):
+            out["failed_step"] = "split_response_not_new"
+            return out
         out["new_pane"] = new_pane
 
         start_argv = build_agent_start_argv(name=name, pane=new_pane,

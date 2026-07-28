@@ -1056,6 +1056,19 @@ class TestUncertainSplitReporting:
         assert out["ok"] is False
         assert out["cleanup"] and "POSSIBLE ORPHAN" in out["cleanup"]
 
+    @pytest.mark.parametrize("returned", ["w1:p1", "w1:pEXISTING"])
+    def test_a_returned_id_that_is_not_new_is_never_closed(self, returned) -> None:
+        """#611 Step-11 pass-5 High 1: a well-formed response is not proof of ownership. If
+        herdr returned the anchor, or an id that already existed, closing it would kill a live
+        pane — possibly the predecessor itself, the exact outcome report-only exists to avoid."""
+        r = self._runner(json.dumps({"result": {"pane_id": returned}}),
+                         before=("w1:p1", "w1:pEXISTING"),
+                         after=("w1:p1", "w1:pEXISTING"))
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["ok"] is False and out["failed_step"] == "split_response_not_new"
+        assert out["new_pane"] is None, "an unprovable id must not be claimed as ours"
+        assert not any(c[:3] == ["herdr", "pane", "close"] for c in r.calls)
+
     def test_an_invalid_returned_pane_id_still_reports(self) -> None:
         """A pane id that parses but fails validation left `new_pane` unset, so the `finally`
         saw nothing to clean up (pass-4 Medium 4, second half)."""
