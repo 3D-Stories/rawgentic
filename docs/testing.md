@@ -118,6 +118,29 @@ triggers fail-open behavior.
 unbound sessions, multi-active-session conflict case, no-active-session
 case, and auto-bind behavior.
 
+### Context Meter (`tests/hooks/test_context_meter.py`)
+
+107 tests for the context-pressure trigger (#687). Pure-function tests import the
+module; flow tests drive the CLI black-box via subprocess with JSON on stdin, and
+every state-writing test passes an isolated `HOME` — `run_hook` copies the real
+environ, so without the override the suite would write into the developer's own
+`~/.rawgentic/`.
+
+Notable cases, each pinning a defect that was real rather than hypothetical:
+
+- a transcript whose FINAL usage row is all zeros (an interrupted turn) must read
+  the last NON-ZERO row, not 0
+- a smaller non-zero row after a larger one must read the LAST, not the maximum
+- the same token count landing in different tiers against a 200k vs a 1M window
+- window escalation must not let a premature warning suppress the real one later
+- six processes racing the same tier must emit exactly once (`O_EXCL` reservation)
+- a failed delivery must RELEASE the reservation, or the tier is silenced for the
+  session
+- `os.environ` is `os._Environ`, not a `dict` — an `isinstance` guard silently
+  disabled the whole env-override layer while dict-based unit tests still passed
+- a bounded backward read must not parse a whole transcript (the largest on this
+  host is 83 MB) and must yield nothing rather than read past its byte cap
+
 ### WAL Lib (`tests/hooks/test_wal_lib.py`)
 
 11 unit tests for the `wal-lib.sh` shared library. Tests `parse_input`,

@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#687 — the context-pressure trigger: design</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-28 17:06 MDT</div>
+<h1>#687 — the context-pressure trigger: design</h1>
+
+</header>
+<main>
+<h1>#687 — the context-pressure trigger: design</h1>
+<p>Epic #684, child 3/3. Implements the <strong>trigger half</strong> of #654: wire the already-shipped measurement (PR #675, <code>docs/planning/2026-07-28-654-q1-context-measurement.md</code>) to a hook, so a session&#x27;s &quot;my context is getting full&quot; behaviour stops being model judgment and becomes a signal.</p>
+<p>Owner-reported symptom, 2026-07-28: *&quot;the sessions identifying that their context is getting high and suggesting or doing clear ... works sometimes, but not reliable at all.&quot;*</p>
+<p><strong>A hook cannot forget. That is the whole design.</strong></p>
+<h2>Verdict up front</h2>
+<p>One new module, <code>hooks/context_meter.py</code>, registered on <strong>both <code>UserPromptSubmit</code> and <code>PostToolUse</code></strong>. It reads the session&#x27;s own transcript, computes in-context tokens as a <strong>fraction of the window</strong>, and emits <code>additionalContext</code> at two tiers — once each per session <strong>per effective window</strong>. It carries <strong>no new mechanism for the handoff itself</strong>: the handoff is already built, and duplicating it would be a defect. The deliverable is the trigger, the seam rule, and one decision the epic&#x27;s predecessor could not make from inside a build.</p>
+<h2>Live probes run before this design committed (<code>&lt;probe-before-design&gt;</code>)</h2>
+<p>Every number here was read on this host on 2026-07-28. None is inferred.</p>
+<table>
+<thead><tr><th>#</th><th>Probe</th><th>Result</th><th>Consequence for the design</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>message.model</code> on a live 1M-window session</td><td><strong><code>claude-opus-5</code>, no <code>[1m]</code> marker</strong></td><td>Window size is <strong>NOT</strong> derivable from the transcript. Kills the &quot;read the model, infer the window&quot; design.</td></tr>
+<tr><td>2</td><td>All-zero <code>message.usage</code> row</td><td><strong>Real</strong> — line 1872 of <code>1b895e69-e90a-43ee-9da6-fe5b55dd8d4f.jsonl</code>, all four fields <code>0</code>, in a transcript whose max in-context total is <strong>809,778</strong></td><td>A last-row reader reports <strong>0%</strong> on a nearly-full session. The reader must take the last <strong>non-zero</strong> row.</td></tr>
+<tr><td>3</td><td><code>~/.claude/projects/*/&lt;session-id&gt;.jsonl</code></td><td><strong>1 hit</strong> across 79 project dirs</td><td>The transcript resolves by glob with no slug rule to reproduce. Probe 9 later made the payload&#x27;s <code>transcript_path</code> the primary route and this glob the <strong>fallback</strong>.</td></tr>
+<tr><td>4</td><td>Fields a hook receives on stdin</td><td><code>session_id</code>, <code>cwd</code> confirmed (<code>hooks/wal-lib.sh:50-53</code>)</td><td><code>transcript_path</code> is documented for the *statusline* (#654) and <strong>no in-repo hook consumes it</strong>, so at this point it was treated as optional. Probe 9 then confirmed it live on both events, promoting it to the primary route (hardened) with the glob as fallback.</td></tr>
+<tr><td>5</td><td>Ambient &quot;durable launcher is armed&quot; marker</td><td><strong>None exists.</strong> It is a caller assertion only: <code>--launcher-armed</code> / <code>--fresh-launch-supported</code> (<code>hooks/launcher_lib.py:2440</code>, comment at <code>:2156</code>)</td><td>AC4&#x27;s unattended split must be an explicit <strong>declaration</strong>, not an inferred marker. Asserting it falsely to satisfy a guard is not an option (the predecessor hit exactly this and correctly refused).</td></tr>
+<tr><td>6</td><td>This session, live, at design time</td><td><strong>159,416 tokens</strong> in context</td><td>= 15.9% of a 1M window, <strong>79.7%</strong> of a 200k one. The window is the crux, not the token count.</td></tr>
+<tr><td>7</td><td>Predecessor session&#x27;s maximum in-context total</td><td><strong>809,778 / 1,000,000 = 81.0%</strong>, with no compaction observed</td><td>Auto-compaction had <strong>not</strong> fired by 81% on a 1M window. This is the only real datum bounding the directive threshold, and it is a *lower* bound on the compaction point.</td></tr>
+</tbody>
+</table>
+<h2>Approach chosen, and the two rejected</h2>
+<p><strong>A. Transcript reader on <code>UserPromptSubmit</code> </strong>and<strong> <code>PostToolUse</code></strong> — chosen. Works headless (probe 4 of #654: a subagent with no UI produced a reading), in-repo, testable, and <code>additionalContext</code> has in-repo precedent (<code>hooks/wal-context:43</code>).</p>
+<p><strong>Why BOTH events, and why <code>UserPromptSubmit</code> alone would have shipped a dead feature.</strong> My first draft registered on <code>UserPromptSubmit</code> only and rejected <code>PostToolUse</code> as &quot;10–30× too fast&quot;. That reasoning conflated *turn* with *user turn*, and the cross-model consult&#x27;s third risk (&quot;a workflow may advance within one assistant turn before another <code>UserPromptSubmit</code> can observe it&quot;) points at the fatal case: <strong><code>UserPromptSubmit</code> fires once per user prompt.</strong> In a long autonomous run — an epic auto-run, a headless WF2, this very session — the owner sends ONE prompt and the session then works for hours. A <code>UserPromptSubmit</code>-only meter would evaluate once, at the start, on an empty context, and never again. It would be silently dead in exactly the runs that need it most.</p>
+<p>So the two cadence arms are carried by two events, which is what makes AC9&#x27;s &quot;whichever comes first&quot; mean something:</p>
+<table>
+<thead><tr><th>Arm</th><th>Event that can fire it</th><th>The case it covers</th></tr></thead>
+<tbody>
+<tr><td>5 <strong>turns</strong></td><td><code>UserPromptSubmit</code> (the turn counter increments only here)</td><td>interactive back-and-forth</td></tr>
+<tr><td>5 <strong>minutes</strong></td><td><code>PostToolUse</code> (and <code>UserPromptSubmit</code>)</td><td>long autonomous runs, where events are plentiful and user prompts are not</td></tr>
+</tbody>
+</table>
+<p>Cost of riding <code>PostToolUse</code>: when the cadence has not elapsed the hook reads one small JSON state file, compares two integers and exits — it does <strong>not</strong> touch the transcript. Precedent for a Python hook on that event is <code>hooks/step_state_post.py</code>.</p>
+<p><strong>B. Statusline bridge</strong> — rejected, and #654 already ruled on it: <code>~/.claude/rawgentic-statusline.sh</code> is a user-level file outside any git repo, so it cannot ship as a tested rawgentic PR, and it renders nothing headless. Documented as an optional addendum in <code>docs/context-meter.md</code>; not shipped.</p>
+<p><strong>C. An external wall-clock timer</strong> (crontab/systemd writing a sentinel the hook reads) — rejected here, costed in &quot;Cadence&quot; below.</p>
+<h2>Module surface — <code>hooks/context_meter.py</code></h2>
+<p>Pure core, all I/O and the clock injected; <code>main(argv)</code> is the only impure function (<code>registry_prune.py</code> is the exemplar).</p>
+<pre><code>IN_CONTEXT_FIELDS = (&quot;input_tokens&quot;, &quot;cache_creation_input_tokens&quot;, &quot;cache_read_input_tokens&quot;)
+
+DEFAULT_WINDOW = 200_000          # conservative floor; see &quot;Window size&quot; below
+KNOWN_WINDOWS = (200_000, 1_000_000)
+DEFAULT_CHECK_IN_PCT = 60         # AC6 — &quot;start looking for a break&quot;
+DEFAULT_ACT_PCT      = 70         # AC3 — &quot;act now&quot;; provisional, see below
+MIN_TIER_GAP_PCT     = 10         # check_in must sit this far below act
+DEFAULT_EVERY_TURNS  = 5          # AC9
+DEFAULT_EVERY_SECONDS = 300       # AC9
+
+def usage_total(usage) -&gt; int
+    # sum IN_CONTEXT_FIELDS; any non-int / missing field contributes 0. Never raises.
+
+def read_used_tokens(read_tail) -&gt; int | None
+    # last row whose usage_total &gt; 0. None when no usage row parses at all.
+    # Unparseable lines are skipped, not fatal (a transcript is appended to live and the
+    # final line can be a partial write).
+    # READS BACKWARD in bounded blocks (see &quot;Cost&quot; below) — it must never parse a whole
+    # transcript, because the largest on this host is 82,948,830 bytes.
+
+def resolve_transcript(session_id, *, payload_path=None, projects_dir=..., glob_fn=glob.glob) -&gt; str | None
+    # Hardened, in this order:
+    #   1. session_id must match [A-Za-z0-9-]{8,64} — checked BEFORE it reaches any glob
+    #      pattern or path join. Precedent for the PRINCIPLE (sanitize a filename component
+    #      before it enters a path) is step_state.sanitize_project, step_state.py:49-64 —
+    #      which SANITIZES unsafe characters; this design REJECTS instead, because a
+    #      sanitized session id would silently address the wrong session&#x27;s transcript.
+    #   2. payload_path is accepted only when ALL hold: basename == f&quot;{session_id}.jsonl&quot;;
+    #      os.path.realpath() is contained under realpath(projects_dir); it is a regular
+    #      file, not a symlink. Any failure falls through to (3) rather than trusting it.
+    #   3. else the glob — and ONLY when it returns exactly ONE hit. Two hits is ambiguous
+    #      and yields None (never pick arbitrarily). The single hit then passes the SAME
+    #      basename/containment/symlink checks: being rooted at projects_dir makes
+    #      containment likely, not certain, since a symlink planted inside the tree still
+    #      points out of it.
+
+def resolve_window(cfg_value, env_value, observed_tokens, *, warn=None) -&gt; tuple[int, str]
+    # (window, provenance). Strict parse, clamp, safe default + stderr warning on a bad value.
+    # ESCALATION: when observed_tokens exceeds the resolved window, step up to the next
+    # KNOWN_WINDOWS tier — a window a session has already exceeded is provably wrong.
+
+def thresholds(cfg, env, *, warn=None) -&gt; tuple[int, int]
+    # (check_in_pct, act_pct). Clamped to 1..99; act must exceed check_in by at least
+    # MIN_TIER_GAP_PCT, else BOTH fall back to the defaults with a warning. Never returns an
+    # inverted or squeezed pair.
+
+def tier_for(fraction, check_in_pct, act_pct) -&gt; str        # &quot;none&quot; | &quot;advisory&quot; | &quot;directive&quot;
+
+def is_safe_seam(armed, current) -&gt; tuple[bool, str]       # pointer transition, see AC7 below
+
+def should_check(state, *, now, every_turns, every_seconds) -&gt; bool
+
+def nag_text(*, tier, used, window, provenance, seam, seam_reason,
+             headless, fresh_handoff_capable) -&gt; str
+    # two independent capability values, never one `unattended` boolean
+
+# NOTE: an earlier draft specified one pure `evaluate(...) -&gt; Decision` wrapping the whole
+# pipeline. What SHIPPED keeps the decision helpers pure (usage_total, read_used_tokens,
+# resolve_window, thresholds, cadence, tier_for_tokens, seam_verdict, should_check, nag_text)
+# and sequences them inside `cmd_hook`, which also owns the reads, the secure writes and the
+# reservation. The Step-11 review flagged the gap honestly: ordering and trust-boundary
+# behaviour cannot be unit-tested independently of the filesystem. Extracting a total pure
+# `evaluate` over already-validated facts is a FOLLOW-UP, deliberately not done here — it is a
+# refactor of the very code the security fixes had just reshaped, and doing both at once is
+# how a fix gets lost. Recorded rather than quietly dropped.</code></pre>
+<h3>The production adapter — how <code>main()</code> actually obtains <code>cfg</code> and <code>pointer</code></h3>
+<p>The first draft passed <code>cfg</code> and <code>pointer</code> into <code>evaluate</code> and never said where they come from. Both reviewers called that out, and it is a genuine hole: without a resolution path, AC6&#x27;s configurable percentage and AC7&#x27;s seam have no live input. The flow, in order, all of it fail-open:</p>
+<p>1. <strong>Subagent guard, first.</strong> If the payload carries a truthy <code>agent_id</code> (or any sidechain marker), do    nothing and exit 0 — see &quot;Subagent policy&quot; below. 2. <strong>Throttle check before anything expensive.</strong> Load the state file; if the cadence has not elapsed,    persist the turn count (on <code>UserPromptSubmit</code>) and exit. <strong>No workspace walk, no config read, no    transcript open.</strong> This is what keeps the <code>PostToolUse</code> path cheap. 3. <strong>Resolve the workspace:</strong> walk up from the payload&#x27;s <code>cwd</code> for <code>.rawgentic_workspace.json</code> — the    same idiom as <code>step_state.find_state_dir</code> (<code>step_state.py:67-90</code>). 4. <strong>Resolve the bound project AND its root path:</strong> take the <strong>last</strong> row in    <code>claude_docs/session_registry.jsonl</code> whose <code>session_id</code> matches. The row&#x27;s <code>project</code> gives the name    (used for the pointer filename) and its <code>project_path</code> — a workspace-relative string like    <code>./projects/p</code> — is <code>normpath</code>-joined to the workspace root to give the project root that    <code>.rawgentic.json</code> is read from. A missing row, a row without a <code>project</code>, an absent <code>project_path</code>,    or an unreadable config each degrade to <strong>defaults for config and <code>unknown</code> for the seam</strong>. Never    guess a project: an unbound session gets the conservative defaults, not another project&#x27;s settings. 5. <strong>Read config:</strong> the project&#x27;s <code>.rawgentic.json</code>, <code>contextMeter</code> block only, directly. This follows    the convention seven hooks already use for their own key (<code>security-guard.py:81-96</code>,    <code>security_guard_lib.py:206-223</code>, <code>seat_outcomes_lib.py:1237-1247</code>, <code>plan_lib.py:765</code>, …), each    fail-open on a malformed file. It deliberately does <strong>not</strong> shell out to <code>capabilities_lib.py derive</code>:    a subprocess on a hook that rides <code>PostToolUse</code> is a per-tool-call cost the meter has not earned, and    <code>derive</code> returns the whole capabilities object to answer a four-integer question. 6. <strong>Read the pointer:</strong> the step-state file at <code>claude_docs/wal/&lt;project&gt;.state.json</code>    (<code>step_state._state_path</code>, <code>:122-123</code>), in-process, and <strong>require its <code>session_id</code> to match the    payload&#x27;s</strong> — another session&#x27;s pointer is not evidence about this one. Stale beyond    <code>DEFAULT_MAX_AGE_MIN</code> ⇒ <code>unknown</code>.</p>
+<p>CLI: <code>main(argv)</code> runs that flow, calls <code>evaluate</code>, and on an emitting decision <strong>writes state first, then prints</strong> the event-appropriate payload. Subcommands: <code>hook</code> (the stdin form Claude Code invokes) and <code>read</code> (print the reading as JSON — the operator-debuggable path, and what the tests drive for the pure pipeline).</p>
+<h3>Subagent policy — declared, not left to chance</h3>
+<p>A subagent&#x27;s hook invocation can carry the <strong>parent&#x27;s</strong> <code>session_id</code>, so without a rule the meter would read the parent&#x27;s transcript, contend on the parent&#x27;s state file, and let a subagent&#x27;s tool calls advance the parent&#x27;s cadence. Rule: <strong>if the payload identifies a subagent/sidechain, the meter does nothing.</strong> A subagent has its own short-lived context and no authority to hand over its parent&#x27;s session, so there is nothing useful for it to say. The check is defensive — if the field is absent on this Claude Code version the branch is simply inert, so the policy cannot itself break the hook.</p>
+<p><strong>Failure mode: fail-OPEN, stated in the docstring.</strong> An absent, unreadable, or malformed transcript, an unwritable state dir, a bad config value, or any unexpected exception ⇒ <strong>print nothing, exit 0</strong>. This is a convenience nag, not a security boundary (repo decision guide, <code>CLAUDE.md</code> §3: convenience/routing ⇒ fail-open). A meter that blocks a turn is worse than a meter that misses one.</p>
+<h2>Window size — the crux, and the conservative call</h2>
+<p>Probe 1 says the window cannot be read. Probe 6 says the same token count is 15.9% or 79.7% depending on which window it is. So window size is <strong>declared, not detected</strong>:</p>
+<p>1. <code>contextMeter.windowSize</code> in the project&#x27;s <code>.rawgentic.json</code>. 2. <code>RAWGENTIC_CONTEXT_WINDOW</code> (per-run override; the repo&#x27;s env-config convention). 3. <code>DEFAULT_WINDOW = 200_000</code>.</p>
+<p><strong>Why 200,000 and not 1,000,000.</strong> The two errors are not symmetric. Assuming 1M on a 200k session means the nag <strong>never fires</strong> — a silent failure, which is the exact class #687 exists to end. Assuming 200k on a 1M session means it fires <strong>early</strong>: at most two messages, each naming the assumption and how to fix it. Fail toward firing.</p>
+<p><strong>The escalation rule that removes most of that cost.</strong> A window a session has already exceeded is provably wrong. When the observed in-context total exceeds the resolved window, <code>resolve_window</code> steps up to the next <code>KNOWN_WINDOWS</code> tier and reports the provenance as <code>escalated</code>. So a 1M session self-corrects the moment it passes 200k, and the residual false positive is bounded to the band below 200k — where a 1M session is genuinely fine and the nag says so, naming the config key to set.</p>
+<h2>Thresholds — provisional, with the arithmetic and what would confirm them</h2>
+<ul>
+<li><code>check_in_pct = 60</code> (AC6, advisory): start <strong>looking</strong> for a seam.</li>
+<li><code>act_pct = 70</code> (AC3, directive): break at the next turn, seam or no seam.</li>
+<li>Invariant: <code>check_in</code> must sit <strong>at least 10 points below</strong> <code>act</code>, or both fall back to defaults.</li>
+</ul>
+<p>Both must sit below auto-compaction. My first draft called that point UNMEASURED and picked 65/75 on a single datum; the consult argued for a ≥10-point margin; <strong>both design reviewers then flagged the resulting default as having no evidence behind it.</strong> They were right that it had none, so rather than argue the point I measured it. <strong>This answers #654&#x27;s Q4 for the 1M window.</strong></p>
+<h3>Measured: probe 8, the compaction-discontinuity scan (2026-07-28, this host)</h3>
+<p>Method: over every transcript larger than 200 KB in <code>~/.claude/projects/</code>, walk the <code>message.usage</code> rows in order, compute the in-context total for each, and record every sharp fall (a drop to under 40% of a previous reading above 50,000 tokens) — an auto-compaction is exactly such a discontinuity.</p>
+<table>
+<thead><tr><th>Quantity</th><th>Value</th></tr></thead>
+</table>
+<p><strong>The scan is committed and re-runnable</strong> — <code>docs/planning/2026-07-28-687-probes/compaction_scan.py</code>, because the Step-4 verifier rightly refused a citation whose method lived in a <code>/tmp</code> scratch dir no reviewer could open. Figures below are its output on this host.</p>
+<table>
+<thead><tr><th>Quantity</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Transcripts scanned (&gt;200 KB)</td><td><strong>266</strong></td></tr>
+<tr><td>Sharp drops found</td><td><strong>86</strong>, across <strong>30</strong> sessions (18 of them with a peak ≥ 900k)</td></tr>
+<tr><td><strong>Highest in-context reading observed anywhere</strong></td><td><strong>999,803 tokens = 100.0% of a 1M window</strong></td></tr>
+<tr><td>Top cluster of pre-drop readings</td><td><strong>994,859 – 999,803</strong>, i.e. <strong>99.5–100.0%</strong></td></tr>
+<tr><td>Sessions with a drop whose peak is under 250k</td><td><strong>0</strong></td></tr>
+</tbody>
+</table>
+<p><strong>The load-bearing conclusion, and it is a ceiling argument rather than an onset measurement.</strong> Sampled sessions reach <strong>99.5–100% of a 1M window</strong> before anything resets them. So on this corpus auto-compaction <strong>did not fire below ~99%</strong> in any observed 1M session — had it, no session could have been seen at 999,803. <code>act_pct = 70</code> therefore sits roughly <strong>30 points</strong> below the observed ceiling rather than the 11 points my draft claimed. Stated as a bound on the *sampled* population, not as a universal onset law: this is 266 transcripts from one host and one account, and Claude Code could compact on a policy that varies by model, plan, or version.</p>
+<p><strong>What this scan honestly does NOT establish, stated because the number is tempting:</strong> the 86 drops are not all auto-compactions. A <code>/clear</code>, a manual <code>/compact</code>, or a new cache prefix produces the same discontinuity shape, which is why the median drop (63.1%) and the minimum (16.1%) must not be read as onsets. Only the <strong>ceiling</strong> is load-bearing here, and the ceiling is what bounds the threshold.</p>
+<p><strong>And the 200k window remains genuinely unmeasured — because it is unmeasurable on this host.</strong> Zero of the 266 transcripts belong to a session whose peak stayed under 250k, so the corpus contains no 200k-window session to scan. This is an evidenced &quot;cannot confirm here&quot;, not an unexamined assumption. The confirmation is one reading taken inside a real 200k-window session, by the same scan; <code>docs/context-meter.md</code> records that, and the widely-repeated ~77% figure is still not evidence I hold. Given the 1M result — Claude Code compacts when nearly full, not at three-quarters — a 70% directive is very likely safe on 200k too, but &quot;very likely&quot; is the honest word and the config key exists so a measurement can override it without a release.</p>
+<h2>Cadence (AC9), and the constraint it will not paper over</h2>
+<p>State carries <code>turns</code> and <code>last_check_ts</code>. A check runs when <code>turns - last_check_turn &gt;= 5</code> <strong>OR</strong> <code>now - last_check_ts &gt;= 300</code> — whichever comes first, exactly as asked. Both configurable (<code>contextMeter.everyTurns</code>, <code>contextMeter.everySeconds</code>), same strict-parse / clamp / default / warn treatment.</p>
+<p><strong>Config surface, per AC6&#x27;s &quot;the project&#x27;s <code>.rawgentic.json</code> … per the repo&#x27;s convention&quot;, with an env override on every value.</strong> <strong>Five</strong> keys live under a <code>contextMeter</code> object in the bound project&#x27;s <code>.rawgentic.json</code>, each with an env twin that takes precedence:</p>
+<table>
+<thead><tr><th><code>contextMeter</code> key</th><th>env twin</th><th>default</th></tr></thead>
+<tbody>
+<tr><td><code>windowSize</code></td><td><code>RAWGENTIC_CONTEXT_WINDOW</code></td><td>200,000</td></tr>
+<tr><td><code>checkInPercent</code></td><td><code>RAWGENTIC_CONTEXT_CHECKIN_PCT</code></td><td>60</td></tr>
+<tr><td><code>actPercent</code></td><td><code>RAWGENTIC_CONTEXT_ACT_PCT</code></td><td>70</td></tr>
+<tr><td><code>everyTurns</code></td><td><code>RAWGENTIC_CONTEXT_EVERY_TURNS</code></td><td>5</td></tr>
+<tr><td><code>everySeconds</code></td><td><code>RAWGENTIC_CONTEXT_EVERY_SECONDS</code></td><td>300</td></tr>
+</tbody>
+</table>
+<p>Precedence is exactly <strong>env → project config → default</strong>, per key. AC6 offers &quot;or workspace default&quot; as an alternative home; this design <strong>does not implement a workspace-level layer</strong> — a third precedence tier for five integers is complexity without a caller, and the env twin already covers the case a workspace default would (one setting applied across projects by a launcher). Named as a deliberate omission rather than left as an implied-but-absent feature. The env layer is not decoration: a launcher that spawns a 1M-window session can set an env var but cannot edit the target project&#x27;s committed config, and window size is precisely the value such a launcher knows and the config does not (the consult&#x27;s own riskiest-assumption).</p>
+<p><strong>The honest constraint:</strong> hooks fire on <strong>events</strong>, not on a timer. With no turn and no tool call, nothing runs. So the 5-minute arm is *evaluated at the next event*, not at the 5-minute mark — a session idle for an hour notices at its next event, not at the 5-minute mark. Riding <code>PostToolUse</code> shrinks that gap to &quot;the next tool call&quot;, which in a working session is seconds, but it does not remove it. This is documented as the real behaviour in <code>docs/context-meter.md</code>.</p>
+<p>The mechanism that WOULD give a true wall-clock trigger, costed rather than implied: an external timer (system crontab or a systemd timer) writing a sentinel the hook reads — that is the <code>long-run-resume</code> crontab pattern, and it is <strong>not shipped here</strong>, because (a) it needs a crontab write, which the permission classifier has denied before (#654&#x27;s AC1), and (b) a nag that arrives when the session is not looking at the screen changes nothing. The event-driven arm is the honest ceiling.</p>
+<h2>Safe seam (AC7) — a decidable predicate, not a vibe</h2>
+<p>Crossing <code>check_in_pct</code> starts a <strong>search</strong> for a seam; it does not stop the session. The signal already exists: the step-state pointer (<code>hooks/step_state.py</code>, shipped by #480/#499/#502) records <code>{project, workflow, step, step_title, issue, entered_at}</code>.</p>
+<p><strong>The seam is a pointer TRANSITION, not a list of blessed step numbers.</strong> Crossing <code>check_in_pct</code> *arms* a seam search: the hook snapshots the pointer into its state. A seam has arrived when a later invocation reads a pointer that has <strong>moved</strong> — same project, both pointers valid, and <code>(workflow, step, step_title, entered_at)</code> differs from the armed snapshot with a later <code>entered_at</code> (re-entering the same step number on a new <code>entered_at</code> counts).</p>
+<p><code>is_safe_seam(armed, current) -&gt; (bool, reason)</code> is pure and total:</p>
+<table>
+<thead><tr><th>Pointer state</th><th>Verdict</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>pointer moved since arming</td><td><strong><code>seam_candidate</code></strong></td><td>The recorded step changed. That is evidence a phase boundary passed — it is <strong>not proof</strong> that the tree is committed or that no wave is out (see below).</td></tr>
+<tr><td>pointer unchanged</td><td>not a seam</td><td>The step is still running: the tree may be dirty (Step 8), a review wave may be out (Step 8a/9/11), or a <code>consume_loopback</code> may be waiting on its persist (Step 4/6/11).</td></tr>
+<tr><td>absent / unreadable / stale beyond <code>step_state.DEFAULT_MAX_AGE_MIN</code> / different project</td><td>not a seam, <code>unknown</code></td><td>Never *soft*-permitted. But the directive tier fires regardless of seam, so an untracked session still gets told — it just does not get the polite early version.</td></tr>
+</tbody>
+</table>
+<p><strong>This replaces a step-number whitelist that was in my first draft</strong>, and the swap came from the consult. The whitelist would have hardcoded WF2/WF3 step semantics into a hook — a second source of truth that silently rots the next time a spine changes, which is the exact drift class this repo has drift-guard tests for. The transition rule is workflow-agnostic, needs no per-workflow table, and is about six lines.</p>
+<p><strong>Why <code>seam_candidate</code> and not <code>seam</code> — the adversarial review&#x27;s third finding, taken.</strong> A pointer transition proves the recorded step changed and nothing more. It does not prove the tree is committed, that no review wave is outstanding, or that the hook observed the boundary *before* work on the new step began — and the limitation below says a transition can be observed late. Calling that &quot;safe&quot; would be the design asserting a property it cannot see. So the hook reports a <strong>candidate</strong>, and the advisory&#x27;s text asks the session to confirm what only the session can: *&quot;a step boundary was recorded; if your tree is clean and no review wave is out, this is the moment to break.&quot;* The reviewer&#x27;s stronger fix — a durable readiness assertion emitted at each transition covering commit state and outstanding waves — is the right long-term answer and is <strong>deferred as a follow-up</strong>: it requires every workflow step to write a new assertion, which is a change to the WF2/WF3 spines, not to this hook.</p>
+<p><strong>The limitation it inherits, named rather than hidden</strong> (the consult&#x27;s own risk #3): a workflow can advance its pointer *and* start the next phase inside a single assistant turn, so the transition may be observed late. Two things bound the damage — <code>PostToolUse</code> gives the meter many observation points inside one turn, and the directive tier does not wait for a candidate at all.</p>
+<p>The hook runs <strong>no git commands</strong>. A per-turn <code>git status</code> is a cost the meter has not earned, and the pointer already answers the question the seam rule asks.</p>
+<p><strong>When no seam arrives before the hard tier:</strong> the directive tier fires <strong>regardless of seam</strong> and says so — break now, accept the mid-phase seam, and capture what the resumption protocol needs (branch + commit, the recorded test baseline, the step marker, the loop-back counters file). The seam search is best-effort *within the advisory band only*. A seam rule that could defer forever would be the same silent failure in a nicer costume.</p>
+<p><strong>Attended vs unattended:</strong> attended, the advisory says &quot;look for a seam and tell me&quot;; unattended, it says &quot;checkpoint and hand over at the next seam without asking&quot;.</p>
+<h2>Unattended split (AC4) — declared, because probe 5 says it cannot be detected</h2>
+<p><strong>Two independent booleans, not one.</strong> The first draft used a single <code>unattended</code> flag and the adversarial review showed it conflates two different capabilities — a headless session with no launcher would have been pointed at <code>launcher_lib handoff</code>, whose guard then legitimately refuses it. So:</p>
+<table>
+<thead><tr><th>Value</th><th>True when</th><th>What it changes</th></tr></thead>
+<tbody>
+<tr><td><code>headless</code></td><td><code>RAWGENTIC_HEADLESS=1</code></td><td>there is no human to ask, so the directive says &quot;checkpoint and write the handoff&quot; rather than &quot;tell me&quot;</td></tr>
+<tr><td><code>fresh_handoff_capable</code></td><td><strong>both</strong> <code>RAWGENTIC_LAUNCHER_ARMED=1</code> <strong>and</strong> <code>RAWGENTIC_FRESH_LAUNCH_SUPPORTED=1</code></td><td>and only then does the nag name <code>launcher_lib handoff</code> as the route</td></tr>
+</tbody>
+</table>
+<p>A headless-but-incapable session (the common case) is routed to <code>clear-prep</code> plus an explicit durable-checkpoint-and-manual-resume instruction. There is deliberately <strong>no inference</strong> on either value: probe 5 confirmed the only armed-launcher signal in the tree is a caller assertion, and <code>launcher_lib.py:2156</code> is explicit that absence must not read as support. The two env names mirror the two flags <code>launcher_lib</code> already requires, one for one — a launcher that can relaunch says so, and nothing guesses on its behalf.</p>
+<h2>Handoff plumbing (AC8) — reused, not rebuilt, plus the one decision this design owes</h2>
+<p>Everything the owner enumerated already exists:</p>
+<table>
+<thead><tr><th>Piece</th><th>Where it lives</th></tr></thead>
+<tbody>
+<tr><td>new pane + verify + tear the predecessor down <strong>last</strong></td><td><code>perform_handoff</code> (<code>hooks/launcher_lib.py:802</code>), the #665 ladder, <code>agent_pane_busy</code> fixed by #673</td></tr>
+<tr><td>bind it to a project</td><td>the <code>project_switched</code> ladder step (<code>launcher_lib.py:146,1095-1102</code>) <strong>including #682&#x27;s bind-first ordering fix from this epic</strong></td></tr>
+<tr><td>pass the prompt</td><td>the resume prompt the handoff already arms (<code>fresh_session_handoff</code>)</td></tr>
+<tr><td>pass the goal</td><td><code>last_unmet_goal_condition</code> (<code>launcher_lib.py:604</code>) — a goal is on disk, not in memory (#654 Q2)</td></tr>
+<tr><td>what to put in it</td><td>the <code>clear-prep</code> skill&#x27;s existing process: mempalace checkpoint, durable handoff file, resume prompt, <code>/goal</code> text</td></tr>
+</tbody>
+</table>
+<p><strong>The route the trigger names, and the design hole it does not paper over.</strong> The child-boundary <code>handoff</code> subcommand refuses unless the caller asserts <code>--launcher-armed</code> <strong>and</strong> <code>--fresh-launch-supported</code> (probe 5). #687&#x27;s trigger fires mainly in *interactive* sessions, which have no armed launcher — so the directive&#x27;s route is <strong><code>clear-prep</code></strong>, which is the sanctioned interactive path and already writes every artifact in the table above. <code>launcher_lib handoff</code> is named only on the unattended branch, where its guard is legitimately satisfied. Neither branch asserts a flag it cannot back.</p>
+<p><strong>The task-list decision (AC8&#x27;s genuine gap) — the home is decided, and the TRANSFER IS DEFERRED.</strong> Harness task lists are session-scoped, so nothing survives a process boundary.</p>
+<p><strong>First, a false claim removed.</strong> My first draft said the home is &quot;a canonical <code>## Task list</code> section inside the file <code>clear-prep</code> already writes&quot;. I checked <code>clear-prep</code> rather than assert it, after the review seat disputed it — and <strong>the review seat was right</strong>. <code>~/.claude/skills/clear-prep/SKILL.md</code> §3 enumerates what goes into the handoff file (branch + commit, test-baseline counts, file:line anchors, decisions, env gotchas, <strong>next actions in order</strong>) and carries <strong>no task snapshot at all</strong>; §5 instead requires the resume prompt to end with <code>/tasklist</code>, and says the next session &quot;decomposes the open work into harness tasks via the <code>tasklist</code> skill&quot;. There is no <code>## Task list</code> section today.</p>
+<p><strong>Decision: the home is the handoff file&#x27;s existing <code>next actions, in order</code> list, and the transfer mechanism is RE-DERIVATION, not serialization.</strong> That is not a workaround — it is the mechanism <code>clear-prep</code> §3 + §5 already specify and the one every rawgentic handoff has used. The successor reads the handoff, runs <code>/tasklist</code>, and rebuilds the list from the next-actions. So AC8&#x27;s &quot;pass the task list in&quot; is satisfied *in the sense the existing plumbing supports*, using no new store — which is exactly what AC8 demands (&quot;reuse the existing session-handoff plumbing rather than inventing a second one&quot;).</p>
+<p><strong>And the part that is DEFERRED, stated plainly rather than implied away.</strong> Re-derivation does not preser task <strong>identity, status, or order</strong>. A serialized transfer that did would need three things this issue does not build: a <strong>writer</strong> in <code>clear-prep</code>, a <strong>consumer</strong> in the resume-prompt contract, and a stable <strong>representation</strong>. #687 fixes the representation so a follow-up has a target instead of a fresh argument:</p>
+<pre><code>## Task list
+- [ ] #&lt;id&gt; &lt;subject&gt; — status: pending|in_progress→pending|completed, blocked-by: #&lt;id&gt;,…</code></pre>
+<p>An <code>in_progress</code> task is written back as <code>pending</code> with its continuation note (the consult&#x27;s detail): a successor cannot inherit half-done in-flight state, only the intent to redo it. <strong>Identity-preserving task-list transfer is therefore DEFERRED, filed against <code>clear-prep</code> (writer) and the resume-prompt contract (consumer)</strong> — out of scope here because #687&#x27;s own Scope sentence makes the deliverable the trigger and the seam choice. Rejected alternative: a new <code>~/.rawgentic/tasks/&lt;session&gt;.json</code>, a second durable store for state the handoff file already carries — the duplication AC8 calls a defect.</p>
+<h2>State file — record-before-emit</h2>
+<p><code>~/.rawgentic/context-meter/&lt;session-id&gt;.json</code>, mode <code>0600</code>, written atomically via <code>atomic_write_lib.atomic_write_text</code> (<code>tempfile.mkstemp(dir=target)</code> → <code>os.replace</code>).</p>
+<pre><code>{&quot;schema_version&quot;: 1, &quot;session_id&quot;: &quot;…&quot;, &quot;turns&quot;: 42, &quot;last_check_turn&quot;: 40,
+ &quot;last_check_ts&quot;: 1785275399, &quot;every_turns&quot;: 5, &quot;every_seconds&quot;: 300,
+ &quot;assumed_window&quot;: 1000000, &quot;window_provenance&quot;: &quot;escalated&quot;,
+ &quot;seam_search&quot;: {&quot;armed_at&quot;: 1785275100, &quot;window&quot;: 1000000,
+                 &quot;pointer&quot;: {&quot;workflow&quot;: &quot;wf2&quot;, &quot;step&quot;: 8, &quot;entered_at&quot;: &quot;…&quot;}}}</code></pre>
+<p><strong>The once-per-tier record is a reservation MARKER per (session, window, tier) — nothing in the JSON — and it is keyed by EFFECTIVE WINDOW, which is a bug fix, not decoration.</strong> The adversarial review found the flat <code>tiers_emitted: [...]</code> list broken: an unconfigured 1M session crosses 60% *of the assumed 200k* at 120k tokens, records <code>advisory</code>, then escalates to a 1M window at 200k — and the flat record suppresses the <strong>real</strong> advisory at 600k for the rest of the session. Keying by window means an escalation invalidates only the tiers computed against the smaller denominator. Two rules complete it:</p>
+<ul>
+<li><strong>Monotonic tiers:</strong> emitting <code>directive</code> marks <code>advisory</code> satisfied for that same effective window, so a</li>
+</ul>
+<p>  premature directive can never be followed by a stale advisory.</p>
+<ul>
+<li><strong>Escalation resets the seam search</strong>, since a seam armed under a wrong denominator was armed for the</li>
+</ul>
+<p>  wrong reason.</p>
+<p><strong>Per-invocation write lifecycle</strong> (the review found this unspecified, and unspecified meant the 5-turn arm would never accumulate):</p>
+<table>
+<thead><tr><th>Invocation</th><th>What is persisted</th></tr></thead>
+<tbody>
+<tr><td>every <code>UserPromptSubmit</code></td><td>the incremented <code>turns</code> — always, before any cadence decision</td></tr>
+<tr><td>every completed check, <strong>including tier <code>none</code></strong></td><td><code>last_check_turn</code> + <code>last_check_ts</code></td></tr>
+<tr><td>an emitting check</td><td>the tier, in the <strong>same</strong> write, <strong>before</strong> stdout</td></tr>
+</tbody>
+</table>
+<p><strong>Concurrency — the reservation is an atomic create, not a lock.</strong> The review was right that hook serialization is unproven, and it is in fact false: parallel tool calls in one assistant block fire several <code>PostToolUse</code> hooks at once. Two processes could each read &quot;advisory not yet emitted&quot; and both emit. So the once-per-tier reservation is won with <code>os.open(marker, O_CREAT | O_EXCL)</code> on <code>~/.rawgentic/context-meter/&lt;session-id&gt;.&lt;window&gt;.&lt;tier&gt;.emitted</code> — exactly one process can create it, and the loser stays silent. This is a filesystem compare-and-swap: no lock, no lost-update window, ~3 lines. A lost <code>turns</code> increment under the same race is left as benign and documented — the cadence fires one turn later, which is not a defect worth a lock.</p>
+<p><code>~/.rawgentic/</code> is the established user-level home (<code>scanner-status.json</code> there today, mode 0600). <strong>But <code>~/.rawgentic</code> itself is mode <code>775</code> on this host — I checked, after the review seat flagged it</strong> — so a plain <code>mkdir</code> would leave <code>context-meter/</code> group- and world-readable and the &quot;writes never leave that subtree&quot; claim defeatable by a pre-planted symlink. Therefore: <code>context-meter/</code> is created with mode <strong><code>0700</code></strong> explicitly, the resolved state directory is <strong>rejected if it is a symlink</strong>, and the write target is containment-checked under the real user home before any write or sweep. <strong>Record before emit</strong> (<code>security-guard-check.sh:49-55</code>) — and <strong>the reservation marker IS the record</strong>, deliberately the only one. The JSON above carries cadence bookkeeping *only*. An earlier draft kept an <code>emitted</code> list inside the JSON *as well*, which the verifier correctly identified as a second source of truth for one fact, with a nasty consequence: win the marker, fail the JSON write, and the tier could never fire again for the whole session — the very defect the reservation was added to prevent, merely relocated. So:</p>
+<p>1. the message is fully rendered <strong>before</strong> the reservation, so nothing fallible sits in between; 2. <code>reserve()</code> creates the marker (the record); 3. the <strong>very next statement</strong> writes stdout; 4. if delivery still fails, <code>release()</code> unlinks the marker so a later turn retries; 5. the JSON state is saved afterwards, best-effort — losing it costs one late check, never a lost warning.</p>
+<p>Bounded growth: on write, unlink sibling files older than 7 days.</p>
+<p>One consult suggestion declined: <code>$XDG_STATE_HOME/rawgentic/...</code> — the repo&#x27;s established user-level home is <code>~/.rawgentic/</code> (&quot;one helper, one home&quot;, <code>CLAUDE.md</code> §3). Its *second* suggestion — a lock around the state write — I declined in the first draft on the reasoning that &quot;hooks are serialized, so the race cannot occur&quot;. <strong>That reasoning was wrong</strong> and the adversarial review caught it: parallel tool calls fire concurrent <code>PostToolUse</code> hooks. The race is real; the fix above is the <code>O_EXCL</code> reservation rather than the proposed lock, because a create-or-fail is both cheaper and sufficient for a once-per-tier guarantee.</p>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: <code>{&quot;additionalContext&quot;: &quot;&lt;text&gt;&quot;}</code> on stdout from a <code>UserPromptSubmit</code> hook</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — <code>hooks/wal-context:43</code> emits exactly this shape from exactly this event, and it is live in every session today   failure: fail-loud</p>
+<ul>
+<li>api: <code>{&quot;hookSpecificOutput&quot;: {&quot;hookEventName&quot;: &quot;PostToolUse&quot;, &quot;additionalContext&quot;: &quot;&lt;text&gt;&quot;}}</code> on stdout from a <code>PostToolUse</code> hook</li>
+</ul>
+<p>  feasibility: verified via spike — the adversarial design review correctly refused the <code>UserPromptSubmit</code> call site as proof for this event (#226&#x27;s exact-API-on-exact-surface rule), so it was spiked live on 2026-07-28: a throwaway <code>PostToolUse:Bash</code> hook emitting this exact object under a real <code>claude -p --settings</code> session, whose reply quoted the injected canary token <strong>verbatim</strong> and named its arrival as a <code>PostToolUse:Bash</code> hook system-reminder. Harness committed at <code>docs/planning/2026-07-28-687-probes/</code> (<code>ptu-hook.sh</code>, plus the method in its README) — the verifier rightly refused the original <code>/tmp</code> citation as unauditable.   failure: fail-loud   note: <strong>The two events need DIFFERENT shapes.</strong> The top-level <code>{&quot;additionalContext&quot;: …}</code> form that <code>wal-context</code> uses is the proven one for <code>UserPromptSubmit</code>; <code>PostToolUse</code> takes the <code>hookSpecificOutput</code> form. The module emits the event-appropriate shape rather than assuming one works everywhere — which is precisely what the review caught the first draft assuming.</p>
+<ul>
+<li>api: Claude Code session transcript JSONL at <code>~/.claude/projects/&lt;slug&gt;/&lt;session-id&gt;.jsonl</code>, rows carrying <code>message.usage.{input_tokens,cache_creation_input_tokens,cache_read_input_tokens}</code></li>
+</ul>
+<p>  feasibility: verified via spike — probes 1, 2, 3 and 6 above read this exact shape from two real transcripts on this host 2026-07-28; the field identity <code>2 + 1257 + 652960 = 654219 == total_input_tokens</code> was verified against the statusline payload in #654   failure: fail-silent   surface: <code>context_meter.py read --json</code> prints <code>{&quot;used&quot;: …, &quot;window&quot;: …, &quot;fraction&quot;: …, &quot;tier&quot;: …, &quot;provenance&quot;: …}</code> and exits 3 when no usage row parses — so a format change is one command away from being visible instead of manifesting as a meter that silently never fires. A test pins the row shape against a committed fixture transcript.</p>
+<ul>
+<li>api: <code>session_id</code> + <code>cwd</code> on hook stdin</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — <code>hooks/wal-lib.sh:50-53</code> parses both from the same JSON payload on every event   failure: fail-loud</p>
+<ul>
+<li>api: <code>transcript_path</code> on hook stdin, on BOTH <code>UserPromptSubmit</code> and <code>PostToolUse</code></li>
+</ul>
+<p>  feasibility: verified via spike — probe 9 (2026-07-28, harness committed at <code>docs/planning/2026-07-28-687-probes/</code>) registered payload-dumping hooks on both events under a real <code>claude -p --settings</code> session and read the captured JSON. <code>UserPromptSubmit</code> delivered <code>{cwd, hook_event_name, permission_mode, prompt, prompt_id, session_id, transcript_path}</code>; <code>PostToolUse</code> delivered those plus <code>{tool_name, tool_input, tool_response, tool_use_id, duration_ms, effort}</code>. <strong><code>transcript_path</code> is present on both, and its basename is exactly <code>&lt;session_id&gt;.jsonl</code></strong> — which is what makes the hardening rule satisfiable. So the payload path is the PRIMARY route and the glob is the fallback (the reverse of my first draft).   failure: fail-silent   surface: the once-per-session stderr diagnostic below fires on transcript-not-found and on an ambiguous glob, so a path or schema change is visible in captured hook stderr rather than manifesting as a meter that quietly never fires; <code>read --json</code> exits 3 for the same conditions.   limit: probe 9 captured a <strong>top-level</strong> session only. <strong>No subagent payload was observed</strong>, so the exact field name a subagent invocation carries is UNVERIFIED — which is precisely why the subagent guard is written to be inert when no marker is present (see &quot;Subagent policy&quot;), and why it cannot be claimed as proven.</p>
+<h2>Error handling and failure modes</h2>
+<p><strong>A meter that silently disables itself recreates the exact failure class #687 exists to end</strong> — the adversarial review&#x27;s sixth finding, and it lands. Fail-open must not mean invisible. So the three self-disabling outcomes (transcript not found, glob ambiguous, no parseable usage row) emit a <strong>rate-limited one-line stderr diagnostic</strong> — at most once per session, gated by the same state file — while still exiting 0 and still never blocking a turn. Stderr from a hook is captured, not injected, so this costs the session nothing and gives an operator something to find.</p>
+<table>
+<thead><tr><th>Failure</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td>Transcript absent / unreadable / not resolvable</td><td>No nag, exit 0, <strong>once-per-session stderr diagnostic</strong></td></tr>
+<tr><td>Glob resolves to more than one transcript</td><td>No nag, exit 0, <strong>once-per-session stderr diagnostic</strong> (never guess which)</td></tr>
+<tr><td>Every usage row unparseable or all-zero</td><td>No nag, exit 0, <strong>once-per-session stderr diagnostic</strong>; <code>read</code> exits 3</td></tr>
+<tr><td>Final transcript line a partial write</td><td>Skipped; earlier rows still read</td></tr>
+<tr><td><code>windowSize</code> / threshold / cadence config malformed</td><td>Clamped or defaulted, stderr warning, run continues</td></tr>
+<tr><td>Thresholds inverted in config</td><td>Both fall back to defaults with a warning</td></tr>
+<tr><td>State dir unwritable</td><td>No nag (record-before-emit), exit 0</td></tr>
+<tr><td>Step-state pointer absent or stale</td><td><code>seam: unknown</code>; the nag still fires with a caveat</td></tr>
+<tr><td>Unknown workflow in the pointer</td><td><code>seam: unknown</code>, same</td></tr>
+</tbody>
+</table>
+<h2>Cost — and why the reader must read backward</h2>
+<p>The throttled path is one small JSON read and two integer compares; it never opens the transcript. The <strong>due</strong> path is the one that needed fixing. The review seat measured the largest transcript on this host at <strong>82,948,830 bytes / 31,054 lines</strong>, parsing in ~0.74 s warm — and a forward scan to the last usable row would repeat that whole read every five minutes, in every active session, with concurrent due events duplicating it.</p>
+<p>So <code>read_used_tokens</code> <strong>reads backward in bounded blocks</strong>: seek to the end, walk <strong>64 KiB</strong> chunks backward (<code>_BLOCK</code>), parse only complete lines, stop at the first usage row with a positive total. The last non-zero usage row is almost always within the final few KB, so the common case reads one block rather than 83 megabytes. The total-bytes bound is <strong><code>DEFAULT_MAX_BYTES = 4 MiB</code></strong>; exceeding it yields no reading (with the diagnostic) rather than an unbounded read. The hook&#x27;s <code>timeout</code> is <strong>5 s</strong>, declared in <code>hooks/hooks.json</code> alongside each registration, as <code>wal-context</code> does.</p>
+<h2>Security implications</h2>
+<ul>
+<li>The state path is built from <code>session_id</code>, which is <strong>validated against <code>[A-Za-z0-9-]{8,64}</code></strong> before</li>
+</ul>
+<p>  it reaches any path join or glob pattern — a hostile <code>session_id</code> must not traverse   (<code>../../etc/cron.d/x</code>) or widen a glob. Repo rule: any path component from input is canonicalized and   containment-checked.</p>
+<ul>
+<li>The nag text quotes <strong>no transcript content</strong> — only integers (used, window, percentage) and the step</li>
+</ul>
+<p>  pointer&#x27;s own fields. A meter that echoed conversation into <code>additionalContext</code> would leak the very   context it is measuring.</p>
+<ul>
+<li>Mode <code>0600</code> on the state file; it names a session id and token counts, nothing else.</li>
+<li>No network, no subprocess, no writes outside <code>~/.rawgentic/context-meter/</code>.</li>
+</ul>
+<h2>Tests (AC5) — black-box via subprocess with JSON on stdin</h2>
+<p>1. Absent transcript ⇒ empty stdout, rc 0. 2. Malformed transcript (invalid JSON lines, truncated final line) ⇒ empty stdout, rc 0. 3. A usage row with <strong>only cache reads</strong> ⇒ counted correctly. 4. <strong>The all-zero final row</strong> (probe 2&#x27;s real shape) ⇒ the reading comes from the last <strong>non-zero</strong>    row, not 0. This is the regression test for the dog-fooding finding. 5. <strong>Same token count, two windows:</strong> 159,416 tokens ⇒ <code>none</code> on a 1,000,000 window and <code>directive</code> on    a 200,000 one. The AC3 relative-threshold proof, using probe 6&#x27;s real number. 6. Window <strong>escalation</strong>: an observed total above the resolved window steps up a tier, provenance    <code>escalated</code>. 7. Once-per-tier record: two consecutive over-threshold invocations ⇒ exactly one emission; the    directive tier still emits after the advisory one did. 8. Record-before-emit: an unwritable state dir ⇒ no emission. 9. Cadence: the turn arm and the seconds arm each fire independently; neither fires early. 10. <code>is_safe_seam</code> over each row of the seam table: unchanged pointer, moved pointer, re-entered same     step with a later <code>entered_at</code>, stale pointer, absent pointer, different project. 11. Threshold config: malformed, out-of-range, inverted, and <strong>squeezed</strong> (<code>check_in</code> within 10 points     of <code>act</code>) values each clamp/default with a warning. 12. <code>session_id</code> traversal attempt ⇒ rejected, no path escape, rc 0. 13. Registration: <code>hooks/hooks.json</code> wires <code>context_meter.py</code> on <strong>both</strong> <code>UserPromptSubmit</code> and     <code>PostToolUse</code>. 14. <strong>Ambiguous transcript resolution:</strong> the glob returns more than one hit ⇒ no reading, no nag, rc 0.     The meter must not pick one arbitrarily (consult catch). 15. <strong>A smaller non-zero row after a larger one</strong> (what a real compaction looks like) ⇒ the reading is     the LAST non-zero row, not the maximum. Pins that the reader is not max-based (consult catch). 16. A <code>PostToolUse</code> invocation inside the throttle window ⇒ the transcript is never opened (asserted by     pointing the resolver at a path that would raise if read). 17. <strong>Escalation invalidates only the stale window&#x27;s record</strong> (the review&#x27;s first finding, as a regression     test): 159,416 tokens against a 200k assumption ⇒ premature <code>directive</code>; escalate to 1M; then     <code>advisory</code> still fires at 600k and <code>directive</code> still fires at 700k. 18. <strong>Monotonic tiers:</strong> a <code>directive</code> emission marks <code>advisory</code> satisfied for the same effective window,     so no stale advisory follows a directive. 19. <strong>Per-event output shape:</strong> the <code>UserPromptSubmit</code> path emits top-level <code>additionalContext</code>; the     <code>PostToolUse</code> path emits <code>hookSpecificOutput.additionalContext</code> with <code>hookEventName: &quot;PostToolUse&quot;</code>.     Both shapes asserted explicitly — this is the contract the live spike proved. 20. <strong>Write lifecycle:</strong> four no-tier prompts followed by a fifth across *separate subprocess     invocations* ⇒ the fifth checks (proving <code>turns</code> persisted each time); a tier-<code>none</code> check persists     both last-check fields. 21. <strong>Concurrent reservation:</strong> two processes racing the same tier ⇒ exactly one emits (drive it by     pre-creating the <code>O_EXCL</code> marker and asserting silence). 22. <code>headless</code> vs <code>fresh_handoff_capable</code>: headless-without-launcher wording routes to <code>clear-prep</code> and     does <strong>not</strong> name <code>launcher_lib handoff</code>; both-flags-set wording does. 23. The three self-disabling outcomes each emit their stderr diagnostic exactly <strong>once</strong> per session. 24. <strong>AC8 route text</strong> (the AC had zero tests): the emitted directive names <code>clear-prep</code> and the handoff     file&#x27;s next-actions list; it names <code>launcher_lib handoff</code> <strong>only</strong> when both capability envs are set. 25. <strong>AC6 real config resolution</strong> (not just value parsing): a <code>tmp_path</code> workspace + registry + project     <code>.rawgentic.json</code> carrying a <code>contextMeter</code> block ⇒ the hook uses those values; an absent workspace,     an unregistered session, and a malformed config each fall back to defaults without raising. 26. <strong>Subagent guard:</strong> a payload carrying a sidechain/agent marker ⇒ nothing written, nothing emitted,     rc 0; a payload without one behaves normally (so the guard is inert on versions lacking the field). 27. <strong>Bounded backward read:</strong> a synthetic multi-megabyte transcript whose last non-zero usage row is near     the end is read without parsing the whole file (asserted on bytes read), and a file whose only usage     rows sit beyond the byte bound yields no reading plus the diagnostic — never an unbounded read. 28. <strong>Path hardening beyond <code>session_id</code>:</strong> a <code>transcript_path</code> whose basename is not     <code>&lt;session_id&gt;.jsonl</code>, one resolving outside the projects root, and one that is a symlink are each     rejected and fall through to the glob; a symlinked state directory is refused; <code>context-meter/</code> is     created mode <code>0700</code> (asserted with <code>stat</code>) even under a <code>0775</code> parent.</p>
+<h2>Complete file-change scope — every pinned surface a new hook touches</h2>
+<p>The review seat&#x27;s fourteenth finding was that this list was missing, and it was right: a new registered hook plus a new config object touches <strong>more than the four version surfaces everyone remembers</strong>. Verified individually rather than copied from a checklist.</p>
+<table>
+<thead><tr><th>Surface</th><th>Why it is in scope</th><th>Verified how</th></tr></thead>
+<tbody>
+<tr><td><code>hooks/context_meter.py</code></td><td>the module</td><td>—</td></tr>
+<tr><td><code>hooks/hooks.json</code></td><td>registration on both events, with a <code>timeout</code></td><td>—</td></tr>
+<tr><td><code>tests/hooks/test_context_meter.py</code></td><td>the tests</td><td>—</td></tr>
+<tr><td><strong><code>phase_executor/.../canary.py:41</code> <code>EXPECTED_REGISTRATION_DIGEST</code></strong></td><td>a length-framed sha256 over ALL of <code>hooks.json</code> <strong>plus the bytes of every referenced script</strong> (<code>canary.py:215-248</code>) — this change alters it twice over. Guard: <code>tests/phase_executor/test_canary_digest_pin.py:20-24</code></td><td>Step-2 analysis, cited file:line</td></tr>
+<tr><td><strong><code>README.md</code> <code>#### Hooks</code> inventory table</strong></td><td>the table lists every hook by name/event/purpose, so a new hook needs a row</td><td><strong>I read it myself</strong> (<code>README.md</code> §Hooks). Note: the Step-2 analysis agent reported &quot;no table enumerating individual hooks&quot; — <strong>that was wrong</strong>, and the review seat caught it. Confirmed against the file.</td></tr>
+<tr><td><strong><code>templates/rawgentic-json-schema.json</code></strong></td><td>the example-config template carrying a <code>$comment</code>-documented block per optional section (<code>telemetryAlerts</code> is the exact analogue); a new <code>contextMeter</code> block belongs there</td><td>I opened it and listed its top-level keys</td></tr>
+<tr><td><code>docs/config-reference.md</code></td><td>the <code>contextMeter</code> keys, defaults, clamps, env twins</td><td>—</td></tr>
+<tr><td><code>docs/context-meter.md</code> (new)</td><td>tier table, seam rule, unattended split, the measured 1M onset, the unmeasured 200k caveat, the event-not-timer constraint, the statusline addendum</td><td>—</td></tr>
+<tr><td><code>docs/testing.md</code></td><td>test-count prose for the new file, if it pins one</td><td>check before edit</td></tr>
+<tr><td>4 version surfaces + README changelog</td><td>repo convention, one PR = one bump = one entry, in the exact shape with the diagram decision and <code>Suite old→new</code></td><td><code>CLAUDE.md</code> §2</td></tr>
+<tr><td>rendered <code>.html</code> of this design</td><td>design-doc convention, via <code>hooks/render_artifact.py</code></td><td>—</td></tr>
+</tbody>
+</table>
+<h2>Scope</h2>
+<p><strong>In:</strong> the transcript consumer, its registration, the tiers, the seam predicate, the config surface, the unattended split, <code>docs/context-meter.md</code>, and the AC8 task-list-home decision.</p>
+<p><strong>Out (per the issue):</strong> a hook that runs <code>/clear</code> itself; replacing auto-compaction; the statusline bridge (documented as an addendum, not shipped); #654&#x27;s Q4/Q5 write-up.</p>
+<h2>Cross-model peer consult — what it changed, and what it did not</h2>
+<p>An independent proposal was produced by the <code>gpt</code> backend (<code>docs/reviews/peer-rawgentic-peer-problem-687-2026-07-28.md</code>) under the blindness rule: my draft was on disk before I read it. Four things were grafted and four declined, all recorded so the reasoning is auditable rather than absorbed silently.</p>
+<p><strong>Taken:</strong> 1. <strong><code>PostToolUse</code> as a second event.</strong> Its risk #3 pointed at the adjacent fatal case — a    <code>UserPromptSubmit</code>-only meter is silently dead in a long autonomous run. This is the single largest    change to the design and it came from the consult. 2. <strong>The seam as a pointer transition</strong> rather than a step-number whitelist. Simpler, workflow-agnostic,    and it removes a second source of truth that would rot on the next spine change. 3. <strong>A ≥10-point margin below the lowest observed compaction onset</strong>, moving the defaults from 65/75 to    60/70, plus the <code>check_in</code> ≤ <code>act − 10</code> invariant. 4. Two tests: the <strong>ambiguous glob</strong> case and the <strong>smaller-non-zero-row-after-a-larger-one</strong> case (which    pins that the reader is last-non-zero, not max-based). Plus <code>schema_version</code> in the state file.</p>
+<p><strong>Declined, with reasons:</strong> <code>$XDG_STATE_HOME</code> (repo home is <code>~/.rawgentic/</code>); an advisory lock (single writer, <code>os.replace</code> already atomic); a new <code>handoffs/&lt;id&gt;.json</code> manifest store carrying task snapshots (AC8 calls duplicating the handoff mechanism a defect — see the task-list decision above); and extending <code>fresh_session_available</code>&#x27;s authorization to accept an <code>interactive-confirmed</code> capability — a genuinely good idea, but it changes #665&#x27;s shipped ladder, so it is a <strong>follow-up</strong>, not this issue.</p>
+<h2>Adversarial-on-design review — 10 findings, 9 taken</h2>
+<p><code>docs/reviews/2026-07-28-687-context-pressure-trigger-md-2026-07-28.md</code> (Codex, high effort): 0 Critical, 4 High, 6 Medium. Every finding was checked against the design rather than accepted on the reviewer&#x27;s word, and nine changed it. Where the fix is smaller than the recommendation, the reduction is stated.</p>
+<table>
+<thead><tr><th>#</th><th>Sev</th><th>Finding</th><th>Disposition</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>High</td><td>Window escalation left the flat <code>tiers_emitted</code> list keyed to a dead denominator — a premature advisory under an assumed 200k window would suppress the real one at 600k</td><td><strong>Taken in full.</strong> <code>emitted</code> keyed by effective window + monotonic tiers + escalation resets the seam search. Regression test 17.</td></tr>
+<tr><td>2</td><td>High</td><td>One <code>unattended</code> boolean conflated headless with fresh-handoff-capable, routing valid headless sessions at a command that refuses them</td><td><strong>Taken in full.</strong> Two booleans, two env pairs, headless-but-incapable routed to <code>clear-prep</code>. Test 22.</td></tr>
+<tr><td>3</td><td>High</td><td>A pointer transition does not prove nothing is in flight; calling it <code>seam</code> asserts a property the hook cannot see</td><td><strong>Taken, reduced.</strong> Renamed <code>seam_candidate</code> and the advisory asks the session to confirm tree/wave state. The proposed durable readiness assertion is deferred — it changes the WF2/WF3 spines, not this hook.</td></tr>
+<tr><td>4</td><td>High</td><td><code>additionalContext</code> on <code>PostToolUse</code> was <strong>unproven</strong> — the cited call site is <code>UserPromptSubmit</code>-only, which #226&#x27;s exact-surface rule does not extend</td><td><strong>Taken in full, and it changed the contract.</strong> Spiked live; it works, but only via <code>hookSpecificOutput</code>, not the top-level form. Declared as its own <code>platform_apis</code> entry. Test 19.</td></tr>
+<tr><td>5</td><td>Med</td><td>The write lifecycle for non-emitting invocations was unspecified, so the 5-turn arm would never have accumulated</td><td><strong>Taken in full.</strong> Explicit per-invocation write table. Test 20.</td></tr>
+<tr><td>6</td><td>Med</td><td>Silent self-disable on a transcript/format failure recreates the very failure class the feature exists to end</td><td><strong>Taken in full.</strong> Once-per-session stderr diagnostic on all three outcomes, still exit 0. Test 23.</td></tr>
+<tr><td>7</td><td>Med</td><td>Declaring a <code>## Task list</code> heading is not a transfer mechanism — no writer, no consumer, no representation</td><td><strong>Taken in full, and it shrank the claim.</strong> The home is decided; <strong>transfer is stated DEFERRED</strong>, with the representation fixed and both missing call sites named.</td></tr>
+<tr><td>8</td><td>Med</td><td>The 200k default&#x27;s directive has no measured evidence it precedes compaction on that window</td><td><strong>DISCARDED, with reason.</strong> AC3 explicitly instructs &quot;pick a conservative default, state it as provisional, and record what would confirm it&quot; — the design does exactly that, and the reviewer&#x27;s alternative (require explicit declaration) would make the meter do nothing by default, which is the silent failure #687 exists to end. Mitigations kept: the nag names the assumed window and its provenance, and <code>docs/context-meter.md</code> tells a 200k operator to set the threshold from their own observation.</td></tr>
+<tr><td>9</td><td>Med</td><td>The no-lock rejection rested on hook serialization, which is unproven</td><td><strong>Taken — the reasoning was simply wrong.</strong> Parallel tool calls fire concurrent <code>PostToolUse</code> hooks. Fixed with an <code>O_EXCL</code> reservation rather than the proposed lock. Test 21.</td></tr>
+<tr><td>10</td><td>Med</td><td>&quot;Verdict up front&quot; still said <code>UserPromptSubmit</code> only, contradicting the chosen approach</td><td><strong>Taken.</strong> Fixed.</td></tr>
+</tbody>
+</table>
+<p>Eleven review passes across #679 and #682 each found something real; this is the twelfth and it did too.</p>
+<h2>Step 4 design gate — the review seat, 15 findings, verdict BLOCK → resolved</h2>
+<p>The gate&#x27;s own quality-bar self-review (executor <code>review</code> seat, <code>gpt-5.6-sol</code>, deep pass) returned <strong>15 findings — 7 High, 7 Medium, 1 Low — and a verdict of BLOCK.</strong> Two things about that number matter and both are stated rather than smoothed over:</p>
+<p>1. <strong>It was dispatched BEFORE the adversarial amendments landed</strong> (brief sent while the design still had the    flat tier list, the single <code>unattended</code> boolean, the <code>seam</code> label and the unproven <code>PostToolUse</code> shape).    So findings 1, 2, 4, 6, 7 and 15 name defects the concurrent adversarial pass had already fixed — the two    reviewers converged independently on the same four Highs, which is corroboration, not double-counting. 2. <strong>The genuinely new findings were all real, and one of them corrected my own input.</strong> Every disputed fact    was checked against the file rather than accepted:</p>
+<table>
+<thead><tr><th>#</th><th>Sev</th><th>New finding</th><th>Disposition</th></tr></thead>
+<tbody>
+<tr><td>5</td><td>High</td><td><strong>The production adapter was missing</strong> — <code>evaluate</code> received <code>cfg</code> and <code>pointer</code> with no specified way for <code>main()</code> to obtain either, so AC6 and AC7 had no live input path</td><td><strong>Taken.</strong> Six-step resolution flow specified, throttle-before-anything-expensive, project resolved from the registry, pointer <code>session_id</code> required to match.</td></tr>
+<tr><td>3</td><td>High</td><td><strong>Subagent contention</strong> — a subagent invocation can carry the parent&#x27;s <code>session_id</code>, so the meter would read the parent&#x27;s transcript and contend on its state</td><td><strong>Taken.</strong> Explicit subagent policy: do nothing. Written to be inert where the marker is absent, because probe 9 saw no subagent payload and I will not claim a field name I did not observe.</td></tr>
+<tr><td>9</td><td>Med</td><td><strong><code>clear-prep</code> does not write a <code>## Task list</code> section</strong> — my &quot;already writes&quot; claim was false</td><td><strong>Taken, and it improved the answer.</strong> I read <code>clear-prep</code> myself: §3 has no task snapshot, §5 mandates <code>/tasklist</code> re-derivation. The home is now the existing next-actions list, transfer is re-derivation, and identity-preserving transfer is explicitly DEFERRED.</td></tr>
+<tr><td>10</td><td>Med</td><td><strong><code>transcript_path</code> was used but undeclared</strong></td><td><strong>Taken.</strong> Probe 9 dumped both events&#x27; real payloads; declared, and the payload path is now primary with the glob as fallback.</td></tr>
+<tr><td>12</td><td>Med</td><td><strong>Path hardening stopped at <code>session_id</code></strong> — no basename binding, containment or symlink check; <code>~/.rawgentic</code> is <code>0775</code> so <code>mkdir</code> would not be private</td><td><strong>Taken in full.</strong> I confirmed the <code>775</code> mode myself. Basename bound to the validated id, realpath containment, symlink refusal, <code>context-meter/</code> at <code>0700</code>.</td></tr>
+<tr><td>13</td><td>Med</td><td><strong>Unbounded transcript parse</strong> — largest transcript measured at 82,948,830 bytes, re-read every five minutes per session</td><td><strong>Taken.</strong> Bounded backward read with a byte cap. I confirmed the file size independently.</td></tr>
+<tr><td>14</td><td>Med</td><td><strong>Missing pinned surfaces</strong> — canary digest, README hook table, config template, testing docs</td><td><strong>Taken.</strong> Full file-change scope table above. <strong>This finding also caught an error in my Step-2 analysis input</strong>, which had reported no README hook table; there is one, and I verified it.</td></tr>
+<tr><td>8</td><td>Med</td><td>The 200k default&#x27;s directive had no measured evidence</td><td><strong>Partly taken by MEASURING (probe 8), and the 200k half remains OPEN.</strong> Probe 8 measured only the <strong>1M</strong> corpus (ceiling ≈99.8%, so 70% has ~30 points of margin there) and it also showed *why* the 200k case cannot be closed here: zero of 266 transcripts belong to a 200k-window session. So the accepted finding is <strong>mitigated, not resolved</strong> — mitigated by the 1M evidence, the config key, and the nag naming its own assumed window; unresolved pending one real 200k observation. The identical adversarial finding F8, which I first discarded on the AC&#x27;s wording, is answered the same way — and discarding it was the weaker response.</td></tr>
+<tr><td>11</td><td>Med</td><td>AC4 and AC8 had zero tests; several listed tests could pass without the behaviour</td><td><strong>Taken.</strong> Tests 22, 24–28 added.</td></tr>
+</tbody>
+</table>
+<p><strong>Why this is a spec-tightening pass and not a Step-3 return.</strong> Every accepted finding tightens a specification the design already carried — a resolution flow it implied, a hardening rule it under-stated, a threshold it called provisional, a claim it overstated. <strong>No approach was reversed:</strong> the module, both events, the two tiers, the transition-based seam and the reuse-not-rebuild handoff stance all survive unchanged. That is the #223 in-gate cheap path (amend + one incremental verifier, no Step-3 return), and one <code>spec_tighten</code> loop-back was consumed for it.</p>
+<h2>The claim I would most expect to be wrong</h2>
+<p>Not the threshold any more — probe 8 measured that, and 70% sits ~30 points below the 1M onset. What replaces it:</p>
+<p><strong>That the subagent guard fires on the right field.</strong> Probe 9 captured only a top-level session&#x27;s payload, so I do not know what a subagent invocation actually carries. If subagent hooks arrive with the parent&#x27;s <code>session_id</code> and <strong>no</strong> marker my guard recognises, then every subagent tool call advances the parent&#x27;s cadence and contends on the parent&#x27;s state file. The <code>O_EXCL</code> reservation still prevents a duplicate nag and a lost turn increment is benign, so the failure mode is a meter that checks more often than designed — not a wrong reading and not a broken guarantee. The confirmation is one payload dump from inside a subagent, which is the same probe-9 harness pointed at a <code>Task</code> dispatch, and it is a follow-up rather than a blocker precisely because the blast radius is cadence, not correctness.</p>
+<p>Runner-up: <strong>that the pointer-transition seam is observable often enough to matter.</strong> If WF2 runs several steps inside one assistant turn, the advisory tier may never see a transition and every real break ends up driven by the directive tier — i.e. the polite early path degrades to the blunt one. The feature still works; it just works less gracefully than designed, and <code>PostToolUse</code> is what makes the degradation unlikely rather than certain.</p>
+<p>Third: <strong>that the 200k window behaves like the 1M one.</strong> Unmeasurable here (zero 200k sessions in a 266-transcript corpus), so it rests on the inference that Claude Code compacts near-full on both. If 200k compacts at 65%, the directive is late and useless on that window — the config key is the escape, and the scan is one 200k session away from settling it.</p>
+<h2>Step 11 pre-PR code review — 21 findings, 1 Critical, 6 High, both verdicts BLOCK</h2>
+<p>Two reviewers over the real diff (executor <code>review</code> seat, <code>gpt-5.6-sol</code>): R1 on mechanical + bug/logic, R2 on architecture + security. <strong>This is the gate that earns its cost.</strong> Both returned BLOCK, and between them they found one Critical, six High and a dozen Medium/Low — several of which would have shipped a feature that was quietly broken in its main case.</p>
+<p>The ones that mattered most, all fixed with a regression test each:</p>
+<table>
+<thead><tr><th>Sev</th><th>Finding</th><th>Why it mattered</th><th>Fix</th></tr></thead>
+<tbody>
+<tr><td><strong>Critical</strong></td><td>The step-state pointer&#x27;s <code>workflow</code>/<code>step</code> were interpolated <strong>verbatim</strong> into <code>additionalContext</code></td><td>The pointer is a project-controlled FILE, and <code>additionalContext</code> is read by the model as trustworthy. A hostile repo could put instruction text in it and have a session act on it — a prompt-injection channel straight into the next turn.</td><td>Every value echoed to the model is allowlisted through <code>_echo_safe</code> to <code>[A-Za-z0-9._-]{1,32}</code>, else <code>?</code>. Test asserts an injection string never reaches the reason text.</td></tr>
+<tr><td><strong>High</strong> ×2 (both reviewers)</td><td>The <code>PostToolUse</code> matcher was `Bash\</td><td>Edit\</td><td>Write\</td><td>NotebookEdit\</td><td>Task`</td><td>It omits <code>Read</code>, <code>Grep</code>, <code>Glob</code>. A long autonomous run spent reading and searching fires <strong>no</strong> invocation — so the 5-minute arm, the entire justification for riding <code>PostToolUse</code>, was <strong>dead in exactly the case it exists for</strong>. I had copied <code>wal-post</code>&#x27;s matcher without thinking about it.</td><td>Wildcard matcher <code>*</code>, with a test that fails on any narrowing.</td></tr>
+<tr><td><strong>High</strong></td><td><code>canary._add_record</code>&#x27;s duplicate branch returned <strong>before</strong> the symlink and containment checks</td><td>My own dedup fix introduced it: a path could be a regular file on first reference and an out-of-root symlink with identical bytes on the second, and <code>read_bytes()</code> follows symlinks.</td><td>Checks moved above the duplicate branch and made unconditional.</td></tr>
+<tr><td><strong>High</strong></td><td>Registry-derived <code>project</code> and <code>project_path</code> were neither validated nor contained</td><td><code>project</code> becomes a *filename* and <code>project_path</code> is *read from* — both come from a file a repo controls. <code>project=&quot;/tmp/payload&quot;</code> or <code>project_path=&quot;../../victim&quot;</code> redirects the reads.</td><td><code>_PROJECT_RE</code> on the name; absolute rejected; resolved path must be contained under the workspace and be a real directory.</td></tr>
+<tr><td><strong>High</strong></td><td>State containment was pathname-based and checked <strong>after</strong> <code>mkdir</code>+<code>chmod</code>; only the final component was symlink-checked</td><td>A symlinked <code>~/.rawgentic</code> passes a realpath check against <code>$HOME</code> while redirecting every write, and an escaping path was created and chmod&#x27;ed before being refused.</td><td>Both components symlink-checked and contained <strong>before</strong> any mutation; <code>lstat</code> confirms a real directory.</td></tr>
+<tr><td><strong>High</strong></td><td>Unbounded reads — stdin, the whole registry, config, pointer, and non-regular files</td><td>The hook runs per tool call under a 5 s timeout. A committed hostile registry prefix, a huge config, or a <strong>FIFO</strong> turns it into a self-inflicted timeout.</td><td>Every read byte-capped; registry read from the <strong>tail</strong>; <code>_read_capped</code> refuses non-regular files and opens `O_NOFOLLOW\</td><td>O_NONBLOCK`.</td></tr>
+</tbody>
+</table>
+<p><strong><code>O_NONBLOCK</code> deserves its own line, because the test found it, not the review.</strong> The reviewer said a FIFO could hang the hook. I added a regular-file check via <code>fstat</code> — and the FIFO test then <strong>hung the whole suite for five minutes</strong>, because opening a FIFO for reading blocks *at <code>open()</code>*, before any check can run. The check was in the wrong place entirely and only running it proved that.</p>
+<p>Mediums also fixed: window overflow past the largest known tier pinned to that tier (it had used the observed count as the window, so the marker key changed every reading and the directive re-delivered forever — both reviewers); the armed seam search is dropped when pressure falls back below the advisory band; the 7-day sweep no longer deletes a live session&#x27;s markers (the marker *is* the record); <code>reserve</code> unlinks the marker if a post-create step fails; tier comparison is integer-exact (<code>116000/200000*100</code> computes as <code>57.99999999999999</code>, so an exact 58% boundary would not have fired); a throttled <code>PostToolUse</code> now writes nothing at all; and the stderr diagnostic no longer prints an absolute path or unescaped control characters.</p>
+<p><strong>R1&#x27;s testability finding was the sharpest, and it was about my own test.</strong> <code>test_a_failed_delivery_releases_the_reservation</code> redirected stdout to <code>/dev/null</code>, where printing *succeeds* — so deleting the production <code>release()</code> call would have left it green. It now drives <code>cmd_hook</code> with a stdout object that raises, and asserts both that no marker survives and that the retry emits.</p>
+<p><strong>Two findings deferred, with reasons rather than silence:</strong></p>
+<ul>
+<li><strong>No single pure <code>evaluate()</code></strong> (R2, Medium). Real drift from this design&#x27;s own module surface, now</li>
+</ul>
+<p>  corrected in that section. Extracting it is a follow-up: it is a refactor of the very code the   security fixes had just reshaped, and doing both in one pass is how a fix gets lost.</p>
+<ul>
+<li><strong>A remaining check/use race on the transcript path</strong> (R2, Medium). <code>resolve_transcript</code> validates</li>
+</ul>
+<p>  then <code>read_used_tokens</code> reopens by pathname. Mitigated — the reader now opens <code>O_NOFOLLOW</code>, so the   symlink swap it describes fails — but a fully fd-based read relative to a trusted directory   descriptor is the complete fix, and that is a follow-up.</p>
+<p>One policy contradiction was also resolved rather than argued: R2 was right that <code>CLAUDE.md</code> called <code>capabilities_lib derive</code> the &quot;ONLY sanctioned way&quot; to read <code>.rawgentic.json</code> while seven hooks read it directly. The manual now states the real rule and its narrow exception, so the next author is not choosing between a doc and the tree.</p>
+
+</main>
+<footer>Last updated: 2026-07-28 17:06 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

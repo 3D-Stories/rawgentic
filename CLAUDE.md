@@ -18,9 +18,21 @@ Every claim below carries its evidence; when a doc and a test disagree, **the te
   as of v3.24.0, 2026-07-07 — a dated snapshot; the current count comes from running
   the gate, never from this file). Judgment lives in skills; logic lives in hooks; skills shell out
   via `python3 hooks/<lib>.py <subcmd>`. The most-called: `capabilities_lib.py derive`
-  (the ONLY sanctioned way to read `.rawgentic.json` — never hand-derive, never probe the
-  filesystem for config-level facts), `adversarial_review_lib.py is-enabled`,
-  `work_summary.py summarize`, `render_artifact.py`, `security_scan.py scan`.
+  (the sanctioned way for a SKILL to read `.rawgentic.json` — never hand-derive the
+  capabilities object, never probe the filesystem for config-level facts),
+  `adversarial_review_lib.py is-enabled`, `work_summary.py summarize`, `render_artifact.py`,
+  `security_scan.py scan`.
+  - **Narrow, real exception, so the rule stops contradicting the tree (#687):** a HOOK that needs
+    its OWN single config block reads `.rawgentic.json` directly and fail-open. That is the
+    established pattern, not a deviation — `security-guard.py:81-96`,
+    `security_guard_lib.py:206-223`, `seat_outcomes_lib.py:1237-1247`, `plan_lib.py:765`,
+    `post_update_reconcile.py:158-172`, `wal-lib.sh:275-330`, `context_meter.py` all do it, and
+    `executor_routing_lib.py` mixes both. Reason it is not `derive`: several of these run per tool
+    call, where a subprocess is a cost they have not earned, and `derive` returns a whole
+    capabilities object to answer a one-key question. Rule for a new hook: read only your own
+    block, cap the read, fail open, and validate the values (strict parse, clamp, safe default,
+    stderr warning — `seat_outcomes_lib.load_thresholds_from_block` is the exemplar). Anything
+    that needs the *capabilities object* still goes through `derive`.
 - **Fourth layer (since #424): `phase_executor/`** — a self-contained uv-native package (src
   layout: `phase_executor/pyproject.toml`+`uv.lock`, code under `phase_executor/src/phase_executor/`)
   that is NOT part of the hooks/skills machinery. It is the deterministic model-seat execution

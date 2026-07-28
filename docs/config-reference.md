@@ -1166,3 +1166,38 @@ still a repo secret (subscription-billed, not secret-free); treat it like any cr
 logged in to Claude Code (`claude` authenticated in the runner's environment) — then no repo
 secret is needed at all, at the cost of operating a runner. Prefer this when you'd rather not
 store a long-lived token in repo secrets.
+
+### `contextMeter`
+
+OPTIONAL block tuning the context-pressure trigger (`hooks/context_meter.py`, #687). Absent section =
+documented defaults. Five keys, each with an env twin that takes precedence; precedence is
+**env → project config → default**, per key.
+
+```json
+"contextMeter": { "windowSize": 1000000, "checkInPercent": 60, "actPercent": 70,
+                  "everyTurns": 5, "everySeconds": 300 }
+```
+
+| Key | Env twin | Default | Meaning |
+|---|---|---|---|
+| `windowSize` | `RAWGENTIC_CONTEXT_WINDOW` | `200000` | context window in tokens |
+| `checkInPercent` | `RAWGENTIC_CONTEXT_CHECKIN_PCT` | `60` | advisory tier — start looking for a seam |
+| `actPercent` | `RAWGENTIC_CONTEXT_ACT_PCT` | `70` | directive tier — break now |
+| `everyTurns` | `RAWGENTIC_CONTEXT_EVERY_TURNS` | `5` | check cadence, turn arm |
+| `everySeconds` | `RAWGENTIC_CONTEXT_EVERY_SECONDS` | `300` | check cadence, wall-clock arm |
+
+**Why `windowSize` is the one worth setting.** A session's model name does not reveal its context
+window (a 1M session records `claude-opus-5` with no `[1m]` marker), so the window is declared, not
+detected. The default is the CONSERVATIVE 200,000: assuming 1M on a 200k session would mean the nag
+never fires, which is the silent failure the feature exists to end, whereas assuming 200k on a 1M
+session merely fires early and says so. It also self-corrects — once a session's observed in-context
+total exceeds the assumed window, the meter escalates to the next known tier and discards tiers
+recorded against the outgrown one.
+
+Percentages are clamped to 1..99 and `checkInPercent` must sit at least 10 points below `actPercent`;
+cadence values must be ≥1. Any malformed, out-of-range, inverted or squeezed value falls back to the
+documented default with a stderr warning — a bad value never breaks a turn. There is deliberately no
+workspace-level layer for these keys: the env twin already covers the cross-project case.
+
+Full behaviour, including the seam rule, the attended/unattended split and the measured
+auto-compaction ceiling: `docs/context-meter.md`.
