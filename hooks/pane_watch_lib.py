@@ -705,6 +705,10 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
                             if rc == 0:
                                 debouncer.commit(pane_id, now)
                                 prior[pane_id] = BLOCKED
+                                # Step 11 pass-6: an older failed stream send for this same pane was
+                                # left in the queue, so the next drain paged the same continuous
+                                # block a second time.
+                                pending_sends.pop(pane_id, None)
                                 report["notified"].append({"pane_id": pane_id, "rc": rc,
                                                            "deferred_sweep": True})
                                 emit(f"pane-watch: deferred sweep notified for {pane_id}")
@@ -827,7 +831,17 @@ def watch_stream(lines, *, reconciler, sender, clock=time.time, debouncer=None,
                 event.pane or reconciler.meta(event.pane_id))
             report["send_failures"] += 1
             emit(f"pane-watch: SEND FAILED for {event.pane_id} (rc={rc}) — pending retry")
+    # Step 11 pass-6: this reported only `pending_sends`, so an unresolved DEFERRED REGISTRATION left
+    # no structured evidence at all — a genuinely blocked pane could exit with notified=[] and
+    # pending_at_exit=[]. Both queues are reported now, and separately, because they mean different
+    # things: one is "we could not deliver", the other "we could not even learn about this pane".
     report["pending_at_exit"] = sorted(pending_sends)
+    report["pending_registrations_at_exit"] = sorted(pending_registrations)
+    if report["pending_registrations_at_exit"]:
+        report["errors"].append(
+            "unresolved deferred registrations at exit: "
+            + ", ".join(report["pending_registrations_at_exit"])
+            + " — these panes were never learned, so a block on them was never checked")
     return report
 
 

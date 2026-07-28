@@ -783,3 +783,60 @@ class TestDeliveryIsRetriedNotLost:
                                  sender=lambda b: 1, clock=lambda: 1000.0,
                                  emit=lambda _m: None, heartbeat_s=10_000.0)
         assert report["pending_at_exit"] == ["w1:pA"], report
+
+
+class TestStep11Pass6:
+    def _rec(self):
+        return pw.Reconciler(_snapshot([("w1:pA", "working", 5, "alpha")]))
+
+    def test_an_unresolved_deferred_registration_leaves_EVIDENCE_at_exit(self):
+        """Step 11 pass-6 BLOCKER: `pending_at_exit` reported only `pending_sends`, so a genuinely
+        blocked pane whose registration never resolved exited with notified=[] AND pending_at_exit=[]
+        — the only trace was a log line about a deferred creation, which says nothing about an
+        undelivered block."""
+        sent = []
+        report = pw.watch_stream(
+            [_created("w1:pNEW", name="newborn"),
+             _updated("w1:pNEW", "blocked", 1, name="newborn"), pw._EOF],
+            reconciler=self._rec(), sender=lambda b: (sent.append(b), 0)[1],
+            clock=lambda: 1000.0, emit=lambda _m: None,
+            live_panes=lambda: set())                 # never readable
+        assert sent == []
+        assert report["pending_registrations_at_exit"] == ["w1:pNEW"], report
+        assert any("never learned" in e for e in report["errors"]), report
+
+    def test_a_deferred_sweep_clears_an_older_pending_send(self):
+        """Step 11 pass-6: a successful deferred sweep committed the notification but left an older
+        failed stream send queued, so the next drain paged the same block again."""
+        rec = self._rec()
+        rec.register_pane({"pane_id": "w1:pNEW", "name": "newborn"}, live_pane_ids={"w1:pNEW"})
+        sent = []
+        results = iter([1, 0, 0])
+        ticks = iter([1000.0, 1000.0, 2000.0, 99999.0])
+
+        def current(_pid):
+            return {"pane_id": "w1:pNEW", "workspace_id": "w1", "agent_status": "blocked",
+                    "name": "newborn", "revision": 9}
+
+        report = pw.watch_stream(
+            [_updated("w1:pNEW", "blocked", 1, name="newborn"), None, None],
+            reconciler=rec, sender=lambda b: (sent.append(b), next(results))[1],
+            clock=lambda: next(ticks), debouncer=pw.Debouncer(window_s=0.0),
+            emit=lambda _m: None, heartbeat_s=1.0,
+            live_panes=lambda: {"w1:pA", "w1:pNEW"}, current_pane=current)
+        assert len(sent) == 2, f"one continuous block must not page a third time: {report}"
+        assert report["pending_at_exit"] == [], report
+
+    def test_rollback_is_what_makes_the_STREAM_path_retry(self):
+        """Step 11 pass-6: the earlier None-baseline test passed with `rollback()` no-op'd, because
+        the heartbeat retry bypassed reconciliation entirely. This drives the STREAM path only (the
+        heartbeat is pushed out of reach), so it fails if the rollback is removed."""
+        rec = self._rec()
+        sent = []
+        results = iter([1, 0])
+        report = pw.watch_stream(
+            [_updated("w1:pA", "blocked", 6), _updated("w1:pA", "blocked", 6)],
+            reconciler=rec, sender=lambda b: (sent.append(b), next(results))[1],
+            clock=lambda: 1000.0, debouncer=pw.Debouncer(window_s=0.0),
+            emit=lambda _m: None, heartbeat_s=10_000.0)
+        assert len(sent) == 2, f"the SAME revision must be eligible again after a failure: {report}"
