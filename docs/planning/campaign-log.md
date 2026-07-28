@@ -14,6 +14,60 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #684 — make the blocked-pane watcher actually fire
+
+### #679 — poll pane state + key on `state_change_seq` (small-standard lane) · v3.104.1
+
+**Two independent reasons the #612 watcher could never notify anybody, and only the first was
+known.** Cause 1 (what #679 diagnosed): `events.subscribe` on herdr 0.7.5 delivers a ~39-frame
+backlog burst and then nothing, ever — five instruments, including a controlled stimulus (three pane
+renames on a live subscription → 0 frames) and duration-independence (39 events at 12 s, 39 at 12 s,
+39 at 50 s). Cause 2, found by RUNNING it: a real Claude pane driven to a real permission prompt went
+`working@revision 3` → `blocked@revision 3`. herdr bumps `revision` on pane-record changes, not on
+every `agent_status` transition, so `Reconciler.accepts` — which requires a strictly newer key —
+refused the one frame the feature exists for. The watcher polled happily, `poll_failures: 0`, and
+sent **zero notifications**. The `revision 1 → 3` figure in #679/#684 is real but spans TWO
+transitions, and that is what hid it.
+
+**Shipped.** `poll_lines` (a drop-in for `socket_lines`; the brain is untouched because
+`watch_stream` already took its lines as an argument), `merge_agent_sequences` + `_revision_of`
+(the key is `state_change_seq` from `snapshot.agents[]`, falling back to `revision`),
+`clamp_poll_interval`, `write_heartbeat(extra=)` carrying `polls`/`poll_failures`, and
+`--source {poll,events}` / `--poll-interval-s` with **poll** the default. The subscription path is
+RETAINED behind the flag — one flag away if herdr repairs the feed, and its tests are the written
+record of what those five instruments learned.
+
+**Decisions (this slot).**
+- D-1 (owner): poll, not `events.wait` in a loop (contract unverified, may drop transitions between
+  calls) and not upstream-only (would leave the watcher dead and W2–W7 BLOCKED). No upstream filing.
+- The 15-minute pre-check the epic mandated came back NEGATIVE and is recorded on #679:
+  `projects/herdr-dashboard` has no socket client at all (only dep `textual`); it reads pane state
+  through the herdr **CLI** and refreshes on discrete UI events. So the subscription was
+  unchallenged by it — and the one other project on this box that shows live pane state polls too.
+- Owner elected the **small-standard lane** (design ceremony dropped; TDD, Step 8a, Step 11,
+  security scan, CI all kept).
+- The detection gap is documented as CUMULATIVE rather than "one poll interval": the generator is
+  pull-driven and one drain walks every pending registration and every pending send sequentially. A
+  persistent block is always detected on the next sample, so what degrades is lateness, never loss.
+- Owner authorised a FOURTH revision round past the exhausted `design` loop-back budget, to fix a
+  High the third review pass found (agent detach killing the watcher).
+
+**Reviews — three design passes, each of which found something real.** Pass 1: 6 findings (5 High)
+tripped the volume loop-back. Pass 2: 4 High + 1 Medium, two of them reproduced by the reviewer.
+Pass 3: 1 High + 2 Medium + 1 Low, the High being a routine agent detach read as `2148 → 5` and
+killing the whole watcher. One item was DECLINED with its reason recorded (making ordinary generator
+exhaustion fail-loud in `watch_stream`: unreachable from either shipped source, and it would break
+~20 existing tests that legitimately feed a finite list). Step 8a (2 reviewers) + Step 11 + the
+adversarial diff review ran on the committed diff. Security scan PASS (iac not applicable).
+
+**Status.** Suite 5618 → 5663, 0 failing; both pylint lanes 10.00/10. Verified live three times
+against a real herdr server — run A failed (revision key), runs B and C passed — and the failure is
+the only reason cause 2 was found. Evidence retained at
+`docs/planning/2026-07-28-667-uat-plan/harness/evidence/679-t5-live-ac3-2026-07-28.md`. No
+workflow-spine change → no diagram REV. PR + CI + merge SHA per the established next-slot convention.
+
+---
+
 ## Standalone — #647: backend-resolved run-status probe + `liveness_unknown` · v3.97.2
 
 **The last instance of the #638 defect class, in the read-only status surface (small-standard
