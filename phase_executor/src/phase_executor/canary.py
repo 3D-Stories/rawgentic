@@ -38,7 +38,7 @@ POLICY_REVISION = 1
 EXPECTED_PLUGIN_VERSION = "3.104.2"
 # Computed live over hooks/hooks.json + the scripts referenced in its command fields (the
 # canonical length-framed encoding below). test_canary_digest_pin.py asserts pin == live.
-EXPECTED_REGISTRATION_DIGEST = "sha256:f30d6b38abff94a2ba771d1d1a3055d48ac6309baeb31b8bd65e108735f5c38c"
+EXPECTED_REGISTRATION_DIGEST = "sha256:0c2bf9a7e7efc40169a7a75e9ee7ec6450919b7b5f81e266f8d362d5b70afdb5"
 
 # The mutating tool/matcher classes to positive-deny-probe are DERIVED from hooks.json's
 # PreToolUse matchers (never invented) — each matcher whose command is an ENFORCING guard. The
@@ -197,13 +197,22 @@ class CanaryRefused(contract.CompositionError):
 # --------------------------------------------------------------- registration digest (H3)
 def _add_record(records: dict, root_p: Path, rel_path: str) -> None:
     """Read ``rel_path`` (relative to ``root_p``) into ``records`` keyed by its normalized rel
-    path. Fail-closed: a path escaping root, a symlink, or a duplicate rel path all raise."""
+    path. Fail-closed: a path escaping root or a symlink raises.
+
+    A repeated rel path is IDEMPOTENT, not an error (#687): one script may legitimately be
+    registered on several events — ``context_meter.py`` rides both ``UserPromptSubmit`` (the
+    5-turn arm) and ``PostToolUse`` (the 5-minute arm). The digest is over the SET of
+    (path, content) records, so recording a path once and skipping the repeat leaves the
+    digest byte-identical; only a same-path/different-bytes conflict — which one filesystem
+    read cannot produce, but a future caller might — still raises."""
     norm = os.path.normpath(rel_path)
     if os.path.isabs(norm) or norm == ".." or norm.startswith(".." + os.sep):
         raise ValueError(f"registration digest: referenced path {rel_path!r} escapes root")
-    if norm in records:
-        raise ValueError(f"registration digest: duplicate path {norm!r}")
     target = root_p / norm
+    if norm in records:
+        if records[norm] != target.read_bytes():
+            raise ValueError(f"registration digest: conflicting content for {norm!r}")
+        return
     if target.is_symlink():
         raise ValueError(f"registration digest: symlink rejected: {rel_path!r}")
     resolved = target.resolve()
@@ -218,7 +227,8 @@ def compute_registration_digest(root) -> str:
     is ``u64(len(rel_path)) ++ rel_path ++ u64(len(content)) ++ content`` (8-byte big-endian
     lengths), records ordered by normalized rel path. Naive concatenation permits boundary
     collisions (bytes moved between two files leave the concatenated hash unchanged); the framing
-    closes that. Fail-closed: duplicate paths, symlinks, and paths outside root all raise.
+    closes that. Fail-closed: symlinks and paths outside root raise. A script referenced by
+    several events is recorded once (see ``_add_record``).
 
     ``root`` is the plugin registration root; hooks.json lives at ``root/hooks/hooks.json`` and
     each command's ``${CLAUDE_PLUGIN_ROOT}`` resolves to ``root``."""
