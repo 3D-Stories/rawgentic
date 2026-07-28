@@ -797,36 +797,66 @@ class TestOpenHandoffCarriesMidChildFields:
 
 class TestTheResumePromptBindsFirst:
     """#682: `project_switched` allows `SWITCH_POLL_ATTEMPTS (40) x SWITCH_POLL_DELAY_S (3.0)` =
-    120 s for a fresh successor to bind and append to the registry. A successor that verifies its
-    facts BEFORE binding — correct, prudent behaviour — can exceed that, and the launcher then
-    declares `failed_step: project_switched` and closes its pane mid-bind. Observed live three
-    times in the epic #667 UAT (check L2).
+    120 s for a fresh successor to bind and append to the registry, then declares
+    `failed_step: project_switched` and CLOSES ITS PANE. Observed live three times (epic #667 UAT,
+    check L2), with the successor's transcript showing it was executing the bind when its pane closed.
 
-    The observation is CONFOUNDED and the issue says so: the fixture used a synthetic issue 99998
-    that does not exist, so the successor spent its budget investigating a nonexistent issue's
-    provenance. What is NOT confounded is the real concern — the 120 s budget assumes the bind comes
-    first, and nothing ENFORCED that ordering. The mid-child prompt already led with it; the
-    child-boundary prompt buried it in a comma list.
+    The observation is CONFOUNDED and the issue says so (a synthetic issue 99998 sent the successor
+    investigating a nonexistent issue). What is NOT confounded: the budget assumes the bind comes
+    first, and nothing enforced it.
+
+    **The Step-4 review then found that the first version of this fix would not have worked at all**,
+    which is why these tests exist in this shape.
     """
 
-    def test_the_child_boundary_prompt_puts_the_bind_before_anything_else(self):
-        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684})
+    def test_the_bind_carries_a_project_argument(self):
+        """THE finding. A bare `/rawgentic:switch` does not bind: the skill enters LIST MODE and asks
+        a human which project to use, so an unattended successor sits at a question, never appends the
+        registry row, and has its pane closed when the budget exhausts."""
+        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684, "project": "rawgentic"})
         prompt = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE)["resume_prompt"]
-        ok, why = dl.resume_prompt_binds_first(prompt)
-        assert ok, f"{why}\nprompt: {prompt}"
+        assert "/rawgentic:switch rawgentic" in prompt
+        assert dl.resume_prompt_binds_first(prompt)[0]
 
-    def test_the_mid_child_prompt_still_binds_first(self):
-        """It already did — this pins it so the shared validator cannot regress one and not the
-        other."""
+    def test_a_bare_bind_command_is_refused_when_the_project_is_known(self):
+        """With the project known the check is a LITERAL match, so this is fully sound."""
+        ok, why = dl.resume_prompt_binds_first(
+            "FIRST run /rawgentic:switch to bind, then work.", project="rawgentic")
+        assert not ok and "list mode" in why
+
+    def test_without_a_known_project_the_argument_test_has_a_stated_limit(self):
+        """Earned in testing, and recorded rather than hidden: with no project to compare against,
+        "switch to bind" is indistinguishable from "switch <project>" — the next English word looks
+        exactly like an argument. That is precisely why callers pass `project`, and why
+        `perform_handoff` does."""
+        ok, _why = dl.resume_prompt_binds_first("FIRST run /rawgentic:switch to bind, then work.")
+        assert ok, "the documented limit changed — update the docstring, do not just flip this"
+
+    def test_switch_off_is_not_a_bind(self):
+        """`/rawgentic:switch off <name>` DEACTIVATES a project. It matches a naive
+        "directive plus an argument" rule while doing the opposite of binding."""
+        ok, _why = dl.resume_prompt_binds_first("FIRST run /rawgentic:switch off rawgentic.")
+        assert not ok
+
+    def test_the_mid_child_prompt_also_carries_the_project(self):
         s = _st([_iss(665, "in_progress")], generation=4, extra={"epic": 667})
         prompt = dl.mid_child_handoff(s, position=_position())["resume_prompt"]
-        ok, why = dl.resume_prompt_binds_first(prompt)
-        assert ok, f"{why}\nprompt: {prompt}"
+        assert dl.resume_prompt_binds_first(prompt)[0], prompt
+        assert "/rawgentic:switch " in prompt
 
-    def test_a_prompt_that_asks_for_git_before_the_bind_is_refused(self):
-        ok, why = dl.resume_prompt_binds_first(
-            "Resume the run. git fetch origin, then bind with /rawgentic:switch.")
-        assert not ok and "git" in why
+    def test_a_handoff_with_no_project_produces_a_prompt_that_is_refused(self):
+        """Fail-closed rather than spawning a doomed successor: with no project name there is no
+        valid bind command to send, so the handoff must refuse."""
+        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684})   # no project key
+        prompt = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE)["resume_prompt"]
+        ok, why = dl.resume_prompt_binds_first(prompt)
+        assert not ok and "never tells the successor to bind" in why
+
+    def test_the_no_project_clause_does_not_match_the_validator_it_warns_about(self):
+        """Earned by a live mistake during this fix: the clause explaining the bare-command trap
+        NAMED the command, and the explanation matched the guard's own pattern — the prose about the
+        bug became a false positive for the guard against it."""
+        assert not dl.resume_prompt_binds_first(dl._bind_clause(None))[0]
 
     def test_a_prompt_with_no_bind_at_all_is_refused(self):
         ok, why = dl.resume_prompt_binds_first("Resume the run and get on with the next child.")
@@ -834,15 +864,28 @@ class TestTheResumePromptBindsFirst:
 
     def test_a_non_string_is_refused_rather_than_crashing(self):
         for bad in (None, 42, [], {}):
-            ok, _why = dl.resume_prompt_binds_first(bad)
-            assert not ok
+            assert not dl.resume_prompt_binds_first(bad)[0]
+
+    def test_a_late_bind_is_refused_by_the_positional_proxy(self):
+        late = ("x" * (dl.BIND_MUST_APPEAR_WITHIN + 50)) + " /rawgentic:switch rawgentic"
+        ok, why = dl.resume_prompt_binds_first(late)
+        assert not ok and "past the first" in why
+
+    def test_the_positional_check_is_a_documented_proxy_not_a_semantic_claim(self):
+        """The Step-4 review refuted the previous prose classifier by producing BOTH a false positive
+        and a false negative in one pass. These two cases pin the honest limit rather than pretending
+        it is gone: a prompt that mentions other work before an early bind is ACCEPTED, and that is a
+        known bound of a positional proxy — the structural fix (the launcher sending the bind as its
+        own verified turn) is the recorded follow-up."""
+        accepted = "Read the handoff first, then run /rawgentic:switch rawgentic."
+        assert dl.resume_prompt_binds_first(accepted)[0]
+        # And the false positive the old rule produced is now correctly accepted.
+        was_wrongly_refused = ("Do not run git fetch before binding. FIRST run "
+                               "/rawgentic:switch rawgentic.")
+        assert dl.resume_prompt_binds_first(was_wrongly_refused)[0]
 
     def test_the_prompt_says_why_the_bind_comes_first(self):
-        """A bare ordering instruction is easy to rationalise past. The reason — an unbound session
-        cannot Read anything under projects/, and the launcher will close the pane at 120 s — is what
-        makes a prudent successor bind before verifying rather than after."""
-        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684})
+        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684, "project": "rawgentic"})
         prompt = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE)["resume_prompt"]
         low = prompt.lower()
-        assert "before" in low and "/rawgentic:switch" in prompt
-        assert "unbound" in low or "cannot read" in low
+        assert "before" in low and ("unbound" in low or "cannot read" in low)

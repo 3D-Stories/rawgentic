@@ -897,7 +897,8 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     # expensive failure: a clean-looking `failed_step`, a closed pane, and the successor's completed
     # work lost. Checked HERE with the other caller-mismatch validations, before the split, so a
     # refusal never leaves a pane behind.
-    binds_first, why_not = _driver_lib().resume_prompt_binds_first(resume_prompt)
+    binds_first, why_not = _driver_lib().resume_prompt_binds_first(
+        resume_prompt, project=expected_project)
     if not binds_first:
         raise LauncherError(f"resume_prompt does not bind first: {why_not}")
     if prompt_marker is not None:

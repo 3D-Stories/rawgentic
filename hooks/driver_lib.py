@@ -282,47 +282,94 @@ LAUNCHABLE_MODES = frozenset({"herdr", "pane_less"})
 
 BIND_DIRECTIVE = "/rawgentic:switch"
 
-# Directives a successor must not be asked for BEFORE the bind. Not an exhaustive list of shell
-# verbs — it is the set that a resume prompt realistically opens with, which is all a regression
-# guard needs. `_LATER_DIRECTIVES` is checked by POSITION, so a prompt that merely mentions `git`
-# later on is fine.
-_LATER_DIRECTIVES: tuple[str, ...] = (
-    "git ", "gh ", "pytest", "python3 ", "/rawgentic:implement-feature", "/rawgentic:fix-bug",
-    "/rawgentic:epic-run",
-)
+# A bind directive WITH a project argument. The argument is the whole point: Step-4 review finding,
+# and it is the defect that made the first version of this fix useless. `/rawgentic:switch` with no
+# argument does not bind anything — the switch skill enters LIST MODE and asks a human "which project
+# do you want to bind this session to?" (`skills/switch/SKILL.md`, Steps 1-2). An unattended
+# successor obeying a bare command therefore sits at a question, never appends the registry row, and
+# has its pane closed when `project_switched` exhausts. So the guard checks the command's SHAPE.
+_BIND_WITH_PROJECT = re.compile(re.escape(BIND_DIRECTIVE) + r"\s+(?!off\b)\S+")
+
+# How early the bind must appear. This is an honest POSITIONAL PROXY for "first", not a proof of it:
+# a prose classifier cannot establish semantic ordering, and the Step-4 review demonstrated exactly
+# that by producing both a false positive and a false negative against the previous attempt. The
+# structural fix — the launcher sending the bind as its own verified turn — is the recorded follow-up.
+BIND_MUST_APPEAR_WITHIN = 260
 
 
-def resume_prompt_binds_first(prompt) -> tuple[bool, str]:
-    """Does this resume prompt tell the successor to bind BEFORE doing anything else? (#682)
+def resume_prompt_binds_first(prompt, project=None) -> tuple[bool, str]:
+    """Is the bind a VALID, EARLY instruction in this resume prompt? (#682)
 
     `perform_handoff` gives a successor `SWITCH_POLL_ATTEMPTS x SWITCH_POLL_DELAY_S` = 120 s to bind
     and append to the registry, then declares `failed_step: project_switched` and CLOSES ITS PANE.
-    That budget is only sound if the bind is the successor's first act. Nothing enforced the
-    ordering, so a prudent successor that verified its facts first got killed mid-bind — observed
-    live three times, and the failure is silent and expensive: the launcher reports a clean
-    `failed_step`, closes the pane, and the work the successor had already done is gone.
+    The failure is silent and expensive: a clean-looking `failed_step`, a closed pane, and the work
+    the successor had already done is gone.
 
-    So the ordering is a MECHANICAL precondition of the handoff rather than a wording convention.
+    Checked, in descending order of soundness:
+
+    - **With a known `project`: the EXACT literal `/rawgentic:switch <project>` must be present.**
+      Fully mechanical — no classification of prose at all. This is the check that matters, and the
+      caller should always supply the project when it has one.
+    - **Without one: the command must at least carry SOME argument.** Honest limit, earned in
+      testing: this cannot distinguish a project name from the next English word, so
+      `"/rawgentic:switch to bind"` passes the argument test while being a bare command. That is why
+      `project` exists.
+    - **The bind must appear within `BIND_MUST_APPEAR_WITHIN` characters.** A positional PROXY for
+      "first", openly not a proof — prose ordering cannot be classified reliably, and the attempt to
+      do so was refuted by review with a false positive and a false negative in the same pass.
+
     Returns `(ok, reason)`; the reason is empty when ok.
     """
     if not isinstance(prompt, str) or not prompt.strip():
         return False, "the resume prompt is not a non-empty string"
-    bind_at = prompt.find(BIND_DIRECTIVE)
-    if bind_at < 0:
-        return False, (f"the resume prompt never tells the successor to bind ({BIND_DIRECTIVE}), so "
-                       "`project_switched` could only ever fail and the pane would be closed at "
-                       "120 s")
-    for token in _LATER_DIRECTIVES:
-        at = prompt.find(token)
-        if 0 <= at < bind_at:
-            return False, (f"the resume prompt asks for {token.strip()!r} at offset {at} before the "
-                           f"bind at {bind_at} — the 120 s `project_switched` budget assumes the "
-                           "bind is the FIRST action, and a successor that obeys this ordering can "
-                           "have its pane closed mid-bind (#682)")
+    if isinstance(project, str) and project.strip():
+        literal = f"{BIND_DIRECTIVE} {project.strip()}"
+        at = prompt.find(literal)
+        if at < 0:
+            return False, (f"the resume prompt does not contain the exact bind command "
+                           f"{literal!r} — without the project argument the switch skill enters "
+                           "list mode and waits for a human, so the registry row never appears and "
+                           "the pane is closed when `project_switched` exhausts at 120 s (#682)")
+        if at > BIND_MUST_APPEAR_WITHIN:
+            return False, (f"the bind appears at offset {at}, past the first "
+                           f"{BIND_MUST_APPEAR_WITHIN} characters")
+        return True, ""
+    match = _BIND_WITH_PROJECT.search(prompt)
+    if match is None:
+        if BIND_DIRECTIVE in prompt:
+            return False, (f"the resume prompt uses a bare {BIND_DIRECTIVE!r} with no project "
+                           "argument — that enters the switch skill's LIST MODE and waits for a "
+                           "human to answer, so the registry row never appears and the pane is "
+                           "closed when `project_switched` exhausts at 120 s (#682)")
+        return False, (f"the resume prompt never tells the successor to bind ({BIND_DIRECTIVE} "
+                       "<project>), so `project_switched` could only ever fail")
+    if match.start() > BIND_MUST_APPEAR_WITHIN:
+        return False, (f"the bind appears at offset {match.start()}, past the first "
+                       f"{BIND_MUST_APPEAR_WITHIN} characters — the 120 s `project_switched` budget "
+                       "assumes the bind is the successor's first act")
     return True, ""
 
 
-def _build_resume_prompt(state: dict, next_issue: int) -> str:
+def _bind_clause(project) -> str:
+    """The bind instruction, with the project argument that makes it actually bind.
+
+    Step-4 review finding, and it is why the first version of this fix would not have fixed
+    anything: `/rawgentic:switch` with NO argument does not bind — the skill enters list mode and
+    asks a human which project to use. When no project is known the clause deliberately carries no
+    valid command, so `resume_prompt_binds_first` refuses the handoff rather than spawning a
+    successor that is guaranteed to sit at a question until its pane is closed.
+    """
+    if isinstance(project, str) and project.strip():
+        return f"run {BIND_DIRECTIVE} {project.strip()}"
+    # Deliberately carries NO bind directive at all, not even quoted. An earlier version of this
+    # string explained the trap by naming the command, and the explanation itself matched the
+    # validator's pattern — the prose about the bug became a false positive for the guard against it.
+    return ("bind the project, EXCEPT that the launcher supplied no project name: a bind command "
+            "without one enters list mode and waits for a human, so this handoff must be refused "
+            "rather than sent")
+
+
+def _build_resume_prompt(state: dict, next_issue: int, project=None) -> str:
     """The canonical idempotent, state-re-deriving resume prompt for a fresh session (no
     in-context memory). Used for the interactive hand-back + a direct `claude -p` spawn; the
     crontab launcher's own static prompt conforms to this (design §4 SR1).
@@ -339,7 +386,7 @@ def _build_resume_prompt(state: dict, next_issue: int) -> str:
     epic_ref = f"epic #{epic}" if _is_int(epic) else camp
     return (
         f"Fresh-session resume for {epic_ref}. FIRST, before reading any file and before checking "
-        f"any fact: run {BIND_DIRECTIVE} to bind the project. An unbound session cannot Read "
+        f"any fact: {_bind_clause(project)}. An unbound session cannot Read "
         "anything under projects/, and the launcher closes this pane if the bind has not landed in "
         "claude_docs/session_registry.jsonl within 120 seconds — so bind, then verify, never the "
         "other way round. THEN: git fetch origin, read the driver-state + epic-<N>-autorun-log, and "
@@ -350,7 +397,7 @@ def _build_resume_prompt(state: dict, next_issue: int) -> str:
     )
 
 
-def fresh_session_handoff(state: dict, *, mode: str) -> dict:
+def fresh_session_handoff(state: dict, *, mode: str, project=None) -> dict:
     """Decide the process-boundary handoff after a child reaches a terminal outcome (#569).
 
     Returns an explicit disposition (NEVER a bare None — design §4 [2]):
@@ -373,7 +420,8 @@ def fresh_session_handoff(state: dict, *, mode: str) -> dict:
         generation = (state.get("generation") if _is_int(state.get("generation")) else 0) + 1
         return {"outcome": "ready", "next_issue": nxt, "generation": generation,
                 "campaign": state.get("campaign", ""),
-                "resume_prompt": _build_resume_prompt(state, nxt)}
+                "resume_prompt": _build_resume_prompt(state, nxt,
+                                                     project or state.get("project"))}
     return {"outcome": "blocked"}
 
 
@@ -557,7 +605,8 @@ def _build_mid_child_resume_prompt(state: dict, position: dict, generation: int)
     return (
         f"{mid_child_marker(position['issue'], generation)} Mid-child resume for {epic_ref}, "
         f"child #{position['issue']}, interrupted at WF2 step {position['step']}. "
-        "FIRST bind the project (/rawgentic:switch) — an unbound session cannot read inside "
+        f"FIRST bind the project: {_bind_clause(position.get('project'))} — an unbound session "
+        "cannot read inside "
         f"projects/. Then `git fetch origin && git checkout {position['branch']}`: that branch "
         "already carries this child's committed work, so do not re-implement it. The recorded "
         f"test baseline is {position['test_baseline']} — diff against it; do not re-measure it "
