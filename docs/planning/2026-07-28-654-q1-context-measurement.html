@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#654 Q1 — measuring context pressure (live-verified)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-28 04:18 MDT</div>
+<h1>#654 Q1 — measuring context pressure (live-verified)</h1>
+
+</header>
+<main>
+<h1>#654 Q1 — measuring context pressure: the reading path, live-verified</h1>
+<p>Epic #667. Answers <strong>Q1 only</strong> of the #654 spike: *a documented, live-verified reading path covering BOTH sources — the statusline bridge (authoritative) and the transcript fallback (headless).* Q2 (can a goal be set without a human), Q3 (restart mechanisms), Q4 (threshold arithmetic) and Q5 (recommendation + decomposition) are NOT answered here and #654 stays open for them.</p>
+<p>Every number below was read from this host on 2026-07-28, not inferred.</p>
+<h2>Verdict</h2>
+<p><strong>Both sources work, and the authoritative one needs no arithmetic at all.</strong> Claude Code hands the statusline a pre-calculated <code>used_percentage</code>. The transcript fallback reproduces it to within the drift of the seconds between two readings. Context detection can therefore be mechanical rather than model judgment.</p>
+<h2>Source 1 — the statusline payload (authoritative, interactive only)</h2>
+<p><strong>Captured live</strong>, by inserting one <code>printf &#x27;%s&#x27; &quot;$input&quot; &gt; …</code> line into <code>~/.claude/rawgentic-statusline.sh</code> after its existing <code>input=$(cat)</code>, waiting for a render, then restoring the script from a backup and confirming the restore by sha256 (<code>e383b4a7456c5f8a14b4d52b02bcbeff87349385ee7c90a52d520fd0ab1da521</code>, probe line gone, script still exits 0). This is the only way to see what Claude Code actually sends; reading the schema would not have been evidence.</p>
+<p>Top-level keys delivered:</p>
+<pre><code>context_window  cost  cwd  effort  exceeds_200k_tokens  fast_mode  model  output_style
+prompt_id  rate_limits  session_id  session_name  thinking  transcript_path  version  workspace</code></pre>
+<p>And <code>context_window</code> itself, verbatim:</p>
+<pre><code>{
+  &quot;total_input_tokens&quot;: 654219,
+  &quot;total_output_tokens&quot;: 1667,
+  &quot;context_window_size&quot;: 1000000,
+  &quot;current_usage&quot;: {
+    &quot;input_tokens&quot;: 2,
+    &quot;output_tokens&quot;: 1667,
+    &quot;cache_creation_input_tokens&quot;: 1257,
+    &quot;cache_read_input_tokens&quot;: 652960
+  },
+  &quot;used_percentage&quot;: 65,
+  &quot;remaining_percentage&quot;: 35
+}</code></pre>
+<p><strong>The load-bearing correction, and it simplifies the whole feature.</strong> <code>total_input_tokens</code> is NOT a session cumulative — it is the in-context total for the current request. Read from the capture: <code>2 + 1257 + 652960 = 654219</code>, exactly the reported <code>total_input_tokens</code>. So a consumer needs ONE field, <code>used_percentage</code>, or at most one division. #654&#x27;s body correctly warns that <code>hooks/usage_capture.py</code> sums usage across the whole session and is off by ~477x for this purpose — that warning applies to the transcript rows, not to this field.</p>
+<p><code>session_id</code> is present in the same payload, so a reading is attributable to a session without any extra lookup. <code>exceeds_200k_tokens</code> is also delivered, which is a free signal for the 200k-model threshold question in Q4.</p>
+<p><strong>What this source cannot do:</strong> headless and cron runs render no statusline, so nothing invokes the command and no reading is produced. That is the entire reason source 2 is required, not optional.</p>
+<h2>Source 2 — the transcript fallback (works everywhere, including headless)</h2>
+<p>Sum the LAST <code>message.usage</code> row in the session transcript: <code>input_tokens + cache_read_input_tokens + cache_creation_input_tokens</code>.</p>
+<p><strong>Reading A — the same live session, seconds after the statusline capture:</strong></p>
+<ul>
+<li>transcript: <code>~/.claude/projects/-home-rocky00717-rawgentic/28e64d8b-….jsonl</code>, 562 usage-bearing rows</li>
+<li>last row: <code>input_tokens 2</code>, <code>cache_creation_input_tokens 2531</code>, <code>cache_read_input_tokens 649882</code></li>
+<li><strong>in-context total 652,415 tokens = 65.2% of the 1M window</strong></li>
+</ul>
+<p><strong>The cross-check.</strong> Statusline said <code>used_percentage: 65</code> with <code>total_input_tokens: 654219</code>; the transcript gave 652,415, i.e. 65.2%. The two agree to within <strong>1,804 tokens — 0.18% of the window</strong> — which is the cache-read delta between two readings taken seconds apart, not a methodology error.</p>
+<p><strong>Reading B — a session with NO statusline</strong>, which AC1 requires separately:</p>
+<ul>
+<li>transcript <code>agent-a408d0c5b13b7c1fa.jsonl</code> (a subagent run: no UI, no statusline command ever</li>
+</ul>
+<p>  invoked; confirmed non-interactive — no <code>queue-operation</code> or <code>queued_command</code> rows), 14 usage rows</p>
+<ul>
+<li>last row: <code>input_tokens 2</code>, <code>cache_read_input_tokens 154085</code>, <code>cache_creation_input_tokens 19580</code></li>
+<li><strong>in-context total 173,667 tokens = 17.4% of a 1M window, or 86.8% of a 200k window</strong></li>
+</ul>
+<p>That second framing is worth keeping for Q4: the same transcript is comfortable on a 1M model and already past the reported ~77% auto-compaction point on a 200k one, so any threshold has to be expressed against <code>context_window_size</code>, never as an absolute token count.</p>
+<h2>Honest limits of this answer</h2>
+<ul>
+<li><strong>AC1 asks for a reading that &quot;matches <code>/context</code> for the same session&quot;. I did not run <code>/context</code></strong> —</li>
+</ul>
+<p>  it is an interactive slash command and this run is unattended. Substituted a cross-check between   the two independent mechanical sources above, which is what a consumer will actually rely on. If   an operator wants the <code>/context</code> comparison, the statusline number to compare against is   <code>used_percentage</code>.</p>
+<ul>
+<li>The no-statusline reading comes from a <strong>subagent</strong> transcript, not a cron-spawned top-level</li>
+</ul>
+<p>  session. It establishes what AC1 needs — that the fallback works where no statusline exists, on   the same row shape — but it is not a proof about cron specifically. A cron-spawned session writes   the same <code>message.usage</code> rows; that last step is inference, and the cheap confirmation is to take   one reading inside the first real cron-spawned run.</p>
+<ul>
+<li><code>used_percentage</code> is an integer. It is precise enough for tier thresholds and too coarse for</li>
+</ul>
+<p>  anything finer; use <code>total_input_tokens / context_window_size</code> when a fraction is wanted.</p>
+<ul>
+<li>Nothing here was implemented. #654&#x27;s Scope puts all implementation out of bounds, and the</li>
+</ul>
+<p>  statusline is a user-level file outside any git repository, so the ~3-line bridge cannot ship as a   rawgentic PR with tests. That placement question belongs to Q5.</p>
+<h2>What Q1 hands to the next question</h2>
+<p>1. The authoritative reading is <code>context_window.used_percentage</code>, already calculated, delivered with    <code>session_id</code>, on every statusline render. 2. The headless reading is the last <code>message.usage</code> row summed over three fields, and it agrees with    the authoritative one to 0.18% of the window. 3. A consumer therefore needs a <strong>persist step</strong>, not a compute step: the statusline is the only    thing that sees source 1, and it currently discards it. Where that persisted state lives, and    what reads it, is Q5&#x27;s recommendation — not settled here.</p>
+
+</main>
+<footer>Last updated: 2026-07-28 04:18 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
