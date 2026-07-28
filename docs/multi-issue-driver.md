@@ -418,8 +418,9 @@ builds its own list. Its resume prompt is built by `driver_lib._build_mid_child_
 next to #569's `_build_resume_prompt` for the same reason: two copies of that wording would
 drift.
 
-**Teardown is successor-driven and verified against six on-disk artifacts**, and the predecessor
-is left alive AND still guarded on every refusal. `.driver-state` writes on this path go through
+**Teardown is successor-driven and verified against six on-disk artifacts**, and on every refusal BEFORE the clear the
+predecessor is left alive AND still guarded. After a confirmed clear the honest statement is narrower: a
+refusal leaves it alive but possibly unguarded, and a re-armed predecessor is never closed. `.driver-state` writes on this path go through
 one locked read-modify-write helper (`plan_lib.file_lock` on a stable sidecar). The full ladder,
 the destructive sequence, the named partial-success states, and the one window where a crash
 leaves the predecessor unguarded are documented in `docs/runbooks/herdr.md` §8 rather than

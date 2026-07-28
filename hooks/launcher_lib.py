@@ -1903,7 +1903,7 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
         # already belong to an unrelated session. Closing on an old proof would kill that session
         # and report `retired`. Re-arming would paste into it too, so when the target stops being
         # provably the predecessor's, nothing further is done.
-        def _predecessor_re_armed() -> str | None:
+        def _predecessor_re_armed() -> tuple[str | None, str]:
             """Has the predecessor become GUARDED AGAIN since we cleared it?
 
             Step 11 pass-4 (Critical, reproduced): the close path re-checked driver state and pane
@@ -1912,21 +1912,31 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             anyway, destroying a guarded working context. The declared clear-to-close window assumes
             the predecessor stays unguarded; this is the case where it does not.
 
-            Returns a refusal reason when it is guarded again, else None. Fail-safe on an unreadable
-            transcript: no evidence of a re-arm is not evidence of one, and the clear was already
-            confirmed, so treating an unreadable read as "re-armed" would strand every teardown
-            behind a transient I/O error.
+            Returns `(reason_or_None, kind)` with kind `"ok"`, `"re_armed"` or `"unreadable"`.
+
+            FAIL-CLOSED on an unreadable transcript (Step 11 pass-5). The first version failed safe
+            to "not re-armed" to avoid stranding a teardown behind a transient I/O error — and a
+            reviewer promptly hid a REAL re-arm behind one read error and got `retired` plus a
+            `pane close`. The asymmetry decides it: refusing on an unreadable read leaves the
+            predecessor alive and recoverable, while proceeding can irreversibly destroy a live
+            guarded session. `"unreadable"` is retryable by the caller, so a genuinely transient
+            error costs an attempt rather than the whole teardown.
             """
-            rows = [r for r in _iter_goal_status(read_or_empty(pred_transcript))]
+            try:
+                text = read_text(pred_transcript)
+            except (OSError, UnicodeDecodeError) as exc:
+                return (f"the predecessor's transcript could not be read ({exc}), so a re-arm "
+                        "cannot be ruled out", "unreadable")
+            rows = [r for r in _iter_goal_status(text)]
             if not rows:
-                return None
+                return (None, "ok")
             newest = rows[-1]
             if newest.get("met") is False:
                 return (f"the predecessor has ARMED A NEW GUARD since the clear was confirmed "
                         f"(newest condition {newest.get('condition')!r} is unmet) — it is a live "
                         "guarded session again, so closing it would destroy a working context this "
-                        "teardown was never authorised to touch")
-            return None
+                        "teardown was never authorised to touch", "re_armed")
+            return (None, "ok")
 
         close_argv = build_teardown_argv(anchor_pane)
         closed = False
@@ -1934,8 +1944,27 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
         for attempt in range(CLOSE_ATTEMPTS):
             if attempt:
                 sleeper(CLOSE_RETRY_DELAY_S)
-            re_armed = _predecessor_re_armed()
-            if re_armed is not None:
+            # Explicit ordering, NOT `_destructive_call` (Step 11 pass-5, reproduced): that wrapper
+            # would run the fence and a `pane get` subprocess AFTER the re-arm check, and a reviewer
+            # injected a new guard during exactly that window and watched a guarded predecessor get
+            # closed. The re-arm check must be the LAST read before the syscall, so the order is
+            # fence -> identity -> re-arm -> close, with nothing in between the last two.
+            fence_ok, fence_why, fence_kind = _state_fence()
+            if not fence_ok:
+                if fence_kind == "unreadable":
+                    continue                        # transient: costs an attempt, not the teardown
+                target_lost = f"state fence REFUSED: {fence_why}"
+                break
+            status, identity_why = _anchor_hosts_predecessor()
+            if status == "unavailable":
+                continue
+            if status == "mismatch":
+                target_lost = f"identity check failed: {identity_why}"
+                break
+            re_armed, re_arm_kind = _predecessor_re_armed()
+            if re_arm_kind == "unreadable":
+                continue                            # fail-closed, but retryable
+            if re_arm_kind == "re_armed":
                 phase_ok, phase_why = _phase("predecessor_re_armed", fenced=False)
                 out["outcome"] = "predecessor_re_armed"
                 out["reason"] = (
@@ -1943,13 +1972,8 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
                     + ("" if phase_ok else
                        f" WARNING: not persisted to teardown_phase ({phase_why})."))
                 return out
-            proc, refusal_why, refusal_kind = _destructive_call(
-                close_argv, "pane_close", note=f"attempt {attempt + 1}/{CLOSE_ATTEMPTS}")
-            if refusal_kind in ("mismatch", "state"):
-                target_lost = refusal_why           # proven: stop, and do NOT re-arm
-                break
-            if refusal_kind == "unavailable":
-                continue                            # transient: this attempt failed, keep trying
+            proc = _run(close_argv, "pane_close",
+                        note=f"attempt {attempt + 1}/{CLOSE_ATTEMPTS}")
             if proc is not None and getattr(proc, "returncode", 1) == 0:
                 closed = True
                 break

@@ -1602,16 +1602,37 @@ class TestNothingHappensBetweenTheBaselineAndTheClearSend:
     sat below the baseline and confirmed a clear herdr never executed. This pins the ORDERING
     structurally, because the timing itself is not observable from a test."""
 
-    def test_no_pane_get_occurs_between_the_last_probe_and_the_clear_text(self, tmp_path):
+    def test_nothing_is_read_between_the_baseline_and_the_clear_send(self, tmp_path):
+        """The property that matters is not adjacency of *some* probe — the buggy version also ended
+        with a `pane get` before the send. It is that the predecessor-transcript BASELINE is the last
+        thing that happens before the transport. So both the runner and the reader log into one
+        ordered event list, and the assertion is on that interleaving."""
         world = _world(tmp_path)
         state = _write_state(tmp_path, world)
-        out = _retire(state, world, tmp_path)
+        events: list[str] = []
+        real_open = open
+
+        def read_text(path):
+            if str(path).endswith(f"{PRED}.jsonl"):
+                events.append("read_pred_transcript")
+            with real_open(path, encoding="utf-8") as fh:
+                return fh.read()
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "get"]:
+                events.append("pane_get")
+            elif argv[:3] == ["herdr", "pane", "send-text"] \
+                    and argv[4].startswith("/goal clear"):
+                events.append("clear_text")
+            elif argv[0] == "git":
+                events.append("git")
+            return world(argv, timeout)
+
+        out = _retire(state, world, tmp_path, runner=runner, read_text=read_text)
         assert out["outcome"] == "retired", out
-        kinds = world.kinds()
-        i_clear = kinds.index("clear_text")
-        assert kinds[i_clear - 1] == "pane_get", kinds
-        # exactly one probe immediately before the send — not two, and nothing else between
-        assert "pane_get" not in kinds[i_clear - 1:i_clear][1:], kinds
+        i_clear = events.index("clear_text")
+        # the LAST event before the send must be the baseline read, with no herdr round-trip after it
+        assert events[i_clear - 1] == "read_pred_transcript", events[:i_clear + 1]
 
     def test_a_matching_row_appearing_before_the_send_cannot_confirm(self, tmp_path):
         """The residual is now baseline→syscall only. Prove the guard still refuses when the row
@@ -1667,10 +1688,17 @@ class TestAReArmedPredecessorIsNotClosed:
         world = _world(tmp_path)
         state = _write_state(tmp_path, world)
 
+        # The guard must appear during the PRE-CLOSE window, not before the check: appending it
+        # right after send-keys (the first version of this test) is caught by the check trivially
+        # and proves nothing about the race. Injecting it on the pre-close `pane get` is the real
+        # timing a reviewer reproduced.
+        seen = {"cleared": False}
+
         def runner(argv, timeout=180):
             result = world(argv, timeout)
-            # after the clear is confirmed, the predecessor is prompted and arms a NEW guard
             if argv[:3] == ["herdr", "pane", "send-keys"]:
+                seen["cleared"] = True
+            elif seen["cleared"] and argv[:3] == ["herdr", "pane", "get"]:
                 world._append_pred(_goal_row("a brand new guard it just armed", met=False))
             return result
 
@@ -1679,6 +1707,32 @@ class TestAReArmedPredecessorIsNotClosed:
         assert "pane_close" not in world.kinds(), world.kinds()
         assert "rearm_text" not in world.kinds(), world.kinds()
         assert _state_of(state)["handoff_pending"]["teardown_phase"] == "predecessor_re_armed"
+        assert out["ok"] is False
+
+
+    def test_an_unreadable_transcript_does_not_hide_a_re_arm(self, tmp_path):
+        """Step 11 pass-5: the check used to fail SAFE to "not re-armed", and a reviewer hid a real
+        re-arm behind one read error and got `retired` plus a `pane close`. Refusing costs a
+        recoverable stall; proceeding destroys a live guarded session."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        seen = {"cleared": False}
+        real_open = open
+
+        def read_text(path):
+            if seen["cleared"] and str(path).endswith(f"{PRED}.jsonl"):
+                raise OSError("transient read failure")
+            with real_open(path, encoding="utf-8") as fh:
+                return fh.read()
+
+        def runner(argv, timeout=180):
+            result = world(argv, timeout)
+            if argv[:3] == ["herdr", "pane", "send-keys"]:
+                seen["cleared"] = True
+            return result
+
+        out = _retire(state, world, tmp_path, runner=runner, read_text=read_text)
+        assert "pane_close" not in world.kinds(), world.kinds()
         assert out["ok"] is False
 
     def test_a_normally_cleared_predecessor_is_still_closed(self, tmp_path):

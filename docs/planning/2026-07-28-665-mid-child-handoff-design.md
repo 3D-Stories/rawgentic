@@ -98,8 +98,8 @@ its own pane id (herdr 0.7.5 exposes no pane environment — the same fact that 
 `_report_possible_orphan` report-only). So the predecessor, which DID observe both values, writes
 `successor: {pane, session}` under the state lock immediately after its own `pane get`, bound to this
 generation. `retire_predecessor` then asserts that its OWN `$CLAUDE_CODE_SESSION_ID` equals
-`successor.session`. That is stronger than the check it replaces: it is an identity binding, so a
-session that was never the intended successor cannot authorise a teardown at all.
+`successor.session`. That is stronger than the check it replaces: it is an identity binding — an INTERLOCK against mistakes, not an
+authentication boundary, because a caller controls its own child's environment (Step 11).
 
 `open_handoff` copies `disposition["position"]` and `disposition["kind"]` through when present.
 When absent the written shape is byte-identical to today's — `tests/hooks/test_driver_lib.py:611`
@@ -322,7 +322,7 @@ launch mode `fresh` carries no `--resume`, so its transcript contains only its o
 7. **Prove the target's identity before touching it.** `herdr pane get <anchor>` must return `agent_session.value` EXACTLY equal to `position.predecessor_session`. A pane id is a reusable handle and syntax validation cannot detect a stale or recycled one. The successor must also PASS `--anchor-pane`, and it must equal `position.predecessor_pane`: two independent sources must agree before anything destructive happens. Any mismatch, or a missing session value, refuses both destructive steps.
 8. **Re-check that the guard is still in force,** per §5's current-state rule: the LATEST `goal_status` row for the armed condition must still be `met:false`. If it is not, refuse — retiring the predecessor when the continuing session is already unguarded is the original defect.
 9. **Record the phase, then clear the guard, then CONFIRM it cleared.** Persist `teardown_phase: "clearing"` under the lock BEFORE sending anything (R4 — so a crash in the window below is discoverable rather than invisible). Then send `herdr pane send-text <anchor> "/goal clear"` and `herdr pane send-keys <anchor> Enter` — both return codes checked, failure of either aborts before `pane close` — and **poll the predecessor's transcript below a baseline taken IMMEDIATELY before the send for a `goal_status` row with `met:true`, `sentinel:true` AND the recorded condition** (Step 11 pass-3: an unbound row let a REPLACEMENT guard's own clear confirm ours, and a live pane was closed). A zero return code proves only that keystrokes were transported, not that the slash command was parsed or that the guard changed state; without the semantic confirmation a silently ignored `/goal clear` reaches exactly the close-before-clear outcome this design forbids with every check green. On timeout or malformed evidence: report `clear_unconfirmed` and **leave the pane open**.
-10. **Close the pane** — `herdr pane close <anchor>`, return code checked, bounded retries (2) — then clear `teardown_phase` under the lock.
+10. **Check for a RE-ARM, then close the pane.** Each attempt runs the state fence, the identity probe and then a re-arm check with nothing between it and the close: a newest UNMET row means the predecessor has armed a new guard since the clear, so it is live and guarded again and the outcome is `predecessor_re_armed` — neither close nor re-arm. Fails CLOSED on an unreadable transcript. Then close the pane — `herdr pane close <anchor>`, return code checked, bounded retries (2) — then clear `teardown_phase` under the lock.
 
 **The partial-success state is named and contained.** If the clear is confirmed but the close then
 fails, the predecessor may be alive and **no longer guarded** — strictly worse than either failure
@@ -337,7 +337,7 @@ also fails. `alive_and_unguarded` is the one state this design treats as an inci
 `started` is true (both probe-confirmed). An earlier revision claimed "any later session can complete
 the retirement" — that was false, and it is withdrawn rather than papered over. The recovery path for
 a successor that dies mid-teardown is a NEW handoff: `open_handoff` bumps the generation and
-supersedes the stale pending record. Until that happens the predecessor is alive and still guarded —
+supersedes the stale pending record. Until that happens the predecessor is alive and still guarded — with the one exception named below, a successor that died AFTER a confirmed clear —
 the safe state, and the same one AC6 requires of an aborted handoff. A fenced multi-claimant takeover
 would be the alternative; it is deliberately NOT built here, because nothing in Service A needs it
 and the safe state is already the default.
@@ -460,6 +460,7 @@ platform_apis:
 | `/goal clear` transported but never confirmed (`met:true` never appears) | `clear_unconfirmed`; pane left OPEN. **Guard state genuinely AMBIGUOUS** — the clear may have been parsed while its confirmation was unreadable or arrived after the poll budget, so the predecessor is either still guarded or alive-and-unguarded and this cannot distinguish them. `teardown_phase: "clear_unconfirmed"` is persisted so an operator can. An earlier revision of this table claimed "STILL guarded", which was wrong (Step 11) |
 | `pane close` fails after a CONFIRMED clear | bounded retries, then re-arm from `position.goal_condition` with confirmation; terminal state `alive_and_re_armed`, or `alive_and_unguarded` if the re-arm fails — the one state treated as an incident |
 | successor dies BEFORE the clear is sent | predecessor alive and guarded; recovery is a NEW handoff generation, not a foreign claim |
+| the predecessor ARMS A NEW GUARD after the confirmed clear | `predecessor_re_armed`; neither close nor re-arm is attempted, because it is a live guarded session again and this teardown was never authorised to touch the new guard (Step 11 pass-4/5) |
 | the anchor stops provably hosting the predecessor AFTER a confirmed clear | `target_changed_after_clear`; NEITHER close nor re-arm is attempted, because both would act on a pane that may now belong to someone else. The predecessor is alive-and-unguarded OR has exited on its own and this cannot distinguish them (Step 11 pass-3 — this state was producible and this table omitted it) |
 
 ## 10. Out of scope, explicitly
@@ -471,6 +472,6 @@ and `clear-prep` (user-level).
 Three items are out of scope **as deliberate decisions with reasons**, each filed as a follow-up
 rather than half-built:
 
-1. **A fenced recovery actor for the clear-to-close window** (§6). Needs a fencing token, a claimant-liveness test, and crash-injection coverage at four boundaries. The window is bounded and now discoverable; the failure is a stall, not lost work.
+1. **A fenced recovery actor for the clear-to-close window** (§6). Needs a fencing token, a claimant-liveness test, and crash-injection coverage at four boundaries. The window is bounded and discoverable in the normal case (a newer generation owning the record refuses the generation-scoped write, and the returned report then carries the incident instead); the failure is a stall, not lost work.
 2. **A fenced multi-claimant takeover** so a later session can finish another's retirement (§6). `handoff_claim` refuses foreign claimants by design; a new handoff generation is the sanctioned recovery.
 3. **Retrofitting the driver-state lock onto the epic-run skill's prose-driven status writers** (§3). Acceptable here because Service A has one writer at a time by construction; a second driver session on one campaign is already outside #569's model.
