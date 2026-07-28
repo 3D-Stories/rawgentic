@@ -4,7 +4,7 @@ Operational reference for the herdr terminal multiplexer as this workspace uses 
 
 herdr is load-bearing: `projects/rawgentic` and `projects/thewanderinginn` both route their WF2 **build seat** through it (`executorTerminalBackend: {"build": "herdr"}`), so a broken herdr install takes the build seat with it.
 
-**Scope of this page today (#610).** It covers the **Claude Code integration** — what installing it changes, how to prove the rest of the harness survived, and how to remove it. The binary pin itself lives in `hooks/herdr-pin.json` and its provenance in `docs/reviews/2026-07-27-609-herdr-supply-chain-vet.md`. Section 7 covers the launcher's herdr mode (#611). Broader workspace conventions — pane/workspace layout and run-driver conventions — arrive with #613, which extends this file.
+**Scope of this page today (#610).** It covers the **Claude Code integration** — what installing it changes, how to prove the rest of the harness survived, and how to remove it. The binary pin itself lives in `hooks/herdr-pin.json` and its provenance in `docs/reviews/2026-07-27-609-herdr-supply-chain-vet.md`. Section 7 covers the launcher's herdr mode (#611). Sections 9-12 cover the workspace conventions, the attach/detach/remote recipes, the measured rough edges, and a from-scratch walkthrough (#613).
 
 ## 1. What is installed on this host
 
@@ -406,3 +406,148 @@ Teardown is the successor's, and the reason is asymmetric risk: the predecessor 
 `tests/hooks/test_mid_child_handoff.py::TestNoParallelHandoffPath` is a **source-level drift guard**, and the claim is exactly that: it makes a second handoff path fail the suite when someone writes one in the obvious ways. It is not a proof of architectural impossibility — Python offers no such enclosure. It asserts that no `hooks/*.py` other than `launcher_lib.py` builds a herdr argv, imports or reaches the launcher's argv builders, or shells out to `herdr` through a command string; that `launcher_lib` holds exactly one `perform_handoff` and one `retire_predecessor`; that it sources the disposition, generation bump and claim/ack from `driver_lib` and defines none of them itself; and that `handoff_pending` has exactly one writer in `driver_lib`.
 
 Its own negative cases are tested — five synthetic modules exercising each bypass form, every one of which must be flagged — because a guard that has never been shown to bite is not a guard. It is also pinned for **precision**: `herdr` is a legitimate terminal-backend *name* in three real hooks, so the scanner keys on a herdr *command* and on argv whose first element is `herdr`, not on the bare word.
+
+## 9. Workspace, tab and pane conventions (#613)
+
+**What the ACs assumed and what is actually running are different, so here is the live shape first.**
+Read from `herdr workspace list` / `tab list` / `pane list` on this host, 2026-07-28:
+
+```
+workspace w1  label "rawgentic"   7 tabs, 8 panes, active_tab_id w1:t1
+  tab w1:t1   label "rawgentic"          1 pane   (number 1)
+  tab w1:t3   label "saystory"           1 pane   (number 3)
+  tab w1:tY   label "sysop"              1 pane   (number 30)
+  tab w1:t0   label "lumenquire"         1 pane   (number 32)
+  tab w1:tA   label "herdr-dashboard"    2 panes  (number 10)
+  tab w1:tN   label "model_bench"        1 pane   (number 21)
+  tab w1:t14  label "thewanderinginn"    1 pane   (number 36)
+```
+
+**The convention in force is ONE workspace for the whole fleet and ONE TAB PER PROJECT** — not one
+workspace per project, which is how #613's AC1 phrases it. Panes within a tab are the concurrent
+runs on that project (`w1:tA` holds two). The single workspace carries the label of whichever
+project is focused, which is why it reads `rawgentic` above and is not a naming rule.
+
+Recommendation, stated as a recommendation rather than smuggled in as fact: **keep one workspace.**
+A workspace-per-project layout would put the fleet behind a switch instead of a tab, and the one
+operation that matters during a run — glance at every project's `agent_status` at once — is exactly
+what `tab list` gives you inside a single workspace. If a second workspace ever appears, it should
+mean a different *machine* or a different *epic*, never a different project.
+
+**Per-run convention:** one pane per run, in that project's tab. A mid-child handoff (§8) splits a
+second pane in the same tab and closes the first, so the pane count is the number of live runs and
+a tab with two panes during a handoff is expected, not a leak.
+
+### 9.1 Tab ids are opaque handles — never compute one
+
+The trap, and it is visible in the table above: a tab's display `number` and its `tab_id` suffix are
+**unrelated**. `number 30` is `w1:tY`; `number 10` is `w1:tA`; `number 36` is `w1:t14`. The suffix is
+an opaque handle, not a decimal index, and the numbers are non-contiguous besides. Resolve a tab by
+`label` or by reading `tab_id` from `tab list`; never build `w1:t<number>`.
+
+Pane labels are **optional and sparse** — 3 of 8 panes carry one here (`lumenquire-s9`,
+`Herdr Dashboard`, `claude-twi-4`). Do not rely on a label existing; `pane_id` is the only field
+guaranteed present on every `PaneInfo` (that guarantee is what makes #611's fail-closed rule safe).
+
+## 10. Attach, detach, remote (#613)
+
+Every command below is from `herdr --help` and `herdr --default-config` on the pinned 0.7.5.
+
+**Local attach.** `herdr` launches or attaches to the persistent session — the same command for
+both, so it is safe to run when you are unsure whether a server is up. `herdr session attach <name>`
+attaches a named session. `herdr status` reports both sides and is the first thing to run when
+anything looks wrong:
+
+```
+client:  version 0.7.5  channel stable  protocol 17
+server:  status running  version 0.7.5  protocol 17  compatible yes
+         socket /home/rocky00717/.config/herdr/herdr.sock
+```
+
+`compatible: yes` is the field that matters — a client/server protocol mismatch is the failure that
+looks like a hang.
+
+**Detach** is a keybinding, not a subcommand: **`prefix+q`**. Related bindings from the shipped
+default config: `prefix+?` help, `prefix+s` settings, `prefix+shift+r` reload config, `prefix+o`
+open notification target. Detaching leaves every agent running — that is the point, and it is what
+makes an unattended run survive your ssh session dropping.
+
+**Remote over ssh.** `herdr --remote <ssh-target> [--session <name>]`, with
+`--remote-keybindings <local|server>` (**default `local`**, so your local prefix keeps working) and
+`--handoff` to opt into a live handoff on update or remote attach.
+
+The `[remote]` config knob is worth understanding before you touch it:
+
+- `manage_ssh_config = true` (default) — herdr runs remote ssh through a **generated** config that
+  includes your `~/.ssh/config` **first** and adds `ServerAliveInterval`/`ServerAliveCountMax` as
+  *fallbacks*, so keepalive values you set yourself still win. It also uses a private per-attach
+  OpenSSH **control socket** to reuse the first authenticated connection.
+- Setting it `false` runs plain ssh against your config unchanged. Read the wording carefully: it
+  **does not force keepalive or multiplexing off** — it only stops herdr adding its own. If you set
+  it false and your ssh config has no keepalive, an idle NAT will drop you.
+
+**Server lifecycle.** `herdr server reload-config` reloads config in the running server — this is the
+one to reach for, because it changes nothing about live panes. `herdr server stop` stops the server
+and **takes every pane with it**; §6 and #609's vet both record why that is not a casual command on
+this host, where the server routinely backs several working agents.
+
+## 11. Rough edges, measured rather than repeated (#613)
+
+**Idle CPU — real, but not what "10% constant" would suggest.** Server PID 8287, measured at
+320,331 s elapsed (~89 hours): **cumulative average 10.9% CPU, RSS 26.5 MB**. Three instantaneous
+samples two seconds apart while genuinely idle: **10.0%, 0.0%, 0.0%**. So the lifetime average is
+real and worth knowing for a long-lived host, but the server does not spin at 11% while idle — the
+average is dominated by the hours it spent rendering active agents. Budget for it on a shared box;
+do not treat it as a fault.
+
+**Key repeat — I could not confirm a knob exists, and say so rather than invent one.** #613's AC3
+lists key repeat as a known rough edge. Grepping the shipped `herdr --default-config` for
+`repeat|cpu|poll|interval|fps|tick` returns nothing relevant (only an unrelated comment about named
+punctuation and the ssh `ServerAliveInterval`). **Unverified:** whether 0.7.5 exposes any key-repeat
+tuning at all. What would settle it: upstream's keybinding documentation, or a live test holding a
+key in an attached client and observing whether repeats coalesce. Until then, treat key repeat as an
+outer-terminal setting rather than a herdr one.
+
+**Nested herdr is disabled by default.** `[experimental] allow_nested = false` — launching herdr
+from inside a herdr-managed pane is refused. This bites agents specifically: a Claude session running
+*in* a pane cannot start its own herdr, so anything an agent does cross-pane must go through the
+`pane`/`agent` subcommands against the existing server, which is exactly what §7 and §8 do.
+
+**Pane history is not preserved across a server restart.** `pane_history = false` in the shipped
+config. A full server restart loses recent pane screen content, so evidence you care about must be on
+disk before any restart — the reason §7.4 and §8.3 verify handoffs against files and never against
+scraped pane text.
+
+**Two version-surface traps already documented elsewhere, repeated here because they cost time:** the
+top-level `herdr wait` does not exist in 0.7.5 (#659) while `herdr agent wait` does (§7.7); and a
+freshly split pane is not immediately an available shell, so `agent start` must retry on
+`agent_pane_busy` (§7.8, #673).
+
+## 12. Drive a run from scratch (#613 AC4)
+
+The completeness test for this page. Every command is documented above or in §7-§8.
+
+1. **Check the ground.** `herdr status` — require `compatible: yes`. `herdr pane list` to see what is
+   already running; `herdr tab list` to find the project's tab.
+2. **Attach.** `herdr` (launches or attaches). Detach whenever you like with `prefix+q`; agents keep
+   running. From another machine: `herdr --remote <ssh-target>`.
+3. **Find or make the project's home.** One tab per project (§9). Its `tab_id` comes from
+   `tab list` — never built from the display number (§9.1).
+4. **Start the run** in a pane in that tab. For an agent pane the sequence is §7.1's: split from an
+   explicit anchor, `agent start` (retrying `agent_pane_busy`), `agent wait --until idle`, then paste
+   with `pane send-text` + `pane send-keys Enter`.
+5. **Bind the session to its project** — `/rawgentic:switch <project>` inside the new session, before
+   it reads anything under `projects/`. An unbound session's `Read` is denied by `wal-bind-guard`
+   with no reason text, which reads like a harness fault.
+6. **While it runs:** `herdr tab list` shows every project's `agent_status` in one glance;
+   `herdr pane list` narrows to panes. `agent_status: blocked` is the one that wants a human.
+7. **Out of context mid-task?** That is §8 — `mid-child-handoff` from the predecessor, then
+   `retire-predecessor` from the successor, never a hand-rolled pane split.
+8. **Finishing up.** Close a pane with `herdr pane close <pane>`. Do not `herdr server stop` to end
+   one run: it takes every pane on the host with it (§10).
+
+**What AC4 asks that I cannot self-certify:** whether a *second operator* can drive a run from this
+page alone. I wrote it, so I am the worst possible judge of whether it is sufficient for someone who
+has not. Every command in it has been executed against this host and the outputs above are real, so
+the claims are checkable — but the AC is only genuinely discharged the first time somebody else
+follows §12 end to end without asking a question. That is the one thing to report back.
