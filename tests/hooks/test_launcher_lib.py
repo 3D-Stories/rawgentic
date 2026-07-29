@@ -1641,3 +1641,148 @@ class TestParsePaneAgentStatus:
                                      '{"result": {"pane": {"agent_status": 3}}}'])
     def test_unreadable_input_is_None_never_a_guess(self, bad) -> None:
         assert ll.parse_pane_agent_status(bad) is None
+
+
+class TestInsertPrompt:
+    """#718 — the meter INSERTS A PROSE PROMPT at the act tier.
+
+    Two facts were measured live on 2026-07-29 and both are pinned here, because both are the
+    kind a later refactor would quietly undo:
+
+    * A BARE SLASH COMMAND is inert. Inserted into a session with an unmet `/goal`, `/tasklist`
+      sat queued through five goal-driven turns and was consumed only after the goal was
+      achieved. Prose inserted the same way was acted on in 17 seconds.
+    * An `Enter` sent immediately after the paste returns rc 0 and submits NOTHING. The text sat
+      in the input box past goal completion until a later Enter arrived. A 1.5 s delay between
+      the paste and the Enter does submit.
+    """
+
+    PROSE = ("Context is at 52% of the window. Please run the rawgentic pane-handoff skill now "
+             "to pass this work to a fresh pane.")
+
+    # ---- AC3: prose, never a bare slash command -------------------------------------------
+    @pytest.mark.parametrize("prose", [
+        PROSE,
+        "okay, please run /rawgentic:pane-handoff",          # prose CONTAINING a command is fine
+        "please run the pane-handoff skill now",
+    ])
+    def test_prose_is_accepted(self, prose) -> None:
+        ll.validate_inserted_prompt(prose)                   # must not raise
+
+    @pytest.mark.parametrize("bare", [
+        "/rawgentic:pane-handoff",
+        "/tasklist",
+        "  /rawgentic:pane-handoff  ",                       # leading whitespace is still bare
+        "/pane-handoff now please",                           # args do not make it prose
+    ])
+    def test_bare_slash_command_is_refused(self, bare) -> None:
+        """AC3. A bare slash command is not a slower prompt — it is an inert one."""
+        with pytest.raises(ll.LauncherError) as excinfo:
+            ll.validate_inserted_prompt(bare)
+        assert "slash command" in str(excinfo.value).lower()
+
+    @pytest.mark.parametrize("empty", ["", "   ", "\n\t "])
+    def test_empty_is_refused(self, empty) -> None:
+        with pytest.raises(ll.LauncherError):
+            ll.validate_inserted_prompt(empty)
+
+    # ---- the delivery sequence ------------------------------------------------------------
+    def test_paste_then_delay_then_enter_in_that_order(self) -> None:
+        slept: list[float] = []
+        runner = Runner()
+        ok, reason = ll.insert_prompt(pane="w1:pZZ", text=self.PROSE, runner=runner,
+                                      sleep=slept.append)
+        assert ok, reason
+        # TWO reads: one before typing, one after the delay and immediately before the Enter. The
+        # second exists because the delay is a window in which a permission dialog can appear.
+        assert runner.kinds() == ["herdr pane read", "herdr pane send-text",
+                                  "herdr pane read", "herdr pane send-keys"]
+        assert slept == [ll.INSERT_SUBMIT_DELAY_S]
+
+    def test_a_dialog_appearing_DURING_the_delay_stops_the_enter(self) -> None:
+        """The 1.5 s delay is a real window. An Enter fired into a dialog that opened inside it
+        accepts the dialog instead of submitting a turn (#718 Step-11 diff review, High)."""
+        reads: list[str] = []
+
+        def runner(argv, timeout=180):
+            kind = " ".join(argv[:3])
+            if kind == "herdr pane read":
+                reads.append(kind)
+                clean = len(reads) == 1        # first read clean, second shows a dialog
+                return FakeProc(0, "" if clean else "Do you want to proceed?")
+            return FakeProc(0, "")
+
+        ok, reason = ll.insert_prompt(pane="w1:pZZ", text=self.PROSE, runner=runner,
+                                      sleep=lambda _s: None)
+        assert ok is False
+        assert "refusing to submit" in reason
+        assert "UNSUBMITTED" in reason, "the caller must know the prose is sitting there"
+
+    def test_the_delay_is_between_the_paste_and_the_enter(self) -> None:
+        """Ordering is the whole fix: a delay BEFORE the paste would not help (#718 spike)."""
+        order: list[str] = []
+        runner = Runner()
+        original = runner.__call__
+
+        def recording(argv, timeout=180):
+            order.append(" ".join(argv[:3]))
+            return original(argv, timeout=timeout)
+
+        ll.insert_prompt(pane="w1:pZZ", text=self.PROSE, runner=recording,
+                         sleep=lambda _s: order.append("SLEPT"))
+        assert order.index("SLEPT") > order.index("herdr pane send-text")
+        assert order.index("SLEPT") < order.index("herdr pane send-keys")
+
+    def test_a_bare_slash_never_reaches_the_terminal(self) -> None:
+        runner = Runner()
+        with pytest.raises(ll.LauncherError):
+            ll.insert_prompt(pane="w1:pZZ", text="/rawgentic:pane-handoff", runner=runner,
+                             sleep=lambda _s: None)
+        assert runner.calls == [], "a refused prompt must not touch the pane at all"
+
+    # ---- safety: an Enter accepts whatever is on screen -----------------------------------
+    def test_refuses_when_a_permission_dialog_is_showing(self) -> None:
+        """An Enter would ACCEPT the dialog rather than submit our text."""
+        runner = Runner(responses={
+            "herdr pane read": "Do you want to allow this? \n No, and tell Claude what to do"})
+        ok, reason = ll.insert_prompt(pane="w1:pZZ", text=self.PROSE, runner=runner,
+                                      sleep=lambda _s: None)
+        assert ok is False
+        assert "permission" in reason.lower()
+        assert runner.kinds() == ["herdr pane read"], "nothing may be typed after the veto"
+
+    def test_unreadable_pane_refuses_rather_than_typing_blind(self) -> None:
+        runner = Runner(fail_on="herdr pane read")
+        ok, reason = ll.insert_prompt(pane="w1:pZZ", text=self.PROSE, runner=runner,
+                                      sleep=lambda _s: None)
+        assert ok is False
+        assert "read" in reason.lower()
+
+    @pytest.mark.parametrize("failing", ["herdr pane send-text", "herdr pane send-keys"])
+    def test_a_failed_herdr_call_is_reported_not_swallowed(self, failing) -> None:
+        runner = Runner(fail_on=failing)
+        ok, reason = ll.insert_prompt(pane="w1:pZZ", text=self.PROSE, runner=runner,
+                                      sleep=lambda _s: None)
+        assert ok is False and reason
+
+    def test_rc_zero_is_reported_as_delivery_not_proven_submission(self) -> None:
+        """#718 spike: rc 0 on send-keys is transport, not submission. Say so in the reason."""
+        ok, reason = ll.insert_prompt(pane="w1:pZZ", text=self.PROSE, runner=Runner(),
+                                      sleep=lambda _s: None)
+        assert ok is True
+        assert "submission" in reason.lower()
+
+    def test_pane_id_is_validated(self) -> None:
+        with pytest.raises(ll.LauncherError):
+            ll.insert_prompt(pane="not a pane", text=self.PROSE, runner=Runner(),
+                             sleep=lambda _s: None)
+
+    # ---- the CLI -------------------------------------------------------------------------
+    def test_cli_refuses_a_bare_slash_command(self) -> None:
+        proc = _cli("insert-prompt", "--pane", "w1:pZZ", "--text", "/rawgentic:pane-handoff")
+        assert proc.returncode != 0
+        assert "slash command" in (proc.stderr + proc.stdout).lower()
+
+    def test_cli_rejects_an_invalid_pane(self) -> None:
+        proc = _cli("insert-prompt", "--pane", "not a pane", "--text", "please hand off")
+        assert proc.returncode != 0

@@ -532,6 +532,108 @@ def build_teardown_argv(pane: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# #718 — inserting a PROSE prompt into a pane (the context meter's act tier)
+# ---------------------------------------------------------------------------
+
+# Measured live 2026-07-29 (docs/planning/2026-07-29-718-meter-inserts-prompt.md §5b). An `Enter`
+# sent immediately after the paste returns rc 0 and submits NOTHING: the text sat in the input box
+# through two further goal-driven turns and past goal completion, until a later Enter arrived. With
+# 1.5 s between the paste and the Enter — both still inside a Stop hook — it submits.
+#
+# The value is EVIDENCED, NOT TUNED: 1.5 s is the only delay measured. Shorter values are untested,
+# so lowering it needs its own measurement rather than an argument. The hypothesis that produced
+# this experiment ("Claude Code cannot read input while a hook runs, so no in-hook delay can work")
+# was REFUTED by round 2 — the round-1 failure was a race with the bracketed paste, not a barrier.
+INSERT_SUBMIT_DELAY_S = 1.5
+
+
+def validate_inserted_prompt(text) -> None:
+    """Refuse anything that is not PROSE. Raises `LauncherError`; returns None when acceptable.
+
+    THE finding this whole subcommand exists to encode, measured live on three panes and then
+    re-measured under a controlled goal loop (#718 §2): a **bare slash command is inert**.
+    Inserted into a session with an unmet `/goal`, `/tasklist` sat queued through five
+    goal-driven turns and was taken up only after the goal was achieved — whereas prose inserted
+    the same way was acted on in 17 seconds.
+
+    So the discriminator is the leading character, not a token count: the client treats a message
+    beginning with `/` as a command for its own input box rather than as a turn. Prose that merely
+    CONTAINS a slash command (`okay, please run /rawgentic:pane-handoff`) is the intended shape and
+    stays legal — that exact form is what was measured executing a skill in ~60s.
+
+    Fail-CLOSED, unlike most of this module's env handling: what it guards is a delivery that
+    silently achieves nothing, and a silent no-op is precisely the defect #718 was filed about.
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise LauncherError("refusing to insert an empty prompt")
+    if text.strip().startswith("/"):
+        raise LauncherError(
+            "refusing to insert a bare slash command — it is INERT inside a /goal loop (measured "
+            "#718: queued through five goal-driven turns, consumed only once the goal was met). "
+            "Insert PROSE that asks for the skill instead, e.g. "
+            "'please run the rawgentic pane-handoff skill now'")
+
+
+def insert_prompt(*, pane: str, text: str, runner=None,
+                  sleep=time.sleep) -> tuple[bool, str]:
+    """Paste PROSE into `pane` and submit it. Returns (delivered, reason).
+
+    The sequence is read → paste → delay → Enter, and every element of that order is load-bearing:
+
+    * The **read comes first** because an `Enter` accepts whatever is on screen. If a permission
+      dialog is up, typing then submitting would answer somebody's dialog rather than start a turn.
+      That check is fail-CLOSED (an unreadable pane refuses) because the harm is irreversible,
+      while the cost of refusing is one missed insertion the caller can retry.
+    * The **delay sits between the paste and the Enter** — see `INSERT_SUBMIT_DELAY_S`. A delay
+      before the paste would not help; that is why the ordering is asserted by a test.
+
+    Returns `delivered`, never `submitted`: rc 0 on `send-keys` proves the keystroke was
+    transported, not that a turn began (#718 §5b — the round-1 failure returned rc 0 twice and
+    submitted nothing). Nothing here scrapes the screen to claim otherwise, because the one
+    affordance available (`pane_shows_unsubmitted_paste`) requires a COLLAPSED paste marker that
+    short prose never produces, and its own contract says that marker appears on successful
+    submissions too. An honest "delivered" beats a verification that cannot discriminate.
+    """
+    validate_inserted_prompt(text)
+    send_text, send_keys = build_send_text_argv(pane=pane, text=text)
+    runner = _default_runner if runner is None else runner
+
+    def dialog_veto():
+        """None when it is safe to type/submit, else the reason it is not."""
+        read = runner(build_pane_read_argv(pane))
+        if getattr(read, "returncode", 1) != 0:
+            return "the pane read failed, so its state is unknown"
+        screen = read.stdout if isinstance(getattr(read, "stdout", None), str) else ""
+        for signature in _PERMISSION_DIALOG_SIGNATURES:
+            if signature in screen:
+                return f"a permission dialog is on screen ({signature!r}) — an Enter would accept it"
+        return None
+
+    blocked = dialog_veto()
+    if blocked:
+        return (False, f"refusing to type: {blocked}")
+
+    if getattr(runner(send_text), "returncode", 1) != 0:
+        return (False, "herdr pane send-text failed — nothing was pasted")
+    sleep(INSERT_SUBMIT_DELAY_S)
+
+    # CHECK AGAIN, immediately before the Enter (#718 Step-11 diff review, High). One pre-paste
+    # snapshot is not enough: the delay is a 1.5 s window in which a permission dialog can appear,
+    # and an Enter fired into it accepts the dialog instead of submitting a turn. Re-reading shrinks
+    # that window to the round trip. The prose stays pasted-but-unsubmitted, which `Stop`'s next
+    # firing can recover with a bare Enter rather than a re-paste (`build_send_enter_argv`).
+    blocked = dialog_veto()
+    if blocked:
+        return (False, f"refusing to submit: {blocked}. The prose is pasted but UNSUBMITTED")
+
+    if getattr(runner(send_keys), "returncode", 1) != 0:
+        return (False, "herdr pane send-keys failed — the prose is pasted but unsubmitted; a bare "
+                       "Enter is the recovery (see build_send_enter_argv)")
+    return (True, f"delivered: pasted, waited {INSERT_SUBMIT_DELAY_S}s, sent Enter. Submission is "
+                  "not independently verifiable from an exit code (#718 §5b)")
+
+
+# ---------------------------------------------------------------------------
 # mode selection — aligned with driver_lib.fresh_session_available
 # ---------------------------------------------------------------------------
 
@@ -3384,6 +3486,14 @@ def main(argv: list[str] | None = None) -> int:
     p_goal = sub.add_parser("goal-text")
     p_goal.add_argument("--condition", required=True)
 
+    # #718 — the context meter's act tier calls this. PROSE only; a bare slash command is refused
+    # because it is inert inside a /goal loop (see `validate_inserted_prompt`).
+    p_ins = sub.add_parser("insert-prompt",
+                           help="insert a PROSE prompt into a pane and submit it (#718)")
+    p_ins.add_argument("--pane", required=True,
+                       help="the target pane — the caller's own $HERDR_PANE_ID")
+    p_ins.add_argument("--text", required=True, help="PROSE; must not begin with '/'")
+
     args = parser.parse_args(argv)
     try:
         if args.cmd == "handoff":
@@ -3428,6 +3538,10 @@ def main(argv: list[str] | None = None) -> int:
             text, truncated = goal_text(args.condition)
             print(json.dumps({"text": text, "truncated": truncated}))
             return 0
+        if args.cmd == "insert-prompt":
+            delivered, reason = insert_prompt(pane=args.pane, text=args.text)
+            print(json.dumps({"delivered": delivered, "reason": reason}))
+            return 0 if delivered else 1
     except LauncherError as exc:
         print(f"launcher_lib: {exc}", file=sys.stderr)
         return 2

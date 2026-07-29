@@ -421,7 +421,8 @@ def _pct(cfg, env, cfg_key, env_key, default):
 # Every key the `contextMeter` block documents (docs/config-reference.md). Named here as ONE
 # constant because `validate_setup_block` uses it as an ALLOWLIST: a hand-copied list inside the
 # function would drift from the documented block the moment a sixth key is added.
-SETUP_BLOCK_KEYS = ("windowSize", "checkInPercent", "actPercent", "everyTurns", "everySeconds")
+SETUP_BLOCK_KEYS = ("windowSize", "checkInPercent", "actPercent", "everyTurns", "everySeconds",
+                    "insertPrompt")
 
 
 def validate_setup_block(block) -> list[str]:
@@ -494,6 +495,13 @@ def validate_setup_block(block) -> list[str]:
                           f"{block['windowSize']!r}")
         elif window <= 0:
             errors.append(f"windowSize={window} must be a positive number of tokens")
+
+    # #718 kill switch. STRICTLY a bool, because `insert_enabled` compares with `is True`: a
+    # truthy-looking `"yes"` or `1` would be staged by setup and then read as OFF by the hook,
+    # which is the "setup accepts a block the hook discards" defect #701 exists to prevent.
+    if "insertPrompt" in block and not isinstance(block["insertPrompt"], bool):
+        errors.append(f"insertPrompt must be true or false, got {block['insertPrompt']!r} — the "
+                      "hook accepts only a real boolean, so any other value reads as OFF")
 
     return errors
 
@@ -931,6 +939,128 @@ def read_meter_config(project_path):
     return block if isinstance(block, dict) else {}
 
 
+# ---------------------------------------------------------------------------
+# #718 — inserting a real PROMPT at the act tier
+# ---------------------------------------------------------------------------
+
+# The insert gets its OWN channel in the existing marker dimension (`midturn`, `stop`), NOT a share
+# of the emit's reservation. Sharing it would spend the session's single attempt on a transient
+# herdr failure and leave only the emit channel — the channel probe 12 showed a model may refuse as
+# possible prompt injection. With its own channel the insert can be released and retried at the next
+# Stop while the nag stays delivered exactly once.
+INSERT_CHANNEL = "stop-insert"
+
+# Whole-subprocess budget. `launcher_lib insert-prompt` sleeps INSERT_SUBMIT_DELAY_S (1.5 s, the
+# measured minimum that actually submits — #718 §5b) and makes three quick herdr calls, so 12 s is
+# margin rather than an expectation. It IS latency added to one `Stop`, once per session per window;
+# that is the stated price of a submit that lands instead of a paste nobody submits.
+INSERT_TIMEOUT_S = 12
+
+
+def meter_config_readable(project_path) -> bool:
+    """Did the project's own `.rawgentic.json` actually exist and parse?
+
+    `read_meter_config` fails OPEN and returns `{}` for BOTH a healthy config carrying no
+    `contextMeter` block and a missing, oversized or malformed file. That collapse is right for
+    thresholds — the documented defaults are the correct answer either way — and WRONG for the #718
+    kill switch (Step-11 diff review, High): a config that would not parse may well contain
+    `insertPrompt: false`, and reading that as "absent, therefore on" ignores the operator's switch
+    while claiming to be fail-closed.
+
+    `_load_json_capped` returns None for missing/unreadable/malformed and a dict for valid JSON, so
+    the distinction is available without a second read of the file's bytes.
+    """
+    if not project_path:
+        return False
+    return isinstance(_load_json_capped(os.path.join(project_path, ".rawgentic.json")), dict)
+
+
+def insert_enabled(cfg, project_path, config_readable=True) -> bool:
+    """The #718 kill switch, and the fail-CLOSED guard that makes it reachable.
+
+    Keyed on `project_path`, deliberately NOT on the block being non-empty: most projects carry no
+    `contextMeter` block at all (this repo included, verified 2026-07-29), so an empty-block test
+    would silently disable the feature everywhere it matters.
+
+    No resolved project → REFUSE. The switch lives in a project's `.rawgentic.json`, so outside a
+    project it cannot be reached — and default-on there would auto-type an authoritative imperative
+    into unrelated herdr sessions (#718 WF5 review, H2). A boundary that cannot evaluate its own
+    guard refuses; that is this repo's rule for exactly this shape.
+    """
+    if not project_path:
+        return False
+    if not config_readable:
+        return False
+    if isinstance(cfg, dict) and "insertPrompt" in cfg:
+        return cfg["insertPrompt"] is True
+    return True
+
+
+def insert_prose(used, window) -> str:
+    """The inserted text. PROSE that ASKS for the skill — never a bare slash command.
+
+    Measured #718: a bare `/pane-handoff` sat queued through five goal-driven turns and was taken
+    up only once the goal was met, while prose was acted on in 17 seconds. `launcher_lib`'s
+    `validate_inserted_prompt` refuses anything starting with `/`, so this string is checked again
+    on the way through rather than trusted.
+
+    It is imperative on purpose. As INJECTED hook text an imperative gets refused (probe 12); as
+    inserted USER input it is the authoritative channel, which is the entire point of #718.
+    """
+    pct = int(round(100.0 * used / window)) if window else 0
+    return (f"Context is at {pct}% of the window ({used:,} of {window:,} tokens). "
+            "Please run the rawgentic pane-handoff skill now to pass this work to a fresh pane. "
+            "Run it — do not ask first. If you are mid-task, finish the smallest safe unit, "
+            "then hand off.")
+
+
+def try_insert_prompt(*, home, session_id, window, used, cfg, project_path, env,
+                      runner=None) -> str:
+    """Best-effort prompt insertion. Returns a short outcome string, for tests and diagnostics.
+
+    FAIL-OPEN in every direction — it is called from a `Stop` hook and must never raise, block a
+    turn, or make the meter's own emit conditional on herdr being healthy. Every refusal is a quiet
+    return, because the emit has already delivered the same information by the old channel.
+    """
+    if not insert_enabled(cfg, project_path, meter_config_readable(project_path)):
+        return "skipped: disabled, unreadable config, or no resolved project"
+    if env.get("HERDR_ENV") != "1":
+        return "skipped: not inside herdr"
+    pane = env.get("HERDR_PANE_ID")
+    if not pane:
+        return "skipped: no HERDR_PANE_ID"
+    # RECORD BEFORE ACT, then RELEASE on failure — the same discipline the emit path uses at the
+    # reservation above, for the same reason: a held reservation after a failed delivery would
+    # silence this channel for the rest of the window.
+    if not reserve(home, session_id, window, "directive", INSERT_CHANNEL):
+        return "skipped: already inserted for this window"
+    argv = [sys.executable,
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "launcher_lib.py"),
+            "insert-prompt", "--pane", pane, "--text", insert_prose(used, window)]
+    try:
+        run = runner or _insert_runner
+        completed = run(argv, INSERT_TIMEOUT_S)
+        code = getattr(completed, "returncode", 1)
+    except Exception as exc:                      # pylint: disable=broad-except
+        release(home, session_id, window, "directive", INSERT_CHANNEL)
+        return f"failed: {type(exc).__name__}"
+    if code != 0:
+        release(home, session_id, window, "directive", INSERT_CHANNEL)
+        return f"failed: launcher exit {code}"
+    return "inserted"
+
+
+def _insert_runner(argv, timeout):
+    """The one place this module shells out. Isolated so tests never need herdr.
+
+    The module docstring's older claim that it deliberately uses no subprocess is narrowed by #718,
+    not forgotten: one call, on the `Stop` path, at the directive tier, once per session per window.
+    """
+    import subprocess                            # pylint: disable=import-outside-toplevel
+    return subprocess.run(argv, capture_output=True, text=True, check=False,
+                          shell=False, timeout=timeout)
+
+
 def read_pointer(workspace_root, project, session_id):
     """The step-state pointer, but ONLY if it belongs to THIS session.
 
@@ -1327,6 +1457,27 @@ def cmd_hook(argv) -> int:
     except Exception:
         release(home, session_id, window, tier, channel)
         return 0
+
+    # #718 — INSERT A PROMPT, in ADDITION to the emit above and only after it succeeded. Injected
+    # hook text is DATA the model may decline (probe 12: it named the directive as possible prompt
+    # injection and refused its imperative while faithfully reporting it); an inserted prompt
+    # arrives as USER input, the one channel treated as authoritative. Additive on purpose: if the
+    # insert fails, the text has still been delivered the old way.
+    #
+    # `Stop` only. Never mid-turn, and never ESC — at `Stop` the turn has ended and nothing is in
+    # flight, whereas an ESC mid-turn can kill a running suite or a half-finished commit.
+    if event == "Stop" and tier == "directive":
+        outcome = try_insert_prompt(home=home, session_id=session_id, window=window, used=used,
+                                    cfg=cfg, project_path=project_path, env=env)
+        # NEVER SILENT about not having acted (Step-11 diff review, Medium). This module's contract
+        # is fail-open *but* visible, and discarding the outcome made "disabled", "herdr wedged" and
+        # "inserted" indistinguishable — leaving an operator unable to tell why only the refusable
+        # text channel fired. `inserted` stays quiet: that one is self-evidencing, because the
+        # prompt itself shows up in the session.
+        if not outcome.startswith("inserted"):
+            _warn(f"context_meter: prompt insertion did not happen — {outcome}. The directive was "
+                  "still delivered as injected text, which a model may decline to act on.")
+
     save_state(home, session_id, state)
     return 0
 

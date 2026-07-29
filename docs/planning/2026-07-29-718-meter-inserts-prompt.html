@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#718 — the meter inserts a prompt at the act tier</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-29 12:41 MDT</div>
+<h1>#718 — the meter inserts a prompt at the act tier</h1>
+
+</header>
+<main>
+<h1>#718 — the meter INSERTS A PROMPT at the act tier</h1>
+<p>Design doc. Every load-bearing claim below is marked <strong>confirmed</strong> (with the command, file:line or artifact that proves it) or <strong>inferred</strong> (with what would confirm it).</p>
+<h2>1. Verdict first</h2>
+<p><strong>Prompt insertion works. Build it.</strong> AC6 was the blocking question — whether a queued message drains between <code>/goal</code> turns at all, or only when control returns to the human — and it is now answered from durable artifacts rather than scraped terminal text:</p>
+<ul>
+<li>**Prose inserted into a session with an UNMET <code>/goal</code> is acted on at the next goal-driven turn</li>
+</ul>
+<p>  boundary, in 17 seconds, with no human input.** Confirmed, §2 Probe A.</p>
+<ul>
+<li><strong>A bare slash command inserted the same way is NOT consumed.</strong> It survived five goal-driven</li>
+</ul>
+<p>  turns and was taken up only after the goal was achieved. Confirmed, §2 Probe B.</p>
+<p>So the design proceeds unchanged in shape, and AC3&#x27;s &quot;prose, never a bare slash command&quot; is <strong>load-bearing rather than stylistic</strong> — the wrong form of the same message is inert for exactly as long as the loop it exists to interrupt keeps running.</p>
+<p>One correction to the record: the predecessor session&#x27;s third pane observation was non-discriminating and the owner subsequently doubted the whole prose-versus-slash finding. That doubt is now resolved in favour of the original theory, on evidence that discriminates.</p>
+<p>The WF5 review then promoted two unmeasured integration facts to blockers, and <strong>a second spike answered both (§5b) — catching a bug that would otherwise have shipped green.</strong> An <code>Enter</code> sent from inside the hook immediately after the paste returns <code>rc 0</code> and <strong>submits nothing</strong>: the text sat in the input box through two further goal turns and past goal completion. A 1.5-second delay between the paste and the <code>Enter</code>, still inside the hook, does submit. So the design gains a delay constant and a real submission check instead of trusting an exit code.</p>
+<h2>2. AC6 — the measurement</h2>
+<p>Measured 2026-07-29, herdr 0.7.5 (<code>herdr --version</code>), probe pane <code>w1:pDZ</code> split from this session&#x27;s own <code>w1:pDW</code> and closed afterwards. Probe session: Opus 5, xhigh, <code>--permission-mode acceptEdits</code>, cwd a throwaway scratch directory outside the repo.</p>
+<p>Insertion route: <code>herdr pane send-text &lt;pane&gt; &lt;text&gt;</code> then a <strong>separate</strong> <code>herdr pane send-keys &lt;pane&gt; Enter</code> — the same pair <code>build_send_text_argv</code> already builds (<code>hooks/launcher_lib.py:425</code>).</p>
+<p>Probe task: create one <code>tick-&lt;n&gt;.md</code> file per turn, Write tool only. A real <code>/goal</code> was armed whose condition was &quot;done when <code>tick-N.md</code> exists&quot;, so every turn after the first was produced by the goal guard re-prompting at <code>Stop</code>. Control never returned to a human. <strong>No ESC was ever sent.</strong></p>
+<h3>Probe A — prose, goal UNMET, loop running → DRAINED AND ACTED ON (confirmed)</h3>
+<p>Goal #1 required <code>tick-1.md</code> … <code>tick-8.md</code>.</p>
+<table>
+<thead><tr><th>Time</th><th>Event</th></tr></thead>
+<tbody>
+<tr><td>10:42:41</td><td>inserted prose: *&quot;okay, please also create a file named prose-marker.md containing just the word BANANA, then carry on with the tick files.&quot;* Newest tick at insert: <code>tick-6.md</code></td></tr>
+<tr><td>10:42:46</td><td><code>tick-7.md</code> written — the goal loop advanced AFTER the insert</td></tr>
+<tr><td>10:42:58</td><td><code>prose-marker.md</code> written, content <code>BANANA</code>, <strong>while <code>tick-8.md</code> did not yet exist</strong></td></tr>
+</tbody>
+</table>
+<p>Evidence: file mtimes and contents, <code>ls -la --time-style=+%H:%M:%S</code>. The goal was unmet at the moment the prose was acted on, so this is not &quot;the loop ended and then it drained&quot;.</p>
+<h3>Probe B — bare slash command, goal UNMET, loop running → NOT DRAINED (confirmed)</h3>
+<p>Goal #2 required <code>tick-16.md</code>.</p>
+<table>
+<thead><tr><th>Time</th><th>Event</th></tr></thead>
+<tbody>
+<tr><td>17:44:48</td><td>inserted bare <code>/tasklist</code>, nothing else. Tick count: 11</td></tr>
+<tr><td>~17:45:0x</td><td>tick count 13 — <strong>two goal-driven turns later, still queued</strong>: transcript showed <code>❯ /tasklist</code> unconsumed and the footer read <code>Press up to edit queued messages</code></td></tr>
+<tr><td>—</td><td>the loop continued to <code>tick-16.md</code>, five turns after the insert</td></tr>
+<tr><td>after <code>✔ Goal achieved (1m · 8 turns · 4.4k tokens)</code></td><td>only then was it consumed</td></tr>
+</tbody>
+</table>
+<h3>Probe C — bare slash at a MET goal → NON-DISCRIMINATING (recorded, not used)</h3>
+<p>A bare <code>/tasklist</code> inserted at 17:43:24 did execute — but <code>tick-8.md</code> landed at that same moment, so goal #1 was already met and the loop was ending. This <strong>cannot</strong> distinguish &quot;drains mid-loop&quot; from &quot;drained because the loop ended&quot;, so it is not evidence either way. Recorded because the predecessor&#x27;s retracted mistake had precisely this shape, and because a reader comparing Probe B and Probe C without this note would think they conflict.</p>
+<h3>Probe D — prose asking for a skill → acted on, but not mid-loop</h3>
+<p>Prose inserted 17:45:42 asking the session to run the tasklist skill and write <code>skill-marker.md</code> containing <code>CHERRY</code>: the file was written with that content. But <code>tick-16.md</code> already existed at insert time, so the goal was met.</p>
+<p><strong>Supports</strong> prose → action. <strong>Does not establish</strong> skill invocation by prose *inside* an unmet loop. That remains <strong>inferred</strong>, resting on the #718 lumenquire measurement (prose <code>okay, please run /tasklist</code> → <code>Skill(tasklist) / Successfully loaded skill</code> in ~60s, a different session on a different day). What would confirm it: a probe that inserts skill-asking prose while a goal is provably unmet, with the skill&#x27;s own side effect as the artifact.</p>
+<h3>Corroborating, weaker</h3>
+<p>Five prose messages the owner typed into this session&#x27;s own working pane while a <code>/goal</code> was armed were each delivered mid-turn, surfaced alongside tool results. Consistent with Probe A, but weaker evidence: human keystrokes rather than the <code>send-text</code> route, and the delivery boundary was a tool result rather than a turn end.</p>
+<h2>3. Why insertion at all — what is already established</h2>
+<ul>
+<li><strong>The meter hook executes nothing today.</strong> Its entire output is <code>print(payload_out)</code> at</li>
+</ul>
+<p>  <code>hooks/context_meter.py:1325</code>, a JSON envelope containing English. Confirmed by reading.</p>
+<ul>
+<li><strong>Injected hook text is DATA, not instruction.</strong> #713 probe 12: a model named the injected</li>
+</ul>
+<p>  directive as possible prompt injection and refused its imperative while faithfully reporting it.   An inserted prompt arrives as *user input*, which is the one channel the model treats as   authoritative. Confirmed (mempalace drawer <code>2026-07-29-713-probes</code>).</p>
+<ul>
+<li><strong>The launcher has no content generator.</strong> <code>build_fallback_launch_argv</code> (<code>:449</code>) and</li>
+</ul>
+<p>  <code>goal_text</code> (<code>:388</code>) both take content as input. A hook cannot author &quot;here is what remains&quot;.   Confirmed by reading. This is why only the *initiation* becomes deterministic — the issue&#x27;s Out   of Scope, and not negotiable.</p>
+<h2>4. The build</h2>
+<h3>4.1 AC1 — <code>launcher_lib.py insert-prompt</code></h3>
+<p><code>launcher_lib.py</code> is the only home for terminal primitives (<code>skills/pane-handoff/SKILL.md</code>, &quot;The one rule that must not drift&quot;), so the subcommand goes there rather than in the meter.</p>
+<pre><code>python3 hooks/launcher_lib.py insert-prompt --pane &lt;pane_id&gt; --text &lt;prose&gt;</code></pre>
+<ul>
+<li>A pure <code>validate_inserted_prompt(text)</code> that raises <code>LauncherError</code> when the text is empty or —</li>
+</ul>
+<p>  <strong>AC3</strong> — when the stripped text starts with <code>/</code>.</p>
+<ul>
+<li>Reuses <code>build_send_text_argv(pane=…, text=…)</code> (<code>:425</code>) for the argv pair, so the proven</li>
+</ul>
+<p>  send-text-then-separate-Enter route is not re-implemented.</p>
+<ul>
+<li>rc 0 on success; non-zero on a herdr failure, so the caller decides what a failure means.</li>
+</ul>
+<p><strong>Why &quot;starts with <code>/</code>&quot; is the right discriminator, not a token count:</strong> the failure mode measured in Probe B is a message the *client* treats as a command rather than a turn, and that is decided by the leading character. Prose that merely *contains* a slash command (<code>okay, please run /rawgentic:pane-handoff</code>) is the intended shape and must stay legal. Both directions get a test.</p>
+<h3>4.2 AC2 + AC4 — the meter call site</h3>
+<p>In <code>cmd_hook</code>, immediately after the emit at <code>:1325-1326</code> succeeds, and only when <strong>all</strong> hold:</p>
+<p>1. <code>event == &quot;Stop&quot;</code> — AC4. The directive-only gate at <code>:1256</code> already guarantees the tier there. 2. <code>tier == &quot;directive&quot;</code> — the act tier only. 3. The emit&#x27;s reservation at <code>:1311</code> was won — this is the AC2 marker gate,    <code>~/.rawgentic/context-meter/&lt;session&gt;.&lt;window&gt;.directive.&lt;channel&gt;.emitted</code>. The insert then    takes its <strong>own</strong> reservation on the <code>stop-insert</code> channel (§4.3) so a failed insert can be    retried at the next <code>Stop</code> without re-emitting the nag. 4. <code>HERDR_ENV == &quot;1&quot;</code> and <code>HERDR_PANE_ID</code> is present. 5. A project config was actually resolved, and its kill switch is not off (§4.3, fail-closed).</p>
+<p><strong>Fire at <code>Stop</code>, never mid-turn, and never ESC.</strong> At <code>Stop</code> the turn has ended and nothing is in flight; an ESC mid-turn can kill a running suite or a half-finished commit. The owner floated ESC and accepted this reasoning.</p>
+<p><strong>Ordering: insert AFTER the emit, not instead of it.</strong> The emit is cheap and already proven; if the insert fails, the text has still been delivered by the old channel. Deliberately additive.</p>
+<p><strong>Subprocess, and why that is a change of stance:</strong> the module&#x27;s docstring notes that its only mention of <code>subprocess</code> is a comment explaining why it does not use one. That stance is being narrowed on purpose, not forgotten: one bounded call, on the <code>Stop</code> path only, at the directive tier only, once per session per window, with every exception swallowed.</p>
+<h3>4.3 AC5 — once only, fail-open, kill switch</h3>
+<p><strong>REVISED after the WF5 review — findings H1, H2, M3 and M6 all landed here. See §7.</strong></p>
+<ul>
+<li><strong>Once only, on its OWN channel.</strong> The insert reserves</li>
+</ul>
+<p>  <code>marker_path(home, session_id, window, &quot;directive&quot;, &quot;stop-insert&quot;)</code> — a third value in the   existing channel dimension (<code>midturn</code>, <code>stop</code>), not a new kind of store, so #687&#x27;s   &quot;second source of truth&quot; warning does not apply. <strong>It is reserved immediately before the   insert and RELEASED if the insert fails</strong>, exactly as the emit path already does at <code>:1328</code>.   Sharing the emit&#x27;s <code>stop</code> reservation (the first draft) would have burned the single attempt   on a transient herdr hiccup and left only the emit channel — the channel #713 proved a model   may refuse. <strong>[H1]</strong>   The guarantee is therefore once per <code>(session, window, directive, stop-insert)</code> — stated with   all four keys because the marker&#x27;s identity includes the channel, so &quot;once per session per   window&quot; was simply the wrong claim. <strong>[M6]</strong></p>
+<ul>
+<li><strong>Fail-open, every branch:</strong> <code>HERDR_ENV</code> unset → skip. No pane id → skip. Subprocess raises,</li>
+</ul>
+<p>  times out, or exits non-zero → release the reservation and skip. <code>__main__</code> already exits 0 on   any exception (<code>:1403-1407</code>). A meter that cannot type must never block a turn.</p>
+<ul>
+<li><strong>Bounded means a number.</strong> <code>INSERT_TIMEOUT_S = 5</code>, per <code>subprocess.run(..., timeout=...)</code> call,</li>
+</ul>
+<p>  and the child is killed on timeout rather than left running. Two herdr CLI calls at ~50 ms each   measured in §2, so 5 s is ~100× headroom while still bounding the worst case a <code>Stop</code> hook can   add to a turn. <strong>[M3]</strong></p>
+<ul>
+<li><strong>Kill switch:</strong> <code>contextMeter.insertPrompt: false</code> in the project&#x27;s <code>.rawgentic.json</code>, default</li>
+</ul>
+<p>  <strong>true</strong>. Read through <code>read_meter_config</code> (<code>:916</code>), the sanctioned own-block read. Because   <code>validate_setup_block</code> <strong>refuses unknown keys</strong> (<code>:455-459</code>), the key must also be added to   <code>SETUP_BLOCK_KEYS</code> (<code>:424</code>) and documented in <code>docs/config-reference.md</code> — otherwise   <code>/rawgentic:setup</code> would reject a valid block.</p>
+<ul>
+<li><strong>Insertion REQUIRES a resolved project config — fail-closed.</strong> If <code>read_meter_config</code> returned</li>
+</ul>
+<p>  no block because no project was resolved, <strong>do not insert.</strong> The kill switch is project-scoped,   so default-on outside a project would be a switch the operator cannot reach, auto-typing an   authoritative imperative into unrelated herdr sessions. This inverts the first draft, which   called that &quot;only asking&quot; while §4.4 deliberately relies on the imperative being obeyed — the   two claims could not both be true. Fail-closed here matches the house rule: a boundary that   cannot evaluate its own guard refuses. <strong>[H2]</strong></p>
+<h3>4.4 What the inserted prose says</h3>
+<p>Prose, naming the skill, carrying the reason and the room left, and explicitly not asking for permission — because as *user* input an imperative is honoured rather than refused:</p>
+<blockquote>Context is at 52% of the window (520,000 of 1,000,000 tokens). Please run the rawgentic</blockquote>
+<blockquote>pane-handoff skill now to pass this work to a fresh pane. Run it — do not ask first. If you are</blockquote>
+<blockquote>mid-task, finish the smallest safe unit, then hand off.</blockquote>
+<p>It must never begin with <code>/</code>, which §4.1&#x27;s validator enforces on the way through.</p>
+<h2>5. Risk</h2>
+<p>Auto-typing into the owner&#x27;s terminal. Bounded by: the AC2 marker gate, a second reservation on the <code>stop-insert</code> channel, the directive tier only, <code>Stop</code> only, <code>HERDR_ENV</code> required, a resolved project config required, and the kill switch. The text is inserted into the session&#x27;s <strong>own</strong> pane, so no other pane is touched.</p>
+<p>The first draft accepted a residual risk here — insertion default-on in sessions outside any rawgentic project — and argued it was tolerable because the prose &quot;only asks&quot;. The review rejected that, correctly: §4.4 depends on the imperative being *obeyed*, so &quot;only asks&quot; and &quot;will be acted on&quot; cannot both be load-bearing. That path is now fail-closed (§4.3), and the residual is gone rather than accepted.</p>
+<h2>5b. The M4/M5 spike — and the design-breaking bug it caught</h2>
+<p>Run 2026-07-29 after the WF5 review, in a scratch pane (<code>w1:pD0</code>) whose own <code>.claude/settings.json</code> registered a throwaway <code>Stop</code> hook. The hook fired only when <code>stop_hook_active</code> was true — the production condition — and recorded what it saw to a JSON file. The owner&#x27;s <code>~/.claude/settings.json</code> was never touched. Pane closed afterwards.</p>
+<h3>M5 — the registered hook CAN type, but an immediate Enter DOES NOT SUBMIT</h3>
+<table>
+<thead><tr><th>Question</th><th>Answer</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td>M5a — does the hook inherit <code>HERDR_ENV</code> / <code>HERDR_PANE_ID</code>?</td><td><strong>Yes</strong></td><td><code>spike-fired.json</code>: <code>HERDR_ENV=1</code>, <code>HERDR_PANE_ID=w1:pD0</code>, both rounds</td></tr>
+<tr><td>M5b — may it spawn a subprocess?</td><td><strong>Yes</strong></td><td><code>send_text_rc=0</code>, <code>send_keys_rc=0</code>, empty stderr, both rounds</td></tr>
+<tr><td>M5c — can it submit a prompt into its own pane?</td><td><strong>Not with an immediate Enter. Yes with a delay.</strong></td><td>below</td></tr>
+</tbody>
+</table>
+<p><strong>Round 1 — <code>send-text</code> then Enter back to back, both inside the hook (fired 18:00:14).</strong> Both calls returned 0. <strong>The text sat in the input box, unsubmitted</strong>, through two further goal-driven turns (<code>tick-7</code> 11:00:39, <code>tick-8</code> 11:00:45) and past <code>✔ Goal achieved</code>. An EXTERNAL bare Enter at 18:01:39 submitted it, and the turn then ran normally (<code>hook-inserted-marker.md</code> = <code>MANGO</code>, task list up).</p>
+<p><strong>This is the bug that would have shipped.</strong> <code>rc 0</code> from <code>send-keys</code> proves the keystroke was delivered, <strong>not that anything was submitted</strong> — the same gap <code>launcher_lib.py:673</code> already warns about for <code>send-text</code>. A meter that pastes text nobody submits has achieved nothing, and every gate in §4.3 would have reported success.</p>
+<p><strong>Round 2 — <code>time.sleep(1.5)</code> between the paste and the Enter, still inside the hook (fired 18:03:15).</strong> <strong>Submitted.</strong> The input box emptied, the prose became a user turn, and the goal loop continued (<code>tick-12</code> at 11:03:20).</p>
+<p>So the hypothesis that produced round 2 — *&quot;Claude Code does not read input while its hooks execute, therefore any in-hook delay also fails&quot;* — is <strong>REFUTED</strong>. Round 1 was a race between the bracketed paste and the keystroke, not a hook-execution barrier.</p>
+<p><strong>Honest limit:</strong> 1.5 s is the only delay value measured. Smaller values are untested, so the constant is not tuned — it is the one number with evidence behind it.</p>
+<h3>M4 — prose asking for a SKILL is acted on inside an unmet loop</h3>
+<p>Round 2&#x27;s prose asked for the tasklist skill *and* a file. At 12 of 16 ticks — goal provably unmet — the session consumed it and acted: *&quot;The task list was up but stale, so I refreshed it instead of making&quot;* a new one, in that turn.</p>
+<p><strong>Evidence-quality caveat, stated because it is my own fault:</strong> round 2&#x27;s durable file artifact is void. I deleted <code>hook-inserted-marker.md</code> when clearing for round 2, but the session still remembered writing it and correctly declined to redo it — *&quot;MANGO — I wrote it when you asked the first time. Nothing to redo&quot;*. So M4&#x27;s mid-loop evidence is transcript-grade (input box emptied → prose became a turn → task list refreshed in that turn), while the durable prose → skill + file artifact comes from round 1, which was not mid-loop. Both halves hold; the single combined durable artifact does not exist.</p>
+<h3>What this changes in the build</h3>
+<p>1. <strong><code>insert-prompt</code> must delay between the paste and the Enter.</strong>    <code>INSERT_SUBMIT_DELAY_S = 1.5</code>, inside the subcommand, not left to the caller. 2. <strong>Never claim success from <code>rc 0</code> — and do NOT pretend to verify submission either.</strong>    An earlier revision of this section proposed reading the pane afterwards and requiring the    paste affordance to be GONE. <strong>That was wrong on two counts</strong>, both visible in    <code>pane_shows_unsubmitted_paste</code>&#x27;s own contract (<code>:502-526</code>): it requires a <strong>collapsed</strong> paste    marker that a short single-line prose message never produces, and its docstring records that    the same marker appears on *successful* submissions. A check that cannot discriminate is worse    than none, because it would report confidently either way.    What ships instead: the pane read happens <strong>before</strong> typing, and only to veto — if a permission    dialog is on screen, an <code>Enter</code> would accept somebody&#x27;s dialog rather than start a turn, so it    refuses (fail-closed; <code>_PERMISSION_DIALOG_SIGNATURES</code> reused). The return value is named    <code>delivered</code>, never <code>submitted</code>, and its reason string says so. 3. <strong>Revise the §4.3 latency budget.</strong> Worst case is now 1.5 s of delay plus two 5 s timeouts plus    one pane read — about 11.5 s added to a single <code>Stop</code>, once per session per window. Stated    rather than buried: this is the price of a submit that actually lands.</p>
+<h2>6. What was NOT checked — and both former blockers are now ANSWERED</h2>
+<p>The review promoted two of these from footnotes to gates, and it was right to. <strong>Both were then measured (§5b) and both are answered</strong> — and the spike caught a bug that would otherwise have shipped, which is the whole argument for having run it.</p>
+<p>1. <strong>[M4] — RESOLVED.</strong> Skill-asking prose IS acted on inside an unmet goal loop (§5b). The    specific worry — that skill invocation defers while a file write does not — found no support;    round 1&#x27;s mid-loop failure was the unsubmitted Enter, not the content. Residual: no single    durable artifact covers &quot;skill + mid-loop&quot; together (§5b caveat). 2. <strong>[M5] — RESOLVED, with a design change.</strong> The hook inherits the herdr env, may subprocess, and    can submit — <strong>but only with a delay between the paste and the Enter.</strong> An immediate Enter    returns <code>rc 0</code> and submits nothing. See §5b. 3. Whether a delay SHORTER than 1.5 s also submits. Untested; the constant is evidenced, not tuned. 4. Whether the inserted prose survives an auto-compaction landing between the insert and the next    turn. Not probed. 4. The 8-consecutive-continuation cap was not driven to its limit with the meter registered    (carried over from #713). 5. Neither #713 failure has been reproduced end-to-end after its fix; that needs a long real run.</p>
+<h2>7. WF5 review dispositions</h2>
+<p><code>/rawgentic:adversarial-review … design</code>, gpt backend (Codex), 2026-07-29. Report at <code>docs/reviews/2026-07-29-718-meter-inserts-prompt-md-2026-07-29.md</code> — <strong>gitignored</strong>, so the dispositions live here. <strong>Six findings, all six CONFIRMED against the code, none refuted.</strong></p>
+<table>
+<thead><tr><th>#</th><th>Sev</th><th>Finding</th><th>Disposition</th></tr></thead>
+<tbody>
+<tr><td>H1</td><td>High</td><td>Reservation consumed before insertion while every insertion failure is silently converted to success — one transient failure exhausts the session&#x27;s only attempt, leaving the emit channel a model may refuse</td><td><strong>ACCEPTED, design changed.</strong> Own <code>stop-insert</code> channel, reserved immediately before the insert, released on failure (§4.3)</td></tr>
+<tr><td>H2</td><td>High</td><td>The project-scoped kill switch is unreachable exactly where insertion defaults on (no project) — auto-typing an authoritative imperative into unrelated herdr sessions; &quot;only asks&quot; contradicts §4.4</td><td><strong>ACCEPTED, design changed.</strong> Insertion now requires a resolved project config, fail-closed (§4.3, §5). The reviewer caught a contradiction between two of my own sections</td></tr>
+<tr><td>M3</td><td>Medium</td><td>&quot;Bounded&quot; specified no timeout, termination behaviour or worst-case <code>Stop</code> latency</td><td><strong>ACCEPTED, design changed.</strong> <code>INSERT_TIMEOUT_S = 5</code> per call, child killed on timeout (§4.3)</td></tr>
+<tr><td>M4</td><td>Medium</td><td>The production message depends on invoking a skill under an unmet goal; only file-writing was demonstrated in that state</td><td><strong>ACCEPTED as BLOCKING.</strong> Promoted to §6.1; a probe is owed before the call site is written</td></tr>
+<tr><td>M5</td><td>Medium</td><td>The probe proves manual herdr commands work, not that the registered <code>Stop</code> hook may spawn a subprocess, receives the env, resolves its pane, or can type while still executing</td><td><strong>ACCEPTED as BLOCKING.</strong> Promoted to §6.2; this is the central integration and it is currently inferred</td></tr>
+<tr><td>M6</td><td>Medium</td><td>&quot;Once per session per window&quot; is not implied by a marker whose identity also includes <code>&lt;channel&gt;</code></td><td><strong>ACCEPTED, claim corrected.</strong> Now stated as once per <code>(session, window, directive, stop-insert)</code> (§4.3)</td></tr>
+</tbody>
+</table>
+<p>No finding was rejected, and none was applied piecemeal — H1/H2/M3/M6 were folded together, and M4/M5 gate the build rather than being written around.</p>
+<h3>7b. Step-11 diff review dispositions (pre-PR)</h3>
+<p><code>/rawgentic:adversarial-review .rawgentic-advdiff-718.diff diff</code>, gpt backend, on commit <code>5b3f556</code> BEFORE the PR was opened. <strong>Four findings, 3 High. All four confirmed against the code.</strong></p>
+<table>
+<thead><tr><th>#</th><th>Sev</th><th>Finding</th><th>Disposition</th></tr></thead>
+<tbody>
+<tr><td>D1</td><td>High</td><td>A launcher exit of 0 permanently retains the once-per-window reservation and reports <code>inserted</code>, though submission is unverifiable — so an rc-0-without-submission recurrence under a slower paste suppresses every retry for that window, leaving only the channel a model may refuse</td><td><strong>CONFIRMED, NOT FIXED — residual, owner-facing (see §7c).</strong> It re-opens H1&#x27;s hole for the *silent* case. The honest fix is durable verification (the inserted prose appearing as a user turn in the transcript) plus release-and-retry, which is a design addition needing its own measurement</td></tr>
+<tr><td>D2</td><td>High</td><td>The safety check is only a PRE-paste snapshot; it neither proves the composer is empty nor re-checks after the 1.5 s delay, so a dialog opening inside that window gets accepted by the Enter</td><td><strong>ACCEPTED, FIXED.</strong> A second <code>dialog_veto()</code> runs immediately before the Enter; on veto it returns with the prose explicitly reported as pasted-but-UNSUBMITTED. The &quot;composer is empty&quot; half is NOT solved and is folded into §7c</td></tr>
+<tr><td>D3</td><td>High</td><td>The fail-closed guard checks only that <code>project_path</code> is truthy — an absent, unreadable or malformed config all reach the default <code>True</code>, so the project-scoped kill switch can be unreachable and insertion still enabled</td><td><strong>ACCEPTED, FIXED.</strong> New <code>meter_config_readable()</code> distinguishes &quot;healthy config, no block&quot; (stay ON — the common case, this repo included) from &quot;would not parse&quot; (refuse). It found a real hole in the guard added for H2 one review earlier</td></tr>
+<tr><td>D4</td><td>Medium</td><td>The insertion outcome is discarded, so disabled / skipped / timed-out / failed are indistinguishable from success, contradicting the README&#x27;s &quot;never silent about being disabled&quot;</td><td><strong>ACCEPTED, FIXED.</strong> Every non-<code>inserted</code> outcome now goes to <code>_warn</code> naming the reason and stating that only the refusable text channel fired. <code>inserted</code> stays quiet because it is self-evidencing</td></tr>
+</tbody>
+</table>
+<h3>7c. Known residuals, stated rather than buried</h3>
+<p>1. <strong>A silent non-submission still burns the window (D1).</strong> If <code>send-keys</code> returns 0 but nothing    submits — the round-1 failure mode, which the 1.5 s delay is measured to avoid but does not make    impossible — the <code>stop-insert</code> reservation is held and no retry occurs for that window. The emit    still delivered. <strong>Mitigation in place:</strong> the measured delay, and the second dialog check.    <strong>Real fix:</strong> verify from the transcript that the prose became a user turn, then release and    retry. Filed as a follow-up rather than guessed at here. 2. <strong>A non-empty composer is not detected (D2, partial).</strong> <code>send-text</code> appends, so a half-typed    user draft would be submitted together with the inserted prose. No reliable &quot;composer is empty&quot;    signal was found: <code>pane_shows_unsubmitted_paste</code> needs a collapsed-paste marker that short prose    never produces, and its own contract says that marker also appears after a successful submit.    Detecting this needs a measurement, not an argument.</p>
+
+</main>
+<footer>Last updated: 2026-07-29 12:41 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

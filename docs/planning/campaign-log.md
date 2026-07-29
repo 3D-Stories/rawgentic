@@ -14,6 +14,49 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #626 — the context meter: from a nag nobody acts on to a prompt that lands
+
+Section opened by the #718 slot. #713 (`d005749`) and #716 (`2c1e298`) shipped earlier the same
+day without adding their sections here — shared-doc mode was skipped on both, so their detail
+lives only in the README changelog and their own planning docs. Recorded rather than
+back-filled, because a section invented after the fact carries none of the run's telemetry.
+
+### #718 — the act tier INSERTS A PROMPT, it no longer only emits text · v3.108.0
+
+**Problem.** The meter's entire output was `print(payload_out)` — a JSON envelope of English.
+#713's probe 12 had already measured a model naming that injected directive as possible prompt
+injection and **refusing its imperative** while faithfully reporting it. Injected hook text is
+data; only user input is authoritative.
+
+**What shipped.** `launcher_lib.py insert-prompt` (terminal primitives stay in that one module by
+`skills/pane-handoff/SKILL.md`'s standing rule) pastes PROSE into a named pane, waits
+`INSERT_SUBMIT_DELAY_S = 1.5`, then sends a separate `Enter`. `context_meter.py` calls it at
+`Stop`, directive tier only, on its own `stop-insert` reservation, herdr-only, project-config
+required, with a `contextMeter.insertPrompt` kill switch.
+
+**The two measurements that decided the design** (design doc:
+`docs/planning/2026-07-29-718-meter-inserts-prompt.md`, rendered HTML alongside):
+
+| Measured | Result |
+|---|---|
+| Prose into an UNMET `/goal` loop | **Acted on in 17 s** — marker file written while the next tick file did not yet exist |
+| Bare slash command, same conditions | **Inert** — queued through five goal-driven turns, taken up only after `✔ Goal achieved` |
+| A registered `Stop` hook typing into its OWN pane | Inherits `HERDR_ENV`/`HERDR_PANE_ID`, may subprocess — but an **immediate `Enter` returns rc 0 and submits nothing** |
+| Same, with 1.5 s between paste and `Enter` | **Submits.** The "hooks block input" hypothesis was refuted; round 1 was a paste race |
+
+**Reviews.** WF5 design review (gpt): **6 findings, 2 High, all six confirmed against code, none
+refuted.** Four became design changes; two became the live spike above, which caught the
+unsubmitted-Enter bug **before** it shipped green. Dispositions table in the design doc, since
+`docs/reviews/` is gitignored.
+
+**Gates.** Suite **6131 → 6175 passed**, 21 skipped, rc 0 (baseline recorded on `2c1e298` before
+any edit; one PID-reuse flake in `test_quota.py` seen once and green in isolation and on re-run).
+Both pylint lanes 10.00/10. Security scan PASS with `iac: not applicable` as a visible skip.
+Version bumped on all four surfaces + `canary.EXPECTED_REGISTRATION_DIGEST` re-pinned, because
+editing a registered hook script invalidates it. No workflow-spine change → no diagram REV.
+
+---
+
 ## Epic #684 — make the blocked-pane watcher actually fire
 
 ### #679 — poll pane state + key on `state_change_seq` (small-standard lane) · v3.104.1

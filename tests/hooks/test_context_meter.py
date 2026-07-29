@@ -15,6 +15,7 @@ import stat
 import time
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -1646,3 +1647,148 @@ def test_a_legacy_marker_does_not_silence_the_new_stop_channel(tmp_path):
     out = _out(r)
     assert out is not None, "a legacy midturn marker must not suppress the stop channel"
     assert out["hookSpecificOutput"]["hookEventName"] == "Stop"
+
+
+class TestInsertPromptAtTheActTier:
+    """#718 — the act tier INSERTS A PROMPT instead of only emitting text.
+
+    Injected hook text is data a model may decline (probe 12 refused the directive as possible
+    prompt injection); an inserted prompt arrives as USER input. These pin the gates that keep
+    auto-typing bounded, and the fail-closed rule the WF5 review forced.
+    """
+
+    SID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+    # ---- the kill switch, and the fail-CLOSED guard that makes it reachable ---------------
+    def test_no_resolved_project_refuses(self) -> None:
+        """H2: the switch lives in a project config, so outside a project it cannot be reached."""
+        assert cm.insert_enabled({}, None) is False
+        assert cm.insert_enabled({}, "") is False
+
+    def test_an_unreadable_config_refuses(self) -> None:
+        """Step-11 diff review, High. `read_meter_config` returns {} for a healthy config with no
+        block AND for one that would not parse — and the unreadable one may contain
+        `insertPrompt: false`. Defaulting it ON would ignore the operator's switch while claiming
+        to be fail-closed."""
+        assert cm.insert_enabled({}, "/some/project", False) is False
+
+    def test_config_readability_is_read_from_the_file_not_assumed(self, tmp_path) -> None:
+        assert cm.meter_config_readable(None) is False
+        assert cm.meter_config_readable(str(tmp_path)) is False, "no config file at all"
+        (tmp_path / ".rawgentic.json").write_text("{not json", encoding="utf-8")
+        assert cm.meter_config_readable(str(tmp_path)) is False, "malformed must not read as absent"
+        (tmp_path / ".rawgentic.json").write_text('{"project": "x"}', encoding="utf-8")
+        assert cm.meter_config_readable(str(tmp_path)) is True, \
+            "a healthy config with NO contextMeter block is the common case and must stay ON"
+
+    def test_absent_block_is_ON_when_a_project_resolved(self) -> None:
+        """Most projects carry no contextMeter block at all — this repo included. An
+        empty-block test would silently disable the feature everywhere it matters."""
+        assert cm.insert_enabled({}, "/some/project") is True
+
+    def test_kill_switch_off(self) -> None:
+        assert cm.insert_enabled({"insertPrompt": False}, "/some/project") is False
+
+    @pytest.mark.parametrize("truthy", ["yes", 1, "true", [], {}])
+    def test_only_a_real_bool_turns_it_on(self, truthy) -> None:
+        """`is True` is the comparison, so a truthy lookalike must read as OFF, and
+        `validate_setup_block` must refuse to stage it in the first place."""
+        assert cm.insert_enabled({"insertPrompt": truthy}, "/some/project") is False
+        assert any("insertPrompt" in e for e in
+                   cm.validate_setup_block({"insertPrompt": truthy}))
+
+    def test_setup_accepts_a_real_bool(self) -> None:
+        assert cm.validate_setup_block({"insertPrompt": False}) == []
+        assert "insertPrompt" in cm.SETUP_BLOCK_KEYS, \
+            "an unlisted key is REFUSED by validate_setup_block, so setup could never stage it"
+
+    # ---- AC3: the inserted text is PROSE, never a bare slash command ----------------------
+    def test_the_prose_is_not_a_bare_slash_command(self) -> None:
+        """THE finding of #718. A bare slash command is inert inside a /goal loop."""
+        text = cm.insert_prose(520000, 1000000)
+        assert not text.lstrip().startswith("/")
+        assert "pane-handoff" in text
+
+    def test_the_prose_survives_the_launcher_validator(self) -> None:
+        """The one gate that actually enforces AC3 — so the message is checked against it,
+        not merely eyeballed here."""
+        sys.path.insert(0, str(Path(cm.__file__).parent))
+        import launcher_lib as ll  # noqa: PLC0415
+        ll.validate_inserted_prompt(cm.insert_prose(520000, 1000000))   # must not raise
+
+    def test_the_prose_names_the_real_pressure(self) -> None:
+        text = cm.insert_prose(520000, 1000000)
+        assert "52%" in text and "520,000" in text and "1,000,000" in text
+
+    # ---- the gates ------------------------------------------------------------------------
+    def _try(self, tmp_path, *, env, cfg=None, project=None, runner=None):
+        # A REAL project dir with a parseable config, because `try_insert_prompt` now reads the file
+        # to tell "no block" from "unreadable" — a fake path would skip for the wrong reason and the
+        # happy-path assertions below would pass vacuously.
+        if project is None:
+            project = tmp_path / "proj"
+            project.mkdir(exist_ok=True)
+            (project / ".rawgentic.json").write_text('{"project": "x"}', encoding="utf-8")
+            project = str(project)
+        return cm.try_insert_prompt(
+            home=str(tmp_path), session_id=self.SID, window=1000000, used=520000,
+            cfg={} if cfg is None else cfg, project_path=project, env=env,
+            runner=runner or (lambda argv, timeout: types.SimpleNamespace(returncode=0)))
+
+    def test_an_unreadable_project_config_is_a_quiet_skip(self, tmp_path) -> None:
+        env = {"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:pZZ"}
+        assert "skipped" in self._try(tmp_path, env=env, project="/nonexistent/project")
+
+    def test_not_inside_herdr_is_a_quiet_skip(self, tmp_path) -> None:
+        assert "skipped" in self._try(tmp_path, env={})
+
+    def test_no_pane_id_is_a_quiet_skip(self, tmp_path) -> None:
+        assert "skipped" in self._try(tmp_path, env={"HERDR_ENV": "1"})
+
+    def test_happy_path_inserts_once_then_refuses(self, tmp_path) -> None:
+        env = {"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:pZZ"}
+        assert self._try(tmp_path, env=env) == "inserted"
+        assert "already inserted" in self._try(tmp_path, env=env), \
+            "AC5 once-only: the stop-insert reservation must survive a second call"
+
+    def test_a_failed_insert_RELEASES_so_the_next_Stop_can_retry(self, tmp_path) -> None:
+        """H1. Holding the reservation after a failure would silence the channel for the whole
+        window, leaving only the emit — the channel probe 12 showed a model may refuse."""
+        env = {"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:pZZ"}
+        failing = lambda argv, timeout: types.SimpleNamespace(returncode=1)   # noqa: E731
+        assert "failed" in self._try(tmp_path, env=env, runner=failing)
+        assert self._try(tmp_path, env=env) == "inserted", "the retry must not be blocked"
+
+    def test_an_exception_also_releases_and_never_raises(self, tmp_path) -> None:
+        env = {"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:pZZ"}
+
+        def boom(argv, timeout):
+            raise TimeoutError("herdr wedged")
+
+        assert "failed" in self._try(tmp_path, env=env, runner=boom)
+        assert self._try(tmp_path, env=env) == "inserted"
+
+    def test_it_uses_its_OWN_channel_not_the_emit_reservation(self, tmp_path) -> None:
+        """M6: the guarantee is once per (session, window, tier, CHANNEL). The emit's `stop`
+        reservation must not be consumed, or the nag itself would be suppressed."""
+        env = {"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:pZZ"}
+        assert self._try(tmp_path, env=env) == "inserted"
+        assert cm.INSERT_CHANNEL == "stop-insert"
+        assert cm.has_marker(str(tmp_path), self.SID, 1000000, "directive",
+                             cm.INSERT_CHANNEL) is True
+        assert cm.has_marker(str(tmp_path), self.SID, 1000000, "directive", "stop") is False
+
+    def test_the_argv_carries_the_prose_and_the_pane(self, tmp_path) -> None:
+        seen = {}
+
+        def capture(argv, timeout):
+            seen["argv"] = argv
+            seen["timeout"] = timeout
+            return types.SimpleNamespace(returncode=0)
+
+        self._try(tmp_path, env={"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:pQQ"}, runner=capture)
+        argv = seen["argv"]
+        assert argv[1].endswith("launcher_lib.py"), "terminal primitives stay in launcher_lib"
+        assert "insert-prompt" in argv and "w1:pQQ" in argv
+        assert seen["timeout"] == cm.INSERT_TIMEOUT_S
+        assert not argv[-1].startswith("/"), "AC3 — the payload must be prose"
