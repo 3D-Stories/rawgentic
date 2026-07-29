@@ -257,7 +257,9 @@ Two calls, always. A multiline payload arrives as one collapsed bracketed paste 
 python3 "${CLAUDE_PLUGIN_ROOT}/hooks/launcher_lib.py" ad-hoc-handoff --help
 ```
 
-The `/rawgentic:pane-handoff` skill is the front end; `ad-hoc-handoff` is a thin adapter that takes the project, prompt, goal condition and anchor pane directly — no driver-state file and no `--launcher-armed`, which is what `_cmd_handoff` requires and why it could not serve this case — and drives `perform_handoff` unchanged. Closing your own pane is opt-in and OFF by default: an ad-hoc handoff hands off *work*, not the caller's session.
+The `/rawgentic:pane-handoff` skill is the front end; `ad-hoc-handoff` is a thin adapter that takes the project, prompt, goal condition and anchor pane directly — no driver-state file and no `--launcher-armed`, which is what `_cmd_handoff` requires and why it could not serve this case — and drives `perform_handoff` unchanged.
+
+**Retiring the caller's own pane is the DEFAULT** (owner decision 2026-07-29). #700 shipped it opt-in and OFF, reasoning that an ad-hoc handoff hands off *work* rather than retiring the caller — and the first real handoff refuted that: the phrasings that trigger the skill mean *retire this one*, and the OFF default left a live pane re-prompting itself from an armed `/goal` until the owner intervened. Retirement is gated on every verification passing, on the pane provably hosting the calling session, and on the goal being **confirmed cleared** — an unconfirmed clear leaves the pane open. `--no-teardown` opts out for an additive handoff and reports that the guard is still armed.
 
 **Which of the two you want depends on whether a session already exists in the target pane:**
 

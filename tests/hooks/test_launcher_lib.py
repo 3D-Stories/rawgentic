@@ -167,6 +167,11 @@ def _handoff(**over):
         expected_project=PROJECT, registry_path=REGISTRY_PATH,
         transcript_dir="/tmp",
         read_text=Artifacts(), sleeper=lambda _s: None,
+        # #700 field defect 1: `perform_handoff` no longer carries a teardown default, because the
+        # library defaulting ON while the ad-hoc CLI defaulted OFF is how the two surfaces came to
+        # disagree about one operation. These tests are the ones that prove teardown is BLOCKED
+        # until every check passes, so they must ASK for it — otherwise they pass vacuously.
+        teardown=True,
     )
     kw.update(over)
     return kw
