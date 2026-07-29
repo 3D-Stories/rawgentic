@@ -1439,9 +1439,60 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     f"transcript could not be baselined, so {_CLEAR_COMMAND!r} was never sent. Run "
                     f"{_CLEAR_COMMAND!r} in it by hand, then close it")
                 return out
-            clear_text, clear_keys = build_send_text_argv(pane=anchor_pane, text=_CLEAR_COMMAND)
-            for kind, argv in (("clear_predecessor_goal", clear_text),
-                               ("clear_predecessor_goal_keys", clear_keys)):
+            # #707 — THREE states, not two. The first revision sent the clear unconditionally and
+            # then required a NEW receipt row, so "no guard was ever armed" produced no receipt and
+            # was reported as "the clear may not have landed": the pane was stranded with an
+            # AMBIGUOUS verdict and exit 4 when it was simply already safe to close. That is the
+            # COMMON path, not an edge case — the skill tells the operator to run `clear-prep` first
+            # and `clear-prep` step 6 clears the guard, so the documented happy path produces it.
+            #
+            # Liveness is read from the WHOLE transcript, not the post-baseline tail: the guard was
+            # armed earlier in the session, long before this baseline.
+            #
+            # It is keyed on the NEWEST goal_status row and NOT on `predecessor_goal_condition`,
+            # which is the hazard in this fix. A caller whose supplied condition has been superseded
+            # would otherwise read as "already clear" while a replacement guard is live, and the pane
+            # would be closed over it — the same trap #665 Step-11 pass-3 documented for the confirm
+            # side. So the transcript is the single authority, and the supplied condition is at most
+            # an assertion recorded below.
+            try:
+                pred_text = read_text(pred_transcript)
+            except (OSError, UnicodeDecodeError) as exc:
+                out["failed_step"] = "predecessor_goal_clear"
+                out["predecessor_guard"] = (
+                    f"the predecessor pane {anchor_pane} is ALIVE and may still be GUARDED — its "
+                    f"transcript could not be read ({exc}), and an unreadable transcript is not "
+                    f"evidence that nothing is armed. Run {_CLEAR_COMMAND!r} in it by hand")
+                return out
+
+            live_condition = latest_goal_status_condition(pred_text)
+            armed = live_condition is not None and goal_currently_unmet(pred_text, live_condition)
+            if not armed:
+                # Nothing to clear, so nothing to confirm. Recorded as its own result value rather
+                # than a silent skip: "already_clear" is a materially different fact from "cleared
+                # by us", and the step record is what an operator reads afterwards.
+                out["results"]["predecessor_goal_clear"] = "already_clear"
+                record("clear_predecessor_goal", [], None,
+                       note=("skipped: no goal is currently armed in the predecessor "
+                             + (f"(newest guard {live_condition!r} is already met)"
+                                if live_condition is not None
+                                else "(no goal_status row at all)")
+                             + f" — nothing for {_CLEAR_COMMAND!r} to clear (#707)"))
+                if (predecessor_goal_condition is not None
+                        and live_condition is not None
+                        and predecessor_goal_condition.strip() != live_condition.strip()):
+                    record("clear_predecessor_goal", [], None,
+                           note=(f"note: the supplied --predecessor-goal-condition "
+                                 f"{predecessor_goal_condition!r} is not the newest guard "
+                                 f"({live_condition!r}); the transcript won"))
+
+            sends = ()
+            if armed:
+                clear_text, clear_keys = build_send_text_argv(pane=anchor_pane,
+                                                              text=_CLEAR_COMMAND)
+                sends = (("clear_predecessor_goal", clear_text),
+                         ("clear_predecessor_goal_keys", clear_keys))
+            for kind, argv in sends:
                 proc = runner(argv)
                 record(kind, argv, proc, note=f"{_CLEAR_COMMAND} before closing (#700)")
                 if getattr(proc, "returncode", 1) != 0:
@@ -1453,16 +1504,19 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                         f"Check the pane and run {_CLEAR_COMMAND!r} by hand")
                     return out
 
-            # Bound to the condition when the caller knows it. #665 Step-11 pass-3 proved why: with
-            # ANY met:true row accepted, a row belonging to a DIFFERENT guard confirms our clear and
-            # a live pane gets closed on it.
+            # Bound to `live_condition` — the guard actually in force — and NOT to the caller's
+            # supplied one. #665 Step-11 pass-3 proved the binding is necessary at all: with ANY
+            # met:true row accepted, a row belonging to a different guard confirms our clear and a
+            # live pane gets closed on it. #707 then showed WHICH condition it must be: we clear
+            # whatever is armed, so the receipt carries that condition, and binding to a stale
+            # caller-supplied string would wait for a receipt nothing will ever write.
             def _pred_cleared() -> bool:
                 tail = _tail(read_text(pred_transcript), pred_baseline)
                 return tail is not None and transcript_has_cleared_goal(
-                    tail, expected_condition=predecessor_goal_condition)
+                    tail, expected_condition=live_condition)
 
-            if not _poll_for(_pred_cleared, attempts=GOAL_POLL_ATTEMPTS,
-                             delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper):
+            if armed and not _poll_for(_pred_cleared, attempts=GOAL_POLL_ATTEMPTS,
+                                       delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper):
                 out["failed_step"] = "predecessor_goal_clear"
                 out["predecessor_guard"] = (
                     f"the predecessor pane {anchor_pane} is LEFT OPEN because "
