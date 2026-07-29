@@ -393,6 +393,12 @@ def _pct(cfg, env, cfg_key, env_key, default):
     return default, None
 
 
+# Every key the `contextMeter` block documents (docs/config-reference.md). Named here as ONE
+# constant because `validate_setup_block` uses it as an ALLOWLIST: a hand-copied list inside the
+# function would drift from the documented block the moment a sixth key is added.
+SETUP_BLOCK_KEYS = ("windowSize", "checkInPercent", "actPercent", "everyTurns", "everySeconds")
+
+
 def validate_setup_block(block) -> list[str]:
     """Every reason `block` would NOT be honoured as written, for `/rawgentic:setup` (#701).
 
@@ -416,6 +422,16 @@ def validate_setup_block(block) -> list[str]:
         return [f"contextMeter must be a JSON object, got {type(block).__name__}"]
 
     errors: list[str] = []
+
+    # Unknown keys are REFUSED, not ignored (#701 Step-11 diff review, High). Checking only the keys
+    # it knows about made the validator say "ok" to `{"windowSzie": 1000000}`: setup would stage it,
+    # the hook would ignore the misspelled field, and the meter would keep using the 200,000-token
+    # fallback — the exact failure this whole feature exists to prevent, reproduced by the fix for it.
+    for key in block:
+        if key not in SETUP_BLOCK_KEYS:
+            errors.append(
+                f"unknown contextMeter key {key!r} — it would be silently ignored and the meter "
+                f"would keep its default. Expected one of: {', '.join(SETUP_BLOCK_KEYS)}")
 
     def _int(value):
         # `bool` is an `int` subclass, so a bare isinstance check would accept `true` and mean 1.
@@ -1203,12 +1219,19 @@ def cmd_validate_config(args) -> int:
     Fails CLOSED, unlike the hook paths in this module: what it gates is whether setup stages a
     block, and staging one the hook will discard is the failure mode #701 exists to remove.
     """
+    # BROAD except, and it is load-bearing rather than lazy (#701 Step-11 diff review, High).
+    # `__main__` in this module deliberately swallows every exception and exits 0, because a
+    # PostToolUse hook must never block a turn — so ANY exception escaping here is reported to setup
+    # as SUCCESS, and setup stages a block nothing validated. Catching only `ValueError` left that
+    # open: `json.loads` raises RecursionError (a RuntimeError, not a ValueError) on deeply nested
+    # input, verified live at 100k nesting. Whatever goes wrong, the answer is a refusal.
     try:
         block = json.loads(args.json_block)
-    except ValueError as exc:
-        print(f"validate-config: bad JSON: {exc}", file=sys.stderr)
+        errors = validate_setup_block(block)
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"validate-config: could not validate the block ({type(exc).__name__}: {exc})",
+              file=sys.stderr)
         return 2
-    errors = validate_setup_block(block)
     if errors:
         for error in errors:
             print(error, file=sys.stderr)

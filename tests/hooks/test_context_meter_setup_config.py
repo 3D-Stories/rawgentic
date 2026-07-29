@@ -227,3 +227,80 @@ def test_the_config_reference_says_setup_can_configure_it() -> None:
     section = body[body.index("### `contextMeter`"):]
     section = section[:section.index("\n### ")] if "\n### " in section else section
     assert "setup" in section.lower()
+
+# ---------------------------------------------------------------------------
+# #701 Step-11 diff review — two ways the validator said "ok" to a block the hook ignores
+# ---------------------------------------------------------------------------
+
+class TestUnknownKeysAreRefused:
+    """The sharper of the two findings: a validator that only checks the keys it KNOWS about says
+    "ok" to a typo, setup stages it, the hook ignores the misspelled field and keeps using the
+    200,000-token fallback — which is the exact failure #701 exists to prevent, reproduced by the
+    fix for it.
+    """
+
+    def test_a_typod_key_is_refused_and_named(self) -> None:
+        errors = cm.validate_setup_block({"windowSzie": 1_000_000})
+        assert errors, "a misspelled key silently means the default"
+        assert any("windowSzie" in e for e in errors)
+
+    def test_an_unknown_key_is_refused_even_beside_valid_ones(self) -> None:
+        assert cm.validate_setup_block(
+            {"checkInPercent": 60, "actPercent": 70, "windwoSize": 1_000_000})
+
+    # Per-key valid values, because a lone percentage is still checked against the DEFAULT for the
+    # other half: `actPercent: 50` against the default check-in of 60 is an inverted pair, not a
+    # valid single key.
+    @pytest.mark.parametrize("key,value", [("windowSize", 200_000), ("checkInPercent", 50),
+                                           ("actPercent", 80), ("everyTurns", 5),
+                                           ("everySeconds", 300)])
+    def test_every_documented_key_is_still_accepted(self, key, value) -> None:
+        """The allowlist is the five keys `docs/config-reference.md` documents — not the three this
+        issue made reachable from setup. Refusing the cadence pair would make the validator unusable
+        on a block a user had already tuned by hand."""
+        assert cm.validate_setup_block({key: value}) == []
+
+    def test_the_allowlist_is_derived_from_one_place(self) -> None:
+        """A hand-copied list in the validator would drift from the documented block the moment a
+        sixth key is added, so the names live in a module constant the docs guard can also read."""
+        assert set(cm.SETUP_BLOCK_KEYS) == {"windowSize", "checkInPercent", "actPercent",
+                                            "everyTurns", "everySeconds"}
+
+    def test_the_cli_refuses_an_unknown_key(self) -> None:
+        proc = _cli("validate-config", "--json", json.dumps({"windowSzie": 1_000_000}))
+        assert proc.returncode == 2, proc.stdout
+        assert "windowSzie" in proc.stderr
+
+
+class TestTheValidatorCannotFailOpen:
+    """The second finding, and it is specific to THIS module: `__main__` deliberately swallows every
+    exception and exits 0, because a PostToolUse hook must never block a turn. So any exception that
+    escapes `cmd_validate_config` is reported to setup as SUCCESS — a validation gate that passes on
+    error. Catching only `ValueError` around `json.loads` left that open.
+    """
+
+    def test_deeply_nested_json_does_not_report_success(self) -> None:
+        """`json.loads` raises RecursionError on this — a RuntimeError, NOT a ValueError, so it
+        escaped the narrow except and reached the fail-open wrapper. Verified live: 100k nested
+        arrays raise RecursionError, which is an Exception but not a ValueError."""
+        # 10_000 is the measured threshold on this interpreter (5_000 still parses) and keeps the
+        # argument under Linux's 128 KB per-argument cap — 100_000 exceeded it and the test died with
+        # `Argument list too long` instead of exercising the path.
+        bomb = "[" * 10_000 + "]" * 10_000
+        proc = _cli("validate-config", "--json", bomb)
+        assert proc.returncode == 2, (
+            f"rc={proc.returncode}: a validator that cannot parse its input must NOT report ok")
+        assert "ok" not in proc.stdout
+
+    def test_an_unexpected_exception_inside_validation_still_refuses(self,
+                                                                     monkeypatch) -> None:
+        """Belt and braces on the same hazard: whatever goes wrong, the answer is a refusal."""
+        def boom(_block):
+            raise RuntimeError("unexpected")
+
+        monkeypatch.setattr(cm, "validate_setup_block", boom)
+
+        class Args:
+            json_block = "{}"
+
+        assert cm.cmd_validate_config(Args()) == 2
