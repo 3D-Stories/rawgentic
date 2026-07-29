@@ -80,7 +80,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/hooks/launcher_lib.py" ad-hoc-handoff \
   --project <project> \
   --project-path <./projects/project> \
   --cwd <workspace root> \
-  --project-root <project path> \
+  --project-root <workspace root> \
   --registry <workspace root>/claude_docs/session_registry.jsonl \
   --transcript-dir <transcript dir> \
   --resume-prompt-file <prompt file> \
@@ -103,8 +103,14 @@ What comes with the default:
   anything launches, so a stale `$HERDR_PANE_ID` is a refusal rather than a stranger's pane being
   closed.
 - Pass your own live goal condition so the clear receipt is bound to the guard it clears:
-  `--predecessor-goal-condition '<your condition>'`. Read it with the `read-goal-condition`
-  subcommand against your own transcript rather than retyping it.
+  `--predecessor-goal-condition '<your condition>'`. Read it rather than retyping it — and note
+  the flag is `--transcript <file>`, NOT the `--transcript-dir` + `--session-id` pair this command
+  takes:
+
+  ```bash
+  python3 "${CLAUDE_PLUGIN_ROOT}/hooks/launcher_lib.py" read-goal-condition \
+    --transcript "$HOME/.claude/projects/<slug>/$CLAUDE_CODE_SESSION_ID.jsonl"
+  ```
 - An **unconfirmed** clear leaves your pane open on purpose. An ambiguous guard is recoverable; a
   wrongly-closed pane is not.
 
@@ -134,6 +140,10 @@ The JSON on stdout carries `results` and `failed_step`. Report what it says, not
 | `goal_armed` | the guard never armed | the successor is working but unguarded |
 | `send_resume_nudge` | a herdr call failed outright | herdr-side problem, not a timing one |
 | `predecessor_goal_clear` | the handoff worked; clearing YOUR goal did not | your pane is left **open** on purpose — run `/goal clear` in it yourself |
+
+If you had **already** cleared your goal before handing off — which is what `clear-prep` tells you to
+do — that is not a failure and never reports one: `results.predecessor_goal_clear` reads
+`already_clear`, no clear is sent, and the pane closes normally.
 
 **On any failure your pane is still alive and still guarded, and the successor pane is cleaned up.**
 Say that plainly — it is the most useful sentence in the report. A `cleanup` value naming a
