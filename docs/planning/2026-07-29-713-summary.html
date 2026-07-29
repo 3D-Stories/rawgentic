@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#713 — why a long run burned its window instead of handing off</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-report blockquote{background:var(--code);border-left-color:var(--accent)}
+.tpl-report tbody tr:nth-child(even){background:var(--code)}
+</style>
+</head>
+<body class="tpl-report">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-29 10:41 MDT</div>
+<h1>#713 — why a long run burned its window instead of handing off</h1>
+
+</header>
+<main>
+<h1>#713 in plain words: why a long run burned its whole window instead of handing off</h1>
+<p><strong>The short version.</strong> Your session was told &quot;keep going&quot; ten times and &quot;you&#x27;re nearly full&quot; twice — and the &quot;you&#x27;re nearly full&quot; message could never arrive at the moment the &quot;keep going&quot; decision was made. We fixed the timing, and found two more bugs on the way, one of which meant a whole part of the warning system had never worked at all.</p>
+<p>---</p>
+<h2>1. What broke, twice, in one day</h2>
+<p>Two of your runs failed at opposite ends of the same gap.</p>
+<table>
+<thead><tr><th>Run</th><th>What it did</th><th>What went wrong</th></tr></thead>
+<tbody>
+<tr><td><strong>lumenquire</strong></td><td>Shipped 14 PRs, took the e2e suite from 30 pass / 1 fail to 40 pass / 0 fail</td><td>Rode a 1,000,000-token window to <strong>~98% full</strong> and never handed off. You had to do it by hand.</td></tr>
+<tr><td><strong>thewanderinginn</strong></td><td>Stopped at a clean task boundary, wrote a proper handoff file</td><td>Then <strong>asked permission</strong> to start the successor — *&quot;say the word and I&#x27;ll run it&quot;* — and sat idle overnight because nobody was awake to say the word.</td></tr>
+</tbody>
+</table>
+<p>Both end the same way: no successor, and a human needed.</p>
+<p>The cost in the first one is visible in the quality. Early passes each got reproduce-first, red-before-green and a committed guard. Pass 6 shipped with no guard. Pass 8 finished 1 of its 6 issues. The closeout was never started — because starting it at 98% would have meant inventing answers, and it correctly refused to. <strong>The only reason it faced that choice is that it was at 98%.</strong></p>
+<p>---</p>
+<h2>2. Why it happened</h2>
+<p><code>/goal</code> decides whether to keep going at a moment called <strong>Stop</strong> — the instant a turn ends.</p>
+<p>The context meter was not listening at that moment. It was registered on two other events, both of which happen *in the middle* of a turn. So its warning always arrived mid-turn and was already old news by the time the &quot;keep going?&quot; decision was made.</p>
+<p>In your run the Stop hook fired about <strong>ten times</strong>. Not one of those firings had a handoff instruction available to it.</p>
+<p><strong>This was a timing problem, not a loudness problem.</strong> The message was fine. It just never spoke in the room where the decision was made.</p>
+<p>---</p>
+<h2>3. The three bugs</h2>
+<h3>Bug 1 — the meter was never in the room (the reported one)</h3>
+<p>Registered on the wrong events. Fixed by adding the <code>Stop</code> event.</p>
+<h3>Bug 2 — one of the meter&#x27;s two arms had never worked, ever</h3>
+<p>Found while researching Bug 1, and this one is worse than it sounds.</p>
+<p>A hook talks to the model by printing a small piece of JSON. There are two possible shapes. The meter used the <strong>wrong shape</strong> on one of its two events — so on that event, Claude Code silently threw the message away. No error, no warning, nothing.</p>
+<p>That arm had been dead since it shipped. The meter had been running on <strong>one</strong> working arm this whole time.</p>
+<p>We proved it by registering only that shape, on its own, and asking the model what it could see. It replied <strong><code>NONE</code></strong>.</p>
+<h3>Bug 3 — telling the model to hand off does not make it hand off</h3>
+<p>The most useful thing we learned, and it changed the fix.</p>
+<p>We injected a &quot;you&#x27;re nearly full, hand off now&quot; message into a real running goal loop. The model read it, <strong>flagged it as a possible prompt-injection attack, and refused to obey it</strong> — while still reporting that it had seen it.</p>
+<p>That is correct behaviour. Text injected by a hook is *data*, not orders. It is the same defence that stops a malicious file telling your agent what to do.</p>
+<p><strong>So the fix could not be &quot;order the model to hand off&quot;.</strong> It had to be something the model treats as trustworthy.</p>
+<p>---</p>
+<h2>4. What the proof-of-concept actually proved</h2>
+<p>Five experiments against a real Claude Code, all committed so they can be re-run.</p>
+<table>
+<thead><tr><th>#</th><th>Question</th><th>Answer</th></tr></thead>
+<tbody>
+<tr><td>11</td><td>Can the meter speak at <code>Stop</code>?</td><td><strong>Yes</strong> — and doing so <strong>forces one extra turn</strong>. The hook fired twice and the session took two turns for one prompt.</td></tr>
+<tr><td>12</td><td>Does adding our hook break <code>/goal</code>?</td><td><strong>No.</strong> Both hooks fired every turn, the goal ran and completed normally.</td></tr>
+<tr><td>13</td><td>If our hook crashes at <code>Stop</code>, does the turn break?</td><td><strong>No.</strong> Broken hook, garbage output, exit code 1 — session finished normally.</td></tr>
+<tr><td>14</td><td>Which message shape works?</td><td><strong>Only the nested one.</strong> The other is silently dropped. (Bug 2.)</td></tr>
+<tr><td>15</td><td><strong>Does a handoff actually satisfy a <code>/goal</code>?</strong></td><td><strong>Yes</strong> — proven, see below.</td></tr>
+</tbody>
+</table>
+<p>Probe 15 is the important one. We armed a real goal that said *&quot;finish the work, OR record a handoff — a recorded handoff satisfies this goal&quot;*. The session wrote the handoff, never did the work, and <strong>the goal completed</strong>. The judge&#x27;s own words:</p>
+<blockquote>This recorded handoff satisfies the goal condition explicitly stated in the stopping criteria.</blockquote>
+<p>So the sentence <strong>&quot;a handoff satisfies a loop goal&quot;</strong> is not wishful thinking. It is literally how the judge behaves. That is the one channel the model trusts — because it is *your* goal text, not injected text.</p>
+<p>---</p>
+<h2>5. What we built</h2>
+<table>
+<thead><tr><th>Change</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Meter now also listens at <strong>Stop</strong></td><td>So the warning exists when the &quot;keep going?&quot; decision is made</td></tr>
+<tr><td>Stop arm speaks <strong>only inside a loop</strong>, and <strong>only at the 70% tier</strong></td><td>Speaking at Stop forces an extra turn. Inside a loop that costs nothing (it was continuing anyway). Outside one it would hijack a turn you never asked for.</td></tr>
+<tr><td>Every message uses the <strong>nested shape</strong></td><td>Fixes the dead arm (Bug 2)</td></tr>
+<tr><td>Deliveries recorded <strong>per channel</strong></td><td>Otherwise the mid-turn warning would eat the record and silence the new Stop warning — reproducing the original bug through its own fix</td></tr>
+<tr><td>The message now says <strong>&quot;a handoff SATISFIES a loop goal&quot;</strong></td><td>Stated as a *fact*, not an order, because orders get refused (Bug 3). And it is true (probe 15).</td></tr>
+<tr><td>The 60% message says <strong>&quot;write the resume prompt now&quot;</strong></td><td>The old one said &quot;look for a seam&quot; and named nothing to produce, so nothing got written until there was no room to write it</td></tr>
+<tr><td>The 70% message names <strong><code>/rawgentic:pane-handoff</code></strong></td><td>The old one named <code>clear-prep</code>, which prepares the payload but <strong>starts no successor</strong> — exactly the overnight failure</td></tr>
+<tr><td><code>pane-handoff</code> now says <strong>run it, don&#x27;t offer it</strong></td><td>Your decision, 2026-07-29. The &quot;offer it unprompted&quot; wording was the actual cause of the overnight stall</td></tr>
+<tr><td>One safety check before an <strong>unprompted</strong> handoff</td><td>It verifies the reminder came from this session&#x27;s own hook. Without it, any text imitating a meter message could make an agent spawn a session and clear a guard</td></tr>
+</tbody>
+</table>
+<p>---</p>
+<h2>6. What it costs, honestly</h2>
+<p><strong>At most one extra turn</strong>, once per session. If the goal finishes at the exact moment the meter first speaks at Stop, our message becomes the thing that continues the turn.</p>
+<p>That extra turn carries &quot;you&#x27;re at 70%, hand off, here&#x27;s how&quot; — which at that point is the behaviour we want. So we accepted it deliberately rather than designing it away.</p>
+<p>An independent reviewer (a different AI model) checked the design and found <strong>7 problems</strong>, then checked the code and found <strong>4 more</strong>. Most became changes. Two suggestions were declined in writing, with reasons, so the trade-off is on the record rather than buried.</p>
+<p>---</p>
+<h2>7. What is still not proven</h2>
+<ul>
+<li>Nothing was tested on an <strong>older Claude Code</strong>. The Stop message is a recent capability; on an old</li>
+</ul>
+<p>  version it degrades to silence rather than breaking anything — but that is reasoned, not measured.</p>
+<ul>
+<li>The 8-continuation safety cap was never pushed to its limit.</li>
+<li>Neither original failure has been <strong>reproduced end to end after the fix</strong>. That needs another long</li>
+</ul>
+<p>  real run — which is the honest limit of everything above.</p>
+<ul>
+<li>Probe 15 used one wording, once. It shows the mechanism works; not that every phrasing works.</li>
+</ul>
+<p>---</p>
+<p>*Issue #713 · plugin 3.107.2 · suite 6,109 → 6,131 passing, 0 failing · full technical design in <code>2026-07-29-713-goal-loop-vs-context-meter.md</code>, probe harness in <code>2026-07-29-713-probes/</code>.*</p>
+
+</main>
+<footer>Last updated: 2026-07-29 10:41 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
