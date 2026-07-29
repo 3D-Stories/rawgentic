@@ -16,8 +16,8 @@ window**.
 
 | Tier | Default | What the message says |
 |---|---|---|
-| advisory | **60%** | Write the resume prompt **now**, while there is room to write a good one, and verify the delivery gates. Do not stop mid-phase. |
-| directive | **70%** | Break **now**, at the next turn, seam or no seam — here is what to capture, and run `/rawgentic:pane-handoff` to actually hand over. |
+| advisory | **35%** | Write the resume prompt **now**, while there is room to write a good one, and verify the delivery gates. Do not stop mid-phase. |
+| directive | **50%** | Break **now**, at the next turn, seam or no seam — here is what to capture, and run `/rawgentic:pane-handoff` to actually hand over. |
 
 Both tiers also carry one standing fact (#713): **a handoff SATISFIES a loop goal.** The work
 continues in a fresh session with a full window, so handing off does not stop the work — it
@@ -71,7 +71,7 @@ only happen above the act threshold in a session that was already looping, and t
 carries the handoff instruction — which at that point is the wanted behaviour.
 
 Deliveries are recorded per **channel** (`midturn` for the two mid-turn events, `stop` for this one),
-so the mid-turn arm speaking at 70% does not silence the decision-point delivery. Each tier is
+so the mid-turn arm speaking at the act threshold does not silence the decision-point delivery. Each tier is
 therefore delivered at most once mid-turn and at most once at `Stop`.
 
 ## The honest limit on the 5-minute arm
@@ -93,8 +93,8 @@ twin that takes precedence. Precedence is **env → project config → default**
 ```json
 "contextMeter": {
   "windowSize": 1000000,
-  "checkInPercent": 60,
-  "actPercent": 70,
+  "checkInPercent": 35,
+  "actPercent": 50,
   "everyTurns": 5,
   "everySeconds": 300
 }
@@ -103,8 +103,8 @@ twin that takes precedence. Precedence is **env → project config → default**
 | Key | Env twin | Default | Notes |
 |---|---|---|---|
 | `windowSize` | `RAWGENTIC_CONTEXT_WINDOW` | `200000` | tokens; see **Window size** |
-| `checkInPercent` | `RAWGENTIC_CONTEXT_CHECKIN_PCT` | `60` | must be ≥10 below `actPercent` |
-| `actPercent` | `RAWGENTIC_CONTEXT_ACT_PCT` | `70` | 1..99 |
+| `checkInPercent` | `RAWGENTIC_CONTEXT_CHECKIN_PCT` | `35` | must be ≥10 below `actPercent` |
+| `actPercent` | `RAWGENTIC_CONTEXT_ACT_PCT` | `50` | 1..99 |
 | `everyTurns` | `RAWGENTIC_CONTEXT_EVERY_TURNS` | `5` | ≥1 |
 | `everySeconds` | `RAWGENTIC_CONTEXT_EVERY_SECONDS` | `300` | ≥1 |
 
@@ -135,14 +135,29 @@ If you run 1M-window sessions, set `windowSize` and skip all of that.
 
 `docs/planning/2026-07-28-687-probes/compaction_scan.py` scans every transcript on the host for the
 in-context ceiling. **On a 1M window, sampled sessions reach 99.5–100% before anything resets them**
-(highest observed: 999,803 tokens = 100.0%, across 266 transcripts). So a 70% directive has roughly
-30 points of margin there. This answers the 1M half of #654's Q4.
+(highest observed: 999,803 tokens = 100.0%, across 266 transcripts). So the 50% directive has roughly
+50 points of margin there. This answers the 1M half of #654's Q4.
 
 **The 200k window is NOT measured** — this corpus contains zero 200k-window sessions, so there is
 nothing to scan. Given the 1M result (Claude Code compacts when nearly full, not at three-quarters), a
-70% directive is very likely safe on 200k too, but "very likely" is the honest word. **If you run a
+50% directive is very likely safe on 200k too, but "very likely" is the honest word. **If you run a
 200k-window model, take one reading:** run the scan on a session that has been compacted and set
 `actPercent` below the fraction at which its in-context total dropped.
+
+### Why the thresholds are well below the compaction ceiling (#716)
+
+The original pair was **60/70**, sized against the ceiling above. It was safe, and it was still too
+late to be *useful* — which is a different test, and the one that matters.
+
+**Surviving until compaction was never the binding constraint. Having room to hand over well is.**
+A real run (#713) took the directive at 70% of a 1M window, meaning 300,000 tokens left, and rode to
+~98% anyway; the quality of its work degraded in step with the pressure, and its final task was
+abandoned rather than done badly. At 35% of the same window a session has ~650,000 tokens in hand —
+enough to finish the phase it is in, write a resume prompt worth reading, and verify the handoff
+landed.
+
+So the defaults are deliberately **early, not safe**: 35% to start writing, 50% to go. Compaction
+margin is a floor these must clear, never the number they are set to.
 
 ## Choosing when to break — the seam
 

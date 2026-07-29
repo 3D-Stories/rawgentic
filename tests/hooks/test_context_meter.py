@@ -357,8 +357,15 @@ def test_window_does_not_escalate_below_the_boundary():
 # T2 — thresholds, tiers, cadence (AC3, AC6, AC9)
 # --------------------------------------------------------------------------
 
-def test_threshold_defaults_are_60_and_70():
-    assert cm.thresholds({}, {}) == (60, 70)
+def test_threshold_defaults_are_35_and_50():
+    """Owner decision 2026-07-29 (#716): 60/70 -> 35/50.
+
+    The old pair was safe against measured auto-compaction and still too late to be
+    useful — a real run rode a 1M window to ~98% because the directive arrived with no
+    room left to act well on it. Margin against compaction was never the binding
+    constraint; room to write a good handoff is.
+    """
+    assert cm.thresholds({}, {}) == (35, 50)
 
 
 def test_thresholds_from_config_and_env():
@@ -369,12 +376,12 @@ def test_thresholds_from_config_and_env():
 
 @pytest.mark.parametrize("cfg", [
     {"checkInPercent": 0}, {"actPercent": 100}, {"checkInPercent": "x"},
-    {"checkInPercent": 65, "actPercent": 70},     # squeezed: gap < 10
+    {"checkInPercent": 45, "actPercent": 50},     # squeezed: gap < 10
     {"checkInPercent": 80, "actPercent": 70},     # inverted
 ])
 def test_bad_thresholds_fall_back_to_defaults_with_a_warning(cfg):
     warnings = []
-    assert cm.thresholds(cfg, {}, warn=warnings.append) == (60, 70)
+    assert cm.thresholds(cfg, {}, warn=warnings.append) == (35, 50)
     assert warnings, f"{cfg!r} must warn on stderr"
 
 
@@ -1407,7 +1414,7 @@ def test_read_subcommand_uses_the_integer_exact_tier(tmp_path):
 # --------------------------------------------------------------------------
 
 DIRECTIVE_ROW = _usage(inp=1, cr=159_415)      # 159,416 = 79.7% of 200k
-ADVISORY_ROW = _usage(inp=1, cr=123_999)       # 124,000 = 62% of 200k
+ADVISORY_ROW = _usage(inp=1, cr=79_999)        # 80,000 = 40% of 200k
 
 
 def _stop(tmp_path, transcript, *, active, **extra):

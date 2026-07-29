@@ -1183,15 +1183,15 @@ indistinguishable from a deliberate choice on the next read. `everyTurns` and `e
 hand-edited here.
 
 ```json
-"contextMeter": { "windowSize": 1000000, "checkInPercent": 60, "actPercent": 70,
+"contextMeter": { "windowSize": 1000000, "checkInPercent": 35, "actPercent": 50,
                   "everyTurns": 5, "everySeconds": 300 }
 ```
 
 | Key | Env twin | Default | Meaning |
 |---|---|---|---|
 | `windowSize` | `RAWGENTIC_CONTEXT_WINDOW` | `200000` | context window in tokens |
-| `checkInPercent` | `RAWGENTIC_CONTEXT_CHECKIN_PCT` | `60` | advisory tier — start looking for a seam |
-| `actPercent` | `RAWGENTIC_CONTEXT_ACT_PCT` | `70` | directive tier — break now |
+| `checkInPercent` | `RAWGENTIC_CONTEXT_CHECKIN_PCT` | `35` | advisory tier — start looking for a seam |
+| `actPercent` | `RAWGENTIC_CONTEXT_ACT_PCT` | `50` | directive tier — break now |
 | `everyTurns` | `RAWGENTIC_CONTEXT_EVERY_TURNS` | `5` | check cadence, turn arm |
 | `everySeconds` | `RAWGENTIC_CONTEXT_EVERY_SECONDS` | `300` | check cadence, wall-clock arm |
 
