@@ -49,7 +49,7 @@ refuted.** Four became design changes; two became the live spike above, which ca
 unsubmitted-Enter bug **before** it shipped green. Dispositions table in the design doc, since
 `docs/reviews/` is gitignored.
 
-**Gates.** Suite **6131 → 6171 passed**, 21 skipped, rc 0 (baseline recorded on `2c1e298` before
+**Gates.** Suite **6131 → 6175 passed**, 21 skipped, rc 0 (baseline recorded on `2c1e298` before
 any edit; one PID-reuse flake in `test_quota.py` seen once and green in isolation and on re-run).
 Both pylint lanes 10.00/10. Security scan PASS with `iac: not applicable` as a visible skip.
 Version bumped on all four surfaces + `canary.EXPECTED_REGISTRATION_DIGEST` re-pinned, because

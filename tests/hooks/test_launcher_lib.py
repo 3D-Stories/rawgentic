@@ -1693,9 +1693,30 @@ class TestInsertPrompt:
         ok, reason = ll.insert_prompt(pane="w1:pZZ", text=self.PROSE, runner=runner,
                                       sleep=slept.append)
         assert ok, reason
+        # TWO reads: one before typing, one after the delay and immediately before the Enter. The
+        # second exists because the delay is a window in which a permission dialog can appear.
         assert runner.kinds() == ["herdr pane read", "herdr pane send-text",
-                                  "herdr pane send-keys"]
+                                  "herdr pane read", "herdr pane send-keys"]
         assert slept == [ll.INSERT_SUBMIT_DELAY_S]
+
+    def test_a_dialog_appearing_DURING_the_delay_stops_the_enter(self) -> None:
+        """The 1.5 s delay is a real window. An Enter fired into a dialog that opened inside it
+        accepts the dialog instead of submitting a turn (#718 Step-11 diff review, High)."""
+        reads: list[str] = []
+
+        def runner(argv, timeout=180):
+            kind = " ".join(argv[:3])
+            if kind == "herdr pane read":
+                reads.append(kind)
+                clean = len(reads) == 1        # first read clean, second shows a dialog
+                return FakeProc(0, "" if clean else "Do you want to proceed?")
+            return FakeProc(0, "")
+
+        ok, reason = ll.insert_prompt(pane="w1:pZZ", text=self.PROSE, runner=runner,
+                                      sleep=lambda _s: None)
+        assert ok is False
+        assert "refusing to submit" in reason
+        assert "UNSUBMITTED" in reason, "the caller must know the prose is sitting there"
 
     def test_the_delay_is_between_the_paste_and_the_enter(self) -> None:
         """Ordering is the whole fix: a delay BEFORE the paste would not help (#718 spike)."""

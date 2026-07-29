@@ -957,7 +957,25 @@ INSERT_CHANNEL = "stop-insert"
 INSERT_TIMEOUT_S = 12
 
 
-def insert_enabled(cfg, project_path) -> bool:
+def meter_config_readable(project_path) -> bool:
+    """Did the project's own `.rawgentic.json` actually exist and parse?
+
+    `read_meter_config` fails OPEN and returns `{}` for BOTH a healthy config carrying no
+    `contextMeter` block and a missing, oversized or malformed file. That collapse is right for
+    thresholds — the documented defaults are the correct answer either way — and WRONG for the #718
+    kill switch (Step-11 diff review, High): a config that would not parse may well contain
+    `insertPrompt: false`, and reading that as "absent, therefore on" ignores the operator's switch
+    while claiming to be fail-closed.
+
+    `_load_json_capped` returns None for missing/unreadable/malformed and a dict for valid JSON, so
+    the distinction is available without a second read of the file's bytes.
+    """
+    if not project_path:
+        return False
+    return isinstance(_load_json_capped(os.path.join(project_path, ".rawgentic.json")), dict)
+
+
+def insert_enabled(cfg, project_path, config_readable=True) -> bool:
     """The #718 kill switch, and the fail-CLOSED guard that makes it reachable.
 
     Keyed on `project_path`, deliberately NOT on the block being non-empty: most projects carry no
@@ -970,6 +988,8 @@ def insert_enabled(cfg, project_path) -> bool:
     guard refuses; that is this repo's rule for exactly this shape.
     """
     if not project_path:
+        return False
+    if not config_readable:
         return False
     if isinstance(cfg, dict) and "insertPrompt" in cfg:
         return cfg["insertPrompt"] is True
@@ -1002,8 +1022,8 @@ def try_insert_prompt(*, home, session_id, window, used, cfg, project_path, env,
     turn, or make the meter's own emit conditional on herdr being healthy. Every refusal is a quiet
     return, because the emit has already delivered the same information by the old channel.
     """
-    if not insert_enabled(cfg, project_path):
-        return "skipped: disabled or no resolved project"
+    if not insert_enabled(cfg, project_path, meter_config_readable(project_path)):
+        return "skipped: disabled, unreadable config, or no resolved project"
     if env.get("HERDR_ENV") != "1":
         return "skipped: not inside herdr"
     pane = env.get("HERDR_PANE_ID")
@@ -1447,8 +1467,16 @@ def cmd_hook(argv) -> int:
     # `Stop` only. Never mid-turn, and never ESC — at `Stop` the turn has ended and nothing is in
     # flight, whereas an ESC mid-turn can kill a running suite or a half-finished commit.
     if event == "Stop" and tier == "directive":
-        try_insert_prompt(home=home, session_id=session_id, window=window, used=used,
-                          cfg=cfg, project_path=project_path, env=env)
+        outcome = try_insert_prompt(home=home, session_id=session_id, window=window, used=used,
+                                    cfg=cfg, project_path=project_path, env=env)
+        # NEVER SILENT about not having acted (Step-11 diff review, Medium). This module's contract
+        # is fail-open *but* visible, and discarding the outcome made "disabled", "herdr wedged" and
+        # "inserted" indistinguishable — leaving an operator unable to tell why only the refusable
+        # text channel fired. `inserted` stays quiet: that one is self-evidencing, because the
+        # prompt itself shows up in the session.
+        if not outcome.startswith("inserted"):
+            _warn(f"context_meter: prompt insertion did not happen — {outcome}. The directive was "
+                  "still delivered as injected text, which a model may decline to act on.")
 
     save_state(home, session_id, state)
     return 0

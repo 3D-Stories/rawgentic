@@ -1665,6 +1665,22 @@ class TestInsertPromptAtTheActTier:
         assert cm.insert_enabled({}, None) is False
         assert cm.insert_enabled({}, "") is False
 
+    def test_an_unreadable_config_refuses(self) -> None:
+        """Step-11 diff review, High. `read_meter_config` returns {} for a healthy config with no
+        block AND for one that would not parse — and the unreadable one may contain
+        `insertPrompt: false`. Defaulting it ON would ignore the operator's switch while claiming
+        to be fail-closed."""
+        assert cm.insert_enabled({}, "/some/project", False) is False
+
+    def test_config_readability_is_read_from_the_file_not_assumed(self, tmp_path) -> None:
+        assert cm.meter_config_readable(None) is False
+        assert cm.meter_config_readable(str(tmp_path)) is False, "no config file at all"
+        (tmp_path / ".rawgentic.json").write_text("{not json", encoding="utf-8")
+        assert cm.meter_config_readable(str(tmp_path)) is False, "malformed must not read as absent"
+        (tmp_path / ".rawgentic.json").write_text('{"project": "x"}', encoding="utf-8")
+        assert cm.meter_config_readable(str(tmp_path)) is True, \
+            "a healthy config with NO contextMeter block is the common case and must stay ON"
+
     def test_absent_block_is_ON_when_a_project_resolved(self) -> None:
         """Most projects carry no contextMeter block at all — this repo included. An
         empty-block test would silently disable the feature everywhere it matters."""
@@ -1705,11 +1721,23 @@ class TestInsertPromptAtTheActTier:
         assert "52%" in text and "520,000" in text and "1,000,000" in text
 
     # ---- the gates ------------------------------------------------------------------------
-    def _try(self, tmp_path, *, env, cfg=None, project="/some/project", runner=None):
+    def _try(self, tmp_path, *, env, cfg=None, project=None, runner=None):
+        # A REAL project dir with a parseable config, because `try_insert_prompt` now reads the file
+        # to tell "no block" from "unreadable" — a fake path would skip for the wrong reason and the
+        # happy-path assertions below would pass vacuously.
+        if project is None:
+            project = tmp_path / "proj"
+            project.mkdir(exist_ok=True)
+            (project / ".rawgentic.json").write_text('{"project": "x"}', encoding="utf-8")
+            project = str(project)
         return cm.try_insert_prompt(
             home=str(tmp_path), session_id=self.SID, window=1000000, used=520000,
             cfg={} if cfg is None else cfg, project_path=project, env=env,
             runner=runner or (lambda argv, timeout: types.SimpleNamespace(returncode=0)))
+
+    def test_an_unreadable_project_config_is_a_quiet_skip(self, tmp_path) -> None:
+        env = {"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:pZZ"}
+        assert "skipped" in self._try(tmp_path, env=env, project="/nonexistent/project")
 
     def test_not_inside_herdr_is_a_quiet_skip(self, tmp_path) -> None:
         assert "skipped" in self._try(tmp_path, env={})

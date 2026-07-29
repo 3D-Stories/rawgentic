@@ -598,18 +598,34 @@ def insert_prompt(*, pane: str, text: str, runner=None,
     send_text, send_keys = build_send_text_argv(pane=pane, text=text)
     runner = _default_runner if runner is None else runner
 
-    read = runner(build_pane_read_argv(pane))
-    if getattr(read, "returncode", 1) != 0:
-        return (False, "refusing to type: the pane read failed, so its state is unknown")
-    screen = read.stdout if isinstance(getattr(read, "stdout", None), str) else ""
-    for signature in _PERMISSION_DIALOG_SIGNATURES:
-        if signature in screen:
-            return (False, f"refusing to type: a permission dialog is on screen ({signature!r}) "
-                           "— an Enter would accept it")
+    def dialog_veto():
+        """None when it is safe to type/submit, else the reason it is not."""
+        read = runner(build_pane_read_argv(pane))
+        if getattr(read, "returncode", 1) != 0:
+            return "the pane read failed, so its state is unknown"
+        screen = read.stdout if isinstance(getattr(read, "stdout", None), str) else ""
+        for signature in _PERMISSION_DIALOG_SIGNATURES:
+            if signature in screen:
+                return f"a permission dialog is on screen ({signature!r}) — an Enter would accept it"
+        return None
+
+    blocked = dialog_veto()
+    if blocked:
+        return (False, f"refusing to type: {blocked}")
 
     if getattr(runner(send_text), "returncode", 1) != 0:
         return (False, "herdr pane send-text failed — nothing was pasted")
     sleep(INSERT_SUBMIT_DELAY_S)
+
+    # CHECK AGAIN, immediately before the Enter (#718 Step-11 diff review, High). One pre-paste
+    # snapshot is not enough: the delay is a 1.5 s window in which a permission dialog can appear,
+    # and an Enter fired into it accepts the dialog instead of submitting a turn. Re-reading shrinks
+    # that window to the round trip. The prose stays pasted-but-unsubmitted, which `Stop`'s next
+    # firing can recover with a bare Enter rather than a re-paste (`build_send_enter_argv`).
+    blocked = dialog_veto()
+    if blocked:
+        return (False, f"refusing to submit: {blocked}. The prose is pasted but UNSUBMITTED")
+
     if getattr(runner(send_keys), "returncode", 1) != 0:
         return (False, "herdr pane send-keys failed — the prose is pasted but unsubmitted; a bare "
                        "Enter is the recovery (see build_send_enter_argv)")

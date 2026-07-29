@@ -323,3 +323,29 @@ dispositions live here. **Six findings, all six CONFIRMED against the code, none
 
 No finding was rejected, and none was applied piecemeal — H1/H2/M3/M6 were folded together, and
 M4/M5 gate the build rather than being written around.
+
+### 7b. Step-11 diff review dispositions (pre-PR)
+
+`/rawgentic:adversarial-review .rawgentic-advdiff-718.diff diff`, gpt backend, on commit `5b3f556`
+BEFORE the PR was opened. **Four findings, 3 High. All four confirmed against the code.**
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| D1 | High | A launcher exit of 0 permanently retains the once-per-window reservation and reports `inserted`, though submission is unverifiable — so an rc-0-without-submission recurrence under a slower paste suppresses every retry for that window, leaving only the channel a model may refuse | **CONFIRMED, NOT FIXED — residual, owner-facing (see §7c).** It re-opens H1's hole for the *silent* case. The honest fix is durable verification (the inserted prose appearing as a user turn in the transcript) plus release-and-retry, which is a design addition needing its own measurement |
+| D2 | High | The safety check is only a PRE-paste snapshot; it neither proves the composer is empty nor re-checks after the 1.5 s delay, so a dialog opening inside that window gets accepted by the Enter | **ACCEPTED, FIXED.** A second `dialog_veto()` runs immediately before the Enter; on veto it returns with the prose explicitly reported as pasted-but-UNSUBMITTED. The "composer is empty" half is NOT solved and is folded into §7c |
+| D3 | High | The fail-closed guard checks only that `project_path` is truthy — an absent, unreadable or malformed config all reach the default `True`, so the project-scoped kill switch can be unreachable and insertion still enabled | **ACCEPTED, FIXED.** New `meter_config_readable()` distinguishes "healthy config, no block" (stay ON — the common case, this repo included) from "would not parse" (refuse). It found a real hole in the guard added for H2 one review earlier |
+| D4 | Medium | The insertion outcome is discarded, so disabled / skipped / timed-out / failed are indistinguishable from success, contradicting the README's "never silent about being disabled" | **ACCEPTED, FIXED.** Every non-`inserted` outcome now goes to `_warn` naming the reason and stating that only the refusable text channel fired. `inserted` stays quiet because it is self-evidencing |
+
+### 7c. Known residuals, stated rather than buried
+
+1. **A silent non-submission still burns the window (D1).** If `send-keys` returns 0 but nothing
+   submits — the round-1 failure mode, which the 1.5 s delay is measured to avoid but does not make
+   impossible — the `stop-insert` reservation is held and no retry occurs for that window. The emit
+   still delivered. **Mitigation in place:** the measured delay, and the second dialog check.
+   **Real fix:** verify from the transcript that the prose became a user turn, then release and
+   retry. Filed as a follow-up rather than guessed at here.
+2. **A non-empty composer is not detected (D2, partial).** `send-text` appends, so a half-typed
+   user draft would be submitted together with the inserted prose. No reliable "composer is empty"
+   signal was found: `pane_shows_unsubmitted_paste` needs a collapsed-paste marker that short prose
+   never produces, and its own contract says that marker also appears after a successful submit.
+   Detecting this needs a measurement, not an argument.
