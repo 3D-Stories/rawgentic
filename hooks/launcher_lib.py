@@ -2803,6 +2803,43 @@ def _cmd_ad_hoc_handoff(args) -> int:
             "marker is matched as a plain substring, so a short common word would also match "
             "unrelated transcript content and pass prompt_landed before the prompt ever "
             "submitted. Use a token unique to this handoff, e.g. '[handoff-700]'")
+    # Step-11 diff review: the length floor alone does not deliver what it aims at, since an
+    # 8-character PHRASE is still ordinary prose. Requiring a single token narrows it much further
+    # — the bind turn's own transcript output is prose and tool JSON, which does not contain
+    # `[handoff-700]`-shaped tokens. Still a heuristic, not a proof of uniqueness; the guarantee
+    # remains the caller's choice of token, which is why the skill states the rule too.
+    if marker.strip() != marker or any(c.isspace() for c in marker):
+        raise LauncherError(
+            f"prompt marker {marker!r} contains whitespace — a marker must be a single token so it "
+            "cannot match ordinary prose in the successor's transcript. Use e.g. '[handoff-700]'")
+
+    # Step-11 diff review (Medium): nothing bound the anchor pane to the CALLING session, and
+    # teardown CLOSES that pane — so a stale or mistyped `$HERDR_PANE_ID` would split from, and then
+    # close, a stranger's pane. `retire_predecessor` already holds the rule this mirrors: a
+    # destructive target must prove it hosts the session claiming authority over it.
+    #
+    # Scoped to the destructive request on purpose. Without teardown a wrong anchor is a pane split
+    # in the wrong place — recoverable, and not worth requiring a live herdr probe (and therefore a
+    # herdr server) for every ordinary handoff.
+    if args.teardown_predecessor:
+        own = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+        if not own:
+            raise LauncherError(
+                "$CLAUDE_CODE_SESSION_ID is unset or empty — refusing --teardown-predecessor. "
+                "Closing a pane is irreversible, and a session that cannot prove its own identity "
+                "cannot prove the pane it is asking to close is its own")
+        probe = _default_runner(build_pane_get_argv(args.anchor_pane))
+        if getattr(probe, "returncode", 1) != 0:
+            raise LauncherError(
+                f"`herdr pane get {args.anchor_pane}` returned "
+                f"rc={getattr(probe, 'returncode', None)} — refusing --teardown-predecessor "
+                "because the pane cannot be proven to be yours right now")
+        live = parse_pane_agent_session(getattr(probe, "stdout", "") or "")
+        if live != own:
+            raise LauncherError(
+                f"pane {args.anchor_pane} hosts session {live!r}, not this session ({own!r}) — "
+                "refusing --teardown-predecessor. Closing it could kill an unrelated session; "
+                "check $HERDR_PANE_ID")
 
     # `steps` is deliberately NOT passed: the canonical launch ladder is the only legal one for a
     # launch handoff (`evaluate_verifications` refuses anything else), and defaulting says so.

@@ -333,6 +333,41 @@ The skill cannot "observe a meter"; it reacts to the context-meter hook's own sy
 whose threshold and window belong to `contextMeter` (#687, configurability #701). Accepted →
 reworded to that, and pinned by an eval case rather than a mechanism the skill does not have.
 
+## Step-11 diff-review dispositions (WF5 on the merged diff, 2026-07-29 — 3 findings: 2 High, 1 Medium)
+
+Run retrospectively, after #704 merged: the design gate had run but a pre-PR diff review had not,
+and this change touches `perform_handoff`, which the campaign path shares. Report:
+`docs/reviews/rawgentic-advdiff-700-diff-2026-07-29.md` (gitignored). Fixed in the follow-up PR.
+
+**Medium — nothing binds the anchor pane to the calling session, and teardown closes that pane.
+CONFIRMED, and the only genuinely new finding of the three.** Verified by reading: `perform_handoff`
+validates the anchor's *shape* (`validate_pane_id`) and nothing else, so a stale or mistyped
+`$HERDR_PANE_ID` with `--teardown-predecessor` would split from, and then close, a stranger's pane.
+`retire_predecessor` already holds the right rule (`hooks/launcher_lib.py:2108`) — a destructive
+target must prove it hosts the session claiming authority over it — and it was simply absent here.
+Fixed: with teardown requested, the subcommand requires `$CLAUDE_CODE_SESSION_ID` (mirroring
+`_own_session_id(require_env=True)`) and refuses unless `herdr pane get <anchor>` proves that pane
+hosts it. Fail-closed on an unreadable probe. Scoped to the destructive request deliberately —
+without teardown a wrong anchor is a recoverable mis-split, and demanding a live herdr probe for the
+harmless case would refuse every environment without herdr.
+
+**High — the 8-character floor does not deliver the uniqueness its own comment claims. CONFIRMED as
+a weak mitigation; strengthened, not closed.** The floor admits an 8-character *phrase*, which is
+ordinary prose. Tightened to require a single token (no whitespace), which the bind turn's own
+transcript output — prose and tool JSON — will not contain in `[handoff-700]` shape. This is still a
+heuristic and both the code and the skill say so; genuine structural uniqueness would mean the
+subcommand mutating the caller's prompt to inject a nonce, which was considered and rejected as the
+worse trade.
+
+**High — a stale paste affordance plus an unrecognised dialog could still let an Enter through.
+CONFIRMED as a residual risk; not fixed, and deliberately so.** The reviewer is right that the
+positive signal is not reliable on its own. No better mechanism is available: the affordance is the
+only durable evidence about the input box, `agent_status` is measured useless for this (#694), and a
+structured transcript match was already falsified (`:573-582`). The reachable path is also narrow —
+the nudge only runs when `prompt_landed` is false, so the affordance in view is normally the
+unsubmitted prompt's own. Bounded at four Enters into a session we just created. **This is the one
+claim in #700 most likely to be wrong**, and it is recorded rather than mitigated away.
+
 ## Risk
 
 **Low–medium**, up from the issue's "low" because the recovery touches `perform_handoff`, which the

@@ -41,9 +41,11 @@ Two hard rules about the prompt, both of which the command enforces by refusing:
 
 1. **It must NOT contain `/rawgentic:switch`.** The bind is sent as its own verified turn, so a
    prompt that also binds makes the successor run the switch skill twice (#694).
-2. **It must contain a marker unique to this handoff** — a short single-line token such as
-   `[handoff-700]`, ideally its first line. This is the string that proves the prompt actually
-   arrived, so a common word will not do.
+2. **It must contain a marker unique to this handoff** — a single token such as `[handoff-700]`,
+   ideally its first line. This is the string that proves the prompt actually arrived, so it is
+   refused if it is shorter than 8 characters or contains any whitespace: a common word or a phrase
+   would also match unrelated content in the successor's transcript and pass the check before the
+   prompt had submitted at all.
 
 **The goal condition.** What the successor still owes, in its own words. If the user has a `/goal`
 already, reuse its text verbatim. Multiline is fine — put it in a file and pass the path.
@@ -84,6 +86,10 @@ python3 "${CLAUDE_PLUGIN_ROOT}/hooks/launcher_lib.py" ad-hoc-handoff \
 
 Add `--teardown-predecessor` **only** when the user has actually asked for their own pane to be
 closed. It is off by default, and it only ever fires after every verification has already passed.
+Asking for it adds a precondition: the anchor pane must **provably host this session**, checked
+against `$CLAUDE_CODE_SESSION_ID` before anything launches. A stale `$HERDR_PANE_ID` is therefore a
+refusal rather than a stranger's pane being closed. If that check refuses, re-derive the pane id
+instead of forcing it.
 
 Run it in the foreground. It polls real artifacts, so a slow successor can take a couple of minutes;
 that is the gating working, not a hang.

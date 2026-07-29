@@ -365,17 +365,10 @@ class TestAdHocSubcommand:
         ll.main(_argv(tmp_path))
         assert seen["teardown"] is False
 
-    def test_teardown_is_opt_in(self, tmp_path, monkeypatch) -> None:
-        seen = {}
-        monkeypatch.setattr(ll, "perform_handoff",
-                            lambda **kw: (seen.update(kw), {"ok": True, "results": {},
-                                                            "steps": [], "new_pane": None,
-                                                            "session_id": None, "cleanup": None,
-                                                            "truncated": False,
-                                                            "failed_step": None,
-                                                            "teardown_skipped": None})[1])
-        ll.main(_argv(tmp_path, **{"--teardown-predecessor": None}))
-        assert seen["teardown"] is True
+    # The opt-IN half of AC4 lives in `TestTeardownOwnership`: since the Step-11 diff review,
+    # `--teardown-predecessor` also has to prove the anchor pane is this session's own, so the
+    # assertion that `teardown=True` reaches `perform_handoff` cannot be made without that setup —
+    # see `test_teardown_proceeds_when_the_pane_is_provably_ours`.
 
     def test_an_inline_prompt_and_a_file_prompt_agree(self, tmp_path, monkeypatch) -> None:
         seen = []
@@ -466,6 +459,17 @@ class TestAdHocSubcommand:
         assert proc.returncode == 2
         assert "not allowed with" in proc.stderr
 
+    def test_a_marker_containing_whitespace_is_refused(self, tmp_path) -> None:
+        """The length floor alone does not make a marker distinctive — the #700 Step-11 diff review
+        named that gap. A whitespace-free token is far less likely to occur in the bind turn's own
+        transcript output than a phrase is, and it matches the documented `[handoff-700]` shape."""
+        prompt = tmp_path / "p.md"
+        prompt.write_text("the handoff prompt for this run", encoding="utf-8")
+        proc = _cli(*_argv(tmp_path, **{"--resume-prompt-file": str(prompt),
+                                        "--prompt-marker": "the handoff"}))
+        assert proc.returncode == 2, proc.stdout
+        assert "whitespace" in proc.stderr
+
     def test_a_failed_handoff_exits_nonzero_with_the_step_named(self, tmp_path,
                                                                 monkeypatch) -> None:
         monkeypatch.setattr(ll, "perform_handoff",
@@ -475,3 +479,87 @@ class TestAdHocSubcommand:
                                           "failed_step": "prompt_landed",
                                           "teardown_skipped": None})
         assert ll.main(_argv(tmp_path)) == 4
+
+
+class TestTeardownOwnership:
+    """#700 Step-11 diff review, Medium: nothing bound the anchor pane to the CALLING session, and
+    `--teardown-predecessor` closes that pane. A stale or mistyped `$HERDR_PANE_ID` would therefore
+    split from, and then close, a stranger's pane.
+
+    `retire_predecessor` already holds the pattern this mirrors (`hooks/launcher_lib.py:2108`): a
+    destructive target must PROVE it hosts the session claiming authority over it. The check is
+    scoped to the destructive request — without teardown a wrong anchor is merely a pane split in
+    the wrong place, and demanding a live herdr probe for the harmless case would refuse every
+    environment that has no herdr at all.
+    """
+
+    OTHER = json.dumps({"result": {"pane": {
+        "pane_id": "w1:p1", "agent_status": "idle",
+        "agent_session": {"agent": "claude", "kind": "id", "source": "herdr:claude",
+                          "value": "someone-elses-session"}}}})
+
+    def _own(self, session):
+        return json.dumps({"result": {"pane": {
+            "pane_id": "w1:p1", "agent_status": "idle",
+            "agent_session": {"agent": "claude", "kind": "id", "source": "herdr:claude",
+                              "value": session}}}})
+
+    def test_teardown_refuses_a_pane_that_hosts_another_session(self, tmp_path,
+                                                               monkeypatch) -> None:
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "my-own-session")
+        monkeypatch.setattr(ll, "_default_runner",
+                            lambda argv, timeout=180: FakeProc(0, self.OTHER))
+        called = []
+        monkeypatch.setattr(ll, "perform_handoff", lambda **kw: called.append(kw))
+        assert ll.main(_argv(tmp_path, **{"--teardown-predecessor": None})) == 2
+        assert called == [], "nothing may be launched once the teardown target is unproven"
+
+    def test_teardown_proceeds_when_the_pane_is_provably_ours(self, tmp_path,
+                                                             monkeypatch) -> None:
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "my-own-session")
+        monkeypatch.setattr(ll, "_default_runner",
+                            lambda argv, timeout=180: FakeProc(0, self._own("my-own-session")))
+        seen = {}
+        monkeypatch.setattr(ll, "perform_handoff",
+                            lambda **kw: (seen.update(kw), {"ok": True, "results": {},
+                                                            "steps": [], "new_pane": None,
+                                                            "session_id": None, "cleanup": None,
+                                                            "truncated": False,
+                                                            "failed_step": None,
+                                                            "teardown_skipped": None})[1])
+        assert ll.main(_argv(tmp_path, **{"--teardown-predecessor": None})) == 0
+        assert seen["teardown"] is True
+
+    def test_teardown_refuses_when_the_probe_cannot_prove_anything(self, tmp_path,
+                                                                  monkeypatch) -> None:
+        """Fail CLOSED: an unreadable pane is not evidence of ownership, and what it gates is
+        irreversible."""
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "my-own-session")
+        monkeypatch.setattr(ll, "_default_runner", lambda argv, timeout=180: FakeProc(1, ""))
+        assert ll.main(_argv(tmp_path, **{"--teardown-predecessor": None})) == 2
+
+    def test_teardown_refuses_a_session_that_cannot_prove_its_own_identity(self, tmp_path,
+                                                                          monkeypatch) -> None:
+        """Mirrors `_own_session_id(require_env=True)`: no environment at all is not a state a real
+        Claude session is in, so it cannot be allowed to authorise a close."""
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.setattr(ll, "_default_runner",
+                            lambda argv, timeout=180: FakeProc(0, self._own("whatever")))
+        assert ll.main(_argv(tmp_path, **{"--teardown-predecessor": None})) == 2
+
+    def test_no_teardown_means_no_ownership_probe_at_all(self, tmp_path, monkeypatch) -> None:
+        """The default path must not require a live herdr server just to hand off work."""
+        calls = []
+
+        def runner(argv, timeout=180):
+            calls.append(argv)
+            return FakeProc(0, "")
+
+        monkeypatch.setattr(ll, "_default_runner", runner)
+        monkeypatch.setattr(ll, "perform_handoff",
+                            lambda **kw: {"ok": True, "results": {}, "steps": [],
+                                          "new_pane": None, "session_id": None, "cleanup": None,
+                                          "truncated": False, "failed_step": None,
+                                          "teardown_skipped": None})
+        assert ll.main(_argv(tmp_path)) == 0
+        assert calls == []
