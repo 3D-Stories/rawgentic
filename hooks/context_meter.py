@@ -772,8 +772,23 @@ def _sweep(home):
 
 
 def has_marker(home, session_id, window, tier, channel) -> bool:
+    """Has this tier already been delivered on this channel?
+
+    Honours the PRE-#713 unchannelled marker for the mid-turn channel (Step-11 diff review,
+    Medium). A session that crossed a tier under <= 3.107.1 and then picked up this version
+    would otherwise find no marker and re-deliver the tier it had already been given — and
+    since the directive tier now leads to an automatic handoff, a duplicate is not merely
+    noise. The legacy marker deliberately does NOT satisfy the `stop` channel: that channel
+    never delivered anything before this version, so treating an old record as covering it
+    would leave the new arm born silenced in exactly the long-running sessions it is for.
+    """
     try:
-        return os.path.exists(marker_path(home, session_id, window, tier, channel))
+        if os.path.exists(marker_path(home, session_id, window, tier, channel)):
+            return True
+        if channel == "midturn":
+            return os.path.exists(os.path.join(
+                state_dir(home), f"{session_id}.{window}.{tier}.emitted"))
+        return False
     except OSError:
         return False
 

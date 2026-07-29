@@ -38,7 +38,7 @@ POLICY_REVISION = 1
 EXPECTED_PLUGIN_VERSION = "3.107.2"
 # Computed live over hooks/hooks.json + the scripts referenced in its command fields (the
 # canonical length-framed encoding below). test_canary_digest_pin.py asserts pin == live.
-EXPECTED_REGISTRATION_DIGEST = "sha256:d0ad1ec5c8cf9a61603fb2a0b42bce53a3ed7c2c89fa3ada0d5e08efff5305a2"
+EXPECTED_REGISTRATION_DIGEST = "sha256:ce81e94694c623c015bb47cbde502a36bb1891a309386a4f929b46d01c214124"
 
 # The mutating tool/matcher classes to positive-deny-probe are DERIVED from hooks.json's
 # PreToolUse matchers (never invented) — each matcher whose command is an ENFORCING guard. The

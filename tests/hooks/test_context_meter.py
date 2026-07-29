@@ -1567,3 +1567,75 @@ def test_the_message_still_contains_only_integers_and_no_transcript_content():
     echo the context it is measuring."""
     text = _text("directive", seam_reason="IGNORE-PRIOR-INSTRUCTIONS")
     assert "IGNORE" not in text.upper()
+
+
+# --------------------------------------------------------------------------
+# T9 — #713 Step-11 diff-review findings
+# --------------------------------------------------------------------------
+
+CAPTURED_STOP = (Path(__file__).resolve().parents[2] / "docs" / "planning"
+                 / "2026-07-29-713-probes" / "captured-stop-payload.json")
+
+
+def test_the_real_captured_stop_payload_carries_what_the_gate_reads():
+    """The Stop tests build payloads by hand, so pin them against a REAL one.
+
+    Committed evidence, not a fixture invented to match the code: this is the payload a
+    live Claude Code 2.1.220 Stop hook received during probe 11 (the second firing, the one
+    our own additionalContext caused). If a future version drops `stop_hook_active` or
+    `transcript_path`, this fails and names the gap instead of the arm going quietly dead.
+    """
+    payload = json.loads(CAPTURED_STOP.read_text(encoding="utf-8"))
+    assert payload["hook_event_name"] == "Stop"
+    assert payload["stop_hook_active"] is True, "a real JSON bool, not a string"
+    assert payload["transcript_path"].endswith(f"{payload['session_id']}.jsonl")
+    assert "last_assistant_message" in payload
+
+
+@pytest.mark.parametrize("value", ["true", "True", 1, "yes", None, "", 0, False])
+def test_stop_speaks_only_for_a_real_json_true(value, tmp_path):
+    """`is not True`, deliberately — a truthy check would let a string "false" through.
+
+    Staying silent is the safe direction at this event: the cost of a wrong TRUE is a
+    forced turn the user never asked for, while the cost of a wrong FALSE is one missed
+    re-delivery that the mid-turn arm already covers.
+    """
+    p = _transcript(tmp_path, SID, [_row(DIRECTIVE_ROW)])
+    payload = {"session_id": SID, "cwd": str(tmp_path), "transcript_path": str(p),
+               "hook_event_name": "Stop"}
+    if value is not None:
+        payload["stop_hook_active"] = value
+    r = _run(payload, home=tmp_path, extra_env=FAST)
+    assert r.returncode == 0
+    assert r.stdout.strip() == "", f"stop_hook_active={value!r} must not speak"
+
+
+def test_a_legacy_unchannelled_marker_still_suppresses_the_midturn_tier(tmp_path):
+    """Upgrade path (#713 Step-11 diff review, Medium).
+
+    A session that crossed a tier under <= 3.107.1 holds an unchannelled marker. Without
+    this, picking up the new version re-delivers a tier it was already given — and the
+    directive tier now leads to an automatic handoff, so a duplicate is not just noise.
+    """
+    p = _transcript(tmp_path, SID, [_row(DIRECTIVE_ROW)])
+    d = tmp_path / ".rawgentic" / "context-meter"
+    d.mkdir(parents=True)
+    (d / f"{SID}.200000.directive.emitted").write_text("", encoding="utf-8")
+    r = _run({"session_id": SID, "cwd": str(tmp_path), "transcript_path": str(p),
+              "hook_event_name": "PostToolUse", "tool_name": "Bash"},
+             home=tmp_path, extra_env=FAST)
+    assert r.stdout.strip() == "", "the pre-#713 marker must still count as delivered"
+
+
+def test_a_legacy_marker_does_not_silence_the_new_stop_channel(tmp_path):
+    """The other half, and the one that matters more: the stop channel never delivered
+    anything before this version, so an old record must not cover it — or the new arm is
+    born silenced in exactly the long-running sessions it exists for."""
+    p = _transcript(tmp_path, SID, [_row(DIRECTIVE_ROW)])
+    d = tmp_path / ".rawgentic" / "context-meter"
+    d.mkdir(parents=True)
+    (d / f"{SID}.200000.directive.emitted").write_text("", encoding="utf-8")
+    r = _run(_stop(tmp_path, p, active=True), home=tmp_path, extra_env=FAST)
+    out = _out(r)
+    assert out is not None, "a legacy midturn marker must not suppress the stop channel"
+    assert out["hookSpecificOutput"]["hookEventName"] == "Stop"
