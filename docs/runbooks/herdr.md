@@ -249,9 +249,28 @@ Two calls, always. A multiline payload arrives as one collapsed bracketed paste 
 
 **Submission is verified from the TRANSCRIPT, and never from `agent_status`.** Read the receiving session's own `<session-id>.jsonl` (or any durable artifact the receiver writes, such as its session-registry row) for something only a delivered prompt could produce. A `send-*` exit code proves transport, not arrival. `agent_status` proves nothing at all: measured live it read `idle` immediately after a prompt was submitted, `done` while a turn was still producing output, and `working` for a session sitting at an empty input line.
 
-**`herdr agent wait` takes an agent NAME, not a pane id.** Passing a pane id for a shell-launched `claude` returns `{"error":{"code":"agent_not_found","message":"agent target w1:pD8 not found"}}`, so it is only usable for agents registered through `herdr agent start` — which is why §7.1 step 5 can use it and an ad-hoc sibling pane generally cannot. Combined with the point above, an ad-hoc handoff has **no readiness primitive available**: poll the artifact instead.
+**`herdr agent wait` takes an agent NAME, not a pane id.** Passing a pane id for a shell-launched `claude` returns `{"error":{"code":"agent_not_found","message":"agent target w1:pD8 not found"}}`, so it is only usable for agents registered through `herdr agent start` — which is why §7.1 step 5 can use it and an ad-hoc sibling pane generally cannot. Combined with the point above, delivering text to a pane that is **already running** a session has **no readiness primitive available**: poll the artifact instead. (This does not apply to `/rawgentic:pane-handoff`, which starts the successor through `herdr agent start` and therefore does have `agent wait` — see the helper note below.)
 
-**No helper is shipped for this, deliberately.** `build_send_text_argv` + `_poll_for` + `transcript_has_marker` already compose into exactly a send-and-confirm wrapper, and `perform_handoff` is that composition. Adding a second, general one would duplicate a working path for the sake of the ad-hoc case, so the recipe above is documented instead of wrapped. Revisit if ad-hoc pane handoffs become routine enough that hand-rolling the poll is a recurring source of error rather than a one-off.
+**A helper IS now shipped — use it (#700).** This section previously said none was, deliberately, and recorded the condition for revisiting: *"Revisit if ad-hoc pane handoffs become routine enough that hand-rolling the poll is a recurring source of error rather than a one-off."* That condition was met — the sequence was hand-driven twice in one day, and a session-history mining pass found seven separate occasions in 36 hours where the handoff was expected and did not happen.
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/hooks/launcher_lib.py" ad-hoc-handoff --help
+```
+
+The `/rawgentic:pane-handoff` skill is the front end; `ad-hoc-handoff` is a thin adapter that takes the project, prompt, goal condition and anchor pane directly — no driver-state file and no `--launcher-armed`, which is what `_cmd_handoff` requires and why it could not serve this case — and drives `perform_handoff` unchanged. Closing your own pane is opt-in and OFF by default: an ad-hoc handoff hands off *work*, not the caller's session.
+
+**Which of the two you want depends on whether a session already exists in the target pane:**
+
+| Situation | Use |
+|---|---|
+| Hand work to a FRESH successor | `/rawgentic:pane-handoff` — it launches the pane, so `agent wait` works and all the gates above apply |
+| Deliver text to a pane ALREADY running a session | the by-hand recipe in this section — that pane is not a herdr-registered agent, so it has no readiness primitive and none of the gates apply |
+
+The rule the helper exists to enforce: **never assemble the delivery sequence yourself.** `tests/test_pane_handoff_skill.py` fails if the skill body grows a raw terminal-primitive call, because reinstating it is a silent regression whose only symptom — a prompt that looks undelivered — argues for exactly the wrong response.
+
+**One thing the helper does that the recipe above does not describe: a paste can be intact and genuinely UNSUBMITTED, which is a third state.** Found live on 2026-07-29 driving this sequence by hand. `project_switched` proves the bind's registry row *landed*, not that its *turn ended* — the same reasoning error #694 corrected for `goal_status met:false` and left standing here — so the prompt's Enter can be consumed by the still-running bind turn. The pane then shows `[Pasted text #1 +9 lines]` with the content sitting in the input box and `prompt_landed` never appears.
+
+The recovery is **one bare Enter, and nothing else**: no re-paste (double submission) and no truncation (silent corruption). `perform_handoff` now does up to `PROMPT_NUDGE_ROUNDS` rounds of that, each one gated on `pane_shows_unsubmitted_paste` first, because an Enter accepts whatever is on screen and a bounded count is not a bound on privilege. Any unknown pane state — a permission dialog visible, no paste affordance, a failed read — abandons the recovery and fails closed exactly as before. If you are ever doing this by hand, that is the rule to copy: **submit what is already there.**
 
 **A known gap this repo cannot close.** `~/.claude/skills/herdr/SKILL.md` — the herdr agent skill — documented five invocations of a top-level `herdr wait` that does not exist. It has been corrected locally, but that file is user-level and lives **outside any git repository**, so it is neither committed here nor covered by CI. If you are reading a copy of that skill that still shows `herdr wait`, the skill is stale and this runbook is authoritative. The in-repo half is guarded by `tests/test_herdr_runbook_doc.py`.
 

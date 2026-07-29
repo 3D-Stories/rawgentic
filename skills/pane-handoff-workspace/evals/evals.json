@@ -1,0 +1,36 @@
+{
+  "skill_name": "rawgentic:pane-handoff",
+  "_note": "#700. Triggering is the thing worth measuring here: the issue recorded SEVEN reproaches in 36 hours ('Why didn't you finish the handoff?'), i.e. sessions that should have fired this skill and did not. The prompts below are the owner's real mined phrasings, including the dictated variants ('herder' for herdr, 'pain' for pane) that a description keyed only on 'handoff' would miss. Cases exercise TRIGGERING and refusal, never a live herdr server — the launch itself needs a real pane, so an eval must not depend on one.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "do the herdr session pane pass off",
+      "expected_output": "Invokes the rawgentic:pane-handoff skill. 'pass off' is the dominant phrasing in real requests, not 'handoff', so this must trigger. The skill assembles the anchor pane from $HERDR_PANE_ID and the project from the session-registry row, and drives launcher_lib.py ad-hoc-handoff. It does NOT issue herdr terminal primitives itself."
+    },
+    {
+      "id": 2,
+      "prompt": "Amend the goal and then use Herder to send this over to a new pain.",
+      "expected_output": "Invokes the rawgentic:pane-handoff skill despite the dictation variants ('Herder' for herdr, 'pain' for pane) and despite arriving bundled with another instruction. The amended goal text becomes the successor's --goal-condition."
+    },
+    {
+      "id": 3,
+      "prompt": "hand it over",
+      "expected_output": "Invokes the rawgentic:pane-handoff skill — a terse request is still a request. Because no resume prompt exists yet, the skill says so and points at clear-prep to produce the payload rather than inventing a prompt."
+    },
+    {
+      "id": 4,
+      "prompt": "Run a clear prep and then pass the prompt and goal into a new pane to start the new session",
+      "expected_output": "Runs clear-prep first to produce the handoff payload, then invokes rawgentic:pane-handoff CONSUMING its resume-prompt file and goal text. pane-handoff does not itself invoke clear-prep — clear-prep lives outside this repository."
+    },
+    {
+      "id": 5,
+      "prompt": "The context-meter reminder says the session has reached its directive tier and should break now. Handle it.",
+      "expected_output": "Offers or performs the pass-off unprompted, because the directive tier is the trigger the user expects to act on without asking. Does not claim to read a meter directly — it reacts to the hook's reminder, whose threshold and window belong to contextMeter (#687/#701)."
+    },
+    {
+      "id": 6,
+      "prompt": "Send this prompt over to pane w1:pQ7, which already has a claude session running in it.",
+      "expected_output": "Does NOT run the ad-hoc handoff. That command LAUNCHES a successor; an already-running pane is not a herdr-registered agent, so its gates do not apply. Points at docs/runbooks/herdr.md section 7.1.2 for the by-hand case instead."
+    }
+  ]
+}
