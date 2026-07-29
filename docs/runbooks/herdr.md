@@ -198,33 +198,37 @@ The implementation is `hooks/launcher_lib.py`. `perform_handoff` is the wired se
 4. `herdr agent start <name> --kind claude --pane <new> --timeout <ms>` — **with no goal** (see §7.2). **A freshly split pane is not yet an available shell**, so this call is retried while — and only while — herdr answers with its own `agent_pane_busy` code (up to 15 attempts, 2 s apart). Any other refusal is terminal, because retrying a malformed name or a dead server would only postpone the abort. A pane that never becomes available still fails closed and still closes the tentative pane. See §7.8 for how this was found.
 5. `herdr agent wait <new> --until idle --timeout <ms>` — readiness, before anything is pasted.
 6. `herdr pane get <new>` → the successor's session id. Record its transcript's pre-launch offset too.
-7. `herdr pane send-text <new> "/goal <condition>"` then `herdr pane send-keys <new> Enter`.
-8. **Poll the transcript until the guard is proven armed** — a `goal_status` row with `met: false` whose condition is the one just armed. Failing here aborts *before* the successor is given any work.
-9. **Poll `herdr pane get <new>` until `agent_status` is `idle`** — the successor is genuinely settled, not merely armed. Failing here aborts before the prompt is sent (`failed_step: successor_unsettled`), leaving the predecessor alive and still guarded. See §7.1.1.
-10. `herdr pane send-text <new> "<resume prompt>"` then `send-keys Enter`. The prompt is `driver_lib`'s canonical resume wording for the next ready child, never a hand-written string.
-11. Poll the registry until the successor's own `/rawgentic:switch` line appears.
-12. `herdr pane close <anchor>` — the predecessor, **last**, and only once every check passed.
+7. **SEND 1 — the bind, alone.** `herdr pane send-text <new> "/rawgentic:switch <project>"` then `herdr pane send-keys <new> Enter`. The project argument is mandatory: a bare `/rawgentic:switch` enters the switch skill's list mode and waits for a human (§7.1.1).
+8. **Poll the registry until the successor's own bind line appears** (`project_switched`). Failing here aborts before any work is handed over, leaving the predecessor alive and still guarded.
+9. **SEND 2 — the work.** `herdr pane send-text <new> "<resume prompt>"` then `send-keys Enter`. The prompt is `driver_lib`'s canonical resume wording for the next ready child, never a hand-written string, and it carries **no bind of its own** — send 1 did that.
+10. **Poll the transcript for the prompt's marker** (`prompt_landed`), when the caller supplied one. rc 0 on `send-text` proves transport, not arrival.
+11. **SEND 3 — the guard, last.** `herdr pane send-text <new> "/goal <condition>"` then `send-keys Enter`.
+12. **Poll the transcript until the guard is proven armed** — a `goal_status` row with `met: false` whose condition is the one just armed.
+13. `herdr pane close <anchor>` — the predecessor, **last**, and only once every check passed.
 
-Step 10 comes after step 8 deliberately. A goal only re-prompts a session that tries to **stop**, so a successor that is armed but never given work sits idle and the run stalls silently — with the predecessor already retired. Equally, work handed to a session whose guard never armed is an **unguarded** run. Both orderings were wrong in earlier revisions; this one is the fix.
+Each poll sits immediately after the send whose artifact it reads, so a failure names the send that caused it. Every gate is a **durable artifact the successor itself writes**; none is a timer, and none is pane status (§7.1.1).
 
-#### 7.1.1 Why step 9 exists — armed is not the same as ready (#694)
+#### 7.1.1 Why the bind is its own send and `/goal` goes last (#694)
 
-`goal_armed` (step 8) proves a `goal_status` row was **written**. That row appears when the goal is **registered**, early in the goal's turn, so it can pass while the successor is still mid-turn. Step 9 closes the gap, and it is a **precondition on the paste, not a reordering of the ladder** — the ladder is still `spawned → goal_armed → project_switched`.
+Two things changed here, and the second one reverses an earlier revision of this page.
 
-Two distinct losses were measured live on 2026-07-29, both silent:
+**The bind is its own verified turn.** #682 made the resume prompt *open* with `/rawgentic:switch <project>` and checked that as a prefix — which its own validator docstring is honest about being a *proxy* for "first" rather than a proof of it. Sending the bind separately and waiting for its registry row makes the ordering **structural**, so the proxy has nothing left to do. #682 named this design correct and deferred it only because it reorders a ladder. `perform_handoff` now **refuses** a resume prompt that carries a bind at all: send 1 already did it, and a second one makes the successor run the switch skill twice. `driver_lib`'s builders take `include_bind`, defaulting to **True** — the interactive hand-back and the `claude -p` fallback each deliver exactly one prompt and so still need the bind inside it.
 
-| Successor state when the prompt is pasted | What happens |
+**`/goal` goes last, and this is measured.** A `/goal` pasted into a session *actively mid-turn* on 2026-07-29 produced its `goal_status met:false` row **while that turn was still running**, so it needs no idle window. The old ordering armed the guard first on the reasoning that work handed to an unguarded session is an unguarded run. That concern is **answered rather than discarded**: the predecessor is not retired until the last rung passes, so "work begins unguarded" never coincides with "the predecessor is already gone" — which was the actual harm. The residual unguarded window is between send 2 and step 12, bounded by exactly the thing that closes it.
+
+**`agent_status` is NOT a synchronisation signal, and nothing here may gate on it.** An earlier revision of this fix polled `herdr pane get` for `agent_status == "idle"` between the goal and the prompt. It was **falsified by measurement before it shipped**:
+
+| Measured, live, 2026-07-29 | Consequence |
 |---|---|
-| `working` | the prompt **queues** and was observed stranded — never dispatched |
-| `blocked` (on a permission dialog) | the prompt is **swallowed** — gone once the dialog is dismissed, 0 registry rows, transcript frozen mid-turn |
+| after a **real unmet** goal was armed, the pane read `working` on consecutive reads while the `goal_status met:false` row was **already present** | an idle gate placed after `goal_armed` refuses **every real handoff** — strictly worse than the bug |
+| `/goal` pasted mid-turn produced its row while the turn ran | the guard needs no idle window, so it can go last |
+| the value read `idle` right after a prompt was submitted, `done` mid-output, and `working` at an empty input line | the field does not describe input-readiness at all |
 
-Either way the launcher then burns the full 120 s `project_switched` budget waiting for the consequence of a prompt that never arrived, and reports a clean-looking `failed_step`.
+`parse_pane_agent_status` is retained for **diagnostics only** — it is what lets a report say *why* a handoff stalled. No control flow branches on it. The 22 tests that went green on the falsified gate proved nothing, because the fake runner returned a canned `agent_status: idle`.
 
-`idle` is the **only** accepted state — the same state step 5 already waits for before the goal paste. `done` is deliberately excluded: it was never shown to accept input, and it cannot legitimately occur here anyway, because step 8 has just proven an **unmet** goal (`met:false`), i.e. work outstanding. A `done` successor at that point contradicts the evidence that got the sequence this far, so refusing is the fail-closed reading rather than a false rejection.
+**What #694 turned out NOT to be.** The issue reported the cause as send **order** and asked for switch → prompt → goal. Reproduction refuted the stated *mechanism*: four live runs, and both orders failed identically under back-to-back sends, while a goal-first H7 live handover landed its prompt fine with the bind 25.5 s later (`docs/planning/2026-07-28-667-uat-plan/harness/evidence/682-h7-live-handover-2026-07-28.md`, lines 34-39). The **conclusion** "the goal goes last" is right; the reason in the issue is not. What actually discriminated was whether each send was *gated on evidence* rather than fired back-to-back.
 
-Budget: 20 attempts × 1.5 s = 30 s. One real goal turn on this host completed in ~4 s, so that is a ~7× margin. It is deliberately short rather than generous — a successor blocked on a permission dialog will never settle, so this is also the ceiling on how long such a handoff takes to fail, and failing fast leaves the predecessor alive and guarded.
-
-**What #694 turned out NOT to be.** The issue reported the cause as send **order** (`/goal` before the prompt) and asked for switch → prompt → goal. Reproduction refuted that: both orders failed identically under back-to-back sends, and the H7 live handover armed the goal **first** and landed its prompt fine, with the bind 25.5 s later (`docs/planning/2026-07-28-667-uat-plan/harness/evidence/682-h7-live-handover-2026-07-28.md`, lines 34-39). The reorder would also have stranded the **goal**, because `/rawgentic:switch` reliably blocks on a permission dialog (it edits `.rawgentic_workspace.json`), putting a third-position `/goal` squarely in the swallow case.
+**A permission-blocked successor is a precondition, not something this code can fix.** A prompt pasted into a session blocked on a permission dialog is swallowed outright — but that case was **induced by the test setup** (`--permission-mode default`). The launcher spawns plain `claude`, and `_ALLOWED_CLAUDE_ARGS` deliberately refuses `--permission-mode` as authority-bearing. So a non-blocking permission mode is a **precondition of unattended handoff** that the launcher cannot assert; it fails loudly on a stalled bind instead of building an auto-accepter.
 
 ### 7.2 Why the goal is NOT armed at birth
 
@@ -263,8 +267,11 @@ Checked in this order — which is causal, not alphabetical:
 | Step | Artifact that proves it |
 |---|---|
 | `spawned` | `herdr pane get <pane>` returns a non-empty `agent_session.value` |
-| `goal_armed` | the successor transcript, **past the baseline taken just before the goal was pasted**, carries a `goal_status` attachment with `met: false` whose `condition` is the one just armed |
 | `project_switched` | `claude_docs/session_registry.jsonl`, **past the baseline taken before the split**, carries a line with the NEW session id |
+| `prompt_landed` (mid-child ladder; launch ladder only when a marker is supplied) | the successor transcript, past its baseline, carries the generation-bound marker as a plain substring |
+| `goal_armed` | the successor transcript, **past the baseline taken as soon as the session id was known**, carries a `goal_status` attachment with `met: false` whose `condition` is the one just armed |
+
+The order is the send order (§7.1), and #694 reordered it to keep it that way. It is load-bearing rather than cosmetic: `evaluate_verifications` walks the ladder and stops at the **first** failure, so a ladder listing rungs out of send order reports the wrong step as the thing that broke. A reordered or duplicated ladder is refused outright — the sequence must match one of exactly three canonical tuples, so the pre-#694 order cannot be reintroduced by a caller passing `steps=`. The launch ladder has **no** `prompt_landed` rung because `prompt_marker` is optional there, and gating on an absent result fails closed.
 
 Pane text is rendered, wrapped, and scrolls away, so it is never the evidence. A step whose artifact is missing, unreadable, or unparseable counts as **failed**, not passed: an unreported check is not evidence of success, and what it gates is irreversible. `goal_armed` specifically requires `met: false` — an already-met goal would not prove the successor is guarded. A live handoff failed on 2026-07-27 precisely because no step was verified and the goal silently never armed.
 
@@ -276,7 +283,9 @@ Pane text is rendered, wrapped, and scrolls away, so it is never the evidence. A
 
 **What this still does NOT prove.** The evidence is bound to the launch *temporally* (it appeared after a baseline this handoff established, in a file that has not been replaced since). It is not bound *causally* — nothing in a `goal_status` or registry row carries a token identifying this particular handoff. For a `fresh` successor the gap is narrow, which is why `fresh` is the only launch mode. Closing it properly needs a nonce the successor echoes into an artifact; that does not exist yet.
 
-**Reads are polled, bounded, and fail closed.** The artifacts are written by hooks moments after the paste, so a single read races them. `goal_armed` polls up to 12 times at 1.5 s; `project_switched` polls up to 40 times at 3 s, because it needs the successor to run a whole `/rawgentic:switch` turn first. A read error mid-poll is retried, not fatal — a JSONL file being appended to can momentarily fail to read, and a read landing mid-character raises `UnicodeDecodeError`, which is retried alongside OS-level errors. Exhausting either budget fails the handoff and leaves the predecessor alive and guarded.
+**Reads are polled, bounded on BOTH axes, and fail closed.** The artifacts are written by hooks moments after the paste, so a single read races them. `goal_armed` and `prompt_landed` poll up to 12 times at 1.5 s; `project_switched` polls up to 40 times at 3 s, because it needs the successor to run a whole `/rawgentic:switch` turn first. A read error mid-poll is retried, not fatal — a JSONL file being appended to can momentarily fail to read, and a read landing mid-character raises `UnicodeDecodeError`, which is retried alongside OS-level errors. Exhausting either budget fails the handoff and leaves the predecessor alive and guarded.
+
+An attempt count alone is **not** a time bound, which a cross-model review caught on #694: every attempt does I/O and a blocked read has no ceiling of its own. Each poll therefore also carries a wall-clock deadline of `POLL_WALL_CLOCK_SLACK` (2×) its nominal `attempts × delay` budget, and the first attempt always runs so a slow clock can never become a verdict. The same bound now applies to the `agent_start` retry of §7.8, where the arithmetic actually bit: 15 attempts against a runner whose timeout is 180 s is a 45-minute ceiling on a condition that resolves itself in about a second.
 
 Truncation is surfaced, never silent: if the condition exceeds the 4000-char cap (which includes the `/goal ` prefix and the truncation note, so a 4000-char condition does not itself fit), the wired path reports it on the step record.
 

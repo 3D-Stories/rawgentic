@@ -71,19 +71,23 @@ def _goal_row(condition: str, met: bool) -> str:
 
 class TestMidChildLadder:
     def test_ladder_is_six_causal_steps_naming_on_disk_artifacts(self):
+        """#694 reordered the four predecessor-owned rungs to match the send order: the bind is its
+        own send, so its registry row comes first, and `/goal` goes last so `goal_armed` does too."""
         steps = ll.mid_child_verification_steps()
         assert [s["step"] for s in steps] == [
-            "spawned", "goal_armed", "prompt_landed", "project_switched",
+            "spawned", "project_switched", "prompt_landed", "goal_armed",
             "position_rebuilt", "state_claimed"]
         for s in steps:
             assert s["artifact"].strip()
             assert "pane text" not in s["artifact"].lower()
 
-    def test_launch_ladder_is_unchanged(self):
-        """#611's three-step contract is pinned by its own test; adding a ladder must not
-        mutate it, which is why the mid-child ladder is a separate tuple."""
+    def test_launch_ladder_is_still_three_steps(self):
+        """#611's three-step contract is a SEPARATE tuple from the mid-child ladder, and adding a
+        ladder must not change its length. #694 reordered both of them together — the launch ladder
+        has no `prompt_landed` rung because `prompt_marker` is optional there, so gating on it would
+        fail closed for every caller that supplies none."""
         assert [s["step"] for s in ll.handoff_verification_steps()] == [
-            "spawned", "goal_armed", "project_switched"]
+            "spawned", "project_switched", "goal_armed"]
 
     def test_evaluate_stops_at_the_first_missing_mid_child_step(self):
         results = {"spawned": True, "goal_armed": True, "prompt_landed": True,
@@ -1400,7 +1404,8 @@ class TestAnUnrecordableSuccessorIsAFailedLaunch:
         out = ll.perform_handoff(
             anchor_pane=ANCHOR, cwd=str(tmp_path), project_root=str(tmp_path), name="succ",
             expected_project="rawgentic",
-            goal_condition=COND, resume_prompt="marker-x /rawgentic:switch rawgentic — bind first, then do the thing",
+            # no bind inside the prompt: the launcher sends it as SEND 1 of its own (#694)
+            goal_condition=COND, resume_prompt="marker-x — do the thing",
             registry_path=str(tmp_path / "reg.jsonl"), transcript_dir=str(tmp_path / "t"),
             runner=runner, sleeper=lambda _s: None, read_text=lambda p: "",
             prompt_marker="marker-x", steps=ll.mid_child_verification_steps(),
