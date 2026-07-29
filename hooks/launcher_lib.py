@@ -126,31 +126,20 @@ GOAL_POLL_DELAY_S = 1.5
 SWITCH_POLL_ATTEMPTS = 40
 SWITCH_POLL_DELAY_S = 3.0
 
-# The successor must be SETTLED before the resume prompt is pasted (#694). `goal_armed` proves a
-# `goal_status` row was WRITTEN, and that row appears when the goal is REGISTERED — early in the
-# goal's turn — so it does NOT prove the turn ended. Two distinct losses follow from pasting too
-# early, both measured live on 2026-07-29:
-#   - into a `working` session the prompt QUEUES, and was observed stranded (never dispatched);
-#   - into a session `blocked` on a permission dialog the prompt is SWALLOWED — gone once the
-#     dialog was dismissed, 0 registry rows, the transcript frozen mid-turn.
-# Either way the launcher then spends 120 s polling `project_switched` for the consequence of a
-# prompt that never arrived, and reports a clean-looking `failed_step`.
+# `agent_status` is NOT a synchronisation signal, and nothing here may treat it as one (#694).
 #
-# `idle` is the ONLY accepted state, which is also the state the readiness gate before the GOAL
-# paste already waits for (`build_agent_wait_argv(..., until="idle")`). `done` is deliberately
-# EXCLUDED: it was never shown to accept input — the one live `done` session observed did NOT run
-# a prompt pasted into it — and it cannot legitimately occur at this point anyway, because
-# `goal_armed` has just proven an UNMET goal (`met:false`), i.e. work outstanding. A `done`
-# successor here contradicts the evidence that got us this far, so refusing is the fail-closed
-# reading rather than a false rejection.
+# An earlier revision of this fix gated the resume-prompt paste on `agent_status == "idle"`. It was
+# falsified by measurement on 2026-07-29, on this host, before it shipped:
+#   - after arming a real UNMET goal, the pane reported `working` across consecutive reads while the
+#     `goal_status met:false` row was already present — so an idle gate placed after `goal_armed`
+#     would have refused EVERY real handoff;
+#   - the value read `idle` immediately after a prompt was submitted, and `done` while a turn was
+#     still producing output, and `working` for a session sitting at an empty input line.
 #
-# Budget: one real goal turn on this host completed in ~4 s, so 30 s is a ~7x margin. It is
-# deliberately SHORT rather than generous, because a successor blocked on a permission dialog will
-# never settle, and this budget is therefore also the ceiling on how long such a handoff takes to
-# fail — and failing fast leaves the predecessor alive and still guarded.
-SETTLED_STATUS = "idle"
-SETTLE_POLL_ATTEMPTS = 20
-SETTLE_POLL_DELAY_S = 1.5
+# So the sequence is gated on DURABLE ARTIFACTS the successor itself writes — the session-registry
+# row and the `goal_status` row — and never on pane status or a fixed timer. `parse_pane_agent_status`
+# is retained for diagnostics only (it is what makes a report say WHY a handoff stalled); no control
+# flow may branch on it.
 
 # A freshly split pane is NOT immediately an available shell. Found live on 2026-07-28 (epic
 # #667): the split succeeded, `agent start` refused instantly with
@@ -180,12 +169,12 @@ PANE_READY_DELAY_S = 2.0
 _VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
     {"step": "spawned",
      "artifact": "herdr pane get <pane> -> a non-empty agent_session.value"},
-    {"step": "goal_armed",
-     "artifact": "the successor transcript BELOW the pre-launch offset -> a goal_status "
-                 "attachment with met:false whose condition is the one we armed"},
     {"step": "project_switched",
      "artifact": "claude_docs/session_registry.jsonl BELOW the pre-launch offset -> a line "
                  "carrying the NEW session id"},
+    {"step": "goal_armed",
+     "artifact": "the successor transcript BELOW the pre-launch offset -> a goal_status "
+                 "attachment with met:false whose condition is the one we armed"},
 )
 
 # The mid-child ladder (#665). Six checks, still CAUSAL, and every artifact is a file on disk or
@@ -1107,6 +1096,77 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             out["failed_step"] = "transcript_baseline_unreadable"
             return out
 
+        # SEND 1 of 3 — the BIND, as its own verified turn (#694).
+        #
+        # This is the design #682 identified as correct and deferred: "the launcher should send the
+        # bind as its own verified turn — it already sends `/goal` that way — which removes the
+        # dependence on prose ordering entirely". It is no longer deferred, because the ordering it
+        # replaces was measured wrong. A separate send makes "the bind happens first" STRUCTURAL
+        # instead of a property of prompt wording that a prefix check could only ever proxy.
+        bind_argv, bind_keys = build_send_text_argv(
+            pane=new_pane, text=f"{_driver_lib().BIND_DIRECTIVE} {expected_project}")
+        for kind, argv in (("send_bind", bind_argv), ("send_bind_keys", bind_keys)):
+            proc = runner(argv)
+            record(kind, argv, proc)
+            if getattr(proc, "returncode", 1) != 0:
+                out["failed_step"] = "send_bind"
+                return out
+
+        # Gated on the REGISTRY ROW, never on a timer and never on `agent_status`. Measured live
+        # 2026-07-29: `agent_status` is not a usable synchronisation signal — it read `idle`
+        # immediately after a prompt was submitted, `done` while a turn was still running, and
+        # `working` on a session sitting at an empty input line. The registry row is a durable
+        # artifact the successor itself writes, which is why it is the gate.
+        def _project_switched() -> bool:
+            tail = _tail(read_text(registry_path), registry_baseline)
+            return tail is not None and registry_has_session(
+                tail, session_id, expected_project=expected_project,
+                expected_project_path=expected_project_path)
+
+        out["results"]["project_switched"] = _poll_for(
+            _project_switched,
+            attempts=SWITCH_POLL_ATTEMPTS, delay_s=SWITCH_POLL_DELAY_S, sleeper=sleeper)
+        if not out["results"]["project_switched"]:
+            # A successor that never binds is also the shape a permission-BLOCKED successor takes,
+            # so the failure names that possibility rather than leaving an operator guessing. The
+            # launcher cannot fix it: `--permission-mode` is refused by `_ALLOWED_CLAUDE_ARGS` as
+            # authority-bearing, so a non-blocking permission mode is a PRECONDITION of unattended
+            # handoff, not something this code can assert. Failing loudly here is the honest
+            # alternative to silently burning the rest of the sequence.
+            out["failed_step"] = "project_switched"
+            return out
+
+        # SEND 2 of 3 — the work. The prompt no longer has to carry the bind, because send 1 did.
+        prompt_argv, prompt_keys = build_send_text_argv(pane=new_pane, text=resume_prompt)
+        for kind, argv in (("send_resume_prompt", prompt_argv),
+                           ("send_resume_keys", prompt_keys)):
+            proc = runner(argv)
+            record(kind, argv, proc)
+            if getattr(proc, "returncode", 1) != 0:
+                out["failed_step"] = "send_resume_prompt"
+                return out
+
+        # `prompt_landed` (#665) — rc 0 on send-text proves TRANSPORT, not arrival.
+        if prompt_marker is not None:
+            def _prompt_landed() -> bool:
+                tail = _tail(read_text(transcript_path), transcript_baseline)
+                return tail is not None and transcript_has_marker(tail, prompt_marker)
+
+            out["results"]["prompt_landed"] = _poll_for(
+                _prompt_landed,
+                attempts=GOAL_POLL_ATTEMPTS, delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
+            if not out["results"]["prompt_landed"]:
+                out["failed_step"] = "prompt_landed"
+                return out
+
+        # SEND 3 of 3 — the GUARD, LAST, deliberately while the successor is already working.
+        #
+        # This is what the reordering rests on, and it is measured rather than assumed: on
+        # 2026-07-29 a `/goal` pasted into a session actively mid-turn (counting, `agent_status`
+        # `working`) produced its `goal_status met:false` row
+        # while that turn was still running. `/goal` therefore needs no idle window, which is why
+        # it can go last — and why the previous ordering's whole premise (arm first, because the
+        # guard must exist before work) bought nothing that mattered and cost the prompt.
         text_argv, keys_argv, truncated = build_send_text_goal_argv(
             pane=new_pane, goal_condition=goal_condition)
         out["truncated"] = truncated
@@ -1132,67 +1192,11 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             out["failed_step"] = "goal_armed"
             return out
 
-        # #694 — the guard is armed, but that is not yet enough to hand over work: the
-        # `goal_status` row is written when the goal is REGISTERED, so the successor may still be
-        # mid-turn, or BLOCKED on a permission dialog where a paste is silently swallowed. Wait
-        # for it to be genuinely settled first. See SETTLED_STATUS for why `idle` only, and why
-        # this is a precondition rather than a new rung on the ladder — the causal order the
-        # runbook defends (guard armed BEFORE work is handed over) is unchanged.
-        settle_argv = build_pane_get_argv(new_pane)
-
-        def _successor_settled() -> bool:
-            proc = runner(settle_argv)
-            if getattr(proc, "returncode", 1) != 0:
-                return False
-            return parse_pane_agent_status(
-                getattr(proc, "stdout", "") or "") == SETTLED_STATUS
-
-        settled = _poll_for(_successor_settled, attempts=SETTLE_POLL_ATTEMPTS,
-                            delay_s=SETTLE_POLL_DELAY_S, sleeper=sleeper)
-        # Recorded ONCE with its verdict rather than once per poll read: a 20-read poll would
-        # otherwise bury the actual sequence in `steps` and make the report unreadable.
-        record("successor_settled", settle_argv, None,
-               note=f"settled={settled} (waiting for agent_status {SETTLED_STATUS!r})")
-        if not settled:
-            out["failed_step"] = "successor_unsettled"
-            return out
-
-        # Only now — the guard is proven armed AND the successor is settled — is it given work.
-        prompt_argv, prompt_keys = build_send_text_argv(pane=new_pane, text=resume_prompt)
-        for kind, argv in (("send_resume_prompt", prompt_argv),
-                           ("send_resume_keys", prompt_keys)):
-            proc = runner(argv)
-            record(kind, argv, proc)
-            if getattr(proc, "returncode", 1) != 0:
-                out["failed_step"] = "send_resume_prompt"
-                return out
-
-        # `prompt_landed` (#665) — rc 0 on send-text proves TRANSPORT, not arrival. Checked
-        # before `project_switched` because the registry row is a downstream consequence of this
-        # prompt: verifying the consequence while the cause is unproven can only pass on stale
-        # evidence, which is the ordering defect #611's own ladder was rewritten to fix.
-        if prompt_marker is not None:
-            def _prompt_landed() -> bool:
-                tail = _tail(read_text(transcript_path), transcript_baseline)
-                return tail is not None and transcript_has_marker(tail, prompt_marker)
-
-            out["results"]["prompt_landed"] = _poll_for(
-                _prompt_landed,
-                attempts=GOAL_POLL_ATTEMPTS, delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
-            if not out["results"]["prompt_landed"]:
-                out["failed_step"] = "prompt_landed"
-                return out
-
-        def _project_switched() -> bool:
-            tail = _tail(read_text(registry_path), registry_baseline)
-            return tail is not None and registry_has_session(
-                tail, session_id, expected_project=expected_project,
-                expected_project_path=expected_project_path)
-
-        out["results"]["project_switched"] = _poll_for(
-            _project_switched,
-            attempts=SWITCH_POLL_ATTEMPTS, delay_s=SWITCH_POLL_DELAY_S, sleeper=sleeper)
-
+        # The unguarded window is now BETWEEN send 2 and this row, and it is bounded by exactly the
+        # thing that closes it: the predecessor is not retired until `goal_armed` has passed below,
+        # so a successor that never arms its guard never costs the run its predecessor. That is the
+        # honest answer to the objection the old ordering existed for — the harm was never "work
+        # begins unguarded", it was "work begins unguarded AND the predecessor is already gone".
         ok, failed, _ = evaluate_verifications(out["results"], steps=gate_steps)
         if not ok:
             out["failed_step"] = failed
