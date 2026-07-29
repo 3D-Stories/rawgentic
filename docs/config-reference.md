@@ -1194,6 +1194,18 @@ hand-edited here.
 | `actPercent` | `RAWGENTIC_CONTEXT_ACT_PCT` | `50` | directive tier — break now |
 | `everyTurns` | `RAWGENTIC_CONTEXT_EVERY_TURNS` | `5` | check cadence, turn arm |
 | `everySeconds` | `RAWGENTIC_CONTEXT_EVERY_SECONDS` | `300` | check cadence, wall-clock arm |
+| `insertPrompt` | — | `true` | at the directive tier, INSERT a prose prompt asking for the pane-handoff skill (#718) |
+
+**`insertPrompt` — the kill switch for auto-typing.** At the directive tier, at `Stop` only, the
+meter inserts a real prompt into its own pane (`herdr pane send-text` + a delayed `Enter`) instead
+of only emitting text the model may decline as injected data. Set it to `false` to turn that off and
+keep the text-only nag. It must be a real boolean — `"yes"` or `1` are refused by
+`validate-config` and read as OFF by the hook.
+
+It is bounded: once per session per effective window (its own `stop-insert` reservation), `Stop`
+only, never mid-turn, never ESC, and skipped entirely unless `HERDR_ENV=1` with a pane id. It also
+**requires a resolved project**, because this switch lives in a project's config — outside a project
+it could not be reached, so insertion refuses there rather than defaulting on.
 
 **Why `windowSize` is the one worth setting.** A session's model name does not reveal its context
 window (a 1M session records `claude-opus-5` with no `[1m]` marker), so the window is declared, not

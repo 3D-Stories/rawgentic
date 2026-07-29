@@ -264,7 +264,9 @@ class TestUnknownKeysAreRefused:
         """A hand-copied list in the validator would drift from the documented block the moment a
         sixth key is added, so the names live in a module constant the docs guard can also read."""
         assert set(cm.SETUP_BLOCK_KEYS) == {"windowSize", "checkInPercent", "actPercent",
-                                            "everyTurns", "everySeconds"}
+                                            "everyTurns", "everySeconds",
+                                            # #718 — the auto-typing kill switch
+                                            "insertPrompt"}
 
     def test_the_cli_refuses_an_unknown_key(self) -> None:
         proc = _cli("validate-config", "--json", json.dumps({"windowSzie": 1_000_000}))
