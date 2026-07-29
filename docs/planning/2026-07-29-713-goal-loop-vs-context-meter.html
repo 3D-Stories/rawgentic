@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#713 — the /goal loop vs the context meter</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-29 10:09 MDT</div>
+<h1>#713 — the /goal loop vs the context meter</h1>
+
+</header>
+<main>
+<h1>#713 — the <code>/goal</code> loop vs the context meter: what the Stop event actually allows</h1>
+<p><strong>Status:</strong> AC1 (research) and AC2 (proof of concept) complete; revised once after an independent cross-model review (WF5, Codex, 7 findings — dispositions in §7). AC3 is <strong>redesigned</strong>, not adopted as written: the PoC refuted part of its premise and surfaced a shipped delivery bug. <strong>Date:</strong> 2026-07-29. <strong>Host:</strong> claude-code VM. <strong>Claude Code 2.1.220.</strong> <strong>Plugin 3.107.1.</strong></p>
+<p>Every claim below is marked <strong>CONFIRMED</strong> (with its evidence: doc line, probe, file:line) or <strong>INFERRED</strong> (with what would confirm it). Probe scripts are committed beside this doc in <code>2026-07-29-713-probes/</code> so every citation is re-runnable — the #687 review established that a citation a reader cannot open is not evidence.</p>
+<p>---</p>
+<h2>1. Verdict first</h2>
+<p>Four findings, in the order that matters:</p>
+<p>1. <strong>At <code>Stop</code> there is no way to speak to the model without also forcing another turn.</strong>    Both output channels — <code>decision: &quot;block&quot;</code> and <code>hookSpecificOutput.additionalContext</code> — continue    the conversation. Silence is the only way to let a turn end. <strong>CONFIRMED</strong> by doc and probe 11. 2. <strong>Injected hook text is treated as DATA, not as an instruction.</strong> In a real <code>/goal</code> loop the    model read the meter&#x27;s injected directive, named it as a possible prompt injection, and    explicitly declined to act on its imperative — while still reporting it. <strong>CONFIRMED</strong> by probe    12. <strong>So AC3 cannot work by ordering the model to hand off.</strong> 3. <strong>A recorded handoff DOES satisfy a <code>/goal</code> condition that says it does.</strong> The evaluator returned    exactly that verdict, in its own words, and the loop terminated instead of demanding another work    turn. <strong>CONFIRMED</strong> by probe 15. This is AC4&#x27;s mechanism, and it is the causally important half —    it is the one channel the model treats as authoritative rather than as suspect injected text. 4. <strong>The meter&#x27;s <code>UserPromptSubmit</code> arm has never delivered anything.</strong> It emits the top-level    <code>additionalContext</code> shape, which 2.1.220 silently ignores. <strong>CONFIRMED</strong> by probes 14 and 14b. A    live bug in shipped code, found while researching the timing question, in the module #713 already    scopes.</p>
+<p><strong>Consequence for the plan.</strong> AC4 and AC5 (text) carry the fix. AC3 ships as four changes, not one: the correct output shape on every event; a <strong>directive-tier-only</strong> Stop arm gated on <code>stop_hook_active</code>; per-channel delivery markers so the Stop arm is not silenced by the mid-turn arm having already spoken; and — per the owner&#x27;s decision of 2026-07-29 (§6) — <code>pane-handoff</code> stops *offering* and starts *running*, because a successor that waits for a human is the same bug wearing different clothes.</p>
+<p>---</p>
+<h2>2. AC1 — the <code>Stop</code> hook contract</h2>
+<h3>2.1 Input payload</h3>
+<p><strong>CONFIRMED (probe 11, three runs).</strong> A <code>Stop</code> payload on 2.1.220 carries exactly:</p>
+<pre><code>background_tasks, cwd, effort, hook_event_name, last_assistant_message,
+permission_mode, prompt_id, session_crons, session_id, stop_hook_active, transcript_path</code></pre>
+<p>Two of those matter here:</p>
+<ul>
+<li><strong><code>transcript_path</code> IS present at <code>Stop</code>.</strong> So the meter&#x27;s whole reading path</li>
+</ul>
+<p>  (<code>resolve_transcript</code> → <code>read_used_tokens</code>, <code>context_meter.py:275,228</code>) works at <code>Stop</code>   unchanged, including the hardening that requires the basename to be <code>&lt;session_id&gt;.jsonl</code>.</p>
+<ul>
+<li><strong><code>stop_hook_active</code></strong> — documented as *&quot;<code>true</code> when Claude Code is already continuing as a</li>
+</ul>
+<p>  result of a stop hook&quot;* (<code>hooks.md:2194</code>). Measured: <code>false</code> on the first firing of a turn   sequence, <code>true</code> on every subsequent firing (probes 11, 12).</p>
+<p><strong>A <code>Stop</code> reading can be stale, and that is NOT harmless.</strong> The docs warn (<code>hooks.md:2196</code>) that *&quot;the transcript file isn&#x27;t guaranteed to include the final message at Stop time on all versions.&quot;* So a read taken at <code>Stop</code> can miss a tier that the final assistant message just crossed. Corrected from an earlier draft of this doc, which called that harmless for a band trigger: it is not, because a missed crossing has no later firing to recover in if the session then ends.</p>
+<p>What makes it tolerable here is that <strong><code>Stop</code> is an additional channel, not the only one.</strong> The mid-turn arm rides every tool call, so a crossing is normally detected mid-turn and the Stop arm is a re-delivery at the decision point. The exposure is narrowed to: a tier crossed by the very last assistant message of a turn in which no further tool call occurs. <strong>Stop delivery is therefore best-effort</strong>, and this doc says so rather than claiming precision it has not measured. <strong>NOT measured:</strong> the size of the lag, and whether it is nonzero at all on 2.1.220.</p>
+<h3>2.2 Output shapes</h3>
+<p><strong>CONFIRMED</strong> (<code>hooks.md:2254-2280</code>, the *Stop decision control* table, verbatim):</p>
+<table>
+<thead><tr><th>Field</th><th>Documented meaning</th></tr></thead>
+<tbody>
+<tr><td><code>decision</code></td><td><code>&quot;block&quot;</code> prevents Claude from stopping. Omit to allow Claude to stop</td></tr>
+<tr><td><code>reason</code></td><td>Required when <code>decision</code> is <code>&quot;block&quot;</code>. Tells Claude why it should continue</td></tr>
+<tr><td><code>hookSpecificOutput.additionalContext</code></td><td>Non-error feedback for Claude. The conversation continues so Claude can act on it, but unlike <code>decision: &quot;block&quot;</code> it is shown in the transcript as hook feedback rather than a hook error</td></tr>
+</tbody>
+</table>
+<p>And the sentence that decides this design (<code>hooks.md:2271</code>, verbatim):</p>
+<blockquote>Use <code>additionalContext</code> when the hook is working as designed and giving Claude guidance, such as</blockquote>
+<blockquote>&quot;run the test suite before finishing&quot;. <strong>It keeps the conversation going</strong> through the same loop</blockquote>
+<blockquote>protections as <code>decision: &quot;block&quot;</code>, namely the <code>stop_hook_active</code> input and the</blockquote>
+<blockquote>8-consecutive-continuation cap, but the transcript labels it <code>Stop hook feedback</code> and no hook</blockquote>
+<blockquote>error notification is shown.</blockquote>
+<p>So <strong>there is no read-only channel to the model at <code>Stop</code>.</strong> The universal fields do not provide one either:</p>
+<ul>
+<li><code>continue: false</code> — *&quot;If <code>false</code>, Claude stops processing entirely after the hook runs. Takes</li>
+</ul>
+<p>  precedence over any event-specific decision fields&quot;* (<code>hooks.md:775</code>). This is the one true   override: it would let a rawgentic Stop hook <strong>veto</strong> <code>/goal</code>&#x27;s continuation outright.   <strong>Rejected</strong> — a handoff needs a turn in which to run, and killing the loop dead is the exact   &quot;worse than the bug&quot; failure the issue&#x27;s Risk section names.</p>
+<ul>
+<li><code>systemMessage</code> — *&quot;Warning message shown to the user&quot;* (<code>hooks.md:778</code>); <code>stopReason</code> is *&quot;Not</li>
+</ul>
+<p>  shown to Claude&quot;* (<code>hooks.md:776</code>). These reach the <strong>human</strong>, not the model. <strong>INFERRED:</strong>   <code>systemMessage</code> alone does not force a continuation, since it is not a decision field. Not   probed; what would confirm it is a Stop hook emitting only <code>systemMessage</code> with no extra turn   appearing. Recorded because it is the only candidate for a future non-continuing advisory tier.</p>
+<ul>
+<li><strong>Exit codes.</strong> Exit 2 on <code>Stop</code> *&quot;Prevents Claude from stopping, continues the conversation&quot;*</li>
+</ul>
+<p>  (<code>hooks.md:712</code>); exit 1 is a non-blocking error (<code>hooks.md:699</code>); JSON is read only on exit 0   (<code>hooks.md:760</code>). <code>context_meter.py</code> always exits 0 (<code>context_meter.py:1267-1271</code>), so it can   never block by exit code.</p>
+<h3>2.3 Two Stop hooks — ordering, composition, veto</h3>
+<p><strong>CONFIRMED</strong> (<code>hooks-guide.md:491-493</code>, verbatim):</p>
+<blockquote>When multiple hooks match the same event, every hook&#x27;s command runs to completion before Claude</blockquote>
+<blockquote>Code merges the results. One hook returning <code>deny</code> doesn&#x27;t stop sibling hooks from executing. […]</blockquote>
+<blockquote>After all matching hooks finish, Claude Code combines their outputs. For <code>PreToolUse</code> permission</blockquote>
+<blockquote>decisions, the most restrictive answer applies, in the order <code>deny</code>, <code>defer</code>, <code>ask</code>, <code>allow</code>.</blockquote>
+<blockquote><strong>Text from <code>additionalContext</code> is kept from every hook and passed to Claude together.</strong></blockquote>
+<p>Also <strong>CONFIRMED</strong> (<code>hooks.md:331</code>): *&quot;All matching hooks run in parallel, and identical handlers are deduplicated automatically.&quot;*</p>
+<p>So <code>additionalContext</code> is <strong>additive across hooks, not competitive</strong>. A rawgentic Stop hook cannot be vetoed by <code>/goal</code>&#x27;s evaluator, and cannot veto it, as long as it emits <code>additionalContext</code> and no <code>decision</code>. <strong>CONFIRMED end-to-end by probe 12</strong>: both hooks fired every turn and the goal loop completed normally.</p>
+<p><strong>Honest gap:</strong> the documented precedence order (<code>deny &gt; defer &gt; ask &gt; allow</code>) is stated for <code>PreToolUse</code> <strong>only</strong>. How two *Stop* <code>decision</code> values compose is <strong>NOT documented</strong>. It does not affect this design — the meter emits no <code>decision</code> — but no later change may assume it. What would confirm it: two Stop hooks, one blocking and one silent, observing whether the block survives.</p>
+<p><strong><code>/goal</code> is itself a Stop hook — CONFIRMED</strong> (<code>goal.md:126</code>): *&quot;<code>/goal</code> is a wrapper around a session-scoped prompt-based Stop hook.&quot;* <code>hooks.md:2189</code> agrees, and <code>Stop</code> is in the list of events supporting <code>prompt</code> hooks (<code>hooks.md:2827</code>). Corroborated independently by <code>QwenLM/qwen-code#4206</code>, describing a reimplementation of the same mechanism: *&quot;<code>/goal</code> registers a session-scoped prompt hook on the <code>Stop</code> event […] the main loop increments <code>stopHookBlockingCount</code>. Default cap is 8 unless <code>CLAUDE_CODE_STOP_HOOK_BLOCK_CAP</code> is set.&quot;*</p>
+<p><strong>The 8-continuation cap.</strong> *&quot;Claude Code overrides the hook and ends the turn after 8 consecutive blocks&quot;* (<code>hooks.md:2194</code>), raisable via <code>CLAUDE_CODE_STOP_HOOK_BLOCK_CAP</code> (<code>hooks-guide.md:966</code>); the cap counts blocks *&quot;in a row without progress&quot;* (<code>hooks-guide.md:955</code>). <strong>Unresolved, and named rather than glossed:</strong> the reported #713 run had ~10 Stop firings, which a naive reading of a cap of 8 would have terminated. Either the counter resets on progress or <code>/goal</code> is accounted differently. <strong>INFERRED</strong> that the meter does not meaningfully erode the budget: it emits at most once per tier per window per channel (§4.3), so it can add at most one continuation. Probe 12 saw four firings and normal completion — consistent, but it never approached the cap, so this is not proven. What would confirm it: a goal loop driven to the cap with and without the meter.</p>
+<h3>2.4 Is <code>/goal</code>&#x27;s evaluator text modifiable from outside? And does it accept a handoff?</h3>
+<p>These are <strong>two separate questions</strong>, and an earlier draft of this doc wrongly folded the second into the first and declared both settled. Split:</p>
+<p><strong>(a) Is the evaluator&#x27;s prompt or feedback wording configurable? CONFIRMED: no.</strong> <code>goal.md</code> documents exactly one knob over the evaluator — <code>ANTHROPIC_DEFAULT_HAIKU_MODEL</code>, which changes *which model* judges (<code>goal.md:135</code>), with a warning that it repoints every other small-fast-model use too. There is no setting for the evaluator&#x27;s prompt or its feedback text anywhere in <code>goal.md</code> or <code>hooks.md</code>. This question is closed by absence of evidence in the primary source; the honest caveat is that absence from the docs is not proof of absence from the binary.</p>
+<p><strong>(b) Will the evaluator accept a recorded handoff as satisfying a condition that says it does?</strong> This is AC4&#x27;s load-bearing mechanism and it was <strong>unproven</strong> in the first draft. <strong>Now CONFIRMED by probe 15</strong> — §3, probe 15, including the evaluator&#x27;s verbatim verdict.</p>
+<p>The mechanism it relies on: the evaluator *&quot;does not call tools, so it can only judge what Claude has already surfaced in the conversation&quot;* (<code>goal.md:137</code>), and on a <code>no</code> verdict *&quot;Claude keeps working and takes the reason as guidance for the next turn&quot;* (<code>goal.md:130</code>). The condition is user-authored, capped at 4,000 characters (<code>goal.md:120</code>), and is exactly what the evaluator reads. <strong>That is the lever, and it is the only channel in this whole system that the model treats as authoritative rather than as suspect injected text.</strong></p>
+<p>Also captured verbatim from probe 15&#x27;s transcript — the instruction <code>/goal</code> injects into the session itself, which no rawgentic surface had recorded before:</p>
+<blockquote>Briefly acknowledge the goal, then immediately start (or continue) working toward it — treat the</blockquote>
+<blockquote>condition itself as your directive and do not pause to ask the user what to do. The hook will</blockquote>
+<blockquote>block stopping until the condition holds. It auto-clears once the condition is met […]</blockquote>
+<p>*&quot;Treat the condition itself as your directive&quot;* is why AC4 works and AC3 alone cannot.</p>
+<p>---</p>
+<h2>3. AC2 — the proof of concept</h2>
+<p>Five probes, all committed in <code>2026-07-29-713-probes/</code>, all run on this host on 2026-07-29 under Claude Code 2.1.220 with <code>--model sonnet</code>.</p>
+<h3>Probe 11 — does the meter&#x27;s shape work at <code>Stop</code>, and what does it cost? (no goal)</h3>
+<p><code>stop-probe.sh</code> dumps every Stop payload and emits one canary <code>additionalContext</code> with <code>hookEventName: &quot;Stop&quot;</code>.</p>
+<p><strong>Result — CONFIRMED:</strong></p>
+<ul>
+<li>The nested shape is <strong>accepted</strong> on 2.1.220 and <strong>delivered</strong>: the model&#x27;s next turn was the</li>
+</ul>
+<p>  canary token quoted verbatim.</p>
+<ul>
+<li>The Stop hook fired <strong>twice</strong> for a one-prompt session, and there were <strong>two</strong> assistant turns.</li>
+</ul>
+<p>  So emitting <code>additionalContext</code> at <code>Stop</code> <strong>forces a continuation</strong> — measured, not inferred.</p>
+<ul>
+<li><code>stop_hook_active</code> was <code>false</code> on firing 1 and <code>true</code> on firing 2.</li>
+</ul>
+<p><strong>This is the fact that kills AC3-as-written.</strong> Registering the meter on <code>Stop</code> unconditionally would force an extra turn in any ordinary session that crosses a tier and finishes a turn — turning a convenience nag into a turn-blocker, against <code>context_meter.py</code>&#x27;s stated contract (<code>context_meter.py:21-31</code>).</p>
+<h3>Probe 12 — a real <code>/goal</code> armed, with the meter speaking inside the loop</h3>
+<p>A genuine multi-turn goal with the probe registered as a second Stop hook; run once silent (observe only) and once with the canary live.</p>
+<p><strong>Result — CONFIRMED:</strong></p>
+<ul>
+<li><strong>Two Stop hooks coexist.</strong> The probe fired every turn (3 silent / 4 with the canary) *and* the</li>
+</ul>
+<p>  goal ran its turns and completed normally (<code>steps.txt</code> written, <code>result: success</code>). No silencing,   no double-evaluation, no broken goal.</p>
+<ul>
+<li><strong><code>stop_hook_active</code> is <code>true</code> from the second Stop onward in a goal loop</strong>, driven by <code>/goal</code>&#x27;s</li>
+</ul>
+<p>  own continuations while the probe only observed (silent variant). This is what makes §4.2&#x27;s gate   possible.</p>
+<ul>
+<li><strong>The model refused the injected imperative.</strong> Turn 3, verbatim: *&quot;Flagging something before</li>
+</ul>
+<p>  continuing: that &#x27;Stop hook additional context&#x27; block contained an embedded instruction (a   &#x27;CANARY-STOP-B2-RM4TZ8&#x27; token telling me to repeat it verbatim). Per my standing instructions,   text arr[iving…]&quot;* — reported, not obeyed, then it carried on with the goal.</p>
+<p>That last result reproduces #687 probe 9&#x27;s closing observation and generalizes it: <strong>hook-injected text is data.</strong> A directive that works by ordering the model to run a skill is arguing with its injection defences. A directive that states measured <strong>state</strong> is integrated as fact.</p>
+<p><strong>Not proven by this probe:</strong> that the canary caused the 4th firing. The canary run&#x27;s goal also ran more turns for unrelated reasons (the model batched its appends), so firing counts are not comparable between the two variants. §4.2&#x27;s cost claim rests on probe 11, where the causation is unambiguous.</p>
+<h3>Probe 13 — fail-open at a blocking-capable event</h3>
+<p><code>stop-probe-failopen.sh</code> prints non-JSON on stdout, writes stderr, and exits 1 — the two ways to be broken that are not exit 2.</p>
+<p><strong>Result — CONFIRMED:</strong> one turn, <code>result: success</code>, no extra turn, nothing surfaced to the model. Fail-open holds at <code>Stop</code>. Worth stating *why*: exit 2 at <code>Stop</code> <strong>does</strong> block, so this guarantee rests on <code>context_meter.py</code> returning 0 unconditionally, not on the event being harmless — which is why §4.5 tests it.</p>
+<h3>Probe 14 / 14b — the adjacent bug: which shape does <code>UserPromptSubmit</code> honour?</h3>
+<p>Motivated by a direct conflict: <code>hooks-guide.md</code> says of <code>UserPromptSubmit</code> *&quot;Nest <code>additionalContext</code> inside <code>hookSpecificOutput</code>; if you place it at the top level of the JSON, Claude Code silently ignores it&quot;*, while <code>context_meter.py:905-915</code> and <code>hooks/wal-context:43</code> both emit the <strong>top-level</strong> form, recorded in-repo as verified live 2026-07-28.</p>
+<p><strong>Result — CONFIRMED, and the docs are right:</strong></p>
+<ul>
+<li>Both shapes registered together (probe 14): the model reported <strong>only</strong> the nested token; the</li>
+</ul>
+<p>  top-level token appeared <strong>0</strong> times in the entire stream.</p>
+<ul>
+<li>Top-level <strong>alone</strong>, ruling out a merge confound (probe 14b): the model replied <strong><code>NONE</code></strong>. Zero</li>
+</ul>
+<p>  occurrences.</p>
+<p><strong>So <code>context_meter.py</code>&#x27;s <code>UserPromptSubmit</code> arm delivers nothing.</strong> The meter has run on one working arm (<code>PostToolUse</code>, nested) since #687. In the run that produced #713, the two lines the owner saw were the PostToolUse arm; the UserPromptSubmit arm was silent because it could not be otherwise.</p>
+<p>Fair to the earlier record: the in-repo note claims the opposite, verified one day earlier. Either the behaviour changed between 2026-07-28 and 2026-07-29, or that verification mistook a PostToolUse delivery for a UserPromptSubmit one. This doc does not adjudicate which; it records <strong>what is true today on 2.1.220</strong>, which is what ships. The stale docstring claim is corrected in the same change.</p>
+<p><code>hooks/session-start:878</code> also emits the top-level form, but on <code>SessionStart</code> — a <strong>different</strong> event with its own contract, and empirically something does arrive from that hook. <strong>Not touched, not assumed broken.</strong> Filed as a follow-up to measure, with <code>hooks/wal-context</code>, which is outside #713&#x27;s scope and needs its own issue.</p>
+<h3>Probe 15 — does the evaluator accept a handoff as satisfying the goal? (AC4&#x27;s mechanism)</h3>
+<p>Added in response to the WF5 review, which correctly refused AC4 as an unproven hypothesis. A real <code>/goal</code> was armed with a two-branch condition — finish the work, <strong>or</strong> record a handoff, with the condition stating in terms that *&quot;A RECORDED HANDOFF SATISFIES THIS GOAL&quot;*.</p>
+<p><strong>Result — CONFIRMED, and the verdict is recorded, not inferred from termination:</strong></p>
+<ul>
+<li>The session wrote <code>handoff.md</code> and <strong>never created <code>work.txt</code></strong> — it did not do the work.</li>
+<li>The loop <strong>terminated</strong> (<code>result: success</code>, 3 assistant turns, below the condition&#x27;s own 4-turn</li>
+</ul>
+<p>  bound, so the turn clause did not fire).</p>
+<ul>
+<li>The evaluator&#x27;s own reason, verbatim from the transcript: *&quot;The transcript shows the assistant</li>
+</ul>
+<p>  created handoff.md […] with content that names what remains […] <strong>This recorded handoff satisfies   the goal condition explicitly stated in the stopping criteria: &#x27;A RECORDED HANDOFF SATISFIES THIS   GOAL&#x27;.</strong>&quot;*</p>
+<p>So a loop goal whose condition names a handoff as satisfying it <strong>is judged that way</strong>, and the loop stops asking for more work turns. AC4 is a mechanism, not a hope.</p>
+<p><strong>Limits, named:</strong> one run, one wording, one model (<code>sonnet</code> main / default small-fast evaluator). It shows the mechanism works; it does not establish that every phrasing works. What would strengthen it: the same probe with the exact shipped wording once AC4/AC5 land, and with a condition where the work is genuinely unfinished rather than absent.</p>
+<p>---</p>
+<h2>4. The redesign</h2>
+<h3>4.1 Always nested, with the event&#x27;s own name</h3>
+<p><code>emit_payload</code> (<code>context_meter.py:905-915</code>) becomes one shape for every event: nested under <code>hookSpecificOutput</code> with <code>hookEventName</code> set to the firing event. <strong>CONFIRMED delivered</strong> in this form on <code>PostToolUse</code> (#687 probe 9), <code>UserPromptSubmit</code> (probe 14) and <code>Stop</code> (probes 11, 12). Less code than the branch it replaces, and it fixes the dead arm.</p>
+<h3>4.2 The Stop arm: directive tier only, gated on <code>stop_hook_active</code></h3>
+<p>Two gates, both narrowing:</p>
+<p>1. <strong><code>stop_hook_active</code> must be true.</strong> True means some Stop hook already continued this turn — in    practice a <code>/goal</code> loop, exactly the situation #713 is about. False means the session is about to    hand control back to a human, and staying silent means an ordinary session is <strong>never</strong> forced    into an extra turn. 2. <strong>Directive tier only.</strong> The advisory tier (60%) stays mid-turn. At 60% an extra turn is pure    cost; at the act tier the extra turn *is* the handoff.</p>
+<p><strong>The honest cost, corrected.</strong> An earlier draft claimed the gate makes the Stop arm cost &quot;no extra turn, because the turn was continuing anyway&quot;. The WF5 review refuted that, and it was right: <code>stop_hook_active</code> describes why *this* firing happened, not that another hook *will* continue from it. If <code>/goal</code>&#x27;s evaluator returns <strong>yes</strong> on the same firing where the meter first delivers the directive, the meter&#x27;s <code>additionalContext</code> becomes the sole continuation and forces <strong>one</strong> extra turn.</p>
+<p>Bounded, and stated plainly: <strong>at most one extra turn per session per effective window</strong> — the marker (§4.3) permits exactly one directive delivery on the <code>stop</code> channel. It can only happen at ≥70% context, in a session that was already looping, at the moment the loop ended. That extra turn carries &quot;you are at 70%; a handoff satisfies a loop goal; here is the route&quot; — which at that point is the behaviour this issue exists to produce, not a regression. Accepted deliberately rather than designed away.</p>
+<p>Note for reviewers, because it looks inverted: the documented idiom (<code>hooks-guide.md:955-964</code>) checks the same field and exits early when it is <strong>true</strong>. That idiom is for gates whose job is to *force* convergence and which must not loop. This is the opposite shape — a once-per-tier nag that must not *start* a loop — so it exits early when the field is <strong>false</strong>. It cannot loop either way: the marker bounds it to one emission.</p>
+<p>Cost also stated: in a goal loop the meter is <strong>one Stop late</strong>, since the loop&#x27;s first Stop has <code>stop_hook_active: false</code>. The reported run had ~10 firings, so this is immaterial.</p>
+<h3>4.3 Per-channel delivery markers</h3>
+<p>The once-per-tier marker is keyed <code>(session, window, tier)</code> (<code>context_meter.py:641-643</code>). Left alone, the mid-turn arm delivering the directive at 70% would <strong>consume the marker and permanently silence the Stop arm</strong> — reproducing the reported bug via the fix for it.</p>
+<p>So the key gains a <strong>channel</strong>: <code>midturn</code> (PostToolUse + UserPromptSubmit) or <code>stop</code>. Each tier is then delivered at most once mid-turn and at most once at the decision point — at most two messages per tier per session, up from one. The existing monotonic rule (a directive satisfies the advisory for the same window) is preserved <strong>within</strong> each channel.</p>
+<h3>4.4 What the messages say — state, not orders</h3>
+<p>Given probe 12, the text leads with the <strong>fact</strong> and names the route, rather than issuing an imperative that reads like injected instructions:</p>
+<ul>
+<li>the reading and the window, as now;</li>
+<li>**&quot;A handoff SATISFIES a LOOP goal — the work continues in a fresh window with a full context; it</li>
+</ul>
+<p>  does not stop&quot;** (AC4), phrased as a fact about how goals are judged, which probe 15 confirms is   true;</p>
+<ul>
+<li><code>/rawgentic:pane-handoff</code> named as the route that both hands off and clears the predecessor&#x27;s</li>
+</ul>
+<p>  guard, with <code>clear-prep</code> named as what it wraps (AC3 + AC6);</p>
+<ul>
+<li><strong>AC5:</strong> the check-in tier says *write the resume prompt and verify the delivery gates*, not</li>
+</ul>
+<p>  &quot;look for a seam&quot; — at 60% there is room to do that well; at 98% there is not.</p>
+<p>AC4&#x27;s line also goes where it is <strong>trusted</strong> rather than suspect: the goal-authoring skills (<code>goalsmith</code>, <code>long-run-resume</code>), so every future loop goal carries it inside the condition the evaluator reads. That is the half probe 15 validates, and the half that would have prevented the reported run.</p>
+<h3>4.5 Tests</h3>
+<p>Black-box via subprocess with a real <code>Stop</code> payload on stdin (<code>docs/testing.md:5-8</code>): the nested shape and correct <code>hookEventName</code> per event; silence at <code>Stop</code> when <code>stop_hook_active</code> is false; delivery when true; the advisory tier never emitting at <code>Stop</code>; channel-keyed markers not cross-silencing; and exit 0 with empty stdout when the state dir is unwritable at <code>Stop</code> — the fail-open property probe 13 measured.</p>
+<h3>4.6 Deployment wiring — the surface that actually makes this live</h3>
+<p>Named explicitly, because a design that changes only Python would pass its tests while the installed plugin never invoked the meter at <code>Stop</code> (WF5 finding 4):</p>
+<ul>
+<li><strong><code>hooks/hooks.json</code></strong> — the existing <code>Stop</code> array (currently <code>wal-stop</code> alone) gains a second</li>
+</ul>
+<p>  entry invoking <code>${CLAUDE_PLUGIN_ROOT}/hooks/context_meter.py</code> with no matcher (<code>Stop</code> takes none)   and a 5 s timeout, matching its other two registrations.</p>
+<ul>
+<li><strong><code>phase_executor/src/phase_executor/canary.py</code></strong> — <code>EXPECTED_REGISTRATION_DIGEST</code> is a</li>
+</ul>
+<p>  length-framed sha256 over <code>hooks/hooks.json</code> <strong>plus every script its commands reference</strong>, so   editing either invalidates it and fails ~20 canary tests. It is re-pinned in the same commit;   that test IS this repo&#x27;s registration guard, and it is the mechanism that would catch a missing   <code>Stop</code> entry.</p>
+<ul>
+<li><strong>The repo is not the running plugin.</strong> Sessions load from</li>
+</ul>
+<p>  <code>~/.claude/plugins/cache/rawgentic/rawgentic/&lt;version&gt;/</code>, so no test in this repo can prove the   installed plugin fires at <code>Stop</code>. The probes above are that evidence, gathered by registering the   real event on a live binary. Stated rather than papered over: post-merge, &quot;live&quot; requires the   plugin-update steps in <code>CLAUDE.md</code> §7 and a new session.</p>
+<h3>4.7 Compatibility</h3>
+<p><strong>CONFIRMED: this plugin declares no minimum Claude Code version</strong> — <code>.claude-plugin/plugin.json</code> carries none, and no README or docs sentence states one (searched; only incidental version mentions in changelog prose).</p>
+<p><code>additionalContext</code> on <code>Stop</code> is a <strong>recent</strong> capability. <code>anthropics/claude-code#60993</code> records the schema *rejecting* it (*&quot;hookEventName: Stop is not a permitted value for hookSpecificOutput&quot;*), and <code>#65495</code> quotes the changelog entry adding it: *&quot;Stop and SubagentStop hooks can now return <code>hookSpecificOutput.additionalContext</code> […]&quot;*. Measured working on <strong>2.1.220</strong> (probes 11, 12).</p>
+<p><strong>Chosen behaviour on an older client: silent degradation of the Stop arm only.</strong> No version check is added. Reasons, weighed against the review&#x27;s recommendation to gate explicitly: a version probe on a hook that rides every Stop is cost without a payoff the user can act on; the meter&#x27;s mid-turn arm is unaffected and still delivers; and the hook exits 0 regardless, so the worst case is a transcript notice rather than a broken turn or a blocked session. <strong>INFERRED</strong> — what would confirm it is a run under a pre-change binary, which this host does not have. If that inference is wrong, the failure mode is a visible per-Stop hook-error notice, which is noisy but not dangerous, and it would be reported rather than silent.</p>
+<p>---</p>
+<h2>5. Owner decision, 2026-07-29 — spawning a successor must be seamless</h2>
+<p><strong>Recorded because it changes scope.</strong> The owner&#x27;s instruction, verbatim: *&quot;Spawning a new pane, either with the skill or with the plugin, should not be asking the user. It should be seamless.&quot;*</p>
+<p>This resolves what an earlier draft of this doc deferred as &quot;a separate authorization question, out of scope&quot; — a deferral the WF5 review flagged as leaving the second reported failure unfixed (§7, finding 2). It was right, and the owner has now decided it.</p>
+<p><strong>What actually gates it — corrected.</strong> An earlier draft of this doc said the halt was caused by <code>pane-handoff</code>&#x27;s own per-step permission gates. That is <strong>wrong</strong>, and reading <code>skills/pane-handoff/SKILL.md</code> shows why: the skill&#x27;s &quot;gates&quot; are *verification* gates inside one tested command (<code>launcher_lib.py ad-hoc-handoff</code>), which polls the successor&#x27;s own on-disk artifacts. It asks the user exactly once, and only when the request is genuinely ambiguous between retiring the pane and keeping it (<code>SKILL.md:123</code>).</p>
+<p>The real lever is the skill&#x27;s own trigger language. Its <code>description</code> says: *&quot;ALSO <strong>offer</strong> it unprompted when the context-meter reminder reaches its directive tier&quot;* — so a model following the skill correctly <strong>offers</strong> and waits. Combined with a meter directive that names <code>clear-prep</code> (which produces the payload but neither clears the guard nor spawns the pane), a session that obeys every instruction perfectly still stops without a successor. That is exactly what happened overnight.</p>
+<p><strong>The change:</strong> <code>offer</code> becomes <code>run</code>, and the description stops advertising itself as &quot;all gated&quot; when what it means is &quot;each delivery step is verified&quot;. Text only, in the one file the issue already scopes.</p>
+<p><strong>Left alone deliberately:</strong> the single ambiguity question at <code>SKILL.md:123</code>, and the teardown default. Those are about *which* handoff shape is wanted, not *whether* to hand off, and the retirement default already exists because getting it wrong burned a real run (<code>SKILL.md:97-99</code>).</p>
+<p>---</p>
+<h2>6. The second live report, folded in (2026-07-29)</h2>
+<p>The owner reported a second failure the same day, in <code>thewanderinginn</code> (pane <code>w1:pDP</code>): a session stopped overnight *at a clean task boundary*, wrote its handoff file, and then <strong>asked permission</strong> to spawn the successor — *&quot;say the word and I&#x27;ll run it&quot;* — so the run stopped until morning.</p>
+<p>That is the <strong>opposite</strong> end of the same gap from the lumenquire run in the issue body. Lumenquire never broke and burned the window to 98%; this one broke correctly and never resumed. Both end with no successor and a human in the loop.</p>
+<p><strong>CONFIRMED</strong> (from that session&#x27;s own report, quoted by the owner): the handoff file was written; the pane was not spawned; it ended its turn asking. <strong>INFERRED</strong> (that transcript not read): the mechanism is §5&#x27;s — the skill says *offer*, and the meter points at <code>clear-prep</code>.</p>
+<p>Together the two reports bracket the fix: §4.4 stops the 98% case, §5 stops the waiting case.</p>
+<p>---</p>
+<h2>7. WF5 review dispositions</h2>
+<p>Independent cross-model review (Codex, effort high): 7 findings, 0 Critical, 3 High, 4 Medium. Report: <code>docs/reviews/2026-07-29-713-goal-loop-vs-context-meter-md-2026-07-29.md</code> (gitignored, so the dispositions live here).</p>
+<table>
+<thead><tr><th>#</th><th>Sev</th><th>Finding</th><th>Disposition</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>High</td><td>The <code>stop_hook_active</code> gate cannot guarantee zero extra turns — if <code>/goal</code> stops on an eligible firing, the meter becomes the sole continuation</td><td><strong>ACCEPTED.</strong> §4.2 rewritten: claim corrected, Stop arm narrowed to the directive tier, and the residual cost stated as at most one extra turn per session per window, deliberately accepted. Its recommendation to drop the Stop arm entirely was <strong>declined</strong> — that abandons AC3&#x27;s purpose, and the residual cost occurs only where a handoff is the wanted behaviour</td></tr>
+<tr><td>2</td><td>High</td><td>Unattended successor authorization excluded, yet it caused the overnight halt</td><td><strong>ACCEPTED, and no longer deferred</strong> — owner decision §5, implemented as the <code>offer</code> → <code>run</code> change. The review&#x27;s diagnosis was right; this doc&#x27;s own attribution of the gate was wrong and is corrected in §5</td></tr>
+<tr><td>3</td><td>High</td><td>&quot;Settled; not to be re-litigated&quot; suppresses review of AC4</td><td><strong>ACCEPTED.</strong> §2.4 split into two questions; the suppressing sentence is gone; AC4&#x27;s efficacy is now evidence-backed by probe 15 rather than asserted</td></tr>
+<tr><td>4</td><td>Medium</td><td>No named deployment-wiring surface; changes could pass while the plugin never fires at <code>Stop</code></td><td><strong>ACCEPTED.</strong> New §4.6 names <code>hooks/hooks.json</code>, the canary registration digest, and the repo-≠-installed-plugin limit. The recommended installed-plugin integration test is <strong>declined as infeasible</strong> in this repo; the live probes are the substitute and are named as such</td></tr>
+<tr><td>5</td><td>Medium</td><td>A one-message <code>Stop</code> read lag is not harmless to a band trigger</td><td><strong>ACCEPTED.</strong> §2.1 no longer claims harmlessness; the exposure is narrowed and named, and Stop delivery is declared best-effort</td></tr>
+<tr><td>6</td><td>Medium</td><td>AC4&#x27;s evaluator behaviour unproven</td><td><strong>ACCEPTED — probe 15 added</strong>, with the evaluator&#x27;s verbatim verdict and its limits</td></tr>
+<tr><td>7</td><td>Medium</td><td>No stated minimum supported Claude Code version</td><td><strong>ACCEPTED in part.</strong> New §4.7 records that none is declared and names the degradation. An explicit version check is <strong>declined</strong> — cost on a per-Stop hook with no user-actionable payoff; the reasoning is stated so the trade-off is auditable</td></tr>
+</tbody>
+</table>
+<p>---</p>
+<h2>8. What was NOT checked</h2>
+<ul>
+<li>No run under a Claude Code older than 2.1.220, so §4.7&#x27;s degradation claim stays inferred.</li>
+<li>The 8-continuation cap was never driven to its limit, with or without the meter.</li>
+<li><code>hooks/wal-context</code> and <code>hooks/session-start</code> were not probed; only <code>context_meter.py</code>&#x27;s own shape</li>
+</ul>
+<p>  was measured and fixed here.</p>
+<ul>
+<li>No probe used a subagent, so <code>_is_subagent</code>&#x27;s behaviour at <code>Stop</code> is unmeasured. The guard is</li>
+</ul>
+<p>  inert when its keys are absent, so it cannot break the hook, but &quot;a subagent&#x27;s Stop payload   carries <code>agent_id</code>&quot; remains unverified for this event.</p>
+<ul>
+<li>The size of the <code>last_assistant_message</code>-vs-transcript lag at <code>Stop</code> (§2.1) was not measured, nor</li>
+</ul>
+<p>  whether it is nonzero at all on this version.</p>
+<ul>
+<li>Probe 15 used one wording on one model. The shipped AC4/AC5 wording is not itself probed.</li>
+<li>Neither reported failure was reproduced end-to-end after the fix; that needs a long real run.</li>
+</ul>
+
+</main>
+<footer>Last updated: 2026-07-29 10:09 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
