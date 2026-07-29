@@ -16,6 +16,7 @@ them, and on `hooks/launcher_lib.py`, which legitimately builds them.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -28,7 +29,11 @@ SKILL = REPO_ROOT / "skills" / "pane-handoff" / "SKILL.md"
 # contexts only, and the #700 design review pointed out that an unbackticked prose instruction to
 # hand-roll a send would sail through it. The skill points at the runbook for that discussion
 # instead of restating it, which costs nothing and closes the hole.
-FORBIDDEN = ("send-text", "send-keys", "pane run")
+# Matched on WORD BOUNDARIES, not as bare substrings. A plain `"pane run" in body` check fired on
+# the ordinary English "leaving your pane running", which is repo CLAUDE.md mistake #6 in miniature:
+# a substring pin false-positives on prose that merely contains the letters. The contract is the
+# herdr SUBCOMMAND, so the boundary is part of the contract.
+FORBIDDEN = (r"\bsend-text\b", r"\bsend-keys\b", r"\bpane run\b")
 
 
 @pytest.fixture(scope="module")
@@ -39,8 +44,8 @@ def body() -> str:
 
 @pytest.mark.parametrize("primitive", FORBIDDEN)
 def test_the_skill_never_names_a_raw_terminal_primitive(primitive, body) -> None:
-    assert primitive not in body, (
-        f"skills/pane-handoff/SKILL.md contains {primitive!r}. The delivery sequence has exactly "
+    assert not re.search(primitive, body), (
+        f"skills/pane-handoff/SKILL.md matches {primitive!r}. The delivery sequence has exactly "
         "one tested implementation and the skill must reach it through "
         "`launcher_lib.py ad-hoc-handoff` only (#700 AC2). If you are documenting the primitive "
         "rather than invoking it, that belongs in docs/runbooks/herdr.md §7.1.2.")
@@ -66,7 +71,15 @@ def test_the_skill_requires_a_unique_prompt_marker(body) -> None:
     assert "unique" in body.lower()
 
 
-def test_teardown_is_documented_as_opt_in(body) -> None:
-    """AC4: an ad-hoc handoff hands off work, not the caller's own session."""
-    assert "--teardown-predecessor" in body
-    assert "off by default" in body.lower()
+def test_retiring_the_callers_pane_is_documented_as_the_default(body) -> None:
+    """Owner decision 2026-07-29, REVERSING #700 AC4 — and the reversal is why this test changed
+    rather than the skill: AC4's reasoning ("an ad-hoc handoff hands off work, not the caller's own
+    session") was sound in the abstract and refuted in practice on the first real handoff, where the
+    OFF default left a live pane re-prompting itself from an armed goal.
+
+    What must stay documented is the escape hatch and its cost, because that is the part a user
+    cannot infer: `--no-teardown` exists, and it leaves the guard armed.
+    """
+    assert "--no-teardown" in body
+    assert "DEFAULT" in body, "the skill must say retirement is the default, not bury it"
+    assert "/goal clear" in body, "the additive path's cost must be named"

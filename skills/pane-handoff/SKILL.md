@@ -60,7 +60,11 @@ grep "$CLAUDE_CODE_SESSION_ID" claude_docs/session_registry.jsonl | tail -1
 - `--anchor-pane` — `$HERDR_PANE_ID`. If it is unset, find the pane whose
   `agent_session.value` equals `$CLAUDE_CODE_SESSION_ID` in `herdr pane list`.
 - `--project` / `--project-path` — the `project` and `project_path` fields of that registry line.
-- `--cwd` / `--project-root` — the workspace root and the bound project's path.
+- `--cwd` / `--project-root` — **both the workspace root**, e.g. `/home/rocky00717/rawgentic`.
+  `--cwd` must resolve *inside* `--project-root` (equal is allowed), so passing the workspace root
+  as the cwd and the project directory as the root is **refused** — it reads as an escape. The
+  successor also has to start at the workspace root, because that is where `.rawgentic_workspace.json`
+  lives and therefore where its bind can work.
 - `--registry` — `<workspace root>/claude_docs/session_registry.jsonl`.
 - `--transcript-dir` — `~/.claude/projects/<cwd with every "/" replaced by "-">`. For
   `/home/rocky00717/rawgentic` that is `~/.claude/projects/-home-rocky00717-rawgentic`. It must
@@ -84,12 +88,33 @@ python3 "${CLAUDE_PLUGIN_ROOT}/hooks/launcher_lib.py" ad-hoc-handoff \
   --prompt-marker '<the unique marker>'
 ```
 
-Add `--teardown-predecessor` **only** when the user has actually asked for their own pane to be
-closed. It is off by default, and it only ever fires after every verification has already passed.
-Asking for it adds a precondition: the anchor pane must **provably host this session**, checked
-against `$CLAUDE_CODE_SESSION_ID` before anything launches. A stale `$HERDR_PANE_ID` is therefore a
-refusal rather than a stranger's pane being closed. If that check refuses, re-derive the pane id
-instead of forcing it.
+### Retiring your own pane is the DEFAULT
+
+Most phrasings that trigger this skill mean *retire this session*: "pass off", "pass everything
+over", "clear the context into a new session". So that is what happens by default — your goal is
+cleared, the clear is confirmed, and your pane is closed, **after** every verification has passed.
+
+The earlier default was the opposite, and it burned a real run: the pane stayed alive with its
+`/goal` still armed and kept re-prompting itself at every Stop until the owner intervened.
+
+What comes with the default:
+
+- Your pane must **provably host this session** — checked against `$CLAUDE_CODE_SESSION_ID` before
+  anything launches, so a stale `$HERDR_PANE_ID` is a refusal rather than a stranger's pane being
+  closed.
+- Pass your own live goal condition so the clear receipt is bound to the guard it clears:
+  `--predecessor-goal-condition '<your condition>'`. Read it with the `read-goal-condition`
+  subcommand against your own transcript rather than retyping it.
+- An **unconfirmed** clear leaves your pane open on purpose. An ambiguous guard is recoverable; a
+  wrongly-closed pane is not.
+
+**Use `--no-teardown` when the handoff is additive** — the user is spawning a helper and carrying on
+themselves ("start a new pane and fix that bug while I keep going"). Then your `/goal` stays armed
+and **your session keeps re-prompting itself until you run `/goal clear`**. Teardown is therefore
+opt-OUT, not off by default. The command says so in its output; relay that sentence rather than
+letting the user discover it.
+
+If the request is genuinely ambiguous between the two, ask once before running.
 
 Run it in the foreground. It polls real artifacts, so a slow successor can take a couple of minutes;
 that is the gating working, not a hang.
@@ -108,10 +133,15 @@ The JSON on stdout carries `results` and `failed_step`. Report what it says, not
 | `prompt_landed` | the work never reached it | the recovery already tried; do NOT re-send the text by hand |
 | `goal_armed` | the guard never armed | the successor is working but unguarded |
 | `send_resume_nudge` | a herdr call failed outright | herdr-side problem, not a timing one |
+| `predecessor_goal_clear` | the handoff worked; clearing YOUR goal did not | your pane is left **open** on purpose — run `/goal clear` in it yourself |
 
 **On any failure your pane is still alive and still guarded, and the successor pane is cleaned up.**
 Say that plainly — it is the most useful sentence in the report. A `cleanup` value naming a
 POSSIBLE ORPHAN means a pane may be stranded and needs a human eye.
+
+**Always relay `predecessor_guard` verbatim if it is set.** It is the one sentence that says what
+happened to the user's own pane and guard, and its absence is exactly what let a stranded pane loop
+unnoticed.
 
 On success, tell the user the new pane id and session id, and that their own pane was left running
 (or closed, if they asked for that).

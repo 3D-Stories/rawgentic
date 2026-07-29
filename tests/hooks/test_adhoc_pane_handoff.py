@@ -312,6 +312,10 @@ def _argv(tmp_path, **over) -> list[str]:
         "--project-root": str(REPO_ROOT), "--registry": REGISTRY_PATH,
         "--transcript-dir": str(tmp_path), "--resume-prompt-file": str(prompt),
         "--goal-condition": GOAL_CONDITION, "--prompt-marker": MARKER,
+        # Retirement is ON by default since the owner's 2026-07-29 decision, and it runs a live
+        # `herdr pane get` ownership probe before anything else. These cases are about argument
+        # plumbing and refusals, so they opt out; the retirement path has its own class below.
+        "--no-teardown": None,
     }
     flags.update(over)
     argv = ["ad-hoc-handoff"]
@@ -339,7 +343,7 @@ class TestAdHocSubcommand:
             seen.update(kw)
             return {"ok": True, "results": {}, "steps": [], "new_pane": "w1:pZZ",
                     "session_id": "s", "cleanup": None, "truncated": False,
-                    "failed_step": None, "teardown_skipped": None}
+                    "failed_step": None, "teardown_skipped": None, "predecessor_guard": None}
 
         monkeypatch.setattr(ll, "perform_handoff", fake)
         assert ll.main(_argv(tmp_path)) == 0
@@ -351,9 +355,16 @@ class TestAdHocSubcommand:
         assert seen["prompt_marker"] == MARKER
         assert seen.get("steps") is None, "the canonical launch ladder must be used"
 
-    def test_teardown_defaults_off(self, tmp_path, monkeypatch) -> None:
-        """AC4. An ad-hoc handoff hands off WORK, not the caller's own session — and
-        `perform_handoff`'s own default is True, so this must be passed explicitly."""
+    def test_teardown_defaults_ON(self, tmp_path, monkeypatch) -> None:
+        """Owner decision 2026-07-29, reversing #700 AC4: the phrasings that trigger this skill
+        mean RETIRE THIS ONE, and an OFF default left a live pane re-prompting itself from an armed
+        goal on the first real handoff. Retirement stays gated on every verification AND on the goal
+        being provably cleared, so the expected path is also the guarded one."""
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "my-own-session")
+        monkeypatch.setattr(ll, "_default_runner", lambda argv, timeout=180: FakeProc(0, json.dumps(
+            {"result": {"pane": {"pane_id": "w1:p1", "agent_session": {
+                "agent": "claude", "kind": "id", "source": "herdr:claude",
+                "value": "my-own-session"}}}})))
         seen = {}
         monkeypatch.setattr(ll, "perform_handoff",
                             lambda **kw: (seen.update(kw), {"ok": True, "results": {},
@@ -361,9 +372,11 @@ class TestAdHocSubcommand:
                                                             "session_id": None, "cleanup": None,
                                                             "truncated": False,
                                                             "failed_step": None,
-                                                            "teardown_skipped": None})[1])
-        ll.main(_argv(tmp_path))
-        assert seen["teardown"] is False
+                                                            "teardown_skipped": None, "predecessor_guard": None})[1])
+        argv = [a for a in _argv(tmp_path) if a != "--no-teardown"]
+        ll.main(argv)
+        assert seen["teardown"] is True
+        assert seen["predecessor_session"] == "my-own-session"
 
     # The opt-IN half of AC4 lives in `TestTeardownOwnership`: since the Step-11 diff review,
     # `--teardown-predecessor` also has to prove the anchor pane is this session's own, so the
@@ -378,7 +391,7 @@ class TestAdHocSubcommand:
                                                             "session_id": None, "cleanup": None,
                                                             "truncated": False,
                                                             "failed_step": None,
-                                                            "teardown_skipped": None})[1])
+                                                            "teardown_skipped": None, "predecessor_guard": None})[1])
         ll.main(_argv(tmp_path))
         argv = [a for a in _argv(tmp_path) if a != "--resume-prompt-file"]
         argv = [a for a in argv if not a.endswith("resume.md")]
@@ -393,7 +406,7 @@ class TestAdHocSubcommand:
                                                             "session_id": None, "cleanup": None,
                                                             "truncated": False,
                                                             "failed_step": None,
-                                                            "teardown_skipped": None})[1])
+                                                            "teardown_skipped": None, "predecessor_guard": None})[1])
         cond = tmp_path / "goal.txt"
         cond.write_text("multi\nline\ncondition", encoding="utf-8")
         argv = [a for a in _argv(tmp_path) if a not in ("--goal-condition", GOAL_CONDITION)]
@@ -477,7 +490,7 @@ class TestAdHocSubcommand:
                                           "new_pane": None, "session_id": None,
                                           "cleanup": None, "truncated": False,
                                           "failed_step": "prompt_landed",
-                                          "teardown_skipped": None})
+                                          "teardown_skipped": None, "predecessor_guard": None})
         assert ll.main(_argv(tmp_path)) == 4
 
 
@@ -511,7 +524,7 @@ class TestTeardownOwnership:
                             lambda argv, timeout=180: FakeProc(0, self.OTHER))
         called = []
         monkeypatch.setattr(ll, "perform_handoff", lambda **kw: called.append(kw))
-        assert ll.main(_argv(tmp_path, **{"--teardown-predecessor": None})) == 2
+        assert ll.main([a for a in _argv(tmp_path) if a != "--no-teardown"]) == 2
         assert called == [], "nothing may be launched once the teardown target is unproven"
 
     def test_teardown_proceeds_when_the_pane_is_provably_ours(self, tmp_path,
@@ -526,8 +539,8 @@ class TestTeardownOwnership:
                                                             "session_id": None, "cleanup": None,
                                                             "truncated": False,
                                                             "failed_step": None,
-                                                            "teardown_skipped": None})[1])
-        assert ll.main(_argv(tmp_path, **{"--teardown-predecessor": None})) == 0
+                                                            "teardown_skipped": None, "predecessor_guard": None})[1])
+        assert ll.main([a for a in _argv(tmp_path) if a != "--no-teardown"]) == 0
         assert seen["teardown"] is True
 
     def test_teardown_refuses_when_the_probe_cannot_prove_anything(self, tmp_path,
@@ -536,7 +549,7 @@ class TestTeardownOwnership:
         irreversible."""
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "my-own-session")
         monkeypatch.setattr(ll, "_default_runner", lambda argv, timeout=180: FakeProc(1, ""))
-        assert ll.main(_argv(tmp_path, **{"--teardown-predecessor": None})) == 2
+        assert ll.main([a for a in _argv(tmp_path) if a != "--no-teardown"]) == 2
 
     def test_teardown_refuses_a_session_that_cannot_prove_its_own_identity(self, tmp_path,
                                                                           monkeypatch) -> None:
@@ -545,10 +558,12 @@ class TestTeardownOwnership:
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         monkeypatch.setattr(ll, "_default_runner",
                             lambda argv, timeout=180: FakeProc(0, self._own("whatever")))
-        assert ll.main(_argv(tmp_path, **{"--teardown-predecessor": None})) == 2
+        assert ll.main([a for a in _argv(tmp_path) if a != "--no-teardown"]) == 2
 
     def test_no_teardown_means_no_ownership_probe_at_all(self, tmp_path, monkeypatch) -> None:
-        """The default path must not require a live herdr server just to hand off work."""
+        """`--no-teardown` is the additive path: it closes nothing, so it must not demand a live
+        `herdr pane get` ownership proof. (The DEFAULT path does retire, and therefore does — that
+        is the trade the owner's 2026-07-29 decision accepts.)"""
         calls = []
 
         def runner(argv, timeout=180):
@@ -560,6 +575,6 @@ class TestTeardownOwnership:
                             lambda **kw: {"ok": True, "results": {}, "steps": [],
                                           "new_pane": None, "session_id": None, "cleanup": None,
                                           "truncated": False, "failed_step": None,
-                                          "teardown_skipped": None})
+                                          "teardown_skipped": None, "predecessor_guard": None})
         assert ll.main(_argv(tmp_path)) == 0
         assert calls == []

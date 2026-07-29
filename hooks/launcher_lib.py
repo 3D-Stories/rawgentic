@@ -974,10 +974,12 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     transcript_dir: str, launch_mode: str = "fresh",
                     readiness_timeout_ms: int = 30000,
                     runner=_default_runner, read_text=None, sleeper=time.sleep,
-                    teardown: bool = True, prompt_marker: str | None = None,
+                    teardown: bool, prompt_marker: str | None = None,
                     expected_project: str | None = None,
                     expected_project_path: str | None = None, steps=None,
-                    on_successor=None, now=time.monotonic) -> dict:
+                    on_successor=None, now=time.monotonic,
+                    predecessor_session: str | None = None,
+                    predecessor_goal_condition: str | None = None) -> dict:
     """Execute the ordered handoff. Effects are injected so tests drive the whole sequence.
 
     THE ORDER, and why each position is load-bearing:
@@ -1053,7 +1055,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
 
     out: dict = {"ok": False, "steps": [], "results": {}, "truncated": False,
                  "failed_step": None, "new_pane": None, "session_id": None,
-                 "cleanup": None, "teardown_skipped": None}
+                 "cleanup": None, "teardown_skipped": None, "predecessor_guard": None}
 
     ladder = _VERIFICATION_STEPS if steps is None else steps
     gate_steps = _predecessor_steps(ladder)
@@ -1418,13 +1420,83 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     # Teardown LAST, only when authorized, and its result is NOT ignored (Step-11 Medium 5).
     allowed, reason = teardown_allowed(out["results"], steps=gate_steps)
     if teardown and allowed:
+        # #700 field defect: this used to close the pane WITHOUT clearing its goal, while the
+        # successor-owned `retire-predecessor` path (#665) correctly clears, confirms, then closes.
+        # Found on a real handoff: the predecessor was left alive with its guard armed and looped
+        # its Stop hook four times. Closing a guarded pane is usually masked because the session
+        # dies with it — but when the close fails or is skipped, the owner is left with a session
+        # that can never stop.
+        #
+        # The clear is CONFIRMED before the close, and an unconfirmed clear keeps the pane: a guard
+        # that may still be armed is recoverable, a wrongly-closed pane is not.
+        if predecessor_session is not None:
+            pred_transcript = os.path.join(transcript_dir, f"{predecessor_session}.jsonl")
+            pred_baseline = _baseline(read_text, pred_transcript)
+            if pred_baseline is None:
+                out["failed_step"] = "predecessor_goal_clear"
+                out["predecessor_guard"] = (
+                    f"the predecessor pane {anchor_pane} is ALIVE and STILL GUARDED — its "
+                    f"transcript could not be baselined, so {_CLEAR_COMMAND!r} was never sent. Run "
+                    f"{_CLEAR_COMMAND!r} in it by hand, then close it")
+                return out
+            clear_text, clear_keys = build_send_text_argv(pane=anchor_pane, text=_CLEAR_COMMAND)
+            for kind, argv in (("clear_predecessor_goal", clear_text),
+                               ("clear_predecessor_goal_keys", clear_keys)):
+                proc = runner(argv)
+                record(kind, argv, proc, note=f"{_CLEAR_COMMAND} before closing (#700)")
+                if getattr(proc, "returncode", 1) != 0:
+                    out["failed_step"] = kind
+                    out["predecessor_guard"] = (
+                        f"the predecessor pane {anchor_pane} is ALIVE and may still be GUARDED — "
+                        f"{kind} failed, so aborting BEFORE the close. If the text landed but the "
+                        f"Enter did not, {_CLEAR_COMMAND!r} is staged unsubmitted in its input. "
+                        f"Check the pane and run {_CLEAR_COMMAND!r} by hand")
+                    return out
+
+            # Bound to the condition when the caller knows it. #665 Step-11 pass-3 proved why: with
+            # ANY met:true row accepted, a row belonging to a DIFFERENT guard confirms our clear and
+            # a live pane gets closed on it.
+            def _pred_cleared() -> bool:
+                tail = _tail(read_text(pred_transcript), pred_baseline)
+                return tail is not None and transcript_has_cleared_goal(
+                    tail, expected_condition=predecessor_goal_condition)
+
+            if not _poll_for(_pred_cleared, attempts=GOAL_POLL_ATTEMPTS,
+                             delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper):
+                out["failed_step"] = "predecessor_goal_clear"
+                out["predecessor_guard"] = (
+                    f"the predecessor pane {anchor_pane} is LEFT OPEN because "
+                    f"{_CLEAR_COMMAND!r} was transported but never confirmed by a met:true "
+                    f"sentinel row. Its guard state is AMBIGUOUS — verify the pane and run "
+                    f"{_CLEAR_COMMAND!r} by hand before closing it")
+                return out
+        else:
+            # The campaign launcher does not know the predecessor's session id, so the clear could
+            # not be confirmed even if it were sent. Its behaviour is therefore UNCHANGED —
+            # close-only — and the gap is recorded rather than silently assumed to be harmless.
+            record("teardown_predecessor_guard", [], None,
+                   note=("predecessor goal NOT cleared before close: no predecessor_session was "
+                         "supplied, so the clear could not be confirmed. The session normally dies "
+                         "with the pane; if the close fails, its guard is still armed"))
+
         td_argv = build_teardown_argv(anchor_pane)
         proc = runner(td_argv)
         record("teardown_predecessor", td_argv, proc, note=reason)
         if getattr(proc, "returncode", 1) != 0:
             out["failed_step"] = "teardown_predecessor"
             out["ok"] = False
+            out["predecessor_guard"] = (
+                f"the predecessor pane {anchor_pane} could NOT be closed (rc="
+                f"{getattr(proc, 'returncode', None)}). If its goal was cleared it will stop "
+                f"normally; otherwise run {_CLEAR_COMMAND!r} in it by hand")
             return out
+    elif not teardown:
+        # #700 field defect 3, and the one that actually bit: the default path left the guard armed
+        # and said NOTHING, so the owner met a pane that looped its Stop hook with no idea why.
+        out["predecessor_guard"] = (
+            f"the predecessor pane {anchor_pane} is still running and its /goal is STILL ARMED — "
+            f"it will keep re-prompting itself at every Stop until you run {_CLEAR_COMMAND!r} in "
+            "it. That is deliberate (teardown is opt-in), but it is not automatic")
     out["ok"] = True
     return out
 
@@ -2821,24 +2893,26 @@ def _cmd_ad_hoc_handoff(args) -> int:
     # Scoped to the destructive request on purpose. Without teardown a wrong anchor is a pane split
     # in the wrong place — recoverable, and not worth requiring a live herdr probe (and therefore a
     # herdr server) for every ordinary handoff.
-    if args.teardown_predecessor:
+    teardown = not args.no_teardown
+    own = ""
+    if teardown:
         own = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
         if not own:
             raise LauncherError(
-                "$CLAUDE_CODE_SESSION_ID is unset or empty — refusing --teardown-predecessor. "
+                "$CLAUDE_CODE_SESSION_ID is unset or empty — refusing to retire the anchor pane. "
                 "Closing a pane is irreversible, and a session that cannot prove its own identity "
-                "cannot prove the pane it is asking to close is its own")
+                "cannot prove the pane it is asking to close is its own. Pass --no-teardown to hand off without retiring this pane")
         probe = _default_runner(build_pane_get_argv(args.anchor_pane))
         if getattr(probe, "returncode", 1) != 0:
             raise LauncherError(
                 f"`herdr pane get {args.anchor_pane}` returned "
-                f"rc={getattr(probe, 'returncode', None)} — refusing --teardown-predecessor "
+                f"rc={getattr(probe, 'returncode', None)} — refusing to retire the anchor pane "
                 "because the pane cannot be proven to be yours right now")
         live = parse_pane_agent_session(getattr(probe, "stdout", "") or "")
         if live != own:
             raise LauncherError(
                 f"pane {args.anchor_pane} hosts session {live!r}, not this session ({own!r}) — "
-                "refusing --teardown-predecessor. Closing it could kill an unrelated session; "
+                "refusing to retire it. Closing it could kill an unrelated session; "
                 "check $HERDR_PANE_ID")
 
     # `steps` is deliberately NOT passed: the canonical launch ladder is the only legal one for a
@@ -2849,13 +2923,23 @@ def _cmd_ad_hoc_handoff(args) -> int:
         registry_path=args.registry, transcript_dir=args.transcript_dir,
         prompt_marker=marker, expected_project=args.project,
         expected_project_path=args.project_path,
-        # AC4 — `perform_handoff` defaults this to True, which is right for a campaign because a
-        # campaign HAS a predecessor to retire. An ad-hoc handoff hands off work, not the caller's
-        # own session, so it must be passed explicitly and default OFF.
-        teardown=bool(args.teardown_predecessor))
+        # AC4 — an ad-hoc handoff hands off work, not the caller's own session, so teardown is
+        # opt-in. `perform_handoff` no longer carries a default of its own (#700 field defect 1:
+        # the library defaulted ON while this CLI defaulted OFF, so the two surfaces disagreed
+        # about one operation), which is why it is always passed here.
+        teardown=teardown,
+        # Only meaningful when tearing down, and it is what lets the goal be CLEARED and the clear
+        # CONFIRMED before the pane is closed. `own` is this session's own id, already required
+        # above for the ownership proof.
+        predecessor_session=(own if teardown else None),
+        predecessor_goal_condition=args.predecessor_goal_condition)
     print(json.dumps({k: out[k] for k in
                       ("ok", "results", "failed_step", "new_pane", "session_id",
-                       "truncated", "cleanup", "teardown_skipped")}, indent=2))
+                       "truncated", "cleanup", "teardown_skipped", "predecessor_guard")}, indent=2))
+    # On BOTH streams, and in plain words: the JSON is easy to skim past, and this is the sentence
+    # whose absence let a stranded guarded pane loop its Stop hook four times unnoticed (#700).
+    if out.get("predecessor_guard"):
+        print(f"\nPREDECESSOR: {out['predecessor_guard']}", file=sys.stderr)
     return 0 if out["ok"] else 4
 
 
@@ -3146,9 +3230,20 @@ def main(argv: list[str] | None = None) -> int:
                       help="a token UNIQUE to this handoff that appears in the prompt; it is what "
                            "prompt_landed matches. Required because the check is skipped without "
                            "one, and a skipped check is not a gate")
-    p_ah.add_argument("--teardown-predecessor", action="store_true", default=False,
-                      help="also close the anchor pane once every verification passes; OFF by "
-                           "default — an ad-hoc handoff hands off work, not your own session")
+    # Default ON (owner decision, 2026-07-29), reversing #700 AC4. AC4 reasoned that an ad-hoc
+    # handoff hands off work rather than retiring the caller — but the first real handoff showed the
+    # opposite in practice: the phrasings that trigger this ("pass off", "clear the context into a
+    # new session") mean RETIRE THIS ONE, and the OFF default left a live pane re-prompting itself
+    # from an armed goal. Retirement is gated on every verification passing and on the goal being
+    # provably cleared, so the safe-by-construction path is also the expected one.
+    p_ah.add_argument("--no-teardown", action="store_true", default=False,
+                      help="keep the anchor pane alive after a successful handoff. Your /goal stays "
+                           "ARMED and the output says so — use this only for an additive handoff "
+                           "where you keep working. Named to match the `handoff` subcommand")
+    p_ah.add_argument("--predecessor-goal-condition", default=None,
+                      help="your OWN currently-armed goal condition, used only with "
+                           "the default retirement to bind the clear receipt to the guard actually "
+                           "cleared. Read it with `read-goal-condition --transcript <own>.jsonl`")
 
     # #665 — the mid-child pair. Two commands, run by two different sessions, because the
     # handover and the retirement have different owners: only the successor may retire.
