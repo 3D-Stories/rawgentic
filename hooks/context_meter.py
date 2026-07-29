@@ -393,6 +393,70 @@ def _pct(cfg, env, cfg_key, env_key, default):
     return default, None
 
 
+def validate_setup_block(block) -> list[str]:
+    """Every reason `block` would NOT be honoured as written, for `/rawgentic:setup` (#701).
+
+    Lives here, beside the constants, because the rules it enforces are the HOOK's: the 1..99 range
+    is `_pct`'s and the tier gap is `MIN_TIER_GAP_PCT`. A validator anywhere else would have to copy
+    both, and a copy is the drift this exists to prevent — setup would accept a pair `thresholds()`
+    then discards, leaving the user's tuned values inert and the meter silently back on its
+    defaults, which is indistinguishable from the bug #701 was filed about.
+
+    It adds nothing to the reading, the thresholds or the nag behaviour #687 settled; it only reads.
+
+    Deliberately PURE and total: no I/O, and every input shape is answered with a message rather
+    than an exception. `context_meter.py`'s `__main__` fails OPEN by design (a PostToolUse hook must
+    never block a turn), so a validator that raised would be reported as exit 0 — a validation gate
+    that passes on error is worse than none.
+
+    An EMPTY block is valid: absence means documented defaults, and #701 AC5 requires a declined
+    prompt to leave the section absent rather than restate them.
+    """
+    if not isinstance(block, dict):
+        return [f"contextMeter must be a JSON object, got {type(block).__name__}"]
+
+    errors: list[str] = []
+
+    def _int(value):
+        # `bool` is an `int` subclass, so a bare isinstance check would accept `true` and mean 1.
+        return None if isinstance(value, bool) or not isinstance(value, int) else value
+
+    pcts: dict[str, int] = {}
+    for key, default in (("checkInPercent", DEFAULT_CHECK_IN_PCT),
+                         ("actPercent", DEFAULT_ACT_PCT)):
+        if key not in block:
+            pcts[key] = default
+            continue
+        parsed = _int(block[key])
+        if parsed is None:
+            errors.append(f"{key} must be a whole number, got {block[key]!r}")
+        elif not 1 <= parsed <= 99:
+            errors.append(f"{key}={parsed} is out of range 1..99")
+        else:
+            pcts[key] = parsed
+
+    # Checked against the DEFAULT for whichever half was omitted, because that is the pair
+    # `thresholds()` will actually evaluate.
+    if len(pcts) == 2:
+        gap = pcts["actPercent"] - pcts["checkInPercent"]
+        if gap < MIN_TIER_GAP_PCT:
+            errors.append(
+                f"checkInPercent={pcts['checkInPercent']} must be at least {MIN_TIER_GAP_PCT} "
+                f"below actPercent={pcts['actPercent']} (gap is {gap}) — a squeezed or inverted "
+                "pair leaves no band in which to look for a seam, so the advisory tier is "
+                "unreachable and the session goes straight to 'break now'")
+
+    if "windowSize" in block:
+        window = _int(block["windowSize"])
+        if window is None:
+            errors.append(f"windowSize must be a whole number of tokens, got "
+                          f"{block['windowSize']!r}")
+        elif window <= 0:
+            errors.append(f"windowSize={window} must be a positive number of tokens")
+
+    return errors
+
+
 def thresholds(cfg, env, *, warn=None):
     """(check_in_pct, act_pct). Both fall back together on any problem.
 
@@ -1133,6 +1197,26 @@ def cmd_read(args) -> int:
     return 0
 
 
+def cmd_validate_config(args) -> int:
+    """Exit 0 and print `ok`, or print every reason on stderr and exit 2 (#701).
+
+    Fails CLOSED, unlike the hook paths in this module: what it gates is whether setup stages a
+    block, and staging one the hook will discard is the failure mode #701 exists to remove.
+    """
+    try:
+        block = json.loads(args.json_block)
+    except ValueError as exc:
+        print(f"validate-config: bad JSON: {exc}", file=sys.stderr)
+        return 2
+    errors = validate_setup_block(block)
+    if errors:
+        for error in errors:
+            print(error, file=sys.stderr)
+        return 2
+    print("ok")
+    return 0
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1141,9 +1225,17 @@ def main(argv=None) -> int:
     p_read = sub.add_parser("read", help="print the current reading as JSON")
     p_read.add_argument("--session-id", default=None)
     p_read.add_argument("--transcript", default=None)
+    # #701 — the shape `/rawgentic:setup` already uses for `telemetryAlerts`
+    # (`seat_outcomes_lib.py validate-config`): exit 0 = stage it, non-zero = show stderr and
+    # re-offer. Never stage a block this refuses.
+    p_val = sub.add_parser("validate-config",
+                           help="validate a contextMeter block for setup (#701)")
+    p_val.add_argument("--json", dest="json_block", required=True)
     if not argv:
         argv = ["hook"]
     args = parser.parse_args(argv)
+    if args.cmd == "validate-config":
+        return cmd_validate_config(args)
     if args.cmd == "read":
         return cmd_read(args)
     return cmd_hook(args)
