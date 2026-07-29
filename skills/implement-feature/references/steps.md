@@ -1595,6 +1595,24 @@ CI status, quarantine notice, or skip confirmation.
    git checkout ${capabilities.default_branch} && git pull origin ${capabilities.default_branch}
    ```
 
+2b. **Record the terminal status back to any campaign queue (#695) — IMMEDIATELY after the merge is confirmed:**
+   ```bash
+   python3 hooks/launcher_lib.py record-child-outcome --issue <issue> --status merged --project-root .
+   ```
+   This is the write that #695 exists for. Nothing used to do it, so a child shipped outside the
+   epic driver left `claude_docs/.driver-state/<campaign>.json` reading `queued` after its PR
+   merged — and a fresh-session resume, correctly deriving position from durable state, would
+   re-run a merged child.
+
+   It runs **here**, right after the merge, rather than only at Step 16: Step 16 is not atomic
+   with the merge, so a crash between them reproduces the defect exactly. Step 16 repeats it as
+   idempotent reconciliation.
+
+   **Fail-open by design.** No campaign naming this issue → exit 0, writes nothing, and says so
+   on both streams; that is the normal case for a single-session run. A non-zero exit means a
+   caller/data error (off-vocabulary status, a terminal regression, a corrupt state file) — do
+   NOT ignore it, and do not hand-edit the state file to work around it.
+
 3. **Deploy (adaptive based on capabilities.deploy_method):**
 
    **If `deploy_method == "script"`:**
@@ -1676,6 +1694,22 @@ the store is the Tier-2 measurement telemetry substrate (per
 measurable signal — not just a sentence the user reads once.
 
 1. APPEND WF2 results to session notes.
+
+1a. **Reconcile the campaign queue (#695).** Re-run the terminal-status write-back, whatever
+   this run's outcome was:
+   ```bash
+   python3 hooks/launcher_lib.py record-child-outcome --issue <issue> \
+     --status <merged|pr_open|deferred|abandoned> --project-root .
+   ```
+   Step 14 item 2b already ran this on the merge path; this is the **idempotent
+   reconciliation** that catches every other case — a run interrupted between the merge and
+   here, a headless run whose PR is the terminal deliverable (`pr_open`), or a blocked child
+   (`deferred`/`abandoned`). Recording a status the child already has is a no-op, so the
+   repeat costs nothing.
+
+   Capture the command's output into the run-record: on a fail-open result (no campaign names
+   this issue) add its printed reason as a `follow_ups` entry. Fail-open that leaves no trace
+   is how a real miss comes to look exactly like a deliberate no-op.
 
 1b. **Headless mode:** if `additionalContext` has "HEADLESS MODE active", Steps 14
    and 15 were skipped — the PR is the terminal deliverable. Record this for

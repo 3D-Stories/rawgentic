@@ -1504,6 +1504,204 @@ def _locked_state_update(path: str, mutate):
         return new
 
 
+# ---------------------------------------------------------------------------
+# #695 — the terminal-status write-back, and the issue-state probe behind AC2
+# ---------------------------------------------------------------------------
+
+DRIVER_STATE_DIRNAME = os.path.join("claude_docs", ".driver-state")
+
+# An owner/repo segment. Interpolated into a GraphQL query string, so it is validated as a bare
+# token rather than trusted from `git remote`.
+_PROJECT_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
+
+# The GraphQL query behind AC2's corroboration. `gh issue view --json` CANNOT answer this on the
+# installed CLI — its field list offers `state` and `closed` but neither `stateReason` nor
+# `closedByPullRequestsReferences` — so the probe would have been unbuildable through it. This
+# form was verified live on this host against the actual regression: issue #687 returns
+# state CLOSED, stateReason COMPLETED, and one closing PR #691 with merged:true (#226).
+_ISSUE_STATE_QUERY = """
+{
+  repository(owner: "%s", name: "%s") {
+    issue(number: %d) {
+      number state stateReason
+      closedByPullRequestsReferences(first: 10, includeClosedPrs: true) {
+        nodes { number merged }
+      }
+    }
+  }
+}
+"""
+
+
+def classify_issue_state(payload) -> str:
+    """Map a `gh api graphql` issue payload to a probe verdict. PURE.
+
+    Verdicts, per the #695 design: `confirmed_merged` (closed AND some closing PR merged),
+    `confirmed_abandoned` (closed with no merged closing PR — e.g. `NOT_PLANNED`),
+    `confirmed_open`, or `unknown`.
+
+    `unknown` is returned for ANY shape that cannot be read confidently, and the caller must
+    treat it as "no opinion" rather than as evidence — a probe that cannot answer must not veto
+    a candidate, or a GitHub outage becomes a silent campaign stall.
+    """
+    try:
+        issue = payload["data"]["repository"]["issue"]
+        state = issue["state"]
+    except (KeyError, TypeError):
+        return "unknown"
+    if not isinstance(state, str):
+        return "unknown"
+    if state.upper() == "OPEN":
+        return "confirmed_open"
+    if state.upper() != "CLOSED":
+        return "unknown"
+    nodes = (issue.get("closedByPullRequestsReferences") or {}).get("nodes")
+    if not isinstance(nodes, list):
+        return "confirmed_abandoned"
+    if any(isinstance(n, dict) and n.get("merged") is True for n in nodes):
+        return "confirmed_merged"
+    return "confirmed_abandoned"
+
+
+def repo_from_git(project_root: str, runner=None) -> str | None:
+    """`owner/name` from the project's `origin` remote, or None.
+
+    Derived rather than passed as a flag: #695's H1 finding was that an optional parameter
+    nobody supplies ships the feature dead, and a `--repo` flag on one CLI would have repeated
+    that. Returns None on any failure, which degrades AC2's corroboration to "file wins" rather
+    than failing the handoff.
+    """
+    if runner is None:
+        runner = _default_runner
+    try:
+        proc = runner(["git", "-C", project_root, "remote", "get-url", "origin"], 30)
+    except (OSError, subprocess.SubprocessError, TypeError):
+        return None
+    if getattr(proc, "returncode", 1) != 0:
+        return None
+    url = (getattr(proc, "stdout", "") or "").strip()
+    if not url:
+        return None
+    if url.endswith(".git"):
+        url = url[:-4]
+    # git@host:owner/name and https://host/owner/name both reduce to the last two segments.
+    parts = [p for p in url.replace(":", "/").split("/") if p]
+    if len(parts) < 2:
+        return None
+    owner, name = parts[-2], parts[-1]
+    if not _PROJECT_TOKEN_RE.fullmatch(owner) or not _PROJECT_TOKEN_RE.fullmatch(name):
+        return None
+    return f"{owner}/{name}"
+
+
+def build_issue_state_probe(repo: str, runner=None, timeout: int = 30):
+    """A callable `issue_state_probe(number) -> verdict` for `driver_lib.next_ready_issue`.
+
+    Lives HERE rather than in `driver_lib` because it does I/O: `driver_lib` promises "no I/O and
+    no side effects" and the docs run it from a `python3 -c` one-liner, so the probe is injected
+    across that boundary instead of imported through it (#695).
+
+    Never raises: every failure — a malformed repo, a non-zero `gh`, a timeout, unparseable
+    JSON — becomes `unknown`, because the caller's contract is that an unreachable probe leaves
+    the file's own status standing.
+    """
+    if runner is None:
+        runner = _default_runner
+    try:
+        owner, name = repo.split("/", 1)
+    except (AttributeError, ValueError):
+        return lambda _number: "unknown"
+    if not owner or not name:
+        return lambda _number: "unknown"
+
+    def probe(number) -> str:
+        # An issue number is interpolated into the query, so it must be exactly digits.
+        if isinstance(number, bool) or not str(number).isdigit():
+            return "unknown"
+        argv = ["gh", "api", "graphql", "-f",
+                "query=" + (_ISSUE_STATE_QUERY % (owner, name, int(number)))]
+        try:
+            proc = runner(argv, timeout)
+        except (OSError, subprocess.SubprocessError, TypeError):
+            return "unknown"
+        if getattr(proc, "returncode", 1) != 0:
+            return "unknown"
+        try:
+            return classify_issue_state(json.loads(getattr(proc, "stdout", "") or ""))
+        except (ValueError, TypeError):
+            return "unknown"
+    return probe
+
+
+ISSUE_PROBE_ENV = "RAWGENTIC_ISSUE_STATE_PROBE"
+_PROBE_OFF_VALUES = frozenset({"0", "off", "false", "no"})
+
+
+def issue_probe_enabled(env=None) -> bool:
+    """Is AC2's issue-state corroboration on? **Defaults to ON.**
+
+    The default direction is load-bearing (#695 review finding H1): corroboration that has to be
+    switched on is corroboration nobody switches on, and an optional probe no caller supplies is
+    exactly how AC2 nearly shipped dead. So this is an opt-OUT.
+
+    The opt-out exists because the probe makes a live `gh` call, and a test that drives the
+    handoff CLI with a synthetic campaign would otherwise depend on the real state of whatever
+    issue numbers its fixture happens to reuse — several of this repo's own fixtures use numbers
+    that really are merged here, which turned a fake queue into a "complete" campaign. Tests set
+    it to `0`; production never does.
+    """
+    if env is None:
+        env = os.environ
+    return str(env.get(ISSUE_PROBE_ENV, "1")).strip().lower() not in _PROBE_OFF_VALUES
+
+
+def _issue_state_probe_for(project_root: str):
+    """The AC2 probe for a project, or None when it is unavailable or switched off."""
+    if not issue_probe_enabled():
+        return None
+    repo = repo_from_git(project_root)
+    return build_issue_state_probe(repo) if repo else None
+
+
+def discover_driver_states(project_root: str, issue: int, listdir=os.listdir,
+                           read_text=None) -> list[str]:
+    """Every driver-state file whose queue names `issue`, in sorted filename order.
+
+    A single-session WF2 run does not know which campaign (if any) owns its issue, so passing a
+    path only moved the problem — the command discovers it instead (#695).
+
+    **Cardinality is deliberate.** Zero matches is the NORMAL case (a run outside any campaign)
+    and the caller treats it as a logged no-op. More than one match means several campaigns
+    genuinely name this child, and EVERY one of them is updated: writing only the first would
+    leave the others stale, which is the defect this exists to fix.
+
+    Unreadable or unparseable files are skipped rather than fatal — one corrupt campaign file
+    must not stop an unrelated campaign's bookkeeping.
+    """
+    if read_text is None:
+        def read_text(path):
+            with open(path, encoding="utf-8") as fh:
+                return fh.read()
+    root = os.path.join(project_root, DRIVER_STATE_DIRNAME)
+    try:
+        names = sorted(n for n in listdir(root) if n.endswith(".json"))
+    except OSError:
+        return []
+    hits = []
+    for name in names:
+        path = os.path.join(root, name)
+        try:
+            state = json.loads(read_text(path))
+            issues = state.get("issues", [])
+        except (OSError, ValueError, AttributeError, UnicodeDecodeError):
+            continue
+        if not isinstance(issues, list):
+            continue
+        if any(isinstance(e, dict) and e.get("number") == issue for e in issues):
+            hits.append(path)
+    return hits
+
+
 def _extract_pane_id(stdout: str) -> str | None:
     """Strict parse of the split response. Returns None rather than guessing."""
     try:
@@ -2254,6 +2452,65 @@ def resume_prompt_for_state(state: dict, project: str | None = None) -> str | No
     return disposition["resume_prompt"]
 
 
+def _cmd_record_child_outcome(args) -> int:
+    """#695 — write a child's terminal status back to every campaign queue that names it.
+
+    Fail modes are split deliberately, because they are different KINDS of thing:
+
+    - **Fail-OPEN, exit 0, but never silent:** no campaign file names this issue (the normal
+      case — a single-session run outside any campaign), or the state directory is absent. The
+      reason goes to BOTH stdout and stderr so a wrapper that discards one still records it, and
+      WF2 Step 16 captures it into the run-record. Silent fail-open is how a real miss comes to
+      look exactly like a deliberate no-op.
+    - **Fail-CLOSED, non-zero, file untouched:** a status outside the vocabulary, a terminal
+      regression, or a corrupt/unreadable campaign file. Those are caller or data errors, not
+      states of the world, and swallowing them would corrupt the state the resume path treats as
+      authoritative.
+    """
+    driver = _driver_lib()
+    if args.driver_state:
+        targets = [args.driver_state] if os.path.isfile(args.driver_state) else []
+        if not targets:
+            _say(f"no driver-state file at {args.driver_state!r} — wrote nothing (#695 "
+                 "fail-open: a run outside any campaign is the normal case)")
+            return 0
+    else:
+        targets = discover_driver_states(args.project_root, args.issue)
+        if not targets:
+            _say(f"no campaign under {args.project_root}/{DRIVER_STATE_DIRNAME} names issue "
+                 f"#{args.issue} — wrote nothing (#695 fail-open)")
+            return 0
+
+    wrote, skipped = [], []
+    for path in targets:
+        def _mutate(state, _p=path):
+            return driver.record_child_outcome(state, args.issue, args.status)
+        try:
+            result = _locked_state_update(path, _mutate)
+        except (OSError, ValueError, driver.DriverStateError) as exc:
+            # Loud, and it does NOT continue: a corrupt or refusing campaign file must not be
+            # reported alongside a successful sibling write as though the run were clean.
+            print(f"refusing: {path}: {exc}", file=sys.stderr)
+            return 1
+        if result is None:
+            skipped.append(path)
+        else:
+            wrote.append(path)
+    for path in wrote:
+        _say(f"recorded issue #{args.issue} as {args.status!r} in {path}")
+    for path in skipped:
+        _say(f"issue #{args.issue} already {args.status!r} (or absent) in {path} — no write")
+    return 0
+
+
+def _say(message: str) -> None:
+    """Print to BOTH streams (#695 M2). A fail-open reason that only reaches stdout is lost to
+    any wrapper that captures one stream, and then a real miss is indistinguishable from a
+    deliberate no-op."""
+    print(message)
+    print(message, file=sys.stderr)
+
+
 def _cmd_handoff(args) -> int:
     """The non-test caller the Step-11 review found missing.
 
@@ -2319,9 +2576,20 @@ def _cmd_handoff(args) -> int:
     # of its own (#694). `resume_prompt_for_state` above keeps the default True — it serves the
     # interactive hand-back and the `claude -p` fallback, which each deliver one prompt and so have
     # nowhere else to put the bind.
+    #
+    # #695 AC2: the issue-state probe is supplied HERE, at the one production selection site. The
+    # design review's sharpest finding was that an optional probe no caller passes ships the
+    # corroboration dead, so the repo is derived from the project's own `origin` remote rather than
+    # taken as a flag someone must remember. A repo that cannot be derived degrades to "the file
+    # wins" — the handoff still runs.
+    probe = _issue_state_probe_for(getattr(args, "project_root", "."))
+    if probe is None:
+        print("note: issue-state corroboration is OFF — the driver-state file's own status is "
+              "being trusted (#695)", file=sys.stderr)
     disposition = driver_lib.fresh_session_handoff(state, mode=mode,
                                                   project=getattr(args, "project", None),
-                                                  include_bind=False)
+                                                  include_bind=False,
+                                                  issue_state_probe=probe)
     if disposition.get("outcome") != "ready":
         print(f"no handoff: campaign disposition is {disposition.get('outcome')!r} "
               f"(session_mode {mode!r})")
@@ -2667,6 +2935,20 @@ def main(argv: list[str] | None = None) -> int:
                             help="the predecessor's last unmet goal condition, verbatim (AC6)")
     p_read.add_argument("--transcript", required=True)
 
+    # #695 — the ONE owner of a child's terminal status write-back. Invoked at each authoritative
+    # terminal event: WF2 Step 14 right after the merge is confirmed, and Step 16 as idempotent
+    # reconciliation. Step 16 alone was the first design and it is NOT atomic with the merge.
+    p_rco = sub.add_parser("record-child-outcome",
+                           help="write a child's terminal status back to its campaign queue")
+    p_rco.add_argument("--issue", type=int, required=True)
+    p_rco.add_argument("--status", required=True,
+                       help="one of the driver-state statuses (merged, deferred, abandoned, ...)")
+    p_rco.add_argument("--driver-state",
+                       help="a specific campaign file; omit to DISCOVER every campaign whose "
+                            "queue names this issue under claude_docs/.driver-state/")
+    p_rco.add_argument("--project-root", default=".",
+                       help="root to discover claude_docs/.driver-state/ beneath")
+
     # The `pane_less` half of AC1/AC4. Exposed so the non-herdr launch has an in-repo entry
     # point too — a builder with no caller is the disconnected-module smell both reviews caught.
     p_fb = sub.add_parser("build-fallback", help="argv for the retained pane-less launch")
@@ -2700,6 +2982,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_mid_child_handoff(args)
         if args.cmd == "retire-predecessor":
             return _cmd_retire_predecessor(args)
+        if args.cmd == "record-child-outcome":
+            return _cmd_record_child_outcome(args)
         if args.cmd == "read-goal-condition":
             with open(args.transcript, encoding="utf-8") as fh:
                 condition = last_unmet_goal_condition(fh.read())
