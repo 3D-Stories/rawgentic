@@ -19,6 +19,59 @@ Everything else here is procedure the orchestrator executes.
 > state-transition validator (`record_outcome` / `defer_issue` / queue mutation)
 > is deliberately **not** shipped yet — design #134 follow-up #2, still gated on
 > evidence that hand-maintained state transitions prove error-prone.
+>
+> **Update (#695): that evidence arrived, and the transition layer now exists**, narrowly.
+> `driver_lib.record_child_outcome(state, issue, status)` is a pure transition with a
+> non-regressible-terminal rule; the queue-mutation and full-validator layer above it is
+> still out of scope.
+
+## Who owns the write to `.driver-state` (#695)
+
+**One owner: the `record-child-outcome` command**
+(`python3 hooks/launcher_lib.py record-child-outcome --issue <n> --status <s> --project-root .`).
+Before #695 the honest answer was *"the driver, except when it isn't"* — and that exception was
+the whole defect.
+
+The driver writes this file when **it** sequences children. But a child invoked directly as
+`/rawgentic:implement-feature <n>` bypasses that writer entirely, which is exactly what an epic
+auto-run does after a fresh-session handoff, and exactly what the resume prompt instructs a
+successor to do. So the gap reproduced on **every** non-driver child, silently. Observed live on
+epic #684: `claude_docs/.driver-state/epic-684-watcher-fires.json` still read
+`{"number": 687, "status": "queued"}` after #687 merged (PR #691) and closed, and the resume
+duly offered #687 as the next ready child.
+
+The command is invoked at **each authoritative terminal event**, not at one step:
+
+| Call site | Why |
+|---|---|
+| **WF2 Step 14, item 2b** — immediately after the merge is confirmed | The write follows the event that makes it true. Step 16 alone is **not atomic** with the merge, so a crash between them reproduces the defect. |
+| **WF2 Step 16, item 1a** — idempotent reconciliation | Catches every non-merge terminal outcome (`pr_open` headless, `deferred`, `abandoned`) and any run interrupted before Step 14's write landed. |
+
+Naming the *command* the owner rather than a step is what keeps "one owner" true across two call
+sites: one implementation, one lock (`launcher_lib._locked_state_update` — still the only locked
+driver-state writer), one transition table. Recording a status a child already has is a no-op, so
+the second call costs nothing.
+
+**Discovery, not configuration.** With `--driver-state` omitted the command scans
+`claude_docs/.driver-state/*.json` and updates **every** campaign whose queue names the issue —
+a single-session run does not know its campaign, and updating only the first match would leave
+the others stale. Zero matches is the normal case and is a logged no-op.
+
+**Fail-open, never silent.** No campaign, or no state directory → exit 0, write nothing, print
+the reason to stdout **and** stderr. An off-vocabulary status, a terminal regression, or a
+corrupt state file → non-zero, file untouched: those are caller or data errors, not states of
+the world.
+
+**Belt-and-braces: the resume path also corroborates.** `next_ready_issue` and
+`fresh_session_handoff` accept an `issue_state_probe`, and `launcher_lib handoff` supplies one
+built from `gh api graphql` (the installed `gh issue view --json` exposes neither `stateReason`
+nor `closedByPullRequestsReferences`, so it cannot answer this). A `queued` entry whose real
+issue is confirmed closed is never selected, and a confirmed-**merged** prerequisite satisfies
+its dependents even while the file still says `queued` — without that second half, an
+already-stale campaign reports "no ready child" forever. An unreachable probe leaves the file's
+status standing: corroboration must not turn a GitHub outage into a silent campaign stall.
+This is what protects the files **already** stale on disk, which the write-back cannot
+retroactively repair.
 
 ## The loop
 

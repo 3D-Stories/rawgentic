@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#695 driver-state write-back — design</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-spec table th{color:var(--accent)}
+.tpl-spec li{margin:.2em 0}
+</style>
+</head>
+<body class="tpl-spec">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-28 22:33 MDT</div>
+<h1>#695 driver-state write-back — design</h1>
+
+</header>
+<main>
+<h1>Design — #695: one owner for the driver-state terminal write</h1>
+<p><strong>Issue:</strong> #695 (epic #626). <strong>AC1 is the design decision:</strong> pick ONE owner for the write-back and state it. This document is that decision.</p>
+<h2>The defect, restated precisely</h2>
+<p><code>claude_docs/.driver-state/epic-684-watcher-fires.json</code> still read <code>{&quot;number&quot;: 687, &quot;status&quot;: &quot;queued&quot;}</code> after #687 was merged (PR #691) and closed. A fresh-session resume, obeying its own correct rule — *&quot;derive position from durable state, never in-context memory&quot;* — announced #687 as the next ready child. A successor would have re-done a merged child and opened a duplicate PR.</p>
+<p><strong>It is structural.</strong> Confirmed by reading, not inferred:</p>
+<ul>
+<li><code>next_ready_issue</code> (<code>hooks/driver_lib.py:232</code>) selects the first issue whose</li>
+</ul>
+<p>  <code>status == &quot;queued&quot;</code>. It reads the FILE only. Nothing corroborates it.</p>
+<ul>
+<li>WF2 Step 14 merges; Step 16 persists the run-record. Neither writes</li>
+</ul>
+<p>  <code>claude_docs/.driver-state/&lt;campaign&gt;.json</code>.</p>
+<ul>
+<li>The epic driver writes that file when IT sequences children — so a run invoked as</li>
+</ul>
+<p>  <code>/rawgentic:implement-feature &lt;n&gt;</code> directly bypasses the writer entirely. That is   exactly what an epic auto-run does after a handoff, and what the documented resume   prompt tells a successor to do.</p>
+<p>So the gap reproduces on EVERY non-driver child, silently: the run looks successful, GitHub auto-ticks the epic checkbox when the PR closes the issue, the run-record persists, and only the driver-state lies.</p>
+<h2>Two facts that constrain the design</h2>
+<p>1. <strong><code>driver_lib</code> is deliberately pure.</strong> *&quot;Pure, stdlib-only, no I/O and no side    effects&quot;* (<code>hooks/driver_lib.py:34-35</code>). And its scope boundary is explicit    (<code>:28-32</code>): the state-transition layer *&quot;is intentionally NOT here — it stays    evidence-gated. Extend this module with that layer only when campaign experience    shows hand-maintained state transitions are error-prone.&quot;*</p>
+<p>   <strong>#695 is precisely that evidence.</strong> The condition the author set for opening this    layer is met, so adding it is following that instruction rather than overriding it.</p>
+<p>2. <strong>There is already exactly ONE locked driver-state writer</strong>, and its singularity is    load-bearing: <code>launcher_lib._locked_state_update</code> (<code>hooks/launcher_lib.py:1483</code>)    holds <code>plan_lib.file_lock</code> across the whole read → mutate → atomic-replace cycle,    and locks a stable SIDECAR rather than the state file because <code>atomic_write_text</code>    installs a new inode at the pathname (<code>:1492-1495</code>). A second locked writer that    did not share that reasoning would interleave and silently erase a claim.</p>
+<h2>Revision 2 — after the cross-model design review</h2>
+<p>The v1 decision named <strong>WF2 Step 16</strong> as the owner. An adversarial review (<code>docs/reviews/2026-07-29-695-driver-state-write-back-design-md-2026-07-29.md</code>, 7 findings, 4 High) refuted parts of it. All seven were checked against the code and <strong>all seven hold</strong>. What changed, and why:</p>
+<table>
+<thead><tr><th>#</th><th>Finding</th><th>Verdict</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td>H1</td><td>AC2 ships <strong>dead</strong> — no caller was required to pass the optional probe</td><td><strong>Confirmed.</strong> The only production caller of <code>next_ready_issue</code> is <code>fresh_session_handoff</code> (<code>hooks/driver_lib.py:446</code>). An optional-and-unwired probe changes nothing.</td><td>The probe is threaded through <code>fresh_session_handoff</code> and <strong>supplied by the launcher CLI</strong>. Named call site, not an option.</td></tr>
+<tr><td>H2</td><td>Step 16 is <strong>not atomic</strong> with the merge: a crash after merge but before Step 16 leaves the child <code>queued</code> — the original defect</td><td><strong>Confirmed.</strong> Step 14 merges; Step 16 can be minutes later or never.</td><td><strong>Owner is the locked COMMAND</strong>, invoked at each authoritative terminal event: at Step 14 immediately after the merge is confirmed, and again at Step 16 as idempotent reconciliation.</td></tr>
+<tr><td>H3</td><td>Skipping a stale <code>queued</code> child does not make it satisfy <strong>dependents</strong> — an already-stale campaign can report &quot;no ready child&quot; while its prerequisite really merged</td><td><strong>Confirmed</strong> — and v1&#x27;s own test asserted the wrong behaviour.</td><td>A confirmed outcome becomes an <strong>effective-status overlay</strong> applied before BOTH dependency evaluation and candidate selection.</td></tr>
+<tr><td>H4</td><td><code>status in VALID_STATUSES</code> validates vocabulary, not a legal <strong>transition</strong> — a merged child could be regressed</td><td><strong>Confirmed.</strong></td><td>Explicit transition table; terminal states are non-regressible.</td></tr>
+<tr><td>M1</td><td>Campaign-file <strong>discovery</strong> and multi-match cardinality undefined</td><td><strong>Confirmed</strong> — a single-session run does not know its campaign, so &quot;pass the path&quot; only moved the problem.</td><td>Discovery rule + explicit cardinality policy (below).</td></tr>
+<tr><td>M2</td><td>Fail-open&#x27;s stdout may be <strong>suppressed</strong>, so a real miss looks like a deliberate no-op</td><td><strong>Confirmed.</strong></td><td>The reason goes to <strong>stderr as well</strong>, and Step 16 captures it into the run-record.</td></tr>
+<tr><td>M3</td><td>The probe was <strong>unverifiable</strong> — no cited query, no tri-state, no timeout policy</td><td><strong>Confirmed, and it was a real blocker.</strong> The installed <code>gh</code> exposes neither <code>stateReason</code> nor <code>closedByPullRequestsReferences</code> on <code>gh issue view</code>.</td><td>Verified live via <code>gh api graphql</code> (below). Tri-state contract defined.</td></tr>
+</tbody>
+</table>
+<h3>Platform feasibility (#226) — verified, not assumed</h3>
+<p><code>gh issue view --json</code> <strong>cannot</strong> answer this on the installed CLI: its field list offers <code>state</code> and <code>closed</code> but not <code>stateReason</code> or <code>closedByPullRequestsReferences</code>. The design would have been unbuildable as written.</p>
+<p><code>gh api graphql</code> does, verified live on this host against the actual regression:</p>
+<pre><code>$ gh api graphql -f query=&#x27;{ repository(owner:&quot;3D-Stories&quot;, name:&quot;rawgentic&quot;) {
+    issue(number: 687) { number state stateReason
+      closedByPullRequestsReferences(first:5, includeClosedPrs:true) {
+        nodes { number merged state } } } } }&#x27;
+{&quot;data&quot;:{&quot;repository&quot;:{&quot;issue&quot;:{&quot;number&quot;:687,&quot;state&quot;:&quot;CLOSED&quot;,&quot;stateReason&quot;:&quot;COMPLETED&quot;,
+ &quot;closedByPullRequestsReferences&quot;:{&quot;nodes&quot;:[{&quot;number&quot;:691,&quot;merged&quot;:true,&quot;state&quot;:&quot;MERGED&quot;}]}}}}}</code></pre>
+<p>That is #687 — the child epic #684&#x27;s state file still calls <code>queued</code> — proven closed by a <strong>merged</strong> PR #691. Failure mode: <strong>fail-open to <code>unknown</code></strong> (see the tri-state below).</p>
+<h3>The probe contract (tri-state, injected)</h3>
+<table>
+<thead><tr><th>Verdict</th><th>Derived from</th><th>Effective status</th><th>Selectable?</th><th>Satisfies dependents?</th></tr></thead>
+<tbody>
+<tr><td><code>confirmed_merged</code></td><td><code>state == CLOSED</code> and any <code>closedByPullRequestsReferences</code> node with <code>merged: true</code></td><td><code>merged</code></td><td>no</td><td><strong>yes</strong></td></tr>
+<tr><td><code>confirmed_abandoned</code></td><td><code>state == CLOSED</code> with no merged closing PR (e.g. <code>stateReason: NOT_PLANNED</code>)</td><td><code>abandoned</code></td><td>no</td><td>no</td></tr>
+<tr><td><code>confirmed_open</code></td><td><code>state == OPEN</code></td><td>none — file wins</td><td>yes</td><td>per file</td></tr>
+<tr><td><code>unknown</code></td><td>query failed, timed out, rate-limited, or unparseable</td><td>none — file wins</td><td>yes</td><td>per file</td></tr>
+</tbody>
+</table>
+<p><code>unknown</code> deliberately does <strong>not</strong> veto. The probe is corroboration; once the write-back keeps the file correct the file is primary, and turning a GitHub outage into a total campaign stall is a worse failure than a visible duplicate PR — the stall is the silent one. This is a decision, not an oversight, and it is tested.</p>
+<h2>Decision (rev 2): the locked command owns the write, invoked at every terminal event</h2>
+<p>Why not Step 16 alone, and not the other candidates:</p>
+<table>
+<thead><tr><th>Candidate owner</th><th>Why it loses</th></tr></thead>
+<tbody>
+<tr><td><strong>The epic driver</strong> (today&#x27;s answer)</td><td>It structurally cannot see a non-driver run. That IS the bug — choosing it again just restates the defect.</td></tr>
+<tr><td><strong>WF2 Step 16 alone</strong> (v1&#x27;s answer)</td><td>Refuted by H2. Step 16 does run at the end of every child, but it is <strong>not atomic with the merge</strong>: a crash, cancellation or hook failure after the remote merge succeeds and before Step 16 completes leaves the child <code>queued</code> — the exact defect, faithfully reimplemented.</td></tr>
+<tr><td><strong>WF2 Step 14 alone</strong></td><td>Merge is where terminal status becomes *true*, but Step 14 is not a single terminus: a multi-PR issue merges more than once, and a run can legitimately end at <code>pr_open</code> or <code>deferred</code> without ever merging.</td></tr>
+<tr><td><strong>Resume-time derivation only</strong> (never store it)</td><td>This is AC2, not AC1. It leaves the file permanently untrustworthy, which contradicts the resume prompt&#x27;s own rule; and it needs network I/O on every resume even when the file is fine. Good as corroboration, wrong as the owner.</td></tr>
+<tr><td><strong><code>work_summary.py</code></strong></td><td>It owns the run-record store. Conflating two append-only/mutable stores in one tool means a driver-state failure can fail a telemetry write, or vice versa.</td></tr>
+</tbody>
+</table>
+<p><strong>The owner is the locked <code>record-child-outcome</code> command</strong>, invoked at <strong>each authoritative terminal event</strong> rather than at one step:</p>
+<ul>
+<li><strong>Step 14, immediately after the merge is confirmed</strong> — the write follows the event that</li>
+</ul>
+<p>  makes it true, which is what closes H2&#x27;s window.</p>
+<ul>
+<li><strong>Step 16, as idempotent reconciliation</strong> — the backstop for a run whose Step 14 write</li>
+</ul>
+<p>  never happened (interrupted step, or a non-merge terminal outcome).</p>
+<p>Naming the *command* as owner rather than a step is what keeps &quot;one owner&quot; true while still having two call sites: both go through one implementation, one lock, one transition table. Idempotency is what makes the second call free.</p>
+<h3>Shape</h3>
+<ul>
+<li><code>driver_lib.record_child_outcome(state, issue, status) -&gt; dict | None</code> — <strong>pure</strong>: state</li>
+</ul>
+<p>  in, new state out; <code>None</code> means &quot;nothing to do&quot;, which is exactly   <code>_locked_state_update</code>&#x27;s abort signal. This is the deferred transition layer, now   evidence-gated open by #695 itself.</p>
+<ul>
+<li><strong>A transition table, not a vocabulary check (H4).</strong> Terminal statuses (<code>merged</code>,</li>
+</ul>
+<p>  <code>abandoned</code>) are <strong>non-regressible</strong>: once recorded, a request to move away from them is   refused rather than silently corrupting the state resume treats as authoritative.   Recording the status a child already has is a no-op (<code>None</code>), not an error.</p>
+<ul>
+<li>A <code>record-child-outcome</code> CLI subcommand composing <code>_locked_state_update</code> with that pure</li>
+</ul>
+<p>  function, so there remains <strong>exactly one</strong> locked driver-state writer. It lives beside the   existing writer for that reason, not because it is topically at home there.</p>
+<ul>
+<li><strong>Discovery and cardinality (M1).</strong> <code>--driver-state &lt;path&gt;</code> stays available, but a</li>
+</ul>
+<p>  single-session run does not know its campaign, so with the path omitted the command scans   <code>claude_docs/.driver-state/*.json</code> and selects every file whose queue names the issue.   <strong>Zero matches → logged no-op</strong> (the normal case: a run outside any campaign). <strong>One →   update it.</strong> <strong>More than one → update every validated match</strong>, in sorted filename order:   each is an authoritative campaign, and updating only the first leaves the others stale,   which is the defect.</p>
+<ul>
+<li><strong>Fail-open, but never silent (M2).</strong> Absent file, no match, or an unreadable directory →</li>
+</ul>
+<p>  exit 0, write nothing, and print the reason to <strong>stdout AND stderr</strong>, so a wrapper that   discards one still records it; Step 16 captures the reason into the run-record. A   malformed status or a corrupt state file is a <strong>caller/data error, not a no-op</strong>: non-zero   exit, file untouched.</p>
+<h2>AC2 — corroborate before believing <code>queued</code></h2>
+<p><code>next_ready_issue</code> gains an injected probe, so <code>driver_lib</code> keeps its no-I/O promise:</p>
+<pre><code>next_ready_issue(state, deps_satisfied_by=&quot;merged&quot;, issue_state_probe=None)</code></pre>
+<p><strong>It is threaded through to a real call site (H1), not left as an option.</strong> <code>fresh_session_handoff</code> (<code>hooks/driver_lib.py:446</code>) is the sole production caller, so it takes the probe and passes it down, and the launcher CLI constructs the <code>gh api graphql</code> probe verified above. An optional parameter nobody passes would have shipped AC2 dead — exactly what the review caught.</p>
+<p><strong>A confirmed verdict becomes an effective-status overlay (H3)</strong>, applied before *both* dependency evaluation and candidate selection, per the tri-state table. This matters for precisely the stale campaign #695 describes: with selection-only filtering, a child whose prerequisite really merged but still reads <code>queued</code> would report &quot;no ready child&quot; forever. Under the overlay the prerequisite counts as <code>merged</code>, so its dependent advances.</p>
+<p>The probe is injected rather than called directly because the alternative is <code>driver_lib</code> doing network I/O, which would break the purity its docstring promises and make the module unimportable from the <code>python3 -c</code> one-liner the docs use.</p>
+<p><strong>Belt-and-braces, deliberately.</strong> AC1 stops the file going stale; AC2 stops a stale file being believed. Either alone leaves a live failure: AC1 cannot fix the files already on disk (epic #684&#x27;s is stale right now), and AC2 alone leaves the file wrong forever.</p>
+<h2>Risk</h2>
+<ul>
+<li>The pure function is additive; no existing caller changes.</li>
+<li><code>next_ready_issue</code>&#x27;s new parameter defaults to <code>None</code>, so the #163 contract and its</li>
+</ul>
+<p>  tests are byte-for-byte unaffected.</p>
+<ul>
+<li>The genuine risk is <strong>fail-open hiding a real miss</strong>: a campaign whose file exists but</li>
+</ul>
+<p>  whose queue is malformed would silently write nothing. Mitigated by saying so on   stdout rather than exiting quietly, so a run&#x27;s own log carries the reason.</p>
+<ul>
+<li>Not addressed here, and stated rather than implied: <strong>the stale files already on disk</strong></li>
+</ul>
+<p>  are not repaired by this change. AC2 is what stops them causing harm.</p>
+<h2>Out of scope</h2>
+<ul>
+<li>Repairing existing stale driver-state files (AC2 neutralises them; a migration is not</li>
+</ul>
+<p>  asked for).</p>
+<ul>
+<li>Any change to the status machine&#x27;s vocabulary or to <code>topo_sort_issues</code>.</li>
+<li>The epic-checkbox mirror — GitHub already ticks those when a PR closes an issue.</li>
+</ul>
+
+</main>
+<footer>Last updated: 2026-07-28 22:33 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

@@ -605,6 +605,20 @@ class TestHandoffCLI:
     `*-resume.sh` launcher invokes it (the launchers live outside any git repo, so the logic
     lives here where it can be tested and shipped — D-11 finding 2)."""
 
+    @pytest.fixture(autouse=True)
+    def _no_live_issue_probe(self, monkeypatch):
+        """#695: `handoff` now builds a LIVE `gh api graphql` issue-state probe by default.
+
+        These tests drive it against synthetic campaigns whose fixtures reuse issue numbers that
+        really are merged in this repo (682, 687), so with the probe on, a fake `queued` queue
+        resolves to a genuinely `complete` campaign and the CLI correctly refuses to hand off —
+        which looked like a regression and is really the feature working on real data.
+
+        Switched off here so these assertions test the CLI rather than GitHub's current state.
+        `TestTheIssueProbeDefaultsOn` pins that production does NOT get this treatment.
+        """
+        monkeypatch.setenv(ll.ISSUE_PROBE_ENV, "0")
+
     def test_the_subcommand_exists(self) -> None:
         proc = _cli("handoff", "--help")
         assert proc.returncode == 0

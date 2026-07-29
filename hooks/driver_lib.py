@@ -229,7 +229,65 @@ def _find_cycle(deps_map: dict[int, list[int]], nodes: set[int]) -> list[int]:
     return sorted(nodes)  # fallback: name the unresolved set
 
 
-def next_ready_issue(state: dict, deps_satisfied_by: str = "merged") -> int | None:
+# #695 — how a CONFIRMED external issue verdict overlays the file's own status.
+#
+# The probe is a caller-injected callable returning one of these keys (or None). Only the two
+# CONFIRMED-closed verdicts overlay anything: `confirmed_open` means the file's status stands,
+# and `unknown` (or None, or a raising probe) deliberately does NOT veto — see
+# `effective_issue_statuses`.
+PROBE_OVERLAY: dict[str, str] = {
+    "confirmed_merged": "merged",
+    "confirmed_abandoned": "abandoned",
+}
+
+
+def effective_issue_statuses(issues, issue_state_probe=None) -> tuple[dict, dict]:
+    """``({number: effective_status}, {number: overlaid_status})`` for a campaign queue.
+
+    #695: the driver-state file goes stale whenever a child ships outside the driver, so a
+    `queued` entry is not evidence the child is unfinished. A caller-supplied probe
+    corroborates it, and a CONFIRMED closed verdict overlays the file's value.
+
+    The overlay is applied ONCE, here, so it reaches BOTH dependency evaluation and candidate
+    selection. Filtering only the candidate was the first design and the cross-model review
+    refuted it: a child whose prerequisite really merged but still reads `queued` would leave
+    its dependent blocked forever, so an already-stale campaign reports "no ready child" while
+    the prerequisite is sitting merged on GitHub.
+
+    Only `queued` entries are probed. Every other status either was written by a terminal event
+    or is a live claim, and probing them would spend a network call per candidate to re-derive
+    something the file already knows.
+
+    An `unknown` verdict, a `None`, or a probe that RAISES leaves the file's status alone. That
+    direction is deliberate: the probe is corroboration and the file is primary once the
+    write-back keeps it correct, so a GitHub outage must not become a total campaign stall.
+    A visible duplicate PR is recoverable; a silent stall in an unattended run is not.
+
+    Pure: it calls the injected probe and nothing else, so this module keeps the "no I/O"
+    promise its docstring makes.
+    """
+    effective = {}
+    overlaid = {}
+    for issue in issues:
+        num = issue["number"]
+        status = issue.get("status")
+        effective[num] = status
+        if status != "queued" or issue_state_probe is None:
+            continue
+        try:
+            verdict = issue_state_probe(num)
+        except Exception:  # pylint: disable=broad-except
+            # Corroboration must never break selection — see the docstring.
+            continue
+        mapped = PROBE_OVERLAY.get(verdict) if isinstance(verdict, str) else None
+        if mapped:
+            effective[num] = mapped
+            overlaid[num] = mapped
+    return effective, overlaid
+
+
+def next_ready_issue(state: dict, deps_satisfied_by: str = "merged",
+                     issue_state_probe=None) -> int | None:
     """Return the first queued issue whose dependencies are satisfied, else None.
 
     "First" is queue order (the ``issues`` list order). A dependency counts as
@@ -244,6 +302,13 @@ def next_ready_issue(state: dict, deps_satisfied_by: str = "merged") -> int | No
     error) whenever no queued issue is currently ready, which on an acyclic queue
     means "wait for a dependency to advance." On a never-topo-sorted cyclic queue
     it would return ``None`` forever — run the gate first.
+
+    ``issue_state_probe`` (#695) is the AC2 corroboration: with it supplied, a `queued` entry
+    whose real issue is confirmed closed can never be selected, whatever the file says, and a
+    confirmed-merged prerequisite satisfies its dependents even though the file still calls it
+    `queued`. Omitted → byte-identical to the pre-#695 behaviour, which is what keeps #163's
+    pinned contract intact. See `effective_issue_statuses` for the verdict vocabulary and for
+    why an unreachable probe does not veto.
     """
     if deps_satisfied_by not in _SATISFIED_BY:
         raise DriverStateError(
@@ -255,13 +320,74 @@ def next_ready_issue(state: dict, deps_satisfied_by: str = "merged") -> int | No
     _numbers(issues)  # fail-closed on missing/non-int/duplicate number
     by_num = {i["number"]: i for i in issues}
     numset = set(by_num)
+    effective, _overlaid = effective_issue_statuses(issues, issue_state_probe)
     for issue in issues:
-        if issue.get("status") != "queued":
+        if effective[issue["number"]] != "queued":
             continue
         deps = _in_queue_deps(issue, numset)
-        if all(by_num[d].get("status") in satisfied for d in deps):
+        if all(effective[d] in satisfied for d in deps):
             return issue["number"]
     return None
+
+
+# #695 — statuses a child can never move AWAY from once recorded.
+#
+# `deferred` is deliberately NOT here: a parked child can legitimately be re-queued later.
+# `merged` and `abandoned` are decisions about a shipped or dropped child, and the resume path
+# treats this file as authoritative, so silently regressing one corrupts the very state #695
+# exists to keep true.
+TERMINAL_STATUSES = frozenset({"merged", "abandoned"})
+
+
+def record_child_outcome(state: dict, issue: int, status: str) -> dict | None:
+    """Record a child's terminal status in a campaign queue. PURE — returns a NEW state.
+
+    #695: nothing wrote this back when a child shipped outside the epic driver, so
+    `claude_docs/.driver-state/epic-684-watcher-fires.json` still read
+    ``{"number": 687, "status": "queued"}`` after #687 was merged (PR #691) and closed. A
+    fresh-session resume, obeying its own correct rule — "derive position from durable state,
+    never in-context memory" — then offered #687 as the next ready child.
+
+    Returns ``None`` for "nothing to do", which is exactly `_locked_state_update`'s abort
+    signal, so the caller writes no file at all in those cases:
+
+    - the queue does not name ``issue`` (a single-session run outside this campaign), or
+    - the child already carries ``status`` (idempotent: the write is invoked at BOTH the merge
+      confirmation and the run's Step-16 reconciliation, and the second must be free).
+
+    Raises `DriverStateError` on a CALLER error, because these are bugs at the call site rather
+    than states of the world:
+
+    - ``status`` outside `VALID_STATUSES` — the vocabulary IS the contract, since
+      `next_ready_issue` compares against it exactly; free text would make the file unreadable.
+    - a **regression away from a terminal status** (see `TERMINAL_STATUSES`). Membership in
+      `VALID_STATUSES` proves a legal *word*, not a legal *transition* — the cross-model design
+      review caught that a merged child could otherwise be walked back to `queued`.
+    """
+    if not isinstance(status, str) or isinstance(status, bool) \
+            or status not in VALID_STATUSES:
+        raise DriverStateError(
+            f"status must be one of {sorted(VALID_STATUSES)}, got {status!r}")
+    issues = state.get("issues", [])
+    _numbers(issues)  # fail-closed on missing/non-int/duplicate number
+    current = None
+    for entry in issues:
+        if entry["number"] == issue:
+            current = entry.get("status")
+            break
+    if current is None:
+        return None                      # not this campaign's child — write nothing
+    if current == status:
+        return None                      # idempotent
+    if current in TERMINAL_STATUSES:
+        raise DriverStateError(
+            f"refusing to move issue #{issue} from terminal status {current!r} to "
+            f"{status!r} — the resume path treats this file as authoritative, so regressing a "
+            "shipped child is how a merged issue gets re-run")
+    new = dict(state)
+    new["issues"] = [dict(e, status=status) if e["number"] == issue else dict(e)
+                     for e in issues]
+    return new
 
 
 def _is_int(x) -> bool:
@@ -425,7 +551,7 @@ def _build_resume_prompt(state: dict, next_issue: int, project=None,
 
 
 def fresh_session_handoff(state: dict, *, mode: str, project=None,
-                          include_bind: bool = True) -> dict:
+                          include_bind: bool = True, issue_state_probe=None) -> dict:
     """Decide the process-boundary handoff after a child reaches a terminal outcome (#569).
 
     Returns an explicit disposition (NEVER a bare None — design §4 [2]):
@@ -441,9 +567,16 @@ def fresh_session_handoff(state: dict, *, mode: str, project=None,
         return {"outcome": "single_session"}
     issues = state.get("issues", [])
     _numbers(issues)  # fail-closed on missing/non-int/duplicate number
-    if issues and all(i.get("status") == "merged" for i in issues):
+    # #695 AC2: the overlay reaches the COMPLETE verdict too, not just selection. A campaign
+    # whose last child shipped outside the driver reads `queued` on disk, and without this it
+    # would never report complete — the epic would stay open forever with nothing runnable,
+    # which is the same stale-file defect wearing a different outcome.
+    effective, _overlaid = effective_issue_statuses(issues, issue_state_probe)
+    if issues and all(effective[i["number"]] == "merged" for i in issues):
         return {"outcome": "complete"}
-    nxt = next_ready_issue(state)
+    # This is the ONE production selection site, so the probe has to arrive here or the
+    # corroboration is dead code. `_cmd_handoff` supplies the real `gh api graphql` probe.
+    nxt = next_ready_issue(state, issue_state_probe=issue_state_probe)
     if nxt is not None:
         chosen = project or state.get("project")
         if not valid_project_name(chosen):
