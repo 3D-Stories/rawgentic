@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Epic #667 UAT — run 2, after epic #684</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-28 18:01 MDT</div>
+<h1>Epic #667 UAT — run 2, after epic #684</h1>
+
+</header>
+<main>
+<h1>Epic #667 UAT — run 2, after epic #684</h1>
+<p>Run 1: <code>harness/results-run1-2026-07-28.jsonl</code> (13 PASS / 8 BLOCKED / 3 INCONCLUSIVE / 0 FAIL). Run 2: <code>harness/results.jsonl</code>, driven 2026-07-28 against merged <code>main</code> at <code>3c819c3</code> (plugin 3.105.0), after epic #684 shipped #679, #682 and #687.</p>
+<h2>Verdict</h2>
+<p><strong>24 PASS · 5 BLOCKED · 2 INCONCLUSIVE · 0 FAIL · 6 NOT RUN.</strong></p>
+<p>Zero FAIL. The six NOT RUN are exactly the owner-only checks — <strong>W8a, H7, V3a, L3a, D3, R3</strong> — which this run was directed not to attempt. Every other registered check carries a recorded verdict backed by an evidence file (the harness refuses a PASS without a readable, non-empty one).</p>
+<h2>The headline: the watcher fires</h2>
+<p><strong>W2–W7 all moved BLOCKED → PASS.</strong> That is epic #684&#x27;s exit criterion 1, and it is the whole reason the epic existed. A throwaway pane running <code>claude --permission-mode default</code> was driven to a real &quot;This command requires approval&quot; prompt; it reached <code>agent_status: blocked</code>; and the watcher — <code>pane_watch_lib.py watch --source poll --sender-cmd &#x27;cat &gt;&gt; …&#x27;</code>, so nothing paged the owner — delivered:</p>
+<pre><code>herdr: w1:pD3 [claude] is blocked — waiting on you (w1 w1:t15)</code></pre>
+<p>Then, over 47 further polls of the same blocked pane, it delivered nothing more (W3). Esc cleared the prompt and a second gated command re-blocked it; the heartbeat went to <code>notified: 2</code> (W4). The body carries pane id, agent, workspace and tab and no prompt text at all (W5). The heartbeat advanced monotonically with <code>poll_failures: 0</code> throughout, carrying the input layer&#x27;s own counters (W6). And a watcher started fresh against an already-blocked pane notified within three polls via the startup sweep (W7).</p>
+<p><strong>The one number worth staring at: <code>revision</code> did not advance across <code>working → blocked</code>.</strong> It read 3 before and 3 after. That is #679&#x27;s *second* root cause — the one the issue did not describe and only a live run could find — and it is exactly why the dedup key had to become <code>state_change_seq</code>. A separate observation in this run corroborates it: <code>herdr agent prompt</code> returned an agent object carrying <code>state_change_seq: 2217</code>, the field the <code>pane.updated</code> event never carried.</p>
+<h2>L2 and H3: the blocker moved, and that is the finding</h2>
+<p>Exit criterion 2 hoped L2 and H3 would reach <code>project_switched</code>. They do not — but <strong>for a different reason than run 1</strong>, and the difference matters:</p>
+<table>
+<thead><tr><th></th><th>run 1</th><th>run 2</th></tr></thead>
+<tbody>
+<tr><td>L2</td><td>INCONCLUSIVE — <code>project_switched</code> never completed (#682&#x27;s bug)</td><td>BLOCKED — the ladder refuses at step 0</td></tr>
+<tr><td>H3</td><td>INCONCLUSIVE — same evidence</td><td>BLOCKED — same</td></tr>
+</tbody>
+</table>
+<p>Run 2 never gets as far as <code>project_switched</code>, because <code>launcher_lib.py handoff</code> refuses first:</p>
+<pre><code>no handoff: no durable launcher armed (launch mode &#x27;herdr&#x27;)</code></pre>
+<p><code>fresh_session_available</code> requires the <strong>caller</strong> to assert <code>--launcher-armed</code> *and* <code>--fresh-launch-supported</code>, and <code>launcher_lib.py:2156</code> says in as many words that absence must not read as support. This session can genuinely spawn a pane, so <code>--fresh-launch-supported</code> would be true. It has <strong>no durable launcher armed</strong>, so <code>--launcher-armed</code> would be a false assertion made purely to get past a guardrail — and that is the one move the operating rules forbid outright. So it was not made, and the check is recorded BLOCKED with the reason rather than passed with a lie. The predecessor session reached the same wall and made the same call.</p>
+<p><strong>What #682 demonstrably did fix</strong> is visible in the contract rather than inferred: <code>--project</code> is now <strong>required</strong> on the <code>handoff</code> subcommand, which is why a bare <code>/rawgentic:switch</code> — which enters list mode and waits for a human — can no longer ship in a resume prompt.</p>
+<p>H4, H5 and C7 sit behind the same gate: H4 and H5 need a completed six-step ladder to authorise retirement, and C7 needs the same handoff path. Recorded on each rather than collapsed into one entry. H6 independently confirms the refusal machinery itself is right — <code>teardown_allowed</code> refuses and *names* the unmet step.</p>
+<h2>Tier 7 — #687 verified live, C1–C6</h2>
+<p>Void in run 1 (the code did not exist). Now:</p>
+<ul>
+<li><strong>C1</strong> — the meter&#x27;s reading agrees <strong>exactly</strong> with an independent implementation: 613,303 tokens</li>
+</ul>
+<p>  both ways on this live session. Bounded backward read vs naive forward scan, same answer.</p>
+<ul>
+<li><strong>C2</strong> — with the cadence forced open, the first call emitted and the next three were silent.</li>
+<li><strong>C3</strong> — measured on the state file, not on silence: <code>last_check_turn</code> advanced on turns 1 and 6 only</li>
+</ul>
+<p>  (the 5-turn arm), then a <code>PostToolUse(Read)</code> with 301 s elapsed ran a check — the minute arm firing   independently, <strong>on a non-Bash tool</strong>, which is exactly what the wildcard matcher was fixed for.</p>
+<ul>
+<li><strong>C4</strong> — through the production resolution path: armed mid-Step-8, silent with the pointer unchanged,</li>
+</ul>
+<p>  fired once it moved to Step 9. The message names no step and no workflow, so the Critical injection   channel found at Step 11 is closed rather than narrowed.</p>
+<ul>
+<li><strong>C5</strong> — 159,416 tokens tiers <code>directive</code> on a 200k window and <code>none</code> on a 1M one.</li>
+<li><strong>C6</strong> — absent and corrupt transcripts both give empty stdout, rc 0, and a visible diagnostic.</li>
+</ul>
+<p>The first C3 attempt was <strong>discarded as confounded</strong> — turns 2–5 were silent because the tier had already fired, not because the cadence throttled them. Recorded here because a UAT that hides its own false starts is worth less than one that shows them.</p>
+<h2>Two INCONCLUSIVE, and why neither is a PASS</h2>
+<ul>
+<li><strong>H2</strong> — the precondition would not reproduce. A real busy Claude agent *accepted* an</li>
+</ul>
+<p>  <code>agent_prompt</code>; run 1 saw <code>agent_pane_busy</code>. The readiness wait #673 added could not be exercised,   so the fix is unverified this run. A bug that will not reproduce is not a verified fix.</p>
+<ul>
+<li><strong>R2</strong> — the <code>driver_bench</code> parallel-run race still does not reproduce, and run 1&#x27;s leading theory was</li>
+</ul>
+<p>  already refuted with evidence. Not reproducing a race is not evidence the race is gone.</p>
+<h2>Findings this run produced</h2>
+<p>1. <strong>The startup-sweep notification is not counted.</strong> W7&#x27;s watcher delivered the body while its    heartbeat reported <code>notified: 0</code> — <code>write_heartbeat</code> only counts <code>report[&#x27;notified&#x27;]</code> and the sweep    path passes none. Delivery is proven by the body; the counter under-reports. Worth fixing, because    this heartbeat is the thing an external observer is supposed to trust. 2. <strong>A cosmetic duplication in the #687 advisory.</strong> It renders &quot;A step boundary was just recorded    (a workflow step boundary was just recorded)&quot; — a consequence of making the seam reason generic to    close the injection channel. Harmless, but the owner reads this text. 3. <strong>P2&#x27;s wording is superseded.</strong> &quot;revision advances&quot; is refuted; the check should be reworded to    <code>state_change_seq</code> before run 3, or it will keep asking a question the system no longer answers.</p>
+<h2>Reproducing</h2>
+<pre><code>cd docs/planning/2026-07-28-667-uat-plan/harness
+python3 harness.py summary          # exits non-zero while anything is FAIL or NOT RUN</code></pre>
+<p>Its non-zero exit is expected here and honest: six checks are the owner&#x27;s, and <code>summary</code> names every one rather than letting a partial run read as complete.</p>
+<h2>Full run 1 → run 2 diff</h2>
+<table>
+<thead><tr><th>check</th><th>run 1</th><th>run 2</th><th>movement</th></tr></thead>
+<tbody>
+<tr><td>C1</td><td>NOT RUN</td><td>PASS</td><td><strong>NOT RUN → PASS</strong></td></tr>
+<tr><td>C2</td><td>NOT RUN</td><td>PASS</td><td><strong>NOT RUN → PASS</strong></td></tr>
+<tr><td>C3</td><td>NOT RUN</td><td>PASS</td><td><strong>NOT RUN → PASS</strong></td></tr>
+<tr><td>C4</td><td>NOT RUN</td><td>PASS</td><td><strong>NOT RUN → PASS</strong></td></tr>
+<tr><td>C5</td><td>NOT RUN</td><td>PASS</td><td><strong>NOT RUN → PASS</strong></td></tr>
+<tr><td>C6</td><td>NOT RUN</td><td>PASS</td><td><strong>NOT RUN → PASS</strong></td></tr>
+<tr><td>C7</td><td>NOT RUN</td><td>BLOCKED</td><td><strong>NOT RUN → BLOCKED</strong></td></tr>
+<tr><td>D1</td><td>PASS</td><td>PASS</td><td>same</td></tr>
+<tr><td>D2</td><td>PASS</td><td>PASS</td><td>same</td></tr>
+<tr><td>H1</td><td>PASS</td><td>PASS</td><td>same</td></tr>
+<tr><td>H2</td><td>PASS</td><td>INCONCLUSIVE</td><td><strong>PASS → INCONCLUSIVE</strong></td></tr>
+<tr><td>H3</td><td>INCONCLUSIVE</td><td>BLOCKED</td><td><strong>INCONCLUSIVE → BLOCKED</strong></td></tr>
+<tr><td>H4</td><td>BLOCKED</td><td>BLOCKED</td><td>same</td></tr>
+<tr><td>H5</td><td>BLOCKED</td><td>BLOCKED</td><td>same</td></tr>
+<tr><td>H6</td><td>PASS</td><td>PASS</td><td>same</td></tr>
+<tr><td>L1</td><td>PASS</td><td>PASS</td><td>same</td></tr>
+<tr><td>L2</td><td>INCONCLUSIVE</td><td>BLOCKED</td><td><strong>INCONCLUSIVE → BLOCKED</strong></td></tr>
+<tr><td>P1</td><td>PASS</td><td>PASS</td><td>same</td></tr>
+<tr><td>P2</td><td>PASS</td><td>PASS</td><td>same</td></tr>
+<tr><td>P3</td><td>PASS</td><td>PASS</td><td>same</td></tr>
+<tr><td>R1</td><td>PASS</td><td>PASS</td><td>same</td></tr>
+<tr><td>R2</td><td>INCONCLUSIVE</td><td>INCONCLUSIVE</td><td>same</td></tr>
+<tr><td>V1</td><td>PASS</td><td>PASS</td><td>same</td></tr>
+<tr><td>V2</td><td>PASS</td><td>PASS</td><td>same</td></tr>
+<tr><td>W1</td><td>PASS</td><td>PASS</td><td>same</td></tr>
+<tr><td>W2</td><td>BLOCKED</td><td>PASS</td><td><strong>BLOCKED → PASS</strong></td></tr>
+<tr><td>W3</td><td>BLOCKED</td><td>PASS</td><td><strong>BLOCKED → PASS</strong></td></tr>
+<tr><td>W4</td><td>BLOCKED</td><td>PASS</td><td><strong>BLOCKED → PASS</strong></td></tr>
+<tr><td>W5</td><td>BLOCKED</td><td>PASS</td><td><strong>BLOCKED → PASS</strong></td></tr>
+<tr><td>W6</td><td>BLOCKED</td><td>PASS</td><td><strong>BLOCKED → PASS</strong></td></tr>
+<tr><td>W7</td><td>BLOCKED</td><td>PASS</td><td><strong>BLOCKED → PASS</strong></td></tr>
+</tbody>
+</table>
+<p>run 1: {&#x27;PASS&#x27;: 13, &#x27;BLOCKED&#x27;: 8, &#x27;INCONCLUSIVE&#x27;: 3} run 2: {&#x27;PASS&#x27;: 24, &#x27;INCONCLUSIVE&#x27;: 2, &#x27;BLOCKED&#x27;: 5}</p>
+
+</main>
+<footer>Last updated: 2026-07-28 18:01 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
