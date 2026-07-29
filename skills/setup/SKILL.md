@@ -318,6 +318,49 @@ sentinel) is merged into the `.rawgentic.json` draft at Step 3 and applied at th
 
 ---
 
+---
+
+## Step 2l: Context-Pressure Meter (optional, #701)
+
+Runs on **every** setup invocation. Surfaces the `contextMeter` block that decides when a session is
+told to look for a seam and when it is told to hand off (`hooks/context_meter.py`, #687). Three keys
+are offered; the other two documented keys (`everyTurns`, `everySeconds`) are cadence and are left to
+`docs/config-reference.md`.
+
+**State the units and the denominator up front, because getting this wrong is the whole reason the
+step exists.** A 1M-context session was told it was at **88% of an assumed 200,000-token window** and
+directed to hand off mid-task; the real figure was about 18%. The meter was working exactly as
+designed against a window nobody had been asked to declare.
+
+- `windowSize` — the session's context window **in tokens**, not a percentage of anything
+  (e.g. `1000000` for a 1M-context model). Absent, the meter assumes a deliberately conservative
+  **200000** and self-corrects only by escalation once a session provably exceeds it.
+- `checkInPercent` — **percent of `windowSize`**; the **advisory** tier, "start looking for a seam".
+  Shipped default **60**.
+- `actPercent` — **percent of `windowSize`**; the **directive** tier, which tells the session to break
+  and hand off now. Shipped default **70**.
+
+**Validate any customized block STRICTLY before staging** through the shared validator, which
+enforces the hook's own rules so the two can never disagree:
+```bash
+python3 hooks/context_meter.py validate-config --json '<the contextMeter block>'
+```
+(exit 0 = stage it; non-zero = show the stderr reasons and re-offer — never stage a block this
+refuses). It checks each percentage is a whole number in 1..99, that `checkInPercent` is at least
+`MIN_TIER_GAP_PCT` **below** `actPercent`, and that `windowSize` is a positive integer. An inverted or
+squeezed pair is **refused with the reason**: it leaves no band in which to look for a seam, so the
+advisory tier becomes unreachable and the session jumps straight to "break now".
+
+**Declining leaves the block ABSENT** — do not stage a block that merely restates the shipped
+defaults. This is deliberately **unlike** Step 2j's `telemetryAlerts` answered-defaults sentinel: a
+written-out `60`/`70` is indistinguishable from a deliberate choice on the next read, so a later
+change to the shipped defaults would silently never reach that project.
+
+An existing `contextMeter` key is **preserved verbatim** on decline and read-modify-written on
+accept — never overwrite keys the user has already tuned. This step only COLLECTS; the validated
+block is merged into the `.rawgentic.json` draft at Step 3 and applied at the Step 6 write (a
+project-config field, never a workspace field).
+
 ## Step 3: Detect or Brainstorm
 
 Read `templates/rawgentic-json-schema.json` from the rawgentic plugin directory to
