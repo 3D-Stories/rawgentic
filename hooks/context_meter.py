@@ -73,8 +73,16 @@ IN_CONTEXT_FIELDS = ("input_tokens", "cache_creation_input_tokens",
 
 DEFAULT_WINDOW = 200_000          # conservative floor — see resolve_window
 KNOWN_WINDOWS = (200_000, 1_000_000)
-DEFAULT_CHECK_IN_PCT = 60         # AC6 — start LOOKING for a break
-DEFAULT_ACT_PCT = 70              # AC3 — act now (measured: 1M compacts ≈99.8%)
+# Owner decision 2026-07-29 (#716): 60/70 -> 35/50. The old pair had ~30 points of margin
+# against measured auto-compaction (~99.8% on a 1M window), so it was safe — and still
+# too late to be USEFUL. Two real runs proved the gap: one rode a 1M window to ~98%
+# because the directive arrived with no room left to act well on it, and the quality
+# gradient across its passes tracked the pressure. Margin against compaction was never the
+# binding constraint; room to write a good handoff is. At 35% of a 1M window a session has
+# ~650k tokens in hand to finish its phase and hand over properly; at 70% it has 300k and
+# is already choosing what to drop.
+DEFAULT_CHECK_IN_PCT = 35         # AC6 — start LOOKING for a break
+DEFAULT_ACT_PCT = 50              # AC3 — act now (gap 15, above MIN_TIER_GAP_PCT)
 MIN_TIER_GAP_PCT = 10
 DEFAULT_EVERY_TURNS = 5
 DEFAULT_EVERY_SECONDS = 300

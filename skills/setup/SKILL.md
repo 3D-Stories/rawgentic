@@ -335,10 +335,10 @@ designed against a window nobody had been asked to declare.
 - `windowSize` — the session's context window **in tokens**, not a percentage of anything
   (e.g. `1000000` for a 1M-context model). Absent, the meter assumes a deliberately conservative
   **200000** and self-corrects only by escalation once a session provably exceeds it.
-- `checkInPercent` — **percent of `windowSize`**; the **advisory** tier, "start looking for a seam".
-  Shipped default **60**.
+- `checkInPercent` — **percent of `windowSize`**; the **advisory** tier, "write the resume prompt now".
+  Shipped default **35**.
 - `actPercent` — **percent of `windowSize`**; the **directive** tier, which tells the session to break
-  and hand off now. Shipped default **70**.
+  and hand off now. Shipped default **50**.
 
 **Validate any customized block STRICTLY before staging** through the shared validator, which
 enforces the hook's own rules so the two can never disagree:

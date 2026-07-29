@@ -249,9 +249,9 @@ class TestUnknownKeysAreRefused:
             {"checkInPercent": 60, "actPercent": 70, "windwoSize": 1_000_000})
 
     # Per-key valid values, because a lone percentage is still checked against the DEFAULT for the
-    # other half: `actPercent: 50` against the default check-in of 60 is an inverted pair, not a
+    # other half: `checkInPercent: 50` against the default act of 50 is a zero-gap pair, not a
     # valid single key.
-    @pytest.mark.parametrize("key,value", [("windowSize", 200_000), ("checkInPercent", 50),
+    @pytest.mark.parametrize("key,value", [("windowSize", 200_000), ("checkInPercent", 30),
                                            ("actPercent", 80), ("everyTurns", 5),
                                            ("everySeconds", 300)])
     def test_every_documented_key_is_still_accepted(self, key, value) -> None:
