@@ -73,10 +73,32 @@ class Runner:
 
 SPLIT_OK = json.dumps({"result": {"pane_id": "w1:pZZ"}})
 PANE_LIST_ANCHOR_ONLY = json.dumps({"result": {"panes": [{"pane_id": "w1:p1"}]}})
+# #694: a real `herdr pane get` response ALSO carries `agent_status`; this fixture omitted it, so
+# every `perform_handoff` test drove a successor whose readiness could not be known. That is the
+# same class of fixture unrealism the module docstring blames for letting an ordering-free prompt
+# ship — see `PANE_GET_REAL` below, captured verbatim from herdr 0.7.5 on 2026-07-29.
 PANE_GET_OK = json.dumps({"result": {"pane": {
     "pane_id": "w1:pZZ",
+    "agent_status": "idle",
     "agent_session": {"agent": "claude", "kind": "id", "source": "herdr:claude",
                       "value": "sess-new-123"}}}})
+
+
+def _pane_get(status=None, *, session="sess-new-123"):
+    """A `pane get` response with an explicit `agent_status` (omitted entirely when None)."""
+    pane = {"pane_id": "w1:pZZ",
+            "agent_session": {"agent": "claude", "kind": "id", "source": "herdr:claude",
+                              "value": session}}
+    if status is not None:
+        pane["agent_status"] = status
+    return json.dumps({"result": {"pane": pane}})
+
+
+# A REAL response, captured verbatim from the live herdr 0.7.5 server on this host (2026-07-29).
+# It exists so the status parser is proven against real bytes and real key ordering, not only
+# against hand-written dicts that happen to match the parser's assumptions (#694 review, F2).
+PANE_GET_REAL = (REPO_ROOT / "tests" / "fixtures" / "herdr"
+                 / "pane_get_idle.json").read_text(encoding="utf-8")
 REGISTRY_OK = '{"session_id":"sess-new-123","project":"rawgentic"}\n'
 GOAL_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "herdr" / "goal_status_transcript.jsonl"
 TRANSCRIPT_OK = GOAL_FIXTURE.read_text(encoding="utf-8")
@@ -388,6 +410,7 @@ class TestPerformHandoff:
             "herdr pane list",                                  # pre-split inventory
             "herdr pane split", "herdr agent start", "herdr agent wait", "herdr pane get",
             "herdr pane send-text", "herdr pane send-keys",     # the goal
+            "herdr pane get",                                   # #694 readiness, AFTER the goal
             "herdr pane send-text", "herdr pane send-keys",     # the resume prompt
             "herdr pane close",                                 # the predecessor, LAST
         ]
@@ -1342,3 +1365,111 @@ class TestSplitPaneReadiness:
         assert starts, "no agent_start step recorded"
         assert any("agent_pane_busy" in (s.get("note") or "") for s in starts), \
             "herdr's error code must survive onto the step record"
+
+
+# ---------------------------------------------------------------------------
+# #694 — the successor must be SETTLED before it is handed work
+#
+# `goal_armed` proves a `goal_status` row was WRITTEN. That row appears when the goal is
+# REGISTERED — early in the goal's turn — so it does not prove the turn ended, and nothing
+# checked for `blocked` at all. Measured live on 2026-07-29: a prompt pasted into a session
+# BLOCKED on a permission dialog was swallowed outright — gone after the dialog was dismissed,
+# 0 registry rows, the transcript frozen mid-turn. That is a silent, expensive failure of exactly
+# the kind this ladder exists to prevent, because the launcher then polls `project_switched` for
+# a consequence of a prompt that never arrived.
+# ---------------------------------------------------------------------------
+
+class TestSuccessorMustBeSettled:
+    @staticmethod
+    def _resume_sent(runner) -> bool:
+        return any(t == RESUME_PROMPT for t in _sent(runner))
+
+    @pytest.mark.parametrize("status", ["working", "blocked"])
+    def test_the_prompt_is_never_sent_into_an_unsettled_successor(self, status) -> None:
+        """`working` queues the prompt (observed stranded); `blocked` LOSES it."""
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": _pane_get(status)})
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["ok"] is False
+        assert out["failed_step"] == "successor_unsettled", out
+        assert not self._resume_sent(r), \
+            f"the resume prompt was pasted into a {status!r} successor — it would be lost"
+        assert not _predecessor_closed(r), \
+            "the predecessor must stay alive AND guarded when the successor never settled"
+
+    def test_done_is_not_accepted_as_settled(self) -> None:
+        """`done` was never shown to accept input — the one live `done` session observed did NOT
+        run a prompt pasted into it — and it cannot legitimately occur here anyway, because
+        `goal_armed` has just proven an UNMET goal, i.e. work outstanding. Refusing is the
+        fail-closed reading, not a false rejection (#694 review, F3)."""
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": _pane_get("done")})
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["failed_step"] == "successor_unsettled"
+        assert not self._resume_sent(r)
+
+    def test_an_absent_agent_status_fails_closed(self) -> None:
+        """A status that cannot be read is not a pass. What this gates is irreversible."""
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": _pane_get(None)})
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["failed_step"] == "successor_unsettled"
+        assert not self._resume_sent(r)
+
+    def test_a_successor_that_settles_LATE_still_gets_its_prompt(self) -> None:
+        """The gate is a bounded WAIT, not a single sample — a goal turn that is still finishing
+        must not abort a healthy handoff."""
+        seq = [_pane_get("working"), _pane_get("working"), _pane_get("idle")]
+        seen = {"n": 0}
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return FakeProc(0, PANE_LIST_ANCHOR_ONLY)
+            if argv[:3] == ["herdr", "pane", "split"]:
+                return FakeProc(0, SPLIT_OK)
+            if argv[:3] == ["herdr", "pane", "get"]:
+                i = min(seen["n"], len(seq) - 1)
+                seen["n"] += 1
+                return FakeProc(0, seq[i])
+            return FakeProc(0)
+
+        out = ll.perform_handoff(runner=runner, **_handoff())
+        assert out["ok"] is True, out
+        assert seen["n"] > 2, "the gate must have polled more than once"
+
+    def test_the_settle_check_runs_BETWEEN_the_goal_and_the_prompt(self) -> None:
+        """Ordering is the whole point: after the guard is proven armed, before work is handed
+        over. Checking it earlier would prove nothing about the goal turn."""
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["ok"] is True, out
+        sends = [c for c in r.calls if c[:3] == ["herdr", "pane", "send-text"]]
+        goal_i = r.calls.index(sends[0])
+        prompt_i = r.calls.index(sends[-1])
+        gets = [i for i, c in enumerate(r.calls) if c[:3] == ["herdr", "pane", "get"]]
+        assert any(goal_i < i < prompt_i for i in gets), \
+            "no readiness read happened between the goal paste and the prompt paste"
+
+    def test_the_ladder_ORDER_is_unchanged(self) -> None:
+        """#694 is a precondition guard, NOT a ladder change. The causal order the runbook
+        defends (goal armed before work is handed over) must survive this fix intact."""
+        assert [s["step"] for s in ll.handoff_verification_steps()] == [
+            "spawned", "goal_armed", "project_switched"]
+
+
+class TestParsePaneAgentStatus:
+    def test_reads_a_REAL_herdr_response(self) -> None:
+        assert ll.parse_pane_agent_status(PANE_GET_REAL) == "idle"
+        # the same real bytes must still yield the session id the existing check relies on
+        assert ll.parse_pane_agent_session(PANE_GET_REAL)
+
+    @pytest.mark.parametrize("status", ["idle", "working", "blocked", "done", "unknown"])
+    def test_round_trips_every_status_herdr_documents(self, status) -> None:
+        assert ll.parse_pane_agent_status(_pane_get(status)) == status
+
+    @pytest.mark.parametrize("bad", ["", "not json", "[]", "null", '{"result": {}}',
+                                     '{"result": {"pane": {}}}',
+                                     '{"result": {"pane": {"agent_status": ""}}}',
+                                     '{"result": {"pane": {"agent_status": 3}}}'])
+    def test_unreadable_input_is_None_never_a_guess(self, bad) -> None:
+        assert ll.parse_pane_agent_status(bad) is None
+
+    def test_settled_status_is_idle_only(self) -> None:
+        assert ll.SETTLED_STATUS == "idle"

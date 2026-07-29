@@ -30,6 +30,13 @@ So the wired order is: start the agent WITHOUT a goal → `herdr agent wait --un
 2847-char / 41-newline condition, which arrives as a collapsed bracketed paste and does not
 submit early (#654).
 
+**Both pastes are gated on readiness, not just the first (#694).** The goal paste waits for
+`agent wait --until idle`; the resume-prompt paste waits for `agent_status == idle` read back from
+`pane get`. `goal_armed` alone is NOT that gate — a `goal_status` row is written when the goal is
+REGISTERED, so it can pass while the successor is still mid-turn. A prompt pasted into a `working`
+session queues (observed stranded); into a session `blocked` on a permission dialog it is
+swallowed outright. See SETTLED_STATUS.
+
 WHAT "no shell" DOES AND DOES NOT MEAN
 -------------------------------------
 An earlier revision of this docstring claimed "no shell ever parses the condition". That was
@@ -119,6 +126,32 @@ GOAL_POLL_DELAY_S = 1.5
 SWITCH_POLL_ATTEMPTS = 40
 SWITCH_POLL_DELAY_S = 3.0
 
+# The successor must be SETTLED before the resume prompt is pasted (#694). `goal_armed` proves a
+# `goal_status` row was WRITTEN, and that row appears when the goal is REGISTERED — early in the
+# goal's turn — so it does NOT prove the turn ended. Two distinct losses follow from pasting too
+# early, both measured live on 2026-07-29:
+#   - into a `working` session the prompt QUEUES, and was observed stranded (never dispatched);
+#   - into a session `blocked` on a permission dialog the prompt is SWALLOWED — gone once the
+#     dialog was dismissed, 0 registry rows, the transcript frozen mid-turn.
+# Either way the launcher then spends 120 s polling `project_switched` for the consequence of a
+# prompt that never arrived, and reports a clean-looking `failed_step`.
+#
+# `idle` is the ONLY accepted state, which is also the state the readiness gate before the GOAL
+# paste already waits for (`build_agent_wait_argv(..., until="idle")`). `done` is deliberately
+# EXCLUDED: it was never shown to accept input — the one live `done` session observed did NOT run
+# a prompt pasted into it — and it cannot legitimately occur at this point anyway, because
+# `goal_armed` has just proven an UNMET goal (`met:false`), i.e. work outstanding. A `done`
+# successor here contradicts the evidence that got us this far, so refusing is the fail-closed
+# reading rather than a false rejection.
+#
+# Budget: one real goal turn on this host completed in ~4 s, so 30 s is a ~7x margin. It is
+# deliberately SHORT rather than generous, because a successor blocked on a permission dialog will
+# never settle, and this budget is therefore also the ceiling on how long such a handoff takes to
+# fail — and failing fast leaves the predecessor alive and still guarded.
+SETTLED_STATUS = "idle"
+SETTLE_POLL_ATTEMPTS = 20
+SETTLE_POLL_DELAY_S = 1.5
+
 # A freshly split pane is NOT immediately an available shell. Found live on 2026-07-28 (epic
 # #667): the split succeeded, `agent start` refused instantly with
 # `{"error":{"code":"agent_pane_busy","message":"agent target pane <id> is not an available
@@ -137,6 +170,13 @@ PANE_READY_DELAY_S = 2.0
 # resume prompt before its goal exists is an UNGUARDED run — and the registry row cannot appear
 # until the resume prompt has made it run `/rawgentic:switch`. Checking `project_switched`
 # before the resume prompt was even sent (the second revision) could only pass on stale evidence.
+#
+# #694 did NOT reorder this. `goal_armed` remains the second rung; what changed is that passing it
+# no longer immediately authorises the paste — a settled-successor precondition sits between the
+# rung and the send (see SETTLED_STATUS). The distinction matters because the reordering #694
+# originally proposed (goal LAST) was refuted by reproduction: both orders failed identically under
+# back-to-back sends, and a goal-first live handover landed its prompt fine, with the bind 25.5 s
+# later (docs/planning/2026-07-28-667-uat-plan/harness/evidence/682-h7-live-handover-2026-07-28.md).
 _VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
     {"step": "spawned",
      "artifact": "herdr pane get <pane> -> a non-empty agent_session.value"},
@@ -450,6 +490,32 @@ def parse_pane_agent_session(pane_get_stdout: str) -> str | None:
         value = sess.get("value")
         return value if isinstance(value, str) and value else None
     return None
+
+
+def parse_pane_agent_status(pane_get_stdout: str) -> str | None:
+    """Pull `agent_status` out of a `herdr pane get` response (#694).
+
+    Returns None when absent, empty, non-string, or unparseable. The caller treats None as
+    NOT SETTLED, never as a pass: a status that cannot be read is not evidence that the
+    successor can receive a paste, and what this gates (handing over work, then retiring the
+    predecessor) is irreversible.
+
+    Deliberately a sibling of `parse_pane_agent_session` over the same response rather than an
+    extra return value from it — the two are read at different moments (identity once, readiness
+    repeatedly on a poll) and every existing caller of that function keeps its exact contract.
+    """
+    try:
+        doc = json.loads(pane_get_stdout)
+    except (ValueError, TypeError):
+        return None
+    node = doc.get("result", doc) if isinstance(doc, dict) else None
+    if not isinstance(node, dict):
+        return None
+    pane = node.get("pane") if isinstance(node.get("pane"), dict) else node
+    if not isinstance(pane, dict):
+        return None
+    status = pane.get("agent_status")
+    return status if isinstance(status, str) and status else None
 
 
 def registry_has_session(registry_text: str, session_id: str, *,
@@ -1066,7 +1132,32 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             out["failed_step"] = "goal_armed"
             return out
 
-        # Only now — the guard is proven armed — is the successor given work.
+        # #694 — the guard is armed, but that is not yet enough to hand over work: the
+        # `goal_status` row is written when the goal is REGISTERED, so the successor may still be
+        # mid-turn, or BLOCKED on a permission dialog where a paste is silently swallowed. Wait
+        # for it to be genuinely settled first. See SETTLED_STATUS for why `idle` only, and why
+        # this is a precondition rather than a new rung on the ladder — the causal order the
+        # runbook defends (guard armed BEFORE work is handed over) is unchanged.
+        settle_argv = build_pane_get_argv(new_pane)
+
+        def _successor_settled() -> bool:
+            proc = runner(settle_argv)
+            if getattr(proc, "returncode", 1) != 0:
+                return False
+            return parse_pane_agent_status(
+                getattr(proc, "stdout", "") or "") == SETTLED_STATUS
+
+        settled = _poll_for(_successor_settled, attempts=SETTLE_POLL_ATTEMPTS,
+                            delay_s=SETTLE_POLL_DELAY_S, sleeper=sleeper)
+        # Recorded ONCE with its verdict rather than once per poll read: a 20-read poll would
+        # otherwise bury the actual sequence in `steps` and make the report unreadable.
+        record("successor_settled", settle_argv, None,
+               note=f"settled={settled} (waiting for agent_status {SETTLED_STATUS!r})")
+        if not settled:
+            out["failed_step"] = "successor_unsettled"
+            return out
+
+        # Only now — the guard is proven armed AND the successor is settled — is it given work.
         prompt_argv, prompt_keys = build_send_text_argv(pane=new_pane, text=resume_prompt)
         for kind, argv in (("send_resume_prompt", prompt_argv),
                            ("send_resume_keys", prompt_keys)):
