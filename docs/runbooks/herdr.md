@@ -172,7 +172,7 @@ Delete it when you are done. For a shareable artifact use the committed sanitize
 
 **Idempotent on an exact-path match, appending otherwise.** Repeating the install a 2nd and 3rd time left the `SessionStart` array unchanged — it dedupes on the exact command string. But an install whose target path differs from the entry already present **appends a second entry**. So a settings.json carried between hosts, users or `$HOME`s accumulates a stale `SessionStart` entry pointing at a script that does not exist, and `install` will never clean it up. Remove the stale entry by hand.
 
-**`herdr wait` does not exist in 0.7.5** even though the herdr agent skill documents it. Tracked as #659.
+**`herdr wait` does not exist in 0.7.5** even though the herdr agent skill documents it. Tracked as #696. (It was previously cited here as #659, which is herdr **version-drift detection** — a different concern, so nothing actually tracked this.)
 
 **Only the `build` seat pops a pane.** Review and analysis seats return `transport: "native"` and no pane, by design. Expecting a pane from a review dispatch means waiting forever.
 
@@ -229,6 +229,31 @@ Two things changed here, and the second one reverses an earlier revision of this
 **What #694 turned out NOT to be.** The issue reported the cause as send **order** and asked for switch → prompt → goal. Reproduction refuted the stated *mechanism*: four live runs, and both orders failed identically under back-to-back sends, while a goal-first H7 live handover landed its prompt fine with the bind 25.5 s later (`docs/planning/2026-07-28-667-uat-plan/harness/evidence/682-h7-live-handover-2026-07-28.md`, lines 34-39). The **conclusion** "the goal goes last" is right; the reason in the issue is not. What actually discriminated was whether each send was *gated on evidence* rather than fired back-to-back.
 
 **A permission-blocked successor is a precondition, not something this code can fix.** A prompt pasted into a session blocked on a permission dialog is swallowed outright — but that case was **induced by the test setup** (`--permission-mode default`). The launcher spawns plain `claude`, and `_ALLOWED_CLAUDE_ARGS` deliberately refuses `--permission-mode` as authority-bearing. So a non-blocking permission mode is a **precondition of unattended handoff** that the launcher cannot assert; it fails loudly on a stalled bind instead of building an auto-accepter.
+
+#### 7.1.2 Delivering prompt text to a pane by hand, and the string that looks like a failure (#696)
+
+Everything above is what `perform_handoff` does for you. This section is for the **ad-hoc** case — handing work to a sibling pane outside a campaign handoff — because that is where it was got wrong, at a real cost.
+
+**Use `pane send-text` then a SEPARATE `pane send-keys Enter`. Never `pane run`.**
+
+```bash
+herdr pane send-text <PANE_ID> "<the whole prompt, however long>"
+herdr pane send-keys <PANE_ID> Enter
+```
+
+Two calls, always. A multiline payload arrives as one collapsed bracketed paste and does not submit early, which is why the Enter is a distinct call rather than a trailing newline (#654). `launcher_lib.build_send_text_argv` already emits exactly this pair and records that reason in its docstring — **the shipped code is correct and must not be "fixed"**.
+
+`pane run` is a shell-command runner — its own help reads *"Run a command in a pane"* — and is **never used for prompt text**. That is the sharp form of the diagnosis: it is the wrong tool, not the right tool used badly. A ~1,400-character prompt sent through it did not submit. The precise mechanism by which its Enter fails on long content was **not traced**, and no length threshold is established: the ~1,400-char failure and the ~2,500-char success differ in **method**, not only in length. The honest rule is therefore "never `pane run` for prompt text, at any length", not a byte count.
+
+**`paste again to expand` and `[Pasted text +N lines]` are NOT errors.** They are Claude Code's collapsed-display affordances for long input, and they appear on **successful** submissions — confirmed live on 2026-07-29, where a ~2,500-character multi-line prompt was delivered by the two-call pattern, submitted, and the receiving agent built a task list and began editing files while a `pane read` showed `paste again to expand`. When you see either string, **the buffer is INTACT and must be submitted as-is**: **never retried** and **never truncated**. Both wrong responses have a real cost — a retry risks **double-submission**, and a truncation **silently corrupts the handoff**, which is worse because nothing downstream can tell.
+
+**Submission is verified from the TRANSCRIPT, and never from `agent_status`.** Read the receiving session's own `<session-id>.jsonl` (or any durable artifact the receiver writes, such as its session-registry row) for something only a delivered prompt could produce. A `send-*` exit code proves transport, not arrival. `agent_status` proves nothing at all: measured live it read `idle` immediately after a prompt was submitted, `done` while a turn was still producing output, and `working` for a session sitting at an empty input line.
+
+**`herdr agent wait` takes an agent NAME, not a pane id.** Passing a pane id for a shell-launched `claude` returns `{"error":{"code":"agent_not_found","message":"agent target w1:pD8 not found"}}`, so it is only usable for agents registered through `herdr agent start` — which is why §7.1 step 5 can use it and an ad-hoc sibling pane generally cannot. Combined with the point above, an ad-hoc handoff has **no readiness primitive available**: poll the artifact instead.
+
+**No helper is shipped for this, deliberately.** `build_send_text_argv` + `_poll_for` + `transcript_has_marker` already compose into exactly a send-and-confirm wrapper, and `perform_handoff` is that composition. Adding a second, general one would duplicate a working path for the sake of the ad-hoc case, so the recipe above is documented instead of wrapped. Revisit if ad-hoc pane handoffs become routine enough that hand-rolling the poll is a recurring source of error rather than a one-off.
+
+**A known gap this repo cannot close.** `~/.claude/skills/herdr/SKILL.md` — the herdr agent skill — documented five invocations of a top-level `herdr wait` that does not exist. It has been corrected locally, but that file is user-level and lives **outside any git repository**, so it is neither committed here nor covered by CI. If you are reading a copy of that skill that still shows `herdr wait`, the skill is stale and this runbook is authoritative. The in-repo half is guarded by `tests/test_herdr_runbook_doc.py`.
 
 ### 7.2 Why the goal is NOT armed at birth
 
@@ -312,7 +337,7 @@ Honest status, so this section is not read as more than it is. The sequence in �
 
 ### 7.7 Correction to a documented gotcha
 
-The top-level `herdr wait` genuinely does not exist in 0.7.5 (tracked as #659), but **`herdr agent wait <target> --until idle|working|blocked|done|unknown --timeout <ms>` does exist** and is the readiness primitive §7.1 step 5 uses. Scope #659 to the top-level form rather than claiming the capability is absent.
+The top-level `herdr wait` genuinely does not exist in 0.7.5 (tracked as #696), but **`herdr agent wait <target> --until idle|working|blocked|done|unknown --timeout <ms>` does exist** and is the readiness primitive §7.1 step 5 uses. Scope the correction to the top-level form rather than claiming the capability is absent — and note that `agent wait` keys on an **agent NAME, not a pane id** (§7.1.2).
 
 ### 7.8 The pane-readiness failure, measured (#673)
 
@@ -548,7 +573,7 @@ disk before any restart — the reason §7.4 and §8.3 verify handoffs against f
 scraped pane text.
 
 **Two version-surface traps already documented elsewhere, repeated here because they cost time:** the
-top-level `herdr wait` does not exist in 0.7.5 (#659) while `herdr agent wait` does (§7.7); and a
+top-level `herdr wait` does not exist in 0.7.5 (#696) while `herdr agent wait` does (§7.7); and a
 freshly split pane is not immediately an available shell, so `agent start` must retry on
 `agent_pane_busy` (§7.8, #673).
 
