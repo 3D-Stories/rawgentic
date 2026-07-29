@@ -73,22 +73,55 @@ class Runner:
 
 SPLIT_OK = json.dumps({"result": {"pane_id": "w1:pZZ"}})
 PANE_LIST_ANCHOR_ONLY = json.dumps({"result": {"panes": [{"pane_id": "w1:p1"}]}})
+# #694: a real `herdr pane get` response ALSO carries `agent_status`; this fixture omitted it, so
+# every `perform_handoff` test drove a successor whose readiness could not be known. That is the
+# same class of fixture unrealism the module docstring blames for letting an ordering-free prompt
+# ship — see `PANE_GET_REAL` below, captured verbatim from herdr 0.7.5 on 2026-07-29.
 PANE_GET_OK = json.dumps({"result": {"pane": {
     "pane_id": "w1:pZZ",
+    "agent_status": "idle",
     "agent_session": {"agent": "claude", "kind": "id", "source": "herdr:claude",
                       "value": "sess-new-123"}}}})
+
+
+def _pane_get(status=None, *, session="sess-new-123"):
+    """A `pane get` response with an explicit `agent_status` (omitted entirely when None)."""
+    pane = {"pane_id": "w1:pZZ",
+            "agent_session": {"agent": "claude", "kind": "id", "source": "herdr:claude",
+                              "value": session}}
+    if status is not None:
+        pane["agent_status"] = status
+    return json.dumps({"result": {"pane": pane}})
+
+
+# A REAL response, captured verbatim from the live herdr 0.7.5 server on this host (2026-07-29).
+# It exists so the status parser is proven against real bytes and real key ordering, not only
+# against hand-written dicts that happen to match the parser's assumptions (#694 review, F2).
+PANE_GET_REAL = (REPO_ROOT / "tests" / "fixtures" / "herdr"
+                 / "pane_get_idle.json").read_text(encoding="utf-8")
 REGISTRY_OK = '{"session_id":"sess-new-123","project":"rawgentic"}\n'
 GOAL_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "herdr" / "goal_status_transcript.jsonl"
 TRANSCRIPT_OK = GOAL_FIXTURE.read_text(encoding="utf-8")
 GOAL_CONDITION = ("PR open with green CI, or a blocker is posted to the issue via the ERROR "
                   "protocol")
-# #682: a realistic prompt OPENS with `/rawgentic:switch <project>`. The original fixture said only
-# "Re-bind the project" with no directive at all, so 55 `perform_handoff` tests passed against a
-# prompt that could never have made `project_switched` succeed — the unrealism that let an
-# ordering-free prompt ship. `perform_handoff` now refuses anything that does not open with the bind.
+# #694: a realistic prompt for the herdr handoff path carries NO bind at all — `perform_handoff`
+# sends `/rawgentic:switch <project>` as SEND 1, its own turn gated on the registry row, and refuses
+# a prompt that would make the successor run the switch skill twice.
+#
+# This fixture has now been wrong in both directions, which is why it is commented rather than just
+# edited. Originally it said only "Re-bind the project" with no directive at all, so 55
+# `perform_handoff` tests passed against a prompt that could never have made `project_switched`
+# succeed — the unrealism that let an ordering-free prompt ship (#682). #682 then made it open with
+# the bind, which was right while the bind travelled inside the prompt. The bind now travels on its
+# own, so a prompt carrying one is the unrealistic case again.
 PROJECT = "rawgentic"
-RESUME_PROMPT = ("/rawgentic:switch rawgentic — run this FIRST, before reading any file. An unbound "
-                 "session cannot Read under projects/. THEN run the next child.")
+RESUME_PROMPT = ("Fresh-session resume: git fetch origin, read the driver-state, and run the next "
+                 "ready child to full WF2 completion. Derive position from durable state.")
+# The pre-#694 shape, kept so a test can prove the launcher REFUSES it rather than silently
+# double-binding a successor.
+RESUME_PROMPT_WITH_BIND = (
+    "/rawgentic:switch rawgentic — run this FIRST, before reading any file. An unbound "
+    "session cannot Read under projects/. THEN run the next child.")
 REGISTRY_PATH = "/reg.jsonl"
 
 
@@ -343,26 +376,29 @@ def test_goal_armed_reads_the_REAL_transcript_shape() -> None:
 
 
 def test_ladder_is_ordered_and_names_on_disk_artifacts() -> None:
-    """The order is CAUSAL, not alphabetical: the guard is armed before the successor is given
-    work, and the registry row can only appear once the resume prompt has made it run
-    `/rawgentic:switch`. Checking `project_switched` before the resume prompt is even sent is
-    what the second revision did, and it could only ever have passed on stale evidence."""
+    """The order is CAUSAL, not alphabetical, and #694 reordered it to match the sends: the bind is
+    its own send so its registry row comes first, and `/goal` goes last so `goal_armed` does too.
+    Each rung is the durable artifact written by the send before it. The constraint that survives
+    from the earlier revisions is the one they broke: a rung must never be checked before the send
+    that produces it has actually gone out, or it can only pass on stale evidence."""
     steps = ll.handoff_verification_steps()
-    assert [s["step"] for s in steps] == ["spawned", "goal_armed", "project_switched"]
+    assert [s["step"] for s in steps] == ["spawned", "project_switched", "goal_armed"]
     for s in steps:
         assert s["artifact"].strip()
         assert "pane text" not in s["artifact"].lower()
+        assert "agent_status" not in s["artifact"], \
+            "no rung may rest on pane status — it is not a synchronisation signal (#694)"
 
 
 def test_ladder_aborts_at_the_first_failure() -> None:
     ok, failed, checked = ll.evaluate_verifications(
-        {"spawned": True, "goal_armed": False, "project_switched": True})
-    assert (ok, failed, checked) == (False, "goal_armed", ["spawned", "goal_armed"])
+        {"spawned": True, "project_switched": False, "goal_armed": True})
+    assert (ok, failed, checked) == (False, "project_switched", ["spawned", "project_switched"])
 
 
 def test_missing_result_is_failure_not_pass() -> None:
     ok, failed, _ = ll.evaluate_verifications({"spawned": True})
-    assert ok is False and failed == "goal_armed"
+    assert ok is False and failed == "project_switched"
 
 
 def test_teardown_refused_until_every_check_passes() -> None:
@@ -387,9 +423,10 @@ class TestPerformHandoff:
         assert r.kinds() == [
             "herdr pane list",                                  # pre-split inventory
             "herdr pane split", "herdr agent start", "herdr agent wait", "herdr pane get",
-            "herdr pane send-text", "herdr pane send-keys",     # the goal
-            "herdr pane send-text", "herdr pane send-keys",     # the resume prompt
-            "herdr pane close",                                 # the predecessor, LAST
+            "herdr pane send-text", "herdr pane send-keys",     # SEND 1 — the bind, alone
+            "herdr pane send-text", "herdr pane send-keys",     # SEND 2 — the resume prompt
+            "herdr pane send-text", "herdr pane send-keys",     # SEND 3 — the goal, LAST
+            "herdr pane close",                                 # the predecessor, LAST of all
         ]
         assert out["cleanup"] is None, "nothing to clean up when ownership transferred"
 
@@ -409,7 +446,9 @@ class TestPerformHandoff:
         ("herdr pane split", "split"),
         ("herdr agent start", "agent_start"),
         ("herdr agent wait", "agent_wait"),
-        ("herdr pane send-text", "send_text"),
+        # the FIRST send-text is now the bind (#694), so that is the step a send-text failure
+        # aborts at — nothing else has been sent yet
+        ("herdr pane send-text", "send_bind"),
     ])
     def test_a_failed_step_aborts_and_never_tears_down(self, fail_at, expected) -> None:
         r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK},
@@ -449,9 +488,11 @@ class TestPerformHandoff:
         assert not _predecessor_closed(r)
 
     def test_unarmed_goal_blocks_teardown(self) -> None:
+        """`Artifacts` rather than a bare lambda: the registry evidence has to be LAUNCH-BOUND, and
+        since #694 checks `project_switched` FIRST a fixture whose row is already present at
+        baseline now fails there instead — hiding the goal_armed case this test is about."""
         r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
-        out = ll.perform_handoff(runner=r, **_handoff(
-            read_text=lambda p: REGISTRY_OK if p == "/reg.jsonl" else ""))
+        out = ll.perform_handoff(runner=r, **_handoff(read_text=Artifacts(transcript="")))
         assert out["ok"] is False and out["failed_step"] == "goal_armed"
         assert not _predecessor_closed(r)
 
@@ -742,20 +783,38 @@ class TestResumePrompt:
     given work just sits at an empty prompt: the goal only re-prompts once the session tries to
     STOP, so the run would stall silently and the predecessor would already be retired."""
 
-    def test_resume_prompt_is_sent_after_the_goal(self) -> None:
+    def test_resume_prompt_is_sent_after_the_bind_and_before_the_goal(self) -> None:
+        """#694 inverted this test's predecessor, which asserted the prompt came AFTER the goal.
+        The bind leads (its own send), the work follows, and the guard is armed last."""
         r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
         out = ll.perform_handoff(runner=r, **_handoff())
         assert out["ok"] is True, out
-        assert _sent(r) == [f"/goal {GOAL_CONDITION}", RESUME_PROMPT]
+        assert _sent(r) == [f"/rawgentic:switch {PROJECT}", RESUME_PROMPT,
+                            f"/goal {GOAL_CONDITION}"]
 
-    def test_resume_prompt_waits_until_the_goal_is_VERIFIED_armed(self) -> None:
-        """Not merely 'sent after' — sent after the on-disk goal_status row was observed. If the
-        guard never armed, handing the successor work would start an UNGUARDED run."""
+    def test_resume_prompt_waits_until_the_BIND_is_VERIFIED_landed(self) -> None:
+        """Not merely 'sent after' — sent after the successor's own registry row was observed. A
+        prompt handed to a session that never bound cannot read anything under projects/, and the
+        pane is closed when `project_switched` exhausts."""
         r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
         out = ll.perform_handoff(runner=r, **_handoff(
-            read_text=Artifacts(transcript="")))          # goal row never appears
-        assert out["ok"] is False and out["failed_step"] == "goal_armed"
-        assert _sent(r) == [f"/goal {GOAL_CONDITION}"], "resume prompt sent despite no guard"
+            read_text=Artifacts(registry="")))            # registry row never appears
+        assert out["ok"] is False and out["failed_step"] == "project_switched"
+        assert _sent(r) == [f"/rawgentic:switch {PROJECT}"], \
+            "resume prompt sent despite no bind"
+        assert not _predecessor_closed(r)
+
+    def test_the_goal_waits_until_the_PROMPT_is_verified_landed(self) -> None:
+        """The guard goes last, but not blindly last: with a marker supplied it is armed only once
+        the prompt is proven to have arrived, so `goal_armed` can never be the only thing that
+        passed."""
+        marker = "[rawgentic-midchild:4:7]"
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff(
+            resume_prompt=f"{marker} {RESUME_PROMPT}", prompt_marker=marker,
+            read_text=Artifacts(transcript="")))
+        assert out["ok"] is False and out["failed_step"] == "prompt_landed"
+        assert not any(t.startswith("/goal") for t in _sent(r))
         assert not _predecessor_closed(r)
 
     def test_a_handoff_with_no_resume_prompt_is_refused_before_anything_runs(self) -> None:
@@ -764,24 +823,25 @@ class TestResumePrompt:
             ll.perform_handoff(runner=r, **_handoff(resume_prompt=""))
         assert r.calls == []
 
-    def test_a_prompt_that_does_not_bind_first_is_refused_before_anything_runs(self) -> None:
-        """#682. `project_switched` allows 120 s for the registry row and then CLOSES THE PANE, so
-        that budget is only sound if the bind is the successor's first act. A prompt that asks it to
-        verify first buys a silent, expensive failure: a clean-looking `failed_step`, a closed pane,
-        and the work the successor already did is lost. Refused BEFORE the split, like every other
-        caller mismatch, so the refusal never leaves a pane behind."""
+    def test_a_prompt_carrying_a_bind_ANYWHERE_is_refused_before_anything_runs(self) -> None:
+        """#694 inverted #682's precondition. The bind is SEND 1, so a prompt that also binds makes
+        the successor run the switch skill twice. Position does not matter — a mid-prompt bind is
+        the same double-bind — which is why the guard looks for the directive rather than checking a
+        prefix. Refused BEFORE the split, like every other caller mismatch, so the refusal never
+        leaves a pane behind."""
         r = Runner({"herdr pane split": SPLIT_OK})
-        with pytest.raises(ll.LauncherError, match="does not bind first"):
+        with pytest.raises(ll.LauncherError, match="carries"):
             ll.perform_handoff(runner=r, **_handoff(
                 resume_prompt="Resume epic #667: git fetch origin, then /rawgentic:switch rawgentic."))
-        assert r.calls == [], "a pane was created before the ordering was validated"
+        assert r.calls == [], "a pane was created before the caller mismatch was caught"
 
-    def test_a_prompt_with_no_bind_directive_at_all_is_refused(self) -> None:
-        r = Runner({"herdr pane split": SPLIT_OK})
-        with pytest.raises(ll.LauncherError, match="does not bind first"):
-            ll.perform_handoff(runner=r, **_handoff(
-                resume_prompt="Resume epic #667 and run the next child."))
-        assert r.calls == []
+    def test_a_prompt_with_no_bind_directive_is_exactly_what_is_expected_now(self) -> None:
+        """The pre-#694 version of this test asserted such a prompt was REFUSED. It is now the
+        canonical shape, because the launcher supplies the bind itself."""
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff(
+            resume_prompt="Resume epic #667 and run the next child."))
+        assert out["ok"] is True, out
 
     def test_resume_prompt_step_is_named_in_the_output(self) -> None:
         r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
@@ -1239,6 +1299,81 @@ class TestBoundedPolling:
         assert out["ok"] is True, out
 
 
+class TestPollingIsBoundedOnWallClockToo:
+    """#694 cross-model review, still open when the falsified fix was reverted.
+
+    An attempts cap bounds how many times `check` runs, not how long the poll may take: each
+    attempt does I/O and a blocked read has no ceiling of its own. The review's arithmetic was a
+    20-attempt poll whose every call could take the runner's 180 s timeout — about an hour of
+    wall clock behind a budget that reads as short.
+    """
+
+    def test_a_slow_poll_stops_at_the_wall_clock_deadline(self) -> None:
+        clock = {"t": 0.0}
+        seen = {"n": 0}
+
+        def check():
+            seen["n"] += 1
+            clock["t"] += 60.0          # every read blocks for a minute
+            return False
+
+        assert ll._poll_for(check, attempts=ll.SWITCH_POLL_ATTEMPTS,
+                            delay_s=ll.SWITCH_POLL_DELAY_S, sleeper=lambda _s: None,
+                            now=lambda: clock["t"]) is False
+        assert seen["n"] < ll.SWITCH_POLL_ATTEMPTS, \
+            "the poll spent its whole attempt budget — the wall clock never bounded it"
+        nominal = ll.SWITCH_POLL_ATTEMPTS * ll.SWITCH_POLL_DELAY_S
+        assert clock["t"] <= nominal * ll.POLL_WALL_CLOCK_SLACK + 60.0
+
+    def test_the_first_attempt_always_runs_even_past_the_deadline(self) -> None:
+        """A deadline that could refuse before checking once would turn a slow clock into a
+        verdict — the artifact may already be on disk."""
+        seen = {"n": 0}
+
+        def check():
+            seen["n"] += 1
+            return True
+
+        assert ll._poll_for(check, attempts=5, delay_s=1.0, sleeper=lambda _s: None,
+                            max_wall_s=0.0, now=lambda: 10.0) is True
+        assert seen["n"] == 1
+
+    def test_a_poll_that_simply_needs_several_attempts_is_unaffected(self) -> None:
+        """The bound must not refuse a healthy artifact that appears late — that is the whole
+        reason bounded polling exists (see TestBoundedPolling)."""
+        state = {"n": 0}
+
+        def check():
+            state["n"] += 1
+            return state["n"] == 5
+
+        assert ll._poll_for(check, attempts=ll.GOAL_POLL_ATTEMPTS, delay_s=ll.GOAL_POLL_DELAY_S,
+                            sleeper=lambda _s: None, now=lambda: 0.0) is True
+
+    def test_the_pane_ready_retry_is_bounded_on_wall_clock(self) -> None:
+        """`agent_start` is where the arithmetic actually bit: 15 attempts against a runner whose
+        timeout is 180 s is a 45-minute ceiling on 'a condition that resolves itself in about a
+        second'."""
+        clock = {"t": 0.0}
+        starts = {"n": 0}
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return FakeProc(0, PANE_LIST_ANCHOR_ONLY)
+            if argv[:3] == ["herdr", "pane", "split"]:
+                return FakeProc(0, SPLIT_OK)
+            if argv[:3] == ["herdr", "agent", "start"]:
+                starts["n"] += 1
+                clock["t"] += 180.0     # every attempt burns the runner's whole timeout
+                return FakeProc(1, '{"error":{"code":"agent_pane_busy"}}')
+            return FakeProc(0, PANE_GET_OK)
+
+        out = ll.perform_handoff(runner=runner, **_handoff(now=lambda: clock["t"]))
+        assert out["failed_step"] == "agent_start"
+        assert starts["n"] < ll.PANE_READY_ATTEMPTS, \
+            "the retry ran its whole attempt budget — the wall clock never bounded it"
+
+
 # ---------------------------------------------------------------------------
 # AC6 — the condition is read VERBATIM from the predecessor's own transcript
 # ---------------------------------------------------------------------------
@@ -1342,3 +1477,148 @@ class TestSplitPaneReadiness:
         assert starts, "no agent_start step recorded"
         assert any("agent_pane_busy" in (s.get("note") or "") for s in starts), \
             "herdr's error code must survive onto the step record"
+
+
+# ---------------------------------------------------------------------------
+# #694 — three sends, each gated on a DURABLE ARTIFACT, and `/goal` LAST
+#
+# The predecessor of this class gated the resume-prompt paste on `agent_status == "idle"`. It was
+# falsified by live measurement before it shipped, and these tests exist so it cannot come back:
+#
+#   - X1: after a REAL unmet goal was armed, the pane reported `working` on consecutive reads while
+#     the `goal_status met:false` row was ALREADY present. An idle gate placed after `goal_armed`
+#     therefore refuses EVERY real handoff — strictly worse than the bug it was meant to fix.
+#   - X2: `/goal` pasted into a session actively mid-turn produced its row while that turn was
+#     still running. It needs no idle window, which is what lets it go LAST.
+#   - `agent_status` is not a synchronisation signal at all: `idle` right after a prompt was
+#     submitted, `done` mid-output, `working` at an empty input line.
+#
+# So the gates are artifacts the successor itself writes, and nothing branches on pane status.
+# ---------------------------------------------------------------------------
+
+class TestAgentStatusNeverGatesControlFlow:
+    """The falsified gate, pinned shut from the other side."""
+
+    @pytest.mark.parametrize("status", ["working", "blocked", "done", "unknown", None])
+    def test_a_handoff_completes_whatever_the_pane_status_says(self, status) -> None:
+        """X1 is the case that matters: a healthy successor mid-goal-turn reads `working`. Any
+        branch on this value refuses a handoff that is actually fine."""
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": _pane_get(status)})
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["ok"] is True, out
+        assert out["failed_step"] is None
+        assert RESUME_PROMPT in _sent(r), "the resume prompt was withheld on a pane-status reading"
+
+    def test_no_pane_get_happens_between_the_sends(self) -> None:
+        """The falsified design read `pane get` between two sends to sample readiness. The only
+        legitimate `pane get` is the early one that reads the session id, before any send."""
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["ok"] is True, out
+        kinds = [s["kind"] for s in out["steps"]]
+        first_send = min(i for i, k in enumerate(kinds) if k.startswith("send_"))
+        assert "pane_get" not in kinds[first_send:], \
+            "a readiness sample crept back in between the sends"
+
+
+class TestTheThreeSendsAreOrderedAndGated:
+    @staticmethod
+    def _send_texts(out) -> list[str]:
+        """The `kind` of each send-text step, in order."""
+        return [s["kind"] for s in out["steps"] if s["kind"] in
+                ("send_bind", "send_resume_prompt", "send_text")]
+
+    def test_the_bind_goes_first_the_prompt_second_and_the_goal_last(self) -> None:
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["ok"] is True, out
+        assert self._send_texts(out) == ["send_bind", "send_resume_prompt", "send_text"]
+
+    def test_the_bind_is_its_own_send_carrying_the_project(self) -> None:
+        """A bare `/rawgentic:switch` enters the switch skill's LIST MODE and waits for a human
+        (#682), so the argument is the whole point of sending it at all."""
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["ok"] is True, out
+        assert _sent(r)[0] == f"/rawgentic:switch {PROJECT}"
+
+    def test_the_prompt_is_not_sent_until_the_REGISTRY_ROW_appears(self) -> None:
+        """The gate is the durable artifact, not a timer and not pane status. Without the row the
+        prompt must never go out and the predecessor must survive."""
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff(read_text=Artifacts(registry="")))
+        assert out["ok"] is False and out["failed_step"] == "project_switched", out
+        assert RESUME_PROMPT not in _sent(r), \
+            "the resume prompt was sent to a successor that never bound"
+        assert not _predecessor_closed(r)
+
+    def test_the_goal_is_not_sent_until_the_PROMPT_has_landed(self) -> None:
+        """`prompt_landed` reads the marker out of the successor's own transcript — rc 0 on
+        send-text proves transport, not arrival."""
+        marker = "[rawgentic-midchild:4:7]"
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff(
+            resume_prompt=f"{marker} {RESUME_PROMPT}", prompt_marker=marker,
+            read_text=Artifacts(transcript="")))
+        assert out["ok"] is False and out["failed_step"] == "prompt_landed", out
+        assert not any(t.startswith("/goal") for t in _sent(r)), \
+            "the goal was armed on a prompt that never arrived"
+        assert not _predecessor_closed(r)
+
+    def test_a_prompt_that_carries_its_own_bind_is_refused_before_anything_runs(self) -> None:
+        """The exact inverse of #682's precondition, and deliberately so: the bind is SEND 1 now,
+        so a prompt that also binds would make the successor run the switch skill twice. A caller
+        still passing the old shape is a caller that has not been updated."""
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        with pytest.raises(ll.LauncherError, match="carries"):
+            ll.perform_handoff(runner=r, **_handoff(resume_prompt=RESUME_PROMPT_WITH_BIND))
+        assert r.calls == [], "a caller mismatch must be refused before a pane exists"
+
+    @pytest.mark.parametrize("bad", [None, "", "not a project name!", "../escape"])
+    def test_an_unusable_expected_project_is_refused_before_anything_runs(self, bad) -> None:
+        """SEND 1 is built from it, so it is required rather than optional."""
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        with pytest.raises(ll.LauncherError, match="valid project name"):
+            ll.perform_handoff(runner=r, **_handoff(expected_project=bad))
+        assert r.calls == []
+
+
+class TestTheLadderMatchesTheSendOrder:
+    def test_the_launch_ladder_follows_the_sends(self) -> None:
+        """#694 REORDERED this. `evaluate_verifications` stops at the first failure, so a ladder
+        listing rungs out of send order reports the wrong step as the thing that broke."""
+        assert [s["step"] for s in ll.handoff_verification_steps()] == [
+            "spawned", "project_switched", "goal_armed"]
+
+    def test_the_mid_child_ladder_follows_the_sends(self) -> None:
+        assert [s["step"] for s in ll.mid_child_verification_steps()] == [
+            "spawned", "project_switched", "prompt_landed", "goal_armed",
+            "position_rebuilt", "state_claimed"]
+
+    def test_the_old_goal_first_ladder_is_no_longer_permitted(self) -> None:
+        """A reordered ladder is refused outright, so the pre-#694 order cannot be smuggled back
+        in by a caller passing `steps=`."""
+        with pytest.raises(ll.LauncherError, match="non-canonical"):
+            ll.evaluate_verifications(
+                {"spawned": True, "goal_armed": True, "project_switched": True},
+                steps=[{"step": "spawned"}, {"step": "goal_armed"},
+                       {"step": "project_switched"}])
+
+
+
+class TestParsePaneAgentStatus:
+    def test_reads_a_REAL_herdr_response(self) -> None:
+        assert ll.parse_pane_agent_status(PANE_GET_REAL) == "idle"
+        # the same real bytes must still yield the session id the existing check relies on
+        assert ll.parse_pane_agent_session(PANE_GET_REAL)
+
+    @pytest.mark.parametrize("status", ["idle", "working", "blocked", "done", "unknown"])
+    def test_round_trips_every_status_herdr_documents(self, status) -> None:
+        assert ll.parse_pane_agent_status(_pane_get(status)) == status
+
+    @pytest.mark.parametrize("bad", ["", "not json", "[]", "null", '{"result": {}}',
+                                     '{"result": {"pane": {}}}',
+                                     '{"result": {"pane": {"agent_status": ""}}}',
+                                     '{"result": {"pane": {"agent_status": 3}}}'])
+    def test_unreadable_input_is_None_never_a_guess(self, bad) -> None:
+        assert ll.parse_pane_agent_status(bad) is None

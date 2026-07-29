@@ -377,7 +377,26 @@ def _bind_opening(project: str) -> str:
             "other way round.")
 
 
-def _build_resume_prompt(state: dict, next_issue: int, project=None) -> str:
+def _lead_with_bind(body: str, project, include_bind: bool) -> str:
+    """Put the bind in front of `body`, or capitalise `body` when the caller sends the bind itself.
+
+    ONE place decides this for both builders (#694). The two prompts have disagreed before, and a
+    flag copied into each of them is how that happens again.
+
+    `include_bind=False` is for the herdr handoff path ONLY, where `perform_handoff` sends
+    `/rawgentic:switch <project>` as SEND 1 — its own turn, gated on the session-registry row —
+    and would otherwise make the successor run the switch skill twice. Every other consumer keeps
+    the bind INSIDE the prompt, which is why True is the default: the interactive hand-back and
+    the `claude -p` fallback launch each deliver exactly one prompt and have no second send to put
+    a bind in.
+    """
+    if include_bind:
+        return f"{_bind_opening(project)} THEN — {body}"
+    return body[:1].upper() + body[1:]
+
+
+def _build_resume_prompt(state: dict, next_issue: int, project=None,
+                         include_bind: bool = True) -> str:
     """The canonical idempotent, state-re-deriving resume prompt for a fresh session (no
     in-context memory). Used for the interactive hand-back + a direct `claude -p` spawn; the
     crontab launcher's own static prompt conforms to this (design §4 SR1).
@@ -386,20 +405,27 @@ def _build_resume_prompt(state: dict, next_issue: int, project=None) -> str:
     reason. This used to open with "Re-bind the project (/rawgentic:switch), git fetch origin, read
     the driver-state ...": a comma list that reads as parallel tasks rather than an ordering, and a
     bare directive that would have entered the switch skill's list mode and waited for a human.
+
+    #694 adds `include_bind`. It does NOT retract #682 — the bind still has to come first, and on
+    every path that delivers one prompt it still leads the prompt. What changed is that the herdr
+    handoff has a second send available, so it makes the bind its own verified turn instead, and
+    a prefix check stops having to stand in as a proxy for "first". See `_lead_with_bind`.
     """
     epic = state.get("epic")
     epic_ref = f"epic #{epic}" if _is_int(epic) else state.get("campaign", "the campaign")
-    return (
-        f"{_bind_opening(project)} THEN — fresh-session resume for {epic_ref}: git fetch origin, "
+    body = (
+        f"fresh-session resume for {epic_ref}: git fetch origin, "
         "read the driver-state + epic-<N>-autorun-log, and run the next ready child (currently "
         f"#{next_issue}) via /rawgentic:implement-feature to full WF2 completion. Derive position "
         "from durable state, never in-context memory; never re-do a merged/closed child; restate "
         "the run's auth grant. On a blocker, post the ERROR comment and end so the next fresh "
         "session continues."
     )
+    return _lead_with_bind(body, project, include_bind)
 
 
-def fresh_session_handoff(state: dict, *, mode: str, project=None) -> dict:
+def fresh_session_handoff(state: dict, *, mode: str, project=None,
+                          include_bind: bool = True) -> dict:
     """Decide the process-boundary handoff after a child reaches a terminal outcome (#569).
 
     Returns an explicit disposition (NEVER a bare None — design §4 [2]):
@@ -433,7 +459,8 @@ def fresh_session_handoff(state: dict, *, mode: str, project=None) -> dict:
         generation = (state.get("generation") if _is_int(state.get("generation")) else 0) + 1
         return {"outcome": "ready", "next_issue": nxt, "generation": generation,
                 "campaign": state.get("campaign", ""),
-                "resume_prompt": _build_resume_prompt(state, nxt, chosen)}
+                "resume_prompt": _build_resume_prompt(state, nxt, chosen,
+                                                      include_bind=include_bind)}
     return {"outcome": "blocked"}
 
 
@@ -606,17 +633,20 @@ def validate_mid_child_position(position) -> tuple[bool, list[str]]:
     return (not errors, errors)
 
 
-def _build_mid_child_resume_prompt(state: dict, position: dict, generation: int) -> str:
+def _build_mid_child_resume_prompt(state: dict, position: dict, generation: int,
+                                   include_bind: bool = True) -> str:
     """The successor's instructions, built HERE next to `_build_resume_prompt` so the two
     cannot drift. It re-derives position from durable state — never a copied task list, which
     is session-scoped and, measured live on 2026-07-27, held 30 subjects spanning three
     unrelated projects.
+
+    The marker stays FIRST either way — it is what `prompt_landed` matches, and it must survive
+    whether or not the bind travels inside the prompt (#694). See `_lead_with_bind`.
     """
     epic = state.get("epic")
     epic_ref = f"epic #{epic}" if _is_int(epic) else state.get("campaign", "the campaign")
-    return (
-        f"{mid_child_marker(position['issue'], generation)} "
-        f"{_bind_opening(position.get('project') or '')} THEN — mid-child resume for {epic_ref}, "
+    body = (
+        f"mid-child resume for {epic_ref}, "
         f"child #{position['issue']}, interrupted at WF2 step {position['step']}: "
         f"`git fetch origin && git checkout {position['branch']}`. That branch "
         "already carries this child's committed work, so do not re-implement it. The recorded "
@@ -628,9 +658,11 @@ def _build_mid_child_resume_prompt(state: dict, position: dict, generation: int)
         "`python3 hooks/launcher_lib.py retire-predecessor`. On a blocker, post the ERROR "
         "comment on the child issue and end so the next session can continue."
     )
+    return (f"{mid_child_marker(position['issue'], generation)} "
+            f"{_lead_with_bind(body, position.get('project') or '', include_bind)}")
 
 
-def mid_child_handoff(state: dict, *, position) -> dict:
+def mid_child_handoff(state: dict, *, position, include_bind: bool = True) -> dict:
     """Decide a mid-child (context-driven) handoff. Mirrors `fresh_session_handoff`'s
     disposition contract so `open_handoff` consumes the result unchanged.
 
@@ -662,7 +694,8 @@ def mid_child_handoff(state: dict, *, position) -> dict:
     return {"outcome": "ready", "next_issue": active[0], "generation": generation,
             "campaign": state.get("campaign", ""), "kind": MID_CHILD_HANDOFF_KIND,
             "position": dict(position),
-            "resume_prompt": _build_mid_child_resume_prompt(state, position, generation)}
+            "resume_prompt": _build_mid_child_resume_prompt(state, position, generation,
+                                                            include_bind=include_bind)}
 
 
 def validate_driver_state(state: dict) -> tuple[bool, list[str]]:

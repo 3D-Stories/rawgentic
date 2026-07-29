@@ -30,6 +30,21 @@ So the wired order is: start the agent WITHOUT a goal → `herdr agent wait --un
 2847-char / 41-newline condition, which arrives as a collapsed bracketed paste and does not
 submit early (#654).
 
+**There are THREE sends, each gated on a durable artifact the successor itself writes (#694).**
+In order: `/rawgentic:switch <project>` alone, gated on the session-registry row
+(`project_switched`); then the resume prompt, gated on its marker reaching the transcript
+(`prompt_landed`); then `/goal` LAST, gated on the `goal_status met:false` row (`goal_armed`).
+The predecessor is retired only after all of them pass.
+
+Nothing here gates on `agent_status`, and nothing may: measured live on 2026-07-29 it read `idle`
+immediately after a prompt was submitted, `done` while a turn was still producing output, and
+`working` for a session sitting at an empty input line. An earlier revision of this fix gated the
+resume-prompt paste on `agent_status == "idle"` and was falsified before it shipped — after a real
+UNMET goal was armed the pane reported `working` across consecutive reads while the `goal_status`
+row was ALREADY present, so that gate would have refused every real handoff. `/goal` needs no idle
+window at all: pasted into a session actively mid-turn it still produced its row while that turn
+ran, which is what lets it go last. `parse_pane_agent_status` survives for DIAGNOSTICS only.
+
 WHAT "no shell" DOES AND DOES NOT MEAN
 -------------------------------------
 An earlier revision of this docstring claimed "no shell ever parses the condition". That was
@@ -119,6 +134,30 @@ GOAL_POLL_DELAY_S = 1.5
 SWITCH_POLL_ATTEMPTS = 40
 SWITCH_POLL_DELAY_S = 3.0
 
+# Every bounded wait here is bounded on wall clock as well as on attempt count (#694 cross-model
+# review). An attempts cap alone is not a time bound: each attempt does I/O, a blocked read has no
+# ceiling of its own, and the arithmetic is unforgiving — a 15-attempt retry whose call can each
+# take the runner's 180 s timeout is a 45-minute wait dressed up as a short one. Multiplying the
+# NOMINAL budget (attempts x delay) rather than naming an absolute per-site number keeps the two
+# numbers from drifting apart when a budget is retuned; 2x leaves a healthy-but-slow poll room to
+# finish while refusing to let a stalled one run away.
+POLL_WALL_CLOCK_SLACK = 2.0
+
+# `agent_status` is NOT a synchronisation signal, and nothing here may treat it as one (#694).
+#
+# An earlier revision of this fix gated the resume-prompt paste on `agent_status == "idle"`. It was
+# falsified by measurement on 2026-07-29, on this host, before it shipped:
+#   - after arming a real UNMET goal, the pane reported `working` across consecutive reads while the
+#     `goal_status met:false` row was already present — so an idle gate placed after `goal_armed`
+#     would have refused EVERY real handoff;
+#   - the value read `idle` immediately after a prompt was submitted, and `done` while a turn was
+#     still producing output, and `working` for a session sitting at an empty input line.
+#
+# So the sequence is gated on DURABLE ARTIFACTS the successor itself writes — the session-registry
+# row and the `goal_status` row — and never on pane status or a fixed timer. `parse_pane_agent_status`
+# is retained for diagnostics only (it is what makes a report say WHY a handoff stalled); no control
+# flow may branch on it.
+
 # A freshly split pane is NOT immediately an available shell. Found live on 2026-07-28 (epic
 # #667): the split succeeded, `agent start` refused instantly with
 # `{"error":{"code":"agent_pane_busy","message":"agent target pane <id> is not an available
@@ -133,19 +172,29 @@ PANE_READY_ERROR_CODE = "agent_pane_busy"
 PANE_READY_ATTEMPTS = 15
 PANE_READY_DELAY_S = 2.0
 
-# Order is CAUSAL. The guard is armed before the successor is given work — a session handed a
-# resume prompt before its goal exists is an UNGUARDED run — and the registry row cannot appear
-# until the resume prompt has made it run `/rawgentic:switch`. Checking `project_switched`
-# before the resume prompt was even sent (the second revision) could only pass on stale evidence.
+# Order is CAUSAL, and #694 REORDERED it: `spawned -> project_switched -> goal_armed`, matching the
+# order the sends now happen in. Each rung is the durable artifact produced by the send before it.
+#
+# The previous order armed the guard FIRST (`spawned -> goal_armed -> project_switched`) on the
+# reasoning that a session handed work before its goal exists is an UNGUARDED run. That reasoning is
+# answered rather than discarded: the predecessor is not retired until the LAST rung passes, so
+# "work begins unguarded" never coincides with "the predecessor is already gone" — which was the
+# actual harm. What the old order cost was real, because the bind had to ride inside the resume
+# prompt as a prefix, and a prefix check can only ever proxy for "first" (#682's own docstring says
+# so). Binding in its own verified send makes the ordering structural instead.
+#
+# Two earlier revisions got this wrong in the opposite direction, so the constraint is worth
+# stating: `project_switched` must not be checked before the bind has actually been SENT, or it can
+# only pass on stale evidence.
 _VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
     {"step": "spawned",
      "artifact": "herdr pane get <pane> -> a non-empty agent_session.value"},
-    {"step": "goal_armed",
-     "artifact": "the successor transcript BELOW the pre-launch offset -> a goal_status "
-                 "attachment with met:false whose condition is the one we armed"},
     {"step": "project_switched",
      "artifact": "claude_docs/session_registry.jsonl BELOW the pre-launch offset -> a line "
                  "carrying the NEW session id"},
+    {"step": "goal_armed",
+     "artifact": "the successor transcript BELOW the pre-launch offset -> a goal_status "
+                 "attachment with met:false whose condition is the one we armed"},
 )
 
 # The mid-child ladder (#665). Six checks, still CAUSAL, and every artifact is a file on disk or
@@ -159,21 +208,27 @@ _VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
 # handed to `teardown_allowed` on the predecessor side would authorise a predecessor to retire
 # ITSELF after four checks, which is precisely the ownership inversion approach C was rejected
 # for (design §2).
+#
+# #694 reordered the four predecessor-owned rungs to `project_switched -> prompt_landed ->
+# goal_armed`, so the ladder again lists its rungs in the order the sends produce them (the bind is
+# now its own send, and `/goal` goes last). Order here is not cosmetic: `evaluate_verifications`
+# walks it and stops at the FIRST failure, so a ladder listing rungs out of send order reports the
+# wrong step as the thing that broke.
 _MID_CHILD_VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
     {"step": "spawned", "owner": "predecessor",
      "artifact": "herdr pane get <new> -> a non-empty agent_session.value, recorded into "
                  "handoff_pending.successor so the successor can later bind its own session id "
                  "to it (a session cannot discover its own pane id, so it cannot re-derive this)"},
-    {"step": "goal_armed", "owner": "predecessor",
-     "artifact": "the successor transcript BELOW the pre-launch offset -> a goal_status "
-                 "attachment with met:false whose condition is the one actually armed"},
+    {"step": "project_switched", "owner": "predecessor",
+     "artifact": "claude_docs/session_registry.jsonl BELOW the offset -> ONE line carrying the "
+                 "NEW session id AND the recorded project AND the recorded project_path"},
     {"step": "prompt_landed", "owner": "predecessor",
      "artifact": "the successor transcript BELOW the offset -> the generation-bound handoff "
                  "marker, matched as a plain SUBSTRING: a live probe found pasted prompts "
                  "persisted in queue-operation / attachment rows, not a type:user row"},
-    {"step": "project_switched", "owner": "predecessor",
-     "artifact": "claude_docs/session_registry.jsonl BELOW the offset -> ONE line carrying the "
-                 "NEW session id AND the recorded project AND the recorded project_path"},
+    {"step": "goal_armed", "owner": "predecessor",
+     "artifact": "the successor transcript BELOW the pre-launch offset -> a goal_status "
+                 "attachment with met:false whose condition is the one actually armed"},
     {"step": "position_rebuilt", "owner": "successor",
      "artifact": ".driver-state -> a rebuild receipt the successor writes under the state lock "
                  "carrying {generation, claimant, branch_observed, repo_root_observed, step, "
@@ -450,6 +505,32 @@ def parse_pane_agent_session(pane_get_stdout: str) -> str | None:
         value = sess.get("value")
         return value if isinstance(value, str) and value else None
     return None
+
+
+def parse_pane_agent_status(pane_get_stdout: str) -> str | None:
+    """Pull `agent_status` out of a `herdr pane get` response (#694).
+
+    Returns None when absent, empty, non-string, or unparseable. The caller treats None as
+    NOT SETTLED, never as a pass: a status that cannot be read is not evidence that the
+    successor can receive a paste, and what this gates (handing over work, then retiring the
+    predecessor) is irreversible.
+
+    Deliberately a sibling of `parse_pane_agent_session` over the same response rather than an
+    extra return value from it — the two are read at different moments (identity once, readiness
+    repeatedly on a poll) and every existing caller of that function keeps its exact contract.
+    """
+    try:
+        doc = json.loads(pane_get_stdout)
+    except (ValueError, TypeError):
+        return None
+    node = doc.get("result", doc) if isinstance(doc, dict) else None
+    if not isinstance(node, dict):
+        return None
+    pane = node.get("pane") if isinstance(node.get("pane"), dict) else node
+    if not isinstance(pane, dict):
+        return None
+    status = pane.get("agent_status")
+    return status if isinstance(status, str) and status else None
 
 
 def registry_has_session(registry_text: str, session_id: str, *,
@@ -733,7 +814,8 @@ def herdr_available(which=shutil.which) -> bool:
     return which("herdr") is not None
 
 
-def _poll_for(check, *, attempts: int, delay_s: float, sleeper) -> bool:
+def _poll_for(check, *, attempts: int, delay_s: float, sleeper,
+              max_wall_s: float | None = None, now=time.monotonic) -> bool:
     """Bounded wait for an on-disk artifact. Returns False when it never appears.
 
     A read error mid-poll is swallowed and retried, not fatal: a JSONL file being appended to
@@ -742,9 +824,22 @@ def _poll_for(check, *, attempts: int, delay_s: float, sleeper) -> bool:
     the first and last byte of a multi-byte character raises it, and it is a `ValueError`, so
     catching `OSError` alone let it escape and kill the poll (#611 Step-11 pass-3 Low 5).
     Exhausting the budget still FAILS CLOSED — what this gates (teardown) is irreversible.
+
+    The budget is bounded on BOTH axes (#694 cross-model review). An attempt count alone bounds
+    how many times `check` runs, not how long the poll can take: `check` does I/O, and nothing
+    caps how long one read may block. The nominal budget is `attempts x delay_s`; the wall clock
+    gets `POLL_WALL_CLOCK_SLACK` times that, so a healthy-but-slow poll still finishes while a
+    stalled one cannot outlive its own budget by an order of magnitude. The first attempt ALWAYS
+    runs — a deadline that could refuse before checking once would turn a slow clock into a
+    verdict.
     """
+    if max_wall_s is None:
+        max_wall_s = attempts * delay_s * POLL_WALL_CLOCK_SLACK
+    deadline = now() + max_wall_s
     for attempt in range(attempts):
         if attempt:
+            if now() >= deadline:
+                return False
             sleeper(delay_s)
         try:
             if check():
@@ -807,22 +902,34 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     teardown: bool = True, prompt_marker: str | None = None,
                     expected_project: str | None = None,
                     expected_project_path: str | None = None, steps=None,
-                    on_successor=None) -> dict:
+                    on_successor=None, now=time.monotonic) -> dict:
     """Execute the ordered handoff. Effects are injected so tests drive the whole sequence.
 
     THE ORDER, and why each position is load-bearing:
 
     1. split from an explicit anchor pane, 2. `agent start` (no goal — see the module
     docstring), 3. `agent wait --until idle`, 4. `pane get` for the successor's session id,
-    5. **capture the pre-launch artifact offsets**, 6. paste + submit the goal, 7. **verify the
-    guard actually armed**, 8. only then paste + submit the resume prompt, 9. verify the
-    successor switched project, 10. retire the predecessor LAST.
+    5. **capture the pre-launch artifact offsets**, 6. SEND 1 — `/rawgentic:switch <project>`
+    alone, 7. **verify the registry row appeared** (`project_switched`), 8. SEND 2 — the resume
+    prompt, 9. **verify it actually landed** (`prompt_landed`, when a marker was supplied),
+    10. SEND 3 — `/goal`, LAST, 11. **verify the guard armed** (`goal_armed`), 12. retire the
+    predecessor LAST.
 
-    Step 8 after step 7 is the fix for #611 Step-11 High 1: the second revision armed a goal and
-    stopped, so the successor sat guarded but idle — a goal only re-prompts a session that tries
-    to STOP, so the run stalled silently while the predecessor had already been retired.
-    Verifying before sending matters too: work handed to a session whose guard never armed is an
-    UNGUARDED run.
+    Each verify sits immediately after the send whose artifact it reads, so a failure names the
+    send that caused it. Sending the bind as its OWN turn (#694) is what makes "the bind happens
+    first" structural rather than a property of prompt wording; the prompt must therefore NOT
+    carry a bind, which is checked below.
+
+    `/goal` going last is measured, not assumed: pasted into a session actively mid-turn it still
+    produced its `goal_status` row while that turn was running, so it needs no idle window. The
+    older order armed the guard first to avoid handing work to an unguarded session; that concern
+    is met by step 12 instead — the predecessor is not retired until `goal_armed` passes, so an
+    unguarded successor never costs the run its predecessor. The residual unguarded window is
+    between send 2 and step 11, and it is bounded by exactly the thing that closes it.
+
+    Step 11's own history is why it is not merely "send and hope" (#611 Step-11 High 1): a
+    revision that armed a goal and stopped left the successor guarded but idle, because a goal
+    only re-prompts a session that tries to STOP.
 
     Ownership discipline (#611 Step-11 High 3). Once herdr has NAMED a pane it created, every
     failure path — a failed command, a failed verification, a validation exception, a runner
@@ -890,20 +997,36 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     if not isinstance(resume_prompt, str) or not resume_prompt.strip():
         raise LauncherError("resume_prompt is empty — a guarded successor with no work would "
                             "sit idle while the predecessor is retired")
-    # #682: the bind must be the successor's FIRST act, and that is now a precondition of the
-    # handoff rather than a wording convention. `project_switched` allows 120 s
-    # (SWITCH_POLL_ATTEMPTS x SWITCH_POLL_DELAY_S) for the registry row to appear and then CLOSES
-    # THE PANE, so a prompt that asks the successor to verify anything before binding buys a silent,
-    # expensive failure: a clean-looking `failed_step`, a closed pane, and the successor's completed
-    # work lost. Checked HERE with the other caller-mismatch validations, before the split, so a
-    # refusal never leaves a pane behind.
-    # `expected_project` is REQUIRED for this check, not optional. Step-11 finding: with it absent
-    # the guard fell back to "does the command have any argument", which accepts the English word
-    # after a bare directive — a guard that admits the very defect it exists to stop.
-    binds_first, why_not = _driver_lib().resume_prompt_binds_first(
-        resume_prompt, project=expected_project)
-    if not binds_first:
-        raise LauncherError(f"resume_prompt does not bind first: {why_not}")
+    # #694 — the bind is SEND 1, so the resume prompt must NOT carry it.
+    #
+    # This is the exact INVERSE of the #682 precondition it replaces, and the reversal is the point
+    # rather than a regression. #682 required the prompt to OPEN with `/rawgentic:switch <project>`
+    # and checked that as a prefix, which its own docstring is honest about being a proxy for
+    # "first" and not a proof of it. Sending the bind as its own turn — gated on the registry row
+    # the successor itself writes — makes the ordering STRUCTURAL, so the proxy has nothing left to
+    # do. #682 named this design correct and deferred it only because it reorders a ladder.
+    #
+    # A prompt that still opens with the bind is a caller that has not been updated. Sending it
+    # anyway would re-enter the switch skill in a session already bound, which at best wastes the
+    # successor's first turn and at worst sits in list mode. So it is refused loudly.
+    #
+    # `expected_project` stays REQUIRED — send 1 is built from it, and `project_switched` binds the
+    # registry row to it. An absent project would make the bind a bare directive, which is the
+    # #682 defect: the switch skill enters LIST MODE and waits for a human that no unattended
+    # successor has. Checked HERE with the other caller-mismatch validations, before the split, so
+    # a refusal never leaves a pane behind.
+    driver = _driver_lib()
+    if not driver.valid_project_name(expected_project):
+        raise LauncherError(
+            f"expected_project {expected_project!r} is not a valid project name — the bind is sent "
+            "as its own turn and is built from it, and a bare `/rawgentic:switch` enters the "
+            "switch skill's LIST MODE and waits for a human (#682)")
+    if driver.BIND_DIRECTIVE in resume_prompt:
+        raise LauncherError(
+            f"resume_prompt carries {driver.BIND_DIRECTIVE!r} — the launcher sends the bind as "
+            "SEND 1 of its own, gated on the session-registry row, so a prompt that also binds "
+            "would make the successor run the switch skill twice. Build it with "
+            "include_bind=False (#694)")
     if prompt_marker is not None:
         if not isinstance(prompt_marker, str) or not prompt_marker.strip():
             raise LauncherError("prompt_marker must be a non-empty string when supplied")
@@ -977,9 +1100,16 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                                             readiness_timeout_ms=readiness_timeout_ms)
         # The pane herdr just created needs a moment before it is an available shell (see
         # PANE_READY_* above — found live, not in tests). Wait for exactly that condition.
+        # Bounded on wall clock as well as on attempts (see POLL_WALL_CLOCK_SLACK). This loop is
+        # where the arithmetic actually bites: `runner` is `_default_runner`, whose timeout is
+        # 180 s, so 15 attempts is a 45-minute ceiling on what the comment above calls "a
+        # condition that resolves itself in about a second".
         started = False
+        start_deadline = now() + PANE_READY_ATTEMPTS * PANE_READY_DELAY_S * POLL_WALL_CLOCK_SLACK
         for attempt in range(PANE_READY_ATTEMPTS):
             if attempt:
+                if now() >= start_deadline:
+                    break
                 sleeper(PANE_READY_DELAY_S)
             proc = runner(start_argv)
             body = f"{getattr(proc, 'stdout', '') or ''}{getattr(proc, 'stderr', '') or ''}"
@@ -1041,6 +1171,77 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             out["failed_step"] = "transcript_baseline_unreadable"
             return out
 
+        # SEND 1 of 3 — the BIND, as its own verified turn (#694).
+        #
+        # This is the design #682 identified as correct and deferred: "the launcher should send the
+        # bind as its own verified turn — it already sends `/goal` that way — which removes the
+        # dependence on prose ordering entirely". It is no longer deferred, because the ordering it
+        # replaces was measured wrong. A separate send makes "the bind happens first" STRUCTURAL
+        # instead of a property of prompt wording that a prefix check could only ever proxy.
+        bind_argv, bind_keys = build_send_text_argv(
+            pane=new_pane, text=f"{_driver_lib().BIND_DIRECTIVE} {expected_project}")
+        for kind, argv in (("send_bind", bind_argv), ("send_bind_keys", bind_keys)):
+            proc = runner(argv)
+            record(kind, argv, proc)
+            if getattr(proc, "returncode", 1) != 0:
+                out["failed_step"] = "send_bind"
+                return out
+
+        # Gated on the REGISTRY ROW, never on a timer and never on `agent_status`. Measured live
+        # 2026-07-29: `agent_status` is not a usable synchronisation signal — it read `idle`
+        # immediately after a prompt was submitted, `done` while a turn was still running, and
+        # `working` on a session sitting at an empty input line. The registry row is a durable
+        # artifact the successor itself writes, which is why it is the gate.
+        def _project_switched() -> bool:
+            tail = _tail(read_text(registry_path), registry_baseline)
+            return tail is not None and registry_has_session(
+                tail, session_id, expected_project=expected_project,
+                expected_project_path=expected_project_path)
+
+        out["results"]["project_switched"] = _poll_for(
+            _project_switched,
+            attempts=SWITCH_POLL_ATTEMPTS, delay_s=SWITCH_POLL_DELAY_S, sleeper=sleeper)
+        if not out["results"]["project_switched"]:
+            # A successor that never binds is also the shape a permission-BLOCKED successor takes,
+            # so the failure names that possibility rather than leaving an operator guessing. The
+            # launcher cannot fix it: `--permission-mode` is refused by `_ALLOWED_CLAUDE_ARGS` as
+            # authority-bearing, so a non-blocking permission mode is a PRECONDITION of unattended
+            # handoff, not something this code can assert. Failing loudly here is the honest
+            # alternative to silently burning the rest of the sequence.
+            out["failed_step"] = "project_switched"
+            return out
+
+        # SEND 2 of 3 — the work. The prompt no longer has to carry the bind, because send 1 did.
+        prompt_argv, prompt_keys = build_send_text_argv(pane=new_pane, text=resume_prompt)
+        for kind, argv in (("send_resume_prompt", prompt_argv),
+                           ("send_resume_keys", prompt_keys)):
+            proc = runner(argv)
+            record(kind, argv, proc)
+            if getattr(proc, "returncode", 1) != 0:
+                out["failed_step"] = "send_resume_prompt"
+                return out
+
+        # `prompt_landed` (#665) — rc 0 on send-text proves TRANSPORT, not arrival.
+        if prompt_marker is not None:
+            def _prompt_landed() -> bool:
+                tail = _tail(read_text(transcript_path), transcript_baseline)
+                return tail is not None and transcript_has_marker(tail, prompt_marker)
+
+            out["results"]["prompt_landed"] = _poll_for(
+                _prompt_landed,
+                attempts=GOAL_POLL_ATTEMPTS, delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
+            if not out["results"]["prompt_landed"]:
+                out["failed_step"] = "prompt_landed"
+                return out
+
+        # SEND 3 of 3 — the GUARD, LAST, deliberately while the successor is already working.
+        #
+        # This is what the reordering rests on, and it is measured rather than assumed: on
+        # 2026-07-29 a `/goal` pasted into a session actively mid-turn (counting, `agent_status`
+        # `working`) produced its `goal_status met:false` row
+        # while that turn was still running. `/goal` therefore needs no idle window, which is why
+        # it can go last — and why the previous ordering's whole premise (arm first, because the
+        # guard must exist before work) bought nothing that mattered and cost the prompt.
         text_argv, keys_argv, truncated = build_send_text_goal_argv(
             pane=new_pane, goal_condition=goal_condition)
         out["truncated"] = truncated
@@ -1066,42 +1267,11 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             out["failed_step"] = "goal_armed"
             return out
 
-        # Only now — the guard is proven armed — is the successor given work.
-        prompt_argv, prompt_keys = build_send_text_argv(pane=new_pane, text=resume_prompt)
-        for kind, argv in (("send_resume_prompt", prompt_argv),
-                           ("send_resume_keys", prompt_keys)):
-            proc = runner(argv)
-            record(kind, argv, proc)
-            if getattr(proc, "returncode", 1) != 0:
-                out["failed_step"] = "send_resume_prompt"
-                return out
-
-        # `prompt_landed` (#665) — rc 0 on send-text proves TRANSPORT, not arrival. Checked
-        # before `project_switched` because the registry row is a downstream consequence of this
-        # prompt: verifying the consequence while the cause is unproven can only pass on stale
-        # evidence, which is the ordering defect #611's own ladder was rewritten to fix.
-        if prompt_marker is not None:
-            def _prompt_landed() -> bool:
-                tail = _tail(read_text(transcript_path), transcript_baseline)
-                return tail is not None and transcript_has_marker(tail, prompt_marker)
-
-            out["results"]["prompt_landed"] = _poll_for(
-                _prompt_landed,
-                attempts=GOAL_POLL_ATTEMPTS, delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
-            if not out["results"]["prompt_landed"]:
-                out["failed_step"] = "prompt_landed"
-                return out
-
-        def _project_switched() -> bool:
-            tail = _tail(read_text(registry_path), registry_baseline)
-            return tail is not None and registry_has_session(
-                tail, session_id, expected_project=expected_project,
-                expected_project_path=expected_project_path)
-
-        out["results"]["project_switched"] = _poll_for(
-            _project_switched,
-            attempts=SWITCH_POLL_ATTEMPTS, delay_s=SWITCH_POLL_DELAY_S, sleeper=sleeper)
-
+        # The unguarded window is now BETWEEN send 2 and this row, and it is bounded by exactly the
+        # thing that closes it: the predecessor is not retired until `goal_armed` has passed below,
+        # so a successor that never arms its guard never costs the run its predecessor. That is the
+        # honest answer to the objection the old ordering existed for — the harm was never "work
+        # begins unguarded", it was "work begins unguarded AND the predecessor is already gone".
         ok, failed, _ = evaluate_verifications(out["results"], steps=gate_steps)
         if not ok:
             out["failed_step"] = failed
@@ -2145,8 +2315,13 @@ def _cmd_handoff(args) -> int:
     # to loop in-session — `fresh_session_handoff` returns `single_session` for exactly that
     # case, and overriding it discards the answer (#611 Step-11 pass-3 High 2).
     mode = state.get("session_mode", "single-session")
+    # include_bind=False: this disposition feeds `perform_handoff`, which sends the bind as SEND 1
+    # of its own (#694). `resume_prompt_for_state` above keeps the default True — it serves the
+    # interactive hand-back and the `claude -p` fallback, which each deliver one prompt and so have
+    # nowhere else to put the bind.
     disposition = driver_lib.fresh_session_handoff(state, mode=mode,
-                                                  project=getattr(args, "project", None))
+                                                  project=getattr(args, "project", None),
+                                                  include_bind=False)
     if disposition.get("outcome") != "ready":
         print(f"no handoff: campaign disposition is {disposition.get('outcome')!r} "
               f"(session_mode {mode!r})")
@@ -2301,7 +2476,9 @@ def _cmd_mid_child_handoff(args) -> int:
     held: dict = {}
 
     def _open(state):
-        disposition = driver_lib.mid_child_handoff(state, position=position)
+        # include_bind=False — see `_cmd_handoff`: this prompt is delivered by `perform_handoff`,
+        # which binds in its own send.
+        disposition = driver_lib.mid_child_handoff(state, position=position, include_bind=False)
         held["disposition"] = disposition
         if disposition.get("outcome") != "ready":
             return None

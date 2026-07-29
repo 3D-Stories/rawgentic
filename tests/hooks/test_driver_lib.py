@@ -909,3 +909,71 @@ class TestTheResumePromptBindsFirst:
             if needle == "#682":
                 continue
             assert needle in prompt, needle
+
+
+class TestIncludeBindLeavesThePromptForTheHerdrPath:
+    """#694: the herdr handoff sends `/rawgentic:switch <project>` as its OWN turn, gated on the
+    session-registry row, so the prompt it delivers must not bind as well — a second bind makes the
+    successor run the switch skill twice.
+
+    This does NOT retract #682. The bind still leads on every path that delivers exactly ONE prompt
+    (the interactive hand-back and the `claude -p` fallback launch have no second send to put it in),
+    which is why `include_bind` defaults to True. The flag exists so the ONE caller with a second
+    send can use it.
+    """
+
+    def test_the_default_still_binds_first_on_both_builders(self):
+        """The regression that matters most: a default flipped to False would silently strand every
+        single-prompt path at an unbound session, which cannot Read under projects/ at all."""
+        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684, "project": "rawgentic"})
+        fresh = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE)["resume_prompt"]
+        assert dl.resume_prompt_binds_first(fresh, project="rawgentic")[0]
+        mid = dl.mid_child_handoff(
+            _st([_iss(665, "in_progress")], generation=4, extra={"epic": 667}),
+            position=_position())["resume_prompt"]
+        assert dl.resume_prompt_binds_first(mid, project=_position()["project"])[0]
+
+    def test_include_bind_false_removes_the_directive_entirely(self):
+        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684, "project": "rawgentic"})
+        prompt = dl.fresh_session_handoff(
+            s, mode=dl.FRESH_SESSION_MODE, include_bind=False)["resume_prompt"]
+        assert dl.BIND_DIRECTIVE not in prompt
+        assert not dl.resume_prompt_binds_first(prompt, project="rawgentic")[0]
+
+    def test_the_mid_child_marker_still_leads_without_the_bind(self):
+        """The marker is the `prompt_landed` evidence, so it must survive the bind's removal — and
+        it must still be FIRST, because that is what the launcher matches."""
+        s = _st([_iss(665, "in_progress")], generation=4, extra={"epic": 667})
+        prompt = dl.mid_child_handoff(
+            s, position=_position(), include_bind=False)["resume_prompt"]
+        assert prompt.startswith(dl.mid_child_marker(665, 5))
+        assert dl.BIND_DIRECTIVE not in prompt
+
+    @pytest.mark.parametrize("include_bind", [True, False])
+    def test_no_instruction_is_lost_either_way(self, include_bind):
+        """The two shapes share one body, so a reword cannot drop an instruction from only one of
+        them — which is exactly how the two builders drifted before."""
+        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684, "project": "rawgentic"})
+        prompt = dl.fresh_session_handoff(
+            s, mode=dl.FRESH_SESSION_MODE, include_bind=include_bind)["resume_prompt"]
+        for needle in ("durable state", "never in-context memory", "merged/closed child",
+                       "auth grant", "ERROR comment", "git fetch origin"):
+            assert needle in prompt, needle
+
+    def test_the_bindless_prompt_still_reads_as_a_sentence(self):
+        """`_lead_with_bind` capitalises the body when it is no longer a continuation of the bind
+        clause — a prompt opening with a stray lowercase fragment is a wording defect that reaches
+        a live successor."""
+        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684, "project": "rawgentic"})
+        prompt = dl.fresh_session_handoff(
+            s, mode=dl.FRESH_SESSION_MODE, include_bind=False)["resume_prompt"]
+        assert prompt[0].isupper(), prompt[:40]
+        assert not prompt.startswith("THEN")
+
+    def test_a_project_is_still_required_when_the_prompt_does_not_bind(self):
+        """The launcher builds SEND 1 from the project name, so dropping the bind from the prompt
+        must not drop the requirement — refusing at disposition time is what keeps `open_handoff`
+        from writing an unclaimable generation (#682 Step-11)."""
+        s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684}, project=None)
+        disp = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE, include_bind=False)
+        assert disp["outcome"] == "no_project", disp
