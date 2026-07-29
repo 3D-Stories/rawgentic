@@ -130,6 +130,18 @@ LAUNCH_MODES: dict[str, tuple[str, ...]] = {"fresh": ()}
 # because the waits are different in kind: `goal_status` is hook-written within seconds of the
 # paste, whereas the registry row needs the successor to run a whole `/rawgentic:switch` turn.
 GOAL_POLL_ATTEMPTS = 12
+# #700 — the unsubmitted-Enter recovery. `project_switched` proves the bind's ROW landed, not that
+# its TURN ended, so the resume prompt's Enter can be eaten by the still-running bind turn and the
+# paste then sits in the input box unsubmitted. Measured live 2026-07-29: the row appeared at ~24 s
+# while the pane was still cooking a ~50 s turn, so ONE nudge after the first ~18 s poll would still
+# have landed inside that turn. Four rounds of {bare Enter, re-poll} is ~90 s worst case, past a
+# first turn of the observed length, and costs nothing on a handoff that submits normally.
+PROMPT_NUDGE_ROUNDS = 4
+# A marker must be distinctive, not merely present in the prompt (#700 design review, High 1):
+# `transcript_has_marker` is a plain substring scan, so a short common word would match unrelated
+# tail content and pass `prompt_landed` before the prompt ever submitted. A length floor is a
+# heuristic and nothing more — the skill's own rule is a token unique to the handoff.
+PROMPT_MARKER_MIN_LEN = 8
 GOAL_POLL_DELAY_S = 1.5
 SWITCH_POLL_ATTEMPTS = 40
 SWITCH_POLL_DELAY_S = 3.0
@@ -449,6 +461,69 @@ def build_fallback_launch_argv(*, prompt: str, permission_mode: str,
 def build_pane_get_argv(pane: str) -> list[str]:
     validate_pane_id(pane)
     return ["herdr", "pane", "get", pane]
+
+
+def build_send_enter_argv(pane: str) -> list[str]:
+    """A BARE Enter — the #700 recovery for a paste that is intact but unsubmitted.
+
+    Deliberately not `build_send_text_argv`'s second element: that pair always re-sends the text
+    first, and re-sending is the one thing this recovery must never do. #696's rule is that a
+    collapsed paste is neither retried (double submission) nor truncated (silent corruption); the
+    correct action is to submit what is already there.
+    """
+    validate_pane_id(pane)
+    return ["herdr", "pane", "send-keys", pane, "Enter"]
+
+
+def build_pane_read_argv(pane: str) -> list[str]:
+    """Read the pane's VISIBLE viewport — used only to decide whether a nudge is safe.
+
+    This is not a gate on progress and must never become one: nothing in this module verifies a
+    handoff from scraped terminal output, because the artifacts a successor writes are the only
+    durable evidence. Its single job is the inverse — refusing an action when the screen shows
+    something an Enter must not touch.
+    """
+    validate_pane_id(pane)
+    return ["herdr", "pane", "read", pane, "--source", "visible", "--format", "text"]
+
+
+# Claude Code's own collapsed-input affordances, both confirmed live and documented in
+# docs/runbooks/herdr.md §7.1.2. They appear on SUCCESSFUL submissions too, so their presence does
+# NOT prove the buffer is unsubmitted — see `pane_shows_unsubmitted_paste` for what is actually
+# being claimed.
+_PASTE_AFFORDANCES: tuple[str, ...] = ("[Pasted text", "paste again to expand")
+# A permission prompt VETOES the nudge. These are user-visible strings rather than a machine
+# contract, so a future reword would cost this half of the check — which is why the positive
+# affordance requirement carries it too, and why every unknown resolves to "do not nudge".
+_PERMISSION_DIALOG_SIGNATURES: tuple[str, ...] = (
+    "Do you want to", "and don't ask again", "No, and tell Claude")
+
+
+def pane_shows_unsubmitted_paste(pane_read_stdout) -> tuple[bool, str]:
+    """Is it SAFE to send a bare Enter to this pane? Returns (safe, reason).
+
+    The honest claim is narrower than the name suggests, and #700's review is the reason it is
+    stated here rather than implied: this does not prove the buffer is unsubmitted. §7.1.2 records
+    that the same affordance shows on a successful submission. What it proves is that the pane is
+    displaying an input-box paste affordance and is NOT sitting on a permission dialog — which is
+    the question that matters, because an Enter accepts whatever is on screen and a bounded nudge
+    count is not a bound on privilege.
+
+    Fail-safe in every direction: an empty read, an unrecognised screen, a non-string, or any
+    dialog signature all return False. The cost of a false negative is a handoff that fails closed
+    exactly as it did before #700; the cost of a false positive is accepting a dialog nobody
+    authorised. The dialog check runs FIRST because a scrollback paste marker can still be visible
+    above a live dialog.
+    """
+    text = pane_read_stdout if isinstance(pane_read_stdout, str) else ""
+    for signature in _PERMISSION_DIALOG_SIGNATURES:
+        if signature in text:
+            return (False, f"a permission dialog is on screen ({signature!r}) — an Enter would "
+                           "accept it")
+    for affordance in _PASTE_AFFORDANCES:
+        if affordance in text:
+            return (True, f"the input box shows a collapsed paste ({affordance!r})")
+    return (False, "no collapsed-paste affordance on screen — the pane's state is unknown")
 
 
 def build_teardown_argv(pane: str) -> list[str]:
@@ -951,6 +1026,11 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
 
     `transcript_dir` is where `<session-id>.jsonl` lives (`~/.claude/projects/<slug>/`).
 
+    Step 9 carries the #700 recovery: if the marker never appears, the paste may be intact but
+    UNSUBMITTED because the bind's turn ate its Enter, so up to `PROMPT_NUDGE_ROUNDS` bare Enters
+    are sent — each one gated on `pane_shows_unsubmitted_paste`, never re-sending the text, and
+    every unknown pane state abandoning the recovery. It changes no order and no gate.
+
     #665 additions, all defaulting to the #611 behaviour when omitted: `prompt_marker` adds the
     `prompt_landed` check (the resume prompt is verified to have ARRIVED, not merely to have
     been transported with rc 0); `expected_project`/`expected_project_path` bind
@@ -1227,10 +1307,51 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                 tail = _tail(read_text(transcript_path), transcript_baseline)
                 return tail is not None and transcript_has_marker(tail, prompt_marker)
 
-            out["results"]["prompt_landed"] = _poll_for(
-                _prompt_landed,
-                attempts=GOAL_POLL_ATTEMPTS, delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
-            if not out["results"]["prompt_landed"]:
+            landed = _poll_for(_prompt_landed, attempts=GOAL_POLL_ATTEMPTS,
+                               delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
+
+            # #700 — the paste may be INTACT BUT UNSUBMITTED, which is a third state distinct from
+            # both success and transport failure. `project_switched` proves the bind's row landed,
+            # not that its turn ended, so the prompt's own Enter can be consumed by that turn.
+            # Found live on 2026-07-29 driving this sequence by hand; a single bare Enter recovered
+            # it with exactly one occurrence of the marker in the transcript and no double
+            # submission.
+            #
+            # This is recovery inside send 2, NOT a change to the send order or to any gate:
+            # `prompt_landed` still has to pass on the same artifact, and a nudge can only let a
+            # gate pass where the buffer was intact all along. Never a re-paste and never a
+            # truncation (#696).
+            for _ in range(PROMPT_NUDGE_ROUNDS):
+                if landed:
+                    break
+                # An Enter accepts whatever is on screen, so the pane's state is checked FIRST and
+                # anything other than a clear "safe" abandons the recovery — which leaves exactly
+                # the pre-#700 behaviour.
+                read_argv = build_pane_read_argv(new_pane)
+                proc = runner(read_argv)
+                if getattr(proc, "returncode", 1) != 0:
+                    record("pane_read", read_argv, proc,
+                           note="nudge SKIPPED: pane read failed, so the pane's state is unknown")
+                    break
+                safe, why = pane_shows_unsubmitted_paste(getattr(proc, "stdout", "") or "")
+                record("pane_read", read_argv, proc,
+                       note=f"nudge {'PERMITTED' if safe else 'SKIPPED'}: {why}")
+                if not safe:
+                    break
+                nudge_argv = build_send_enter_argv(new_pane)
+                proc = runner(nudge_argv)
+                record("send_resume_nudge", nudge_argv, proc,
+                       note="bare Enter — submit the intact paste, never re-send it (#700)")
+                if getattr(proc, "returncode", 1) != 0:
+                    # Named distinctly (design review): reporting this as `prompt_landed` would
+                    # blame the successor's timing for what is a failed herdr call.
+                    out["failed_step"] = "send_resume_nudge"
+                    return out
+                landed = _poll_for(_prompt_landed, attempts=GOAL_POLL_ATTEMPTS,
+                                   delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
+
+            out["results"]["prompt_landed"] = landed
+            if not landed:
                 out["failed_step"] = "prompt_landed"
                 return out
 
@@ -2636,6 +2757,71 @@ def _cmd_handoff(args) -> int:
     return 0 if out["ok"] else 4
 
 
+def _read_text_arg(inline: str | None, path: str | None, what: str) -> str:
+    """A text input that may arrive inline or as a file (#700).
+
+    Both a resume prompt and a real goal condition are routinely multiline — §7.2 of the herdr
+    runbook cites a 2847-char, 41-newline condition — and shell-quoting that from a skill body is
+    the hazard this repo already answers with `git commit -F`. Read VERBATIM: stripping could move
+    a marker that a caller put at the end of its prompt.
+    """
+    if inline is not None:
+        return inline
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError as exc:
+        raise LauncherError(f"cannot read the {what} from {path!r}: {exc}") from exc
+
+
+def _cmd_ad_hoc_handoff(args) -> int:
+    """#700 — the ad-hoc handoff: `perform_handoff` with no campaign behind it.
+
+    `_cmd_handoff` cannot serve this case. It opens a driver-state file as its first act, derives
+    the resume prompt from a campaign disposition, and gates on `fresh_session_available(...,
+    launcher_armed=...)`; an ad-hoc caller has none of those, so all three refuse before a pane is
+    ever split. This is therefore an argument adapter and nothing more — no sequencing, no gate and
+    no send of its own, which is what keeps #696's hand-rolled-send failure mode out of the skill
+    that calls it.
+    """
+    resume_prompt = _read_text_arg(args.resume_prompt, args.resume_prompt_file, "resume prompt")
+    condition = _read_text_arg(args.goal_condition, args.goal_condition_file, "goal condition")
+
+    marker = args.prompt_marker
+    # A literal newline is stored ESCAPED in the JSONL transcript, so a marker carrying one can
+    # never match `transcript_has_marker`'s substring scan — `prompt_landed` would burn its whole
+    # poll budget and fail closed after a pane, a session and an armed guard already existed.
+    # Checked here rather than reusing `_reject_control_chars`, whose message is about herdr argv.
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in marker):
+        raise LauncherError(
+            f"prompt marker {marker!r} contains a control character — a transcript stores a "
+            "newline escaped, so a multiline marker can never match the substring scan and "
+            "prompt_landed could not pass")
+    if len(marker.strip()) < PROMPT_MARKER_MIN_LEN:
+        raise LauncherError(
+            f"prompt marker {marker!r} is shorter than {PROMPT_MARKER_MIN_LEN} characters — the "
+            "marker is matched as a plain substring, so a short common word would also match "
+            "unrelated transcript content and pass prompt_landed before the prompt ever "
+            "submitted. Use a token unique to this handoff, e.g. '[handoff-700]'")
+
+    # `steps` is deliberately NOT passed: the canonical launch ladder is the only legal one for a
+    # launch handoff (`evaluate_verifications` refuses anything else), and defaulting says so.
+    out = perform_handoff(
+        anchor_pane=args.anchor_pane, cwd=args.cwd, project_root=args.project_root,
+        name=args.name, goal_condition=condition, resume_prompt=resume_prompt,
+        registry_path=args.registry, transcript_dir=args.transcript_dir,
+        prompt_marker=marker, expected_project=args.project,
+        expected_project_path=args.project_path,
+        # AC4 — `perform_handoff` defaults this to True, which is right for a campaign because a
+        # campaign HAS a predecessor to retire. An ad-hoc handoff hands off work, not the caller's
+        # own session, so it must be passed explicitly and default OFF.
+        teardown=bool(args.teardown_predecessor))
+    print(json.dumps({k: out[k] for k in
+                      ("ok", "results", "failed_step", "new_pane", "session_id",
+                       "truncated", "cleanup", "teardown_skipped")}, indent=2))
+    return 0 if out["ok"] else 4
+
+
 def _own_session_id(explicit: str | None, *, require_env: bool = False) -> str:
     """The caller's OWN Claude session id — the environment is authoritative.
 
@@ -2889,6 +3075,44 @@ def main(argv: list[str] | None = None) -> int:
     p_ho.add_argument("--no-teardown", action="store_true",
                       help="verify everything but leave the predecessor running")
 
+    # #700 — the ad-hoc handoff. Everything comes in DIRECTLY: no driver-state file to read, no
+    # campaign disposition to be `ready`, and no `--launcher-armed` to assert, because an ad-hoc
+    # caller is not a launcher. The skill `pane-handoff` is its only intended caller.
+    p_ah = sub.add_parser("ad-hoc-handoff",
+                          help="hand work to a fresh guarded successor pane, outside any "
+                               "campaign (#700)")
+    p_ah.add_argument("--anchor-pane", required=True,
+                      help="the pane to split FROM — the caller's own ($HERDR_PANE_ID)")
+    p_ah.add_argument("--name", required=True, help="herdr agent name for the successor")
+    p_ah.add_argument("--project", required=True,
+                      help="the rawgentic project NAME the successor must bind (not its path)")
+    # Required, unlike the campaign path's optional equivalent (#700 design review): it binds
+    # `project_switched` to the registry's own project_path as well as the name, and the caller
+    # reads both off its own registry row anyway, so optionality bought nothing.
+    p_ah.add_argument("--project-path", required=True,
+                      help="as the registry records it, e.g. ./projects/rawgentic")
+    p_ah.add_argument("--cwd", required=True)
+    p_ah.add_argument("--project-root", required=True)
+    p_ah.add_argument("--registry", required=True, help="claude_docs/session_registry.jsonl")
+    p_ah.add_argument("--transcript-dir", required=True,
+                      help="~/.claude/projects/<slug>/ — <session-id>.jsonl lives here")
+    ah_prompt = p_ah.add_mutually_exclusive_group(required=True)
+    ah_prompt.add_argument("--resume-prompt", help="the work, inline")
+    ah_prompt.add_argument("--resume-prompt-file",
+                           help="the work, read verbatim from a file (preferred: a real prompt "
+                                "is multiline)")
+    ah_goal = p_ah.add_mutually_exclusive_group(required=True)
+    ah_goal.add_argument("--goal-condition", help="the successor's guard, inline")
+    ah_goal.add_argument("--goal-condition-file",
+                         help="the successor's guard, read verbatim from a file")
+    p_ah.add_argument("--prompt-marker", required=True,
+                      help="a token UNIQUE to this handoff that appears in the prompt; it is what "
+                           "prompt_landed matches. Required because the check is skipped without "
+                           "one, and a skipped check is not a gate")
+    p_ah.add_argument("--teardown-predecessor", action="store_true", default=False,
+                      help="also close the anchor pane once every verification passes; OFF by "
+                           "default — an ad-hoc handoff hands off work, not your own session")
+
     # #665 — the mid-child pair. Two commands, run by two different sessions, because the
     # handover and the retirement have different owners: only the successor may retire.
     p_mc = sub.add_parser("mid-child-handoff",
@@ -2978,6 +3202,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.cmd == "handoff":
             return _cmd_handoff(args)
+        if args.cmd == "ad-hoc-handoff":
+            return _cmd_ad_hoc_handoff(args)
         if args.cmd == "mid-child-handoff":
             return _cmd_mid_child_handoff(args)
         if args.cmd == "retire-predecessor":
