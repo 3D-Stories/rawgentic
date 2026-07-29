@@ -85,6 +85,27 @@ SID = "abcd1234-0000-1111-2222-333344445555"
 FAST = {"RAWGENTIC_CONTEXT_EVERY_TURNS": "1"}
 
 
+@pytest.fixture(autouse=True)
+def _scrub_context_env(monkeypatch):
+    """Neutralize every `RAWGENTIC_CONTEXT_*` env twin for the whole module.
+
+    `_run` already scrubs these for the SUBPROCESS it spawns, but tests that drive `cmd_hook`
+    IN-PROCESS read the real `os.environ` — so the harness was inconsistent with itself, and a
+    developer who legitimately exports one of the twins got a failure the code did not have.
+
+    Found the hard way: setting `RAWGENTIC_CONTEXT_WINDOW=1000000` in `~/.claude/settings.json`
+    (the correct fix for a 1M-context host — env beats project config per key) made
+    `test_cmd_hook_releases_the_reservation_when_delivery_fails` fail deterministically, because its
+    in-process half then computed a 1M window and never reached the tier the test needs. CI never saw
+    it: CI exports none of these. A suite whose result depends on the developer's shell is not a gate.
+
+    Autouse and module-wide rather than per-test: any future in-process test would inherit the same
+    fragility, and the fixture costs nothing where the twin is absent.
+    """
+    for key in [k for k in os.environ if k.startswith("RAWGENTIC_CONTEXT_")]:
+        monkeypatch.delenv(key, raising=False)
+
+
 # --------------------------------------------------------------------------
 # T1 — usage totals and the reader (AC1, probe 2)
 # --------------------------------------------------------------------------
