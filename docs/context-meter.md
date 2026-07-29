@@ -16,12 +16,20 @@ window**.
 
 | Tier | Default | What the message says |
 |---|---|---|
-| advisory | **60%** | Start *looking* for a safe seam to break at. Do not stop mid-phase. |
-| directive | **70%** | Break **now**, at the next turn, seam or no seam — and here is what to capture. |
+| advisory | **60%** | Write the resume prompt **now**, while there is room to write a good one, and verify the delivery gates. Do not stop mid-phase. |
+| directive | **70%** | Break **now**, at the next turn, seam or no seam — here is what to capture, and run `/rawgentic:pane-handoff` to actually hand over. |
+
+Both tiers also carry one standing fact (#713): **a handoff SATISFIES a loop goal.** The work
+continues in a fresh session with a full window, so handing off does not stop the work — it
+relocates it. That line exists because a real run read its own `/goal` condition ("LOOP until DONE —
+do not stop") as "do not hand off", and burned a 1M window to ~98% instead of passing the work on.
+Nothing in the harness had told it otherwise. It is phrased as a fact rather than an order on
+purpose: text injected by a hook is treated as **data**, and a measured probe showed a model
+correctly refusing an injected imperative while still reading the state it carried.
 
 It never runs `/clear` itself and never blocks a turn. It tells the session; the session acts.
 
-## Why it is registered on two events
+## Why it is registered on three events
 
 `UserPromptSubmit` fires once per **user prompt**. In a long autonomous run — an epic auto-run, a
 headless WF2 — the operator sends one prompt and the session then works for hours. A
@@ -34,9 +42,37 @@ So the two cadence arms ride different events:
 |---|---|---|
 | 5 **turns** | `UserPromptSubmit` (the only place the turn counter increments) | interactive back-and-forth |
 | 5 **minutes** | `PostToolUse` (and `UserPromptSubmit`) | autonomous runs, where events are plentiful and prompts are not |
+| the **decision point** | `Stop` | a `/goal` loop, where the re-prompt is decided at `Stop` and a mid-turn reading is already stale |
 
 When the cadence has not elapsed, the hook reads one small JSON file, compares two integers and
 exits — it does **not** open the transcript. That matters, because it rides every tool call.
+
+### The `Stop` arm is deliberately narrower than the other two (#713)
+
+`/goal` is itself a session-scoped prompt-based `Stop` hook, so `Stop` is exactly where the decision
+to keep going is made. A mid-turn reading cannot be present at that moment; in the run that produced
+#713 the `Stop` hook fired ~10 times and not one firing carried a handoff instruction.
+
+But at `Stop` **every channel that reaches the model also continues the turn** — both
+`decision: "block"` and `hookSpecificOutput.additionalContext` keep the conversation going, and
+silence is the only way to let a turn end (measured: a canary emitted at `Stop` produced a second
+assistant turn for a one-prompt session). So this arm is gated three ways:
+
+| Gate | Why |
+|---|---|
+| `stop_hook_active` must be **true** | True means a hook-driven loop is already continuing, so speaking costs no turn it was not already taking. False means the session is handing control back to a human, and an emission would force a turn nobody asked for. |
+| **directive tier only** | At the check-in tier a forced turn buys nothing; at the act tier the extra turn *is* the handoff. |
+| exempt from the **cadence throttle** | `Stop` fires once per turn, so it is already cheap — and being throttled at the decision point is the exact mistiming this arm exists to fix. |
+
+Residual cost, stated rather than designed away: if `/goal`'s evaluator decides the goal is *met* on
+the same firing where this arm first delivers, the meter's own output becomes the sole continuation
+and forces **one** extra turn. It is bounded to at most one per session per effective window, it can
+only happen above the act threshold in a session that was already looping, and the turn it forces
+carries the handoff instruction — which at that point is the wanted behaviour.
+
+Deliveries are recorded per **channel** (`midturn` for the two mid-turn events, `stop` for this one),
+so the mid-turn arm speaking at 70% does not silence the decision-point delivery. Each tier is
+therefore delivered at most once mid-turn and at most once at `Stop`.
 
 ## The honest limit on the 5-minute arm
 

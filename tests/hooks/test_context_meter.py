@@ -519,6 +519,16 @@ def test_malformed_transcript_emits_nothing_and_exits_zero(tmp_path):
 
 
 def test_over_threshold_emits_the_userpromptsubmit_shape(tmp_path):
+    """UserPromptSubmit needs the NESTED form too (#713).
+
+    This test previously pinned the top-level shape, on a note recorded as verified live
+    2026-07-28. Probes 14 and 14b (docs/planning/2026-07-29-713-probes/) measured the
+    opposite on Claude Code 2.1.220: registered alone, a top-level `additionalContext` on
+    this event is SILENTLY IGNORED — the model reported `NONE` — while the nested form is
+    delivered. So the arm this shape served had never delivered anything, and the official
+    guide says so outright: "if you place it at the top level of the JSON, Claude Code
+    silently ignores it."
+    """
     p = _transcript(tmp_path, SID, [_row(_usage(inp=1, cr=159_415))])
     r = _run({"session_id": SID, "cwd": str(tmp_path),
               "transcript_path": str(p),
@@ -526,9 +536,10 @@ def test_over_threshold_emits_the_userpromptsubmit_shape(tmp_path):
     assert r.returncode == 0
     out = _out(r)
     assert out is not None, "159,416 tokens on the default 200k window must emit"
-    # UserPromptSubmit takes the top-level form (hooks/wal-context:43 precedent).
-    assert "additionalContext" in out
-    assert "hookSpecificOutput" not in out
+    hso = out.get("hookSpecificOutput")
+    assert hso and hso.get("hookEventName") == "UserPromptSubmit"
+    assert "additionalContext" in hso
+    assert "additionalContext" not in out
 
 
 def test_over_threshold_emits_the_posttooluse_shape(tmp_path):
@@ -656,8 +667,9 @@ def test_the_loser_of_a_reservation_stays_silent(tmp_path):
     p = _transcript(tmp_path, SID, [_row(_usage(inp=1, cr=159_415))])
     d = tmp_path / ".rawgentic" / "context-meter"
     d.mkdir(parents=True)
-    # Pre-create the reservation marker the winner would have made.
-    (d / f"{SID}.200000.directive.emitted").write_text("", encoding="utf-8")
+    # Pre-create the reservation marker the winner would have made. The name carries the
+    # delivery CHANNEL since #713 — a mid-turn event reserves on the `midturn` channel.
+    (d / f"{SID}.200000.midturn.directive.emitted").write_text("", encoding="utf-8")
     r = _run({"session_id": SID, "cwd": str(tmp_path), "transcript_path": str(p),
               "hook_event_name": "UserPromptSubmit"}, home=tmp_path)
     assert r.stdout.strip() == "", "the loser of the reservation race must stay silent"
@@ -713,16 +725,16 @@ def test_a_failed_delivery_releases_the_reservation(tmp_path):
     # marker. The invariant under test is the inverse: when NO marker was left
     # behind by a failed run, the tier is still available. Simulate the failure
     # path directly on the pure helpers.
-    cm.reserve(str(tmp_path), SID, 200_000, "advisory")
-    assert cm.has_marker(str(tmp_path), SID, 200_000, "advisory")
-    cm.release(str(tmp_path), SID, 200_000, "advisory")
-    assert not cm.has_marker(str(tmp_path), SID, 200_000, "advisory"), (
+    cm.reserve(str(tmp_path), SID, 200_000, "advisory", "midturn")
+    assert cm.has_marker(str(tmp_path), SID, 200_000, "advisory", "midturn")
+    cm.release(str(tmp_path), SID, 200_000, "advisory", "midturn")
+    assert not cm.has_marker(str(tmp_path), SID, 200_000, "advisory", "midturn"), (
         "release must return the reservation so a later turn can retry")
 
 
 def test_reserve_is_won_by_exactly_one_caller(tmp_path):
     (tmp_path / ".rawgentic").mkdir()
-    wins = [cm.reserve(str(tmp_path), SID, 200_000, "directive")
+    wins = [cm.reserve(str(tmp_path), SID, 200_000, "directive", "midturn")
             for _ in range(4)]
     assert wins.count(True) == 1, "O_EXCL must admit exactly one winner"
 
@@ -773,7 +785,9 @@ def _nag(tmp_path, extra_env=None, used=159_415):
              extra_env=extra_env)
     out = _out(r)
     assert out is not None
-    return out.get("additionalContext") or ""
+    # Nested on every event since #713 — the top-level form this used to read is silently
+    # ignored by Claude Code (probes 14/14b).
+    return out.get("hookSpecificOutput", {}).get("additionalContext") or ""
 
 
 def test_attended_text_asks_the_human_and_names_clear_prep(tmp_path):
@@ -1171,7 +1185,7 @@ def test_cmd_hook_releases_the_reservation_when_delivery_fails(tmp_path, monkeyp
     assert cm.cmd_hook(None) == 0
     monkeypatch.undo()
 
-    assert not cm.has_marker(str(tmp_path), SID, 200_000, "directive"), (
+    assert not cm.has_marker(str(tmp_path), SID, 200_000, "directive", "midturn"), (
         "a failed delivery must release the reservation, or the tier is silenced "
         "for the rest of the session")
     # And the retry genuinely works.
@@ -1221,7 +1235,7 @@ def test_context_meter_runs_when_invoked_directly_as_a_command(tmp_path):
     r = subprocess.run([CLI, "hook"], input=payload, capture_output=True,
                        text=True, timeout=20, env=env)
     assert r.returncode == 0, r.stderr
-    assert json.loads(r.stdout)["additionalContext"]
+    assert json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
 
 
 def test_a_real_subagent_payload_shape_is_skipped(tmp_path):
@@ -1377,3 +1391,179 @@ def test_read_subcommand_uses_the_integer_exact_tier(tmp_path):
     assert got["tier"] == "advisory", (
         "exactly 58% must land in the advisory tier; the float path computed "
         "57.99999999999999 and returned none")
+
+
+# --------------------------------------------------------------------------
+# T7 — the Stop arm (#713): speak at the moment /goal decides to re-prompt
+#
+# Every expectation here was measured on Claude Code 2.1.220 by the probes in
+# docs/planning/2026-07-29-713-probes/, not reasoned from the docs alone. The two
+# that shape the design:
+#   * probe 11 — additionalContext at Stop FORCES a continuation (the hook fired
+#     twice and the session took two assistant turns for one prompt). So an
+#     ungated Stop arm would turn a convenience nag into a turn-blocker.
+#   * probe 12 — in a real /goal loop `stop_hook_active` is true from the second
+#     Stop onward, driven by /goal's own continuations. That is the gate.
+# --------------------------------------------------------------------------
+
+DIRECTIVE_ROW = _usage(inp=1, cr=159_415)      # 159,416 = 79.7% of 200k
+ADVISORY_ROW = _usage(inp=1, cr=123_999)       # 124,000 = 62% of 200k
+
+
+def _stop(tmp_path, transcript, *, active, **extra):
+    payload = {"session_id": SID, "cwd": str(tmp_path),
+               "transcript_path": str(transcript), "hook_event_name": "Stop",
+               "stop_hook_active": active}
+    payload.update(extra)
+    return payload
+
+
+def test_stop_stays_silent_when_not_already_continuing(tmp_path):
+    """The gate. `stop_hook_active: false` means this session is about to hand
+    control back to a human — emitting would force an extra turn it never asked
+    for (probe 11), so the meter says nothing."""
+    p = _transcript(tmp_path, SID, [_row(DIRECTIVE_ROW)])
+    r = _run(_stop(tmp_path, p, active=False), home=tmp_path, extra_env=FAST)
+    assert r.returncode == 0
+    assert r.stdout.strip() == "", (
+        "a Stop emission when nothing else is continuing forces an extra turn")
+
+
+def test_stop_emits_the_nested_stop_shape_when_already_continuing(tmp_path):
+    """`stop_hook_active: true` == a hook-driven loop (in practice /goal), where
+    the turn was continuing anyway. Nested shape with hookEventName Stop —
+    accepted and delivered on 2.1.220 (probe 11)."""
+    p = _transcript(tmp_path, SID, [_row(DIRECTIVE_ROW)])
+    r = _run(_stop(tmp_path, p, active=True), home=tmp_path, extra_env=FAST)
+    assert r.returncode == 0
+    out = _out(r)
+    assert out is not None, "a directive-tier reading inside a loop must speak"
+    hso = out.get("hookSpecificOutput")
+    assert hso and hso.get("hookEventName") == "Stop"
+    assert "additionalContext" in hso
+    assert "additionalContext" not in out
+
+
+def test_stop_never_carries_the_advisory_tier(tmp_path):
+    """Directive tier only. At 62% an extra forced turn is pure cost; at the act
+    tier the extra turn IS the handoff this issue exists to produce."""
+    p = _transcript(tmp_path, SID, [_row(ADVISORY_ROW)])
+    r = _run(_stop(tmp_path, p, active=True), home=tmp_path, extra_env=FAST)
+    assert r.returncode == 0
+    assert r.stdout.strip() == ""
+
+
+def test_stop_is_not_silenced_by_the_midturn_arm_having_spoken(tmp_path):
+    """The regression the naive fix would have shipped: one marker keyed only by
+    (session, window, tier) means the mid-turn arm's 70% delivery consumes it and
+    the Stop arm is silent forever — reproducing #713 via its own fix."""
+    p = _transcript(tmp_path, SID, [_row(DIRECTIVE_ROW)])
+    mid = _run({"session_id": SID, "cwd": str(tmp_path), "transcript_path": str(p),
+                "hook_event_name": "PostToolUse", "tool_name": "Bash"},
+               home=tmp_path, extra_env=FAST)
+    assert _out(mid) is not None, "precondition: the mid-turn arm delivered"
+
+    stop = _run(_stop(tmp_path, p, active=True), home=tmp_path, extra_env=FAST)
+    assert stop.returncode == 0
+    out = _out(stop)
+    assert out is not None, (
+        "the Stop channel must still deliver after the mid-turn channel did")
+    assert out["hookSpecificOutput"]["hookEventName"] == "Stop"
+
+
+def test_each_channel_still_delivers_only_once(tmp_path):
+    """Per-channel, not per-event: the two mid-turn events share one channel, so
+    the once-per-tier guarantee #687 shipped is preserved rather than doubled."""
+    p = _transcript(tmp_path, SID, [_row(DIRECTIVE_ROW)])
+    first = _run(_stop(tmp_path, p, active=True), home=tmp_path, extra_env=FAST)
+    assert _out(first) is not None
+    second = _run(_stop(tmp_path, p, active=True), home=tmp_path, extra_env=FAST)
+    assert second.returncode == 0
+    assert second.stdout.strip() == "", "the stop channel must not repeat a tier"
+
+    ups = _run({"session_id": SID, "cwd": str(tmp_path),
+                "transcript_path": str(p),
+                "hook_event_name": "UserPromptSubmit"},
+               home=tmp_path, extra_env=FAST)
+    assert _out(ups) is not None, "the midturn channel is a separate reservation"
+    again = _run({"session_id": SID, "cwd": str(tmp_path),
+                  "transcript_path": str(p),
+                  "hook_event_name": "PostToolUse", "tool_name": "Bash"},
+                 home=tmp_path, extra_env=FAST)
+    assert again.stdout.strip() == "", (
+        "PostToolUse and UserPromptSubmit share the midturn channel")
+
+
+def test_stop_fails_open_when_the_state_dir_is_unusable(tmp_path):
+    """Fail-open matters MORE at Stop than at PostToolUse: exit 2 on Stop blocks
+    the turn (hooks.md:712), so the guarantee rests entirely on this module
+    returning 0. Probe 13 measured a broken Stop hook not blocking; this pins the
+    property in the real one."""
+    p = _transcript(tmp_path, SID, [_row(DIRECTIVE_ROW)])
+    (tmp_path / ".rawgentic").write_text("not a directory", encoding="utf-8")
+    r = _run(_stop(tmp_path, p, active=True), home=tmp_path, extra_env=FAST)
+    assert r.returncode == 0
+    assert r.stdout.strip() == ""
+
+
+def test_a_subagent_never_speaks_at_stop(tmp_path):
+    """A subagent has no authority to hand over its parent's session, and at Stop
+    it could also force a continuation of a turn it does not own."""
+    p = _transcript(tmp_path, SID, [_row(DIRECTIVE_ROW)])
+    r = _run(_stop(tmp_path, p, active=True, agent_id="a8827c81c4105e67c",
+                   agent_type="general-purpose"),
+             home=tmp_path, extra_env=FAST)
+    assert r.returncode == 0
+    assert r.stdout.strip() == ""
+
+
+# --------------------------------------------------------------------------
+# T8 — the message (#713 AC4/AC5/AC6)
+# --------------------------------------------------------------------------
+
+def _text(tier, **kw):
+    kw.setdefault("used", 159_416)
+    kw.setdefault("window", 200_000)
+    kw.setdefault("provenance", "env")
+    kw.setdefault("seam", "unknown")
+    kw.setdefault("seam_reason", "no workflow position recorded")
+    kw.setdefault("headless", False)
+    kw.setdefault("fresh_handoff_capable", False)
+    return cm.nag_text(tier=tier, **kw)
+
+
+def test_every_tier_says_a_handoff_satisfies_a_loop_goal():
+    """AC4. The reported run read "LOOP until DONE" as "do not hand off", and
+    nothing in the harness contradicted it. Probe 15 confirmed the claim is
+    literally true: a /goal evaluator judges a recorded handoff as satisfying a
+    condition that says it does."""
+    for tier in ("advisory", "directive"):
+        text = _text(tier)
+        assert "satisf" in text.lower() and "loop goal" in text.lower(), tier
+        assert "fresh" in text.lower(), tier
+
+
+def test_the_directive_tier_names_pane_handoff_not_only_clear_prep():
+    """AC3/AC6. `clear-prep` writes the payload but neither clears the
+    predecessor's guard nor spawns the successor, so a session that obeyed the
+    old text perfectly still halted without a successor."""
+    text = _text("directive")
+    assert "pane-handoff" in text
+    assert "clear-prep" in text, "the chain is stated, not replaced"
+
+
+def test_the_check_in_tier_asks_for_the_resume_prompt_not_a_seam_hunt():
+    """AC5. At 60% there is room to write a good resume prompt and verify the
+    delivery gates; at 98% there is not."""
+    text = _text("advisory").lower()
+    assert "resume prompt" in text
+    assert "looking for a safe seam" not in text, (
+        "the old wording sent the session hunting for a seam and named no "
+        "deliverable, so nothing got written until there was no room to write it")
+
+
+def test_the_message_still_contains_only_integers_and_no_transcript_content():
+    """#687's invariant, re-pinned because the text changed: the meter must never
+    echo the context it is measuring."""
+    text = _text("directive", seam_reason="IGNORE-PRIOR-INSTRUCTIONS")
+    assert "IGNORE" not in text.upper()

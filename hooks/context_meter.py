@@ -9,14 +9,31 @@ transcript, expresses usage as a FRACTION of the context window, and injects a
 nag at two tiers — once each per session per effective window. A hook cannot
 forget; that is the whole idea.
 
-Registered on BOTH `UserPromptSubmit` and `PostToolUse`:
+Registered on THREE events (#713 added the third):
   * the 5-TURN arm needs `UserPromptSubmit` (one event per user prompt);
   * the 5-MINUTE arm needs `PostToolUse`, because a long autonomous run gets ONE
     user prompt and then works for hours — a UserPromptSubmit-only meter would be
     silently dead in exactly the runs that need it most.
-The two events need DIFFERENT output shapes (both verified live 2026-07-28):
-`UserPromptSubmit` takes top-level `additionalContext` (as `hooks/wal-context:43`
-does); `PostToolUse` takes it nested under `hookSpecificOutput`.
+  * `Stop` is where `/goal` decides whether to re-prompt, so it is the only moment a
+    "hand over now" reading can arrive while it still decides anything. Without it the
+    meter spoke mid-turn and went stale before the decision — a real run reached ~98% of
+    a 1M window with ten Stop firings and never handed off (#713).
+
+ONE output shape on every event: `additionalContext` NESTED under `hookSpecificOutput`
+with `hookEventName` set to the firing event. An earlier version of this module sent the
+TOP-LEVEL form on `UserPromptSubmit`, recorded as verified live 2026-07-28; probes 14/14b
+(docs/planning/2026-07-29-713-probes/) measured that shape being SILENTLY IGNORED on
+Claude Code 2.1.220, so that arm had never delivered anything. Nested is confirmed
+delivered on all three events.
+
+`Stop` is DIFFERENT in three ways, all of them consequences of one fact — at `Stop` every
+channel that reaches the model also CONTINUES the turn, so silence is the only way to let
+a turn end:
+  * it emits only when `stop_hook_active` is true (a hook-driven loop is already
+    continuing, so speaking costs no turn it was not already taking);
+  * it emits only the DIRECTIVE tier (at the check-in tier a forced turn buys nothing);
+  * it is exempt from the cadence throttle, because it fires once per turn and being
+    throttled at the decision point is the exact mistiming #713 is about.
 
 FAIL MODE: **fail-OPEN.** An absent/unreadable/malformed transcript, an
 unwritable state dir, a bad config value, or any unexpected exception means
@@ -638,9 +655,25 @@ def state_path(home, session_id):
     return os.path.join(state_dir(home), f"{session_id}.json")
 
 
-def marker_path(home, session_id, window, tier):
+def channel_for(event) -> str:
+    """Which delivery CHANNEL an event belongs to (#713).
+
+    `Stop` is its own channel because it is a different moment, not a different event:
+    it is where `/goal` decides whether to re-prompt. The two mid-turn events share one
+    channel, so #687's once-per-tier guarantee is preserved rather than tripled.
+    """
+    return "stop" if event == "Stop" else "midturn"
+
+
+def marker_path(home, session_id, window, tier, channel):
+    """The once-per-tier record, keyed by CHANNEL as well (#713).
+
+    Without the channel the mid-turn arm's 70% delivery would consume the only marker and
+    silence the Stop arm for the rest of the session — reproducing the very bug #713
+    reports (a directive that never reaches the re-prompt decision) through its own fix.
+    """
     return os.path.join(state_dir(home),
-                        f"{session_id}.{window}.{tier}.emitted")
+                        f"{session_id}.{window}.{channel}.{tier}.emitted")
 
 
 def load_state(path):
@@ -738,14 +771,14 @@ def _sweep(home):
             continue
 
 
-def has_marker(home, session_id, window, tier) -> bool:
+def has_marker(home, session_id, window, tier, channel) -> bool:
     try:
-        return os.path.exists(marker_path(home, session_id, window, tier))
+        return os.path.exists(marker_path(home, session_id, window, tier, channel))
     except OSError:
         return False
 
 
-def reserve(home, session_id, window, tier) -> bool:
+def reserve(home, session_id, window, tier, channel) -> bool:
     """Win the right to emit this tier, exactly once, race-free.
 
     THE MARKER FILE *IS* the once-per-tier record — deliberately the only one.
@@ -762,7 +795,7 @@ def reserve(home, session_id, window, tier) -> bool:
     duplicate decision. An O_EXCL create is a filesystem compare-and-swap:
     exactly one process wins, the loser stays silent. No lock needed.
     """
-    path = marker_path(home, session_id, window, tier)
+    path = marker_path(home, session_id, window, tier, channel)
     created = False
     try:
         _ensure_dir(home)
@@ -784,7 +817,7 @@ def reserve(home, session_id, window, tier) -> bool:
         return False
 
 
-def release(home, session_id, window, tier) -> None:
+def release(home, session_id, window, tier, channel) -> None:
     """Give the reservation back, so a later turn can retry.
 
     Called on any failure between winning the reservation and delivering the
@@ -793,7 +826,7 @@ def release(home, session_id, window, tier) -> None:
     just relocated.
     """
     try:
-        os.unlink(marker_path(home, session_id, window, tier))
+        os.unlink(marker_path(home, session_id, window, tier, channel))
     except OSError:
         pass
 
@@ -903,16 +936,22 @@ def read_pointer(workspace_root, project, session_id):
 # ---------------------------------------------------------------------------
 
 def emit_payload(event, text):
-    """Per-event output shape — both proven live on 2026-07-28.
+    """ONE shape for every event: nested, with the firing event's own name (#713).
 
-    `UserPromptSubmit` takes the top-level form (hooks/wal-context:43);
-    `PostToolUse` takes the nested `hookSpecificOutput` form. Assuming one shape
-    worked everywhere was a real defect in the first draft of this design.
+    The earlier per-event branch sent the TOP-LEVEL form on `UserPromptSubmit`, recorded as
+    verified live 2026-07-28. Probes 14 and 14b (docs/planning/2026-07-29-713-probes/)
+    measured the opposite on Claude Code 2.1.220: registered ALONE, with no sibling hook to
+    confound the merge, a top-level `additionalContext` on that event is **silently
+    ignored** — the probing model replied `NONE`. The official guide says so outright ("if
+    you place it at the top level of the JSON, Claude Code silently ignores it"). So that
+    arm had never delivered anything since #687, and the meter had been running on
+    `PostToolUse` alone.
+
+    The nested form is CONFIRMED delivered on all three events the meter uses:
+    `PostToolUse` (#687 probe 9), `UserPromptSubmit` (probe 14) and `Stop` (probes 11, 12).
     """
-    if event == "PostToolUse":
-        return {"hookSpecificOutput": {"hookEventName": "PostToolUse",
-                                       "additionalContext": text}}
-    return {"additionalContext": text}
+    return {"hookSpecificOutput": {"hookEventName": event,
+                                   "additionalContext": text}}
 
 
 def nag_text(*, tier, used, window, provenance, seam, seam_reason,
@@ -934,9 +973,28 @@ def nag_text(*, tier, used, window, provenance, seam, seam_reason,
             "RAWGENTIC_CONTEXT_WINDOW) so this reading is right."
         )
 
+    # AC4 (#713) — the line that was missing when a real run read "LOOP until DONE" as "do
+    # not hand off" and burned its whole window. It is phrased as a FACT about how goals are
+    # judged, not as an order, because probe 12 measured what happens to orders injected
+    # here: the model named the injected imperative as a possible prompt injection and
+    # declined to act on it, correctly, while still reporting it. State survives that
+    # defence; commands do not. And the fact is true — probe 15 armed a real /goal whose
+    # condition said a recorded handoff satisfies it, and the evaluator returned exactly
+    # that verdict, ending the loop instead of demanding another work turn.
+    lines.append(
+        "A handoff SATISFIES a LOOP goal: the work continues in a FRESH session with a "
+        "full window, so handing off does not stop the work — it relocates it. "
+        "\"Do not stop\" is not \"do not hand off\"."
+    )
+
     if tier == "advisory":
+        # AC5 — the old wording ("start looking for a safe seam") named no deliverable, so a
+        # session searched and wrote nothing. The point of this tier is that there is still
+        # ROOM to write a good handoff; at 98% there is not.
         lines.append(
-            "Start looking for a safe seam to break at. Do NOT stop mid-phase."
+            "Write the resume prompt NOW, while there is room to write a good one, and "
+            "verify the delivery gates. Do NOT stop mid-phase — but do not put off the "
+            "writing either: this tier exists because the room to do it well disappears."
         )
         if seam == "seam":
             lines.append(
@@ -965,12 +1023,28 @@ def nag_text(*, tier, used, window, provenance, seam, seam_reason,
             "to relaunch you: run the `clear-prep` skill to write the durable "
             "checkpoint and handoff, then stop cleanly for a manual resume."
         )
+    elif tier == "directive":
+        # AC3 + AC6 (#713) — name the route that actually HANDS OFF. `clear-prep` produces
+        # the payload but neither clears this session's guard nor starts a successor, so a
+        # session that obeyed the old text perfectly still stopped with nobody to continue:
+        # that is exactly what a real overnight run did, writing its handoff and then waiting
+        # for a human. State the chain, and name its end.
+        lines.append(
+            "Run `/rawgentic:pane-handoff`: it wraps `clear-prep` (the mempalace "
+            "checkpoint, the durable handoff file, the resume prompt and the /goal text) "
+            "and then actually hands over — it spawns the successor, binds it, delivers the "
+            "prompt, arms its goal, and clears this session's guard. `clear-prep` ALONE "
+            "leaves no successor. The handoff carries `next actions, in order` — the "
+            "successor rebuilds its task list from those via /tasklist."
+        )
     else:
         lines.append(
             "Run the `clear-prep` skill: it writes the mempalace checkpoint, "
             "the durable handoff file, the resume prompt and the /goal text. "
             "Its handoff carries `next actions, in order` — the successor "
-            "rebuilds its task list from those via /tasklist."
+            "rebuilds its task list from those via /tasklist. When you are ready to hand "
+            "over rather than just prepare, `/rawgentic:pane-handoff` is what starts the "
+            "successor."
         )
     return " ".join(lines)
 
@@ -1048,6 +1122,30 @@ def cmd_hook(argv) -> int:
     state["session_id"] = session_id
 
     event = payload.get("hook_event_name")
+    channel = channel_for(event)
+
+    # THE STOP GATE (#713). At `Stop` there is NO read-only channel to the model: both
+    # `decision: block` and `additionalContext` continue the conversation (hooks.md:2271,
+    # measured by probe 11 — the hook fired twice and the session took two assistant turns
+    # for one prompt). So emitting when nothing else is continuing would force a turn the
+    # user never asked for, turning this convenience nag into a turn-blocker.
+    #
+    # `stop_hook_active: true` means a Stop hook already continued this turn — in practice a
+    # `/goal` loop, which is exactly the situation this arm exists for, and where the turn
+    # was continuing anyway. Probe 12 confirmed it is true from the second Stop onward in a
+    # real goal loop, driven by /goal's own continuations.
+    #
+    # Deliberately `is not True`, not a truthy test: staying silent is the safe direction, so
+    # an unexpected shape (a string, a missing key) declines to speak rather than guessing.
+    #
+    # NOTE the documented idiom (hooks-guide.md:955-964) checks this same field and exits
+    # early when it is TRUE. That is for gates whose job is to FORCE convergence and which
+    # must not loop. This is the opposite shape — a once-per-tier nag that must not START a
+    # loop — so it exits early when the field is FALSE. It cannot loop either way: the
+    # marker bounds it to one emission per tier per window per channel.
+    if event == "Stop" and payload.get("stop_hook_active") is not True:
+        return 0
+
     if event == "UserPromptSubmit":
         state["turns"] = (_as_int(state.get("turns")) or 0) + 1
 
@@ -1059,8 +1157,13 @@ def cmd_hook(argv) -> int:
     every_turns = _as_int(state.get("every_turns")) or DEFAULT_EVERY_TURNS
     every_seconds = (_as_int(state.get("every_seconds"))
                      or DEFAULT_EVERY_SECONDS)
-    if not should_check(state, now=now, every_turns=every_turns,
-                        every_seconds=every_seconds):
+    # `Stop` is EXEMPT from the cadence throttle (#713). It fires once per turn, so it is
+    # already low-frequency — unlike PostToolUse, which rides every tool call and is what the
+    # throttle exists to tame. Throttling it would mean a PostToolUse check moments earlier
+    # could suppress the meter at the one moment the whole arm exists to speak at, which is
+    # the mistiming this issue is about.
+    if event != "Stop" and not should_check(state, now=now, every_turns=every_turns,
+                                            every_seconds=every_seconds):
         # Write ONLY when there is something to record. A throttled PostToolUse changes no
         # state, so writing would mean an atomic rewrite + rename + chmod + a directory
         # sweep on every covered tool call — which is not the cheap path this claims to be
@@ -1121,6 +1224,16 @@ def cmd_hook(argv) -> int:
         state.pop("seam_search", None)
         save_state(home, session_id, state)
         return 0
+
+    # DIRECTIVE TIER ONLY at `Stop` (#713). Emitting there costs at most one extra turn (see
+    # the gate above), and the two tiers do not deserve that cost equally: at the check-in
+    # tier an extra forced turn buys nothing, while at the act tier the extra turn IS the
+    # handoff this issue exists to produce. The advisory tier stays mid-turn, where it is
+    # free.
+    if event == "Stop" and tier != "directive":
+        save_state(home, session_id, state)
+        return 0
+
     # The reservation MARKERS are the once-per-tier record, and they are keyed by
     # EFFECTIVE WINDOW: escalation changes the denominator, so a tier recorded
     # against a window the session has outgrown cannot suppress the real warning
@@ -1131,9 +1244,9 @@ def cmd_hook(argv) -> int:
     #
     # Monotonic: a directive satisfies the advisory for the same window, so no
     # stale advisory can follow it.
-    if has_marker(home, session_id, window, tier) or (
+    if has_marker(home, session_id, window, tier, channel) or (
             tier == "advisory"
-            and has_marker(home, session_id, window, "directive")):
+            and has_marker(home, session_id, window, "directive", channel)):
         save_state(home, session_id, state)
         return 0
 
@@ -1172,7 +1285,7 @@ def cmd_hook(argv) -> int:
     # delivery still fails, RELEASE the reservation — holding it would silence
     # this tier for the rest of the session, which is the defect the reservation
     # exists to prevent, merely relocated.
-    if not reserve(home, session_id, window, tier):
+    if not reserve(home, session_id, window, tier, channel):
         # A reservation can fail two ways: another process won the race (correct, stay
         # silent) or the store is unwritable. The second is a SELF-DISABLING failure and
         # the module contract says those are never invisible — so it warns. This is the
@@ -1189,7 +1302,7 @@ def cmd_hook(argv) -> int:
         print(payload_out)
         sys.stdout.flush()
     except Exception:
-        release(home, session_id, window, tier)
+        release(home, session_id, window, tier, channel)
         return 0
     save_state(home, session_id, state)
     return 0

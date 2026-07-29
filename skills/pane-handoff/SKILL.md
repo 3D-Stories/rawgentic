@@ -1,6 +1,6 @@
 ---
 name: pane-handoff
-description: Pass this session's work off to a fresh sibling pane — spawn it, bind it, give it the prompt, arm its goal, all gated. Use whenever the user asks to pass off, pass over, hand off or send work to another pane or session, however phrased — "pass off session in new herdr pane", "do the herdr session pane pass off", "passoff", "pass the session/prompt/goal over", "pass everything over", "send all the information over to a new pane", "send this over to a new pain", "hand it over", "hand off", "handoff", "start a new herdr pane and fix the bug", "create a new pane and resume with the prompt and goal", "clear the context into a new session and pass in the prompt and the goal", "use the herder rawgentic skill", "resume in a new pane". Dictated variants are the same request — "herder" means herdr and "pain" means pane. ALSO offer it unprompted when the context-meter reminder reaches its directive tier, because that is when the user expects the pass-off to happen. Requires HERDR_ENV=1.
+description: Pass this session's work off to a fresh sibling pane — spawn it, bind it, give it the prompt, arm its goal, each step verified against the successor's own artifacts. Use whenever the user asks to pass off, pass over, hand off or send work to another pane or session, however phrased — "pass off session in new herdr pane", "do the herdr session pane pass off", "passoff", "pass the session/prompt/goal over", "pass everything over", "send all the information over to a new pane", "send this over to a new pain", "hand it over", "hand off", "handoff", "start a new herdr pane and fix the bug", "create a new pane and resume with the prompt and goal", "clear the context into a new session and pass in the prompt and the goal", "use the herder rawgentic skill", "resume in a new pane". Dictated variants are the same request — "herder" means herdr and "pain" means pane. ALSO RUN it unprompted — do not offer, do not ask "say the word" — when the context-meter reminder reaches its directive tier, because that is when the pass-off is expected to happen and there may be nobody awake to answer (owner decision 2026-07-29, #713). Requires HERDR_ENV=1.
 argument-hint: optional — a resume-prompt file path, or nothing (the skill will ask what to hand over)
 ---
 
@@ -21,6 +21,17 @@ successor's own on-disk artifacts prove each one arrived.
 
 **It does not close your pane** unless you explicitly ask. Handing off work is not the same as
 retiring yourself.
+
+## Do not ask permission to hand off (owner decision 2026-07-29, #713)
+
+When the context meter reaches its directive tier, **run this skill — do not offer to run it.**
+"Say the word and I'll hand off" is a failure: a real overnight run wrote its handoff file, asked,
+and then sat idle until morning because nobody was awake to answer. The successor pane is cheap and
+its own guard makes it recoverable; a stalled campaign is not.
+
+Assembling the four inputs may still require a judgment call, and the single ambiguity question
+below (retire this pane vs keep it) still stands. Neither is permission to hand off — they are
+questions about *which* handoff. Ask those if you must; never ask *whether*.
 
 ## When NOT to use it
 
