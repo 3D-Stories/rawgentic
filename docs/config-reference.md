@@ -1173,6 +1173,15 @@ OPTIONAL block tuning the context-pressure trigger (`hooks/context_meter.py`, #6
 documented defaults. Five keys, each with an env twin that takes precedence; precedence is
 **env → project config → default**, per key.
 
+**`/rawgentic:setup` configures the first three** (`windowSize`, `checkInPercent`, `actPercent`) at
+Step 2l (#701) — hand-editing this file is no longer the only route. Setup validates through
+`python3 hooks/context_meter.py validate-config --json '<block>'`, which enforces the same rules the
+hook does (each percentage a whole number in 1..99, `checkInPercent` at least `MIN_TIER_GAP_PCT`
+below `actPercent`, `windowSize` a positive integer), so setup cannot stage a block the hook would
+discard. Declining leaves the section **absent**, deliberately — a written-out default is
+indistinguishable from a deliberate choice on the next read. `everyTurns` and `everySeconds` remain
+hand-edited here.
+
 ```json
 "contextMeter": { "windowSize": 1000000, "checkInPercent": 60, "actPercent": 70,
                   "everyTurns": 5, "everySeconds": 300 }
