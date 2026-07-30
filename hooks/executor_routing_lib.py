@@ -906,12 +906,15 @@ def dispatch_seat(
                  f"seat {seat!r} exhausted its chain on availability failures", retryable=True,
                  correlation_id=correlation_id, audit_path=str(audit.path)), final_obs)
     if fail is not None:
-        # a verified identity is NOT success (#733): the sync engine killed/observed this
-        # subprocess itself, so death evidence is positive by construction — retryable.
+        # a verified identity is NOT success (#733). Retryability derives from the FAILURE
+        # CLASS, not blanket-true (8a R2-H3): process-death/transport classes are positive
+        # death evidence (engine-observed); parse/identity/malformed classes are definite,
+        # potentially effectful failures (hermes encodes 4xx submit failures as parse_error
+        # with an explicit do-not-fall-back) — a retry must not be invited for those.
         return _attach_partial(
             _err(EXIT_AVAILABILITY, f"dispatch_{fail}",
                  f"seat {seat!r} final attempt failed ({fail}) — partial output preserved; "
-                 f"see partial_payload/raw_capture_path", retryable=True,
+                 f"see partial_payload/raw_capture_path", retryable=fail in _RETRYABLE_FAILS,
                  correlation_id=correlation_id, audit_path=str(audit.path)), final_obs)
     return {
         "ok": True, "exit": EXIT_OK, "action": "executor", "seat": seat,
@@ -1373,6 +1376,16 @@ def supervised_dispatch(
     # first, verdict precedence unchanged — enforcement > availability > ok).
     def _with_partial(res: dict) -> dict:
         return _attach_partial(res, obs) if obs is not None else res
+    # 8a R1-H1/R2-H1 (narrowed): an ATTESTED-WRONG identity is a billed breach and wins over
+    # the state verdict — but ONLY requested_actual_mismatch. identity_missing keeps the state
+    # verdict: the supervisor deliberately emits no-identity synthetic envelopes (parse_error)
+    # for suspicious deaths, and treating those as breaches would turn honest-death recovery
+    # into non-retryable enforcement.
+    pc = enforce.verify_post(obs) if obs is not None else None
+    if pc is not None and not pc.ok and pc.reason == "requested_actual_mismatch":
+        return _with_partial(_err(EXIT_ENFORCEMENT, pc.reason,
+                                  f"identity breach on supervised seat {seat!r}", retryable=pc.retryable,
+                                  correlation_id=ce, audit_path=audit_path))
     if state != "completed":
         retryable = state in ("timed_out", "exited_no_sentinel", "quota_paused")
         code = EXIT_AVAILABILITY if retryable else EXIT_INTERNAL
@@ -1383,7 +1396,7 @@ def supervised_dispatch(
     # an envelope with a wrong/missing identity is a NON-retryable enforcement failure; an
     # availability-shaped obs is exit 3.
     fail = enforce.contract.observation_process_failure(obs or {})
-    pc = enforce.verify_post(obs or {})
+    pc = pc if pc is not None else enforce.verify_post(obs or {})
     if not pc.ok:
         return _with_partial(_err(EXIT_ENFORCEMENT, pc.reason,
                                   f"identity breach on supervised seat {seat!r}", retryable=pc.retryable,
@@ -1495,13 +1508,20 @@ def resume_dispatch(
     # partial evidence rides on observation-bearing failures (rev-4 evaluation order).
     def _with_partial(res: dict) -> dict:
         return _attach_partial(res, obs) if obs is not None else res
+    # 8a R1-H1/R2-H1 (narrowed, mirror of supervised): attested-wrong identity wins over the
+    # state verdict; identity_missing keeps it (synthetic no-identity death envelopes).
+    pc = enforce.verify_post(obs) if obs is not None else None
+    if pc is not None and not pc.ok and pc.reason == "requested_actual_mismatch":
+        return _with_partial(_err(EXIT_ENFORCEMENT, pc.reason,
+                                  f"identity breach on resume seat {seat!r}",
+                                  retryable=pc.retryable, correlation_id=ce, audit_path=audit_path))
     if state != "completed":
         retryable = state in ("timed_out", "exited_no_sentinel", "quota_paused")
         code = EXIT_AVAILABILITY if retryable else EXIT_INTERNAL
         return _with_partial(_err(code, f"resume_{state}", f"resume seat {seat!r} ended in state {state!r}",
                                   retryable=retryable, correlation_id=ce, audit_path=audit_path))
     fail = enforce.contract.observation_process_failure(obs or {})
-    pc = enforce.verify_post(obs or {})
+    pc = pc if pc is not None else enforce.verify_post(obs or {})
     if not pc.ok:
         return _with_partial(_err(EXIT_ENFORCEMENT, pc.reason, f"identity breach on resume seat {seat!r}",
                                   retryable=pc.retryable, correlation_id=ce, audit_path=audit_path))
@@ -1829,7 +1849,10 @@ def recover_run(*, run_id: str, supervisor, snapshot, audit, routing, enforce,
                 # resume_dispatch's F9) — a mismatched child envelope must never enter the ledger.
                 child_cid = stamped.get("correlation_id")
                 exp_cid = corr_by_sid.get(a.record.session_name)
-                if child_cid is not None and exp_cid is not None and child_cid != exp_cid:
+                # 8a R2-H4: when the CHILD supplies a correlation it must match exactly, even
+                # when the recovery derived no expected value (legacy) — a non-null foreign
+                # correlation must never bypass the refusal just because exp_cid is None.
+                if child_cid is not None and child_cid != exp_cid:
                     entry["verify"] = (f"correlation_mismatch: child {child_cid!r} != recovery "
                                        f"{exp_cid!r} — foreign observation refused")
                     worst = max(worst, EXIT_ENFORCEMENT)
@@ -1865,6 +1888,16 @@ def recover_run(*, run_id: str, supervisor, snapshot, audit, routing, enforce,
                     if obs is not None:
                         _attach_partial(entry, obs)
             else:
+                # 8a R1-H1 (recover leg): a non-completed recovery entry keeps its availability
+                # verdict, but an ATTESTED-WRONG identity on its owned envelope is a billed
+                # breach (mismatch-only — identity_missing keeps the state verdict), and any
+                # owned envelope's partial evidence rides on the entry.
+                if obs is not None:
+                    pc_nc = enforce.verify_post(obs)
+                    if not pc_nc.ok and pc_nc.reason == "requested_actual_mismatch":
+                        entry["verify"] = pc_nc.reason
+                        worst = EXIT_ENFORCEMENT
+                    _attach_partial(entry, obs)
                 worst = max(worst, EXIT_AVAILABILITY)
         elif a.action.startswith("relaunch_refused") or a.action in ("fail", "quarantine"):
             worst = max(worst, EXIT_AVAILABILITY)
@@ -1883,14 +1916,31 @@ def _err(exit_code: int, code: str, message: str, *, retryable: bool, correlatio
     return out
 
 
+# #733 (8a R2-H3): sync `dispatch_<fail>` reasons whose retry is safe — the process died or the
+# transport delivered nothing (positive death / nothing-ran evidence). Every other reason
+# (parse_error, identity_failure, malformed_status, ...) is a definite, potentially effectful
+# failure: retryable=False, the ERROR protocol owns it.
+_RETRYABLE_FAILS: Final[frozenset] = frozenset(
+    {"timeout", "signalled", "nonzero_exit", "launch_error", "no_response"})
+
+
 def _attach_partial(res: dict, obs) -> dict:
     """#733 AC4: attach partial-output evidence from a correlation-OWNED observation to a
     failure result. ``partial`` is precisely ``parsed_payload is not None`` (empty containers,
     "", 0 and False ARE payloads) — a dispatch that produced nothing must not claim a partial.
     Callers must NEVER pass a foreign-correlation observation (the correlation_mismatch refusal
     paths are excluded by design — another dispatch's payload must not ride back to this
-    caller). Accepts an Observation or its dict form; reads, never raises."""
-    d = obs.to_dict() if hasattr(obs, "to_dict") else (obs if isinstance(obs, dict) else {})
+    caller). Accepts an Observation or its dict form; reads, never raises (a to_dict() that
+    raises or returns a non-dict degrades to minimal fields — 8a R1-M3)."""
+    if isinstance(obs, dict):
+        d = obs
+    else:
+        try:
+            d = obs.to_dict() if hasattr(obs, "to_dict") else {}
+        except Exception:  # noqa: BLE001 — never-raises contract inside result assembly
+            d = {}
+        if not isinstance(d, dict):
+            d = {}
     payload = d.get("parsed_payload")
     res["partial"] = payload is not None
     res["parse_status"] = d.get("parse_status")

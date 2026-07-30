@@ -3755,3 +3755,91 @@ def test_733_collect_timeout_observation_does_not_authorize(tmp_path):
                            obs_status="timeout")
     assert res["ok"] is False and res["exit"] == er.EXIT_ENFORCEMENT
     assert res["error"]["code"] == "unauthorized_work_product"
+
+
+def test_733_supervised_noncompleted_wrong_identity_is_enforcement(tmp_path, monkeypatch):
+    # 8a R1-H1/R2-H1 (narrowed): attested-WRONG identity wins over the state verdict
+    res, _sup, _qc, _calls = _supervised(tmp_path, monkeypatch=monkeypatch, state="timed_out",
+                                         obs=_valid_obs(actual="claude-wrong-9"))
+    assert res["exit"] == er.EXIT_ENFORCEMENT
+    assert res["error"]["code"] == "requested_actual_mismatch"
+    assert res["partial"] is False  # payload None on _valid_obs — flagged honestly
+
+
+def test_733_supervised_noncompleted_missing_identity_keeps_state_verdict(tmp_path, monkeypatch):
+    # identity_missing must NOT become a breach: synthetic no-identity death envelopes keep
+    # the retryable state verdict (honest-death recovery unbroken)
+    o = _valid_obs()
+    o["actual_model"] = None
+    o["parse_status"] = "parse_error"
+    o["usage"] = None
+    res, _sup, _qc, _calls = _supervised(tmp_path, monkeypatch=monkeypatch, state="exited_no_sentinel",
+                                         obs=o)
+    assert res["exit"] == er.EXIT_AVAILABILITY
+    assert res["error"]["code"] == "supervised_exited_no_sentinel"
+    assert res["error"]["retryable"] is True
+
+
+def test_733_resume_noncompleted_wrong_identity_is_enforcement(tmp_path):
+    sup = _ResumeSup(state="timed_out", obs=_valid_obs(actual="claude-wrong-9"))
+    res = er.resume_dispatch(**_resume_kw(tmp_path, sup))
+    assert res["exit"] == er.EXIT_ENFORCEMENT
+    assert res["error"]["code"] == "requested_actual_mismatch"
+
+
+def test_733_sync_nondeath_failure_is_not_retryable(tmp_path):
+    # 8a R2-H3: parse_error is a definite, potentially effectful failure — never invite a retry
+    res, _ = _dispatch("ship", tmp_path, dispatch_real=_identity_stub(
+        contract.PARSE_ERROR, payload=None))
+    assert res["error"]["code"] == "dispatch_parse_error"
+    assert res["error"]["retryable"] is False
+
+
+def test_733_recover_foreign_child_cid_refused_even_without_expected(tmp_path):
+    # 8a R2-H4: exp_cid=None (legacy recovery) + a non-null foreign child correlation must refuse
+    rec = _completed_record(tmp_path, seat="ship")
+
+    class _ForeignSup(_RecoverSup):
+        def recover(self, run_id, *, dispatch_gate):
+            # LEGACY shape: the gate authorizes with correlation_id=None, so the recovery
+            # derives exp_cid=None — the exact bypass R2-H4 names
+            import dataclasses as _dc  # noqa: PLC0415
+            from phase_executor.supervisor import RecoveryAction  # noqa: PLC0415  # pylint: disable=no-name-in-module
+            authz = dispatch_gate(record=self._record, correlation_id=None, recovered_from="orig")
+            if authz is None:
+                return [RecoveryAction(self._record.identity, "relaunch_refused (gate)", self._record)]
+            new = _dc.replace(self._record, receipt_nonce=authz.receipt_nonce)
+            return [RecoveryAction(self._record.identity, "relaunch", new)]
+
+        def await_job(self, record, *, timeout_s=3600.0):
+            self.await_calls.append(record.session_name)
+            return "completed", _valid_obs(correlation_id="a-foreign-cid")
+
+    res, audit = _recover(tmp_path, _ForeignSup(rec), seed_seat="ship")
+    assert res["exit"] == er.EXIT_ENFORCEMENT
+    entry = next(e for e in res["results"] if "verify" in e)
+    assert entry["verify"].startswith("correlation_mismatch")
+    for k in ("partial_payload", "raw_capture_path", "observation"):
+        assert k not in entry, k
+
+
+def test_733_attach_partial_falsy_payloads_are_partials():
+    # 8a R1-M3: {}, [], "", 0, False ARE payloads — only None is no-payload
+    for payload in ({}, [], "", 0, False):
+        res = er._attach_partial({"ok": False}, {"parsed_payload": payload})  # pylint: disable=protected-access
+        assert res["partial"] is True, payload
+    assert er._attach_partial({"ok": False}, {"parsed_payload": None})["partial"] is False  # pylint: disable=protected-access
+
+
+def test_733_attach_partial_broken_to_dict_never_raises():
+    class _Broken:
+        def to_dict(self):
+            raise TypeError("boom")
+
+    class _NonDict:
+        def to_dict(self):
+            return ["not-a-dict"]
+
+    for bad in (_Broken(), _NonDict()):
+        res = er._attach_partial({"ok": False}, bad)  # pylint: disable=protected-access
+        assert res["partial"] is False and res["partial_payload"] is None

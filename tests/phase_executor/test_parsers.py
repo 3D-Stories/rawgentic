@@ -188,3 +188,21 @@ def test_zhipuai_max_tokens_threads_and_defaults(tmp_path, monkeypatch):
     zhipuai_sdk.run(req2, run_id="r", attempt_id="a2", capture_root=tmp_path,
                     routing_config_digest="sha256:d")
     assert captured[-1]["max_tokens"] == 1024  # None -> the preserved default, not uncapped
+
+
+def test_733_event_only_identity_without_output_is_no_response_not_usage_unavailable():
+    # 8a R2-H2: a derived identity + NO agent output + NO usage must classify NO_RESPONSE —
+    # USAGE_UNAVAILABLE is allowlisted as success by observation_process_failure, so the old
+    # usage-before-output order let a produced-nothing invocation read as ok end-to-end.
+    from phase_executor.adapters.base import ParsedResult, resolve_parse_status
+    p = ParsedResult(text="", payload=None, actual_model="claude-opus-4-8", usage=None)
+    st = resolve_parse_status(p, "claude-opus-4-8", timed_out=False, exit_code=0, launch_error=None)
+    assert st == "no_response"
+
+
+def test_733_output_without_usage_is_still_usage_unavailable():
+    # the deliberately-accepted degraded state is unchanged: real output, identity, no counts
+    from phase_executor.adapters.base import ParsedResult, resolve_parse_status
+    p = ParsedResult(text="real answer", actual_model="claude-opus-4-8", usage=None)
+    st = resolve_parse_status(p, "claude-opus-4-8", timed_out=False, exit_code=0, launch_error=None)
+    assert st == "usage_unavailable"

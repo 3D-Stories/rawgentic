@@ -17,6 +17,7 @@ from __future__ import annotations
 import functools
 import json
 import re
+from collections.abc import Mapping as _Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Optional
@@ -74,10 +75,17 @@ def observation_process_failure(obs) -> Optional[str]:
     deliberately not consulted — that is ``verify_post``'s job. Accepts an ``Observation`` or
     its dict form. Never raises: this runs inside result assembly.
     """
-    d = obs.to_dict() if isinstance(obs, Observation) else (obs if isinstance(obs, dict) else {})
-    status = d.get("parse_status")
-    proc = d.get("process")
-    proc = proc if isinstance(proc, dict) else {}
+    if isinstance(obs, Observation):
+        # read the two fields directly — a full to_dict() would raise on an Observation whose
+        # UNRELATED fields are malformed (e.g. process=None makes dict(self.process) raise),
+        # violating the never-raises contract (8a R1-M2)
+        status = obs.parse_status
+        proc = obs.process
+    else:
+        d = obs if isinstance(obs, _Mapping) else {}
+        status = d.get("parse_status")
+        proc = d.get("process")
+    proc = proc if isinstance(proc, _Mapping) else {}
     exit_code = proc.get("exit_code")
     if isinstance(exit_code, bool) or not isinstance(exit_code, int):
         exit_code = None  # bool is an int subclass; neither is process-exit evidence

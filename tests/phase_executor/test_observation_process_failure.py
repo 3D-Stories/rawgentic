@@ -87,3 +87,24 @@ def test_accepts_observation_object_form():
         parsed_payload="partial text", raw_capture_path="/cap", fallback_reason=None,
         routing_config_digest="sha256:d")
     assert contract.observation_process_failure(obs) == "timeout"
+
+
+def test_mapping_proxy_process_is_read_as_evidence():
+    # 8a R1-M2: a non-dict Mapping carrying failure evidence must not be ignored
+    from types import MappingProxyType
+    obs = MappingProxyType({"parse_status": "ok",
+                            "process": MappingProxyType({"exit_code": -9, "timed_out": False}),
+                            "parsed_payload": "x"})
+    assert contract.observation_process_failure(obs) == "signalled"
+
+
+def test_observation_with_malformed_process_never_raises():
+    # 8a R1-M2: Observation(process=None) would raise inside to_dict(); the predicate must not
+    obs = contract.Observation(
+        run_id="r", attempt_id="0-x", correlation_id="c", seat="review", engine="claude",
+        transport="native", requested_model="m", actual_model="m", prompt_hash="sha256:x",
+        context_hashes=[], usage=None, timing_ms=1, queued_ms=0,
+        process=None, parse_status="timeout",
+        parsed_payload=None, raw_capture_path=None, fallback_reason=None,
+        routing_config_digest="sha256:d")
+    assert contract.observation_process_failure(obs) == "timeout"

@@ -115,10 +115,15 @@ def resolve_parse_status(parsed: ParsedResult, requested_model: str, *, timed_ou
         return contract.PARSE_ERROR
     if not parsed.actual_model or not contract.models_match(requested_model, parsed.actual_model):
         return contract.IDENTITY_FAILURE
+    if not _has_output(parsed):
+        # OUTPUT before usage (#733 8a R2-H2): an event-only envelope with a derived identity
+        # but no agent output must be NO_RESPONSE, never USAGE_UNAVAILABLE — that status is
+        # allowlisted as a success by observation_process_failure, so ordering it after usage
+        # let a produced-nothing invocation read as ok, satisfy reconciliation, and authorize
+        # collection.
+        return contract.NO_RESPONSE  # valid identity but empty output -> not a usable success
     if not parsed.usage or "input" not in parsed.usage or "output" not in parsed.usage:
         return contract.USAGE_UNAVAILABLE
-    if not _has_output(parsed):
-        return contract.NO_RESPONSE  # valid identity+usage but empty output -> not a usable success
     return contract.OK
 
 
