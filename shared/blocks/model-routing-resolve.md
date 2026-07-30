@@ -38,7 +38,7 @@ Build seats require BOTH `--gate-file` and `--plan-file` (the authenticated #429
 | WF2 phase | seat | notes |
 |---|---|---|
 | Step 2 fan-out | `analysis` | concurrent executor dispatches of the `analysis` seat (D-2); ≤3 concurrent preserved |
-| Step 3 design generation | bake-off (`competitive`) | competitive-only, never single-dispatch — **AC1 carve-out: this PR DECLARES the bake-off contract; the live competitive wiring + audit-stream production is proven in #472 (the proving run). Until then Step 3 design generation stays on its current mechanism — the one deliberate AC1 carve-out.** |
+| Step 3 design generation | bake-off (`competitive`) | competitive-only, never single-dispatch — **AC1 carve-out, current status (#735): the competitive wiring was never proven — #472 closed 2026-07-21 covering read-only seats only. Step 3 design generation stays on its current mechanism; whether to wire or retire the bake-off is decided in #765.** |
 | Step 4 / 8a / 11 review | `review` / `review_fast` | per the #491 lens map (`<review-lens-routing>`, SKILL.md) — the security lens rides the strong `review` seat |
 | Step 8 implementation | `build` | gate authentication + internally minted plan context (`--gate-file` + `--plan-file`, both mandatory) |
 | Step 16 | local | no model call |
