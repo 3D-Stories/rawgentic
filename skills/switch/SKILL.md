@@ -9,7 +9,9 @@ rule's reason, and what breaks without it: `references/why.md` — read before c
 
 ## Step 1: Parse input
 
-No argument → Step 2. `off <name>` → Step 6. Else use as the Step 3 target.
+No argument **and no project named** → Step 2. `off <name>` → Step 6. Else take the name or
+path as the Step 3 target — extracting it when the request is free-form ("bind me to my-api");
+if none or more than one is named, ask which.
 
 ## Step 2: List mode
 
@@ -57,7 +59,16 @@ suggest `/rawgentic:setup` and skip Step 5b.
 
 ### 1. Workspace `defaultProtectionLevel`
 
-Absent → ask for `sandbox`, `standard` or `strict` (why.md), validate, write back, confirm.
+Read `.rawgentic_workspace.json`. If the **top-level** `defaultProtectionLevel` is absent, ask
+the user to choose — showing what each one does, because this picks their guard posture:
+
+- `sandbox` — no guards active. POC / playground projects.
+- `standard` — blocks destroy + mutate ops on production, 6 common security patterns.
+- `strict` — all guards active. Full production projects.
+
+Validate the answer is one of the three, add it **at the top level** by full read-modify-write
+(never into a project entry), then confirm: "Set workspace `defaultProtectionLevel` to
+**<choice>**." Runs once — later binds see the field and skip.
 
 ### 2. Project universal-field check
 
@@ -73,7 +84,8 @@ python3 hooks/post_update_reconcile.py --staleness-project <name> \
   --workspace .rawgentic_workspace.json --state-dir claude_docs
 ```
 
-Surface output verbatim. Advisory, fail-open.
+Surface any output verbatim. Advisory, never blocking — a non-zero exit **or** empty output
+both mean "nothing to nudge": continue to item 3.
 
 ### 3. Headless Access Check
 
