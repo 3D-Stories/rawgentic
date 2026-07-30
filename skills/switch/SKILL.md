@@ -4,241 +4,108 @@ description: Bind this session to a project in the rawgentic workspace, or manag
 argument-hint: project name (e.g., my-app), "off <name>" to deactivate, or empty to list
 ---
 
-<role>
-You are the rawgentic project switcher. Your job is to bind the current session to a project so all subsequent rawgentic workflow skills and hooks operate on the correct project. You do NOT deactivate other projects — multiple projects can be active simultaneously for concurrent sessions.
-</role>
+Bind this session to one project; never deactivate others. Steps run **in order**. Every
+rule's reason, and what breaks without it: `references/why.md` — read before changing a step.
 
-# Switch / Bind Project — `/rawgentic:switch`
+## Step 1: Parse input
 
-Run through the steps below **sequentially**.
+No argument → Step 2. `off <name>` → Step 6. Else use as the Step 3 target.
 
----
+## Step 2: List mode
 
-## Step 1: Parse Input
+Read `.rawgentic_workspace.json` (primary working dir). Missing → STOP: "No rawgentic
+workspace found. Run `/rawgentic:new-project` first." List each as
+`● name (path) — active, configured` (○ inactive) with last-24h counts from
+`claude_docs/session_registry.jsonl`. Ask which to bind.
 
-The user provides a **name**, **path**, or subcommand. They might also use natural language.
+## Step 3: Find in workspace
 
-- **No argument and no project mentioned** → Go to Step 2 (list mode).
-- **"off <name>"** → Go to Step 6 (deactivate mode).
-- **Name or path provided** → Use it as the search target in Step 3.
+Same file. Missing → Step 2's message. Malformed → STOP: "Workspace file is corrupted."
+Match `projects[]` by name (case-insensitive), then normalized path. Not found → list all,
+ask "Did you mean one of these?"
 
----
+## Step 4: Verify the directory
 
-## Step 2: List Mode
+Resolve relative paths against the workspace root. Missing → warn: "The directory `<path>`
+no longer exists. Run `/rawgentic:new-project <name>` to re-create, or
+`/rawgentic:switch off <name>` to deregister."
 
-Read `.rawgentic_workspace.json` from the **primary working directory**.
+## Step 5: Bind
 
-- **File missing** → STOP. Tell the user: "No rawgentic workspace found. Run `/rawgentic:new-project` first."
+Read-modify-write `.rawgentic_workspace.json`: target `active: true`, `lastUsed` = now.
+**Never set another project's `active` to `false`.**
 
-Display all registered projects:
+Append one line to `claude_docs/session_registry.jsonl` (create it and
+`claude_docs/session_notes/` if absent), id from **`$CLAUDE_CODE_SESSION_ID`** — per-process,
+so it is correct under **concurrent** sessions. Two expansion-free calls, no `$(...)`:
 
-```
-Projects in workspace:
-  ● my-api (./projects/my-api) — active, configured
-  ● my-frontend (./projects/my-frontend) — active, configured
-  ○ side-project (./projects/side-project) — inactive
-```
-
-Use ● for active, ○ for inactive. Show configured status.
-
-Also check `claude_docs/session_registry.jsonl` for recent sessions (last 24h) bound to each project and show them:
-```
-  ● my-api — 1 recent session
-  ● my-frontend — 2 recent sessions
+```bash
+printenv CLAUDE_CODE_SESSION_ID; date -u +%Y-%m-%dT%H:%M:%SZ
 ```
 
-Then ask: "Which project do you want to bind this session to?"
-
----
-
-## Step 3: Find in Workspace
-
-Read `.rawgentic_workspace.json` from the **primary working directory**.
-
-- **File missing** → STOP. Tell the user: "No rawgentic workspace found. Run `/rawgentic:new-project` first."
-- **Malformed JSON** → STOP. Tell the user: "Workspace file is corrupted."
-
-Search the `projects` array:
-1. **Match by name first** (case-insensitive comparison).
-2. **Then match by path** (normalize both paths).
-
-**If not found:** List all projects and suggest: "No project matching '<input>'. Did you mean one of these?"
-
----
-
-## Step 4: Verify Directory Exists
-
-Check that the target project's `path` directory exists on disk.
-
-**Path resolution:** Resolve relative paths against the workspace root directory.
-
-**If missing:** Warn: "The directory `<path>` no longer exists. Run `/rawgentic:new-project <name>` to re-create, or `/rawgentic:switch off <name>` to deregister."
-
----
-
-## Step 5: Bind Session
-
-Read `.rawgentic_workspace.json`, then:
-
-1. Set the target project's `active` to `true` (if it wasn't already — this enables a project that was previously deactivated).
-2. Update the target's `lastUsed` to the current ISO 8601 timestamp.
-3. Write the updated workspace file back (full read-modify-write).
-4. **Do NOT set any other project's `active` to `false`.** Multiple projects can be active simultaneously.
-5. **Register in session registry:** Append a line to `claude_docs/session_registry.jsonl`:
-   ```json
-   {"session_id":"<your session_id>","project":"<target project name>","project_path":"<target project path>","started":"<current ISO 8601 timestamp>","cwd":"<workspace root>"}
-   ```
-   Create the file and `claude_docs/session_notes/` directory if they don't exist.
-
-   **How to get your session ID — use the per-session env var, NOT the shared file:**
-
-   The session ID is in `$CLAUDE_CODE_SESSION_ID`, set per Claude Code process (so it is unique and correct even when multiple sessions run **concurrently**). Register in **two expansion-free Bash calls** so the command contains no `$(...)` command substitution: a command containing `$(...)` (or backticks) is flagged "Contains expansion" and **always** triggers a permission prompt that **no `permissions.allow` rule can suppress** — keeping it expansion-free lets a `Bash(printf:*)` / `Bash(date:*)` / `Bash(printenv:*)` allow rule auto-approve the bind.
-
-   **Call 1 — read the session ID and timestamp** (two allowlistable leading binaries, no command substitution):
-
-   ```bash
-   printenv CLAUDE_CODE_SESSION_ID; date -u +%Y-%m-%dT%H:%M:%SZ
-   ```
-
-   **Call 2 — append the registry line, inlining those two values as literals** (starts with `printf`, no `$(...)`, only `>>` redirection, so it matches a `Bash(printf:*)` allow rule):
-
-   ```bash
-   printf '{"session_id":"%s","project":"%s","project_path":"%s","started":"%s","cwd":"%s"}\n' "<SESSION_ID from call 1>" "<target project name>" "<target project path>" "<TIMESTAMP from call 1>" "<workspace root>" >> claude_docs/session_registry.jsonl
-   ```
-
-   Because `$CLAUDE_CODE_SESSION_ID` is per-process, reading it in call 1 and writing in call 2 is still race-free — there is no shared state between the two calls to corrupt.
-
-   **Do NOT** read `claude_docs/.current_session_id` as the source: that file is **shared across all sessions** and is overwritten by every session on every prompt, so under concurrent sessions it can return *another* session's id and bind the wrong session. If `printenv` prints nothing (only older Claude Code that does not set the env var), STOP and ask the user rather than guessing. (The legacy name `$CLAUDE_SESSION_ID` is **not** set — the correct variable is `$CLAUDE_CODE_SESSION_ID`.) **Do NOT invent a session ID.**
-
-Report:
-```
-Bound to: <name> (<path>)
-Configured: yes/no
+```bash
+printf '{"session_id":"%s","project":"%s","project_path":"%s","started":"%s","cwd":"%s"}\n' "<ID>" "<name>" "<path>" "<TS>" "<root>" >> claude_docs/session_registry.jsonl
 ```
 
-**If `configured` is `false`:** Suggest: "This project hasn't been configured yet. Run `/rawgentic:setup`." Then skip Step 5b entirely — there is no config to check for staleness.
+Never take the id from `claude_docs/.current_session_id`. If `printenv` prints nothing, STOP
+and ask. Never invent one.
 
-**If `configured` is `true`:** Proceed to Step 5b before confirming "Ready."
+Report `Bound to: <name> (<path>)` + `Configured: yes/no`. If `configured` is `false`,
+suggest `/rawgentic:setup` and skip Step 5b.
 
----
+## Step 5b: Staleness checks
 
-## Step 5b: Config Staleness Check
+### 1. Workspace `defaultProtectionLevel`
 
-After binding and before the "Ready" confirmation, run these checks in order:
+Absent → ask for `sandbox`, `standard` or `strict` (why.md), validate, write back, confirm.
 
-### 1. Workspace-level: `defaultProtectionLevel`
+### 2. Project universal-field check
 
-Read `.rawgentic_workspace.json`. If the top-level field `defaultProtectionLevel` is missing:
+Check the project's `.rawgentic.json` **via Bash — never the `Read` tool** — for `version`,
+`project`, `repo`, `protectionLevel`, `custom`. Presence only. Any missing → advisory only:
+"Config advisory: your .rawgentic.json is missing: <list>. Run `/rawgentic:setup`." Else
+print nothing.
 
-1. Prompt the user:
-
-   ```
-   Your workspace is missing a default protection level.
-   Choose a workspace-wide default for new or unconfigured projects:
-
-   - sandbox  — No guards active. Good for POC / playground projects.
-   - standard — Blocks destroy + mutate ops on production, 6 common security patterns.
-   - strict   — All guards active. Full production projects.
-
-   Which level? (sandbox / standard / strict)
-   ```
-
-2. Wait for the user's choice. Validate it is one of `sandbox`, `standard`, `strict`.
-3. Read `.rawgentic_workspace.json`, add `"defaultProtectionLevel": "<choice>"` at the top level, and write it back (full read-modify-write).
-4. Confirm: "Set workspace `defaultProtectionLevel` to **<choice>**."
-
-This prompt runs once — subsequent binds see the field and skip.
-
-### 2. Project-level: universal field check
-
-Check the project's `.rawgentic.json` **via Bash — never the `Read` tool** — for the following
-**universal fields** (hardcoded list). The tool matters: a `Read` here would trigger the harness's
-`CLAUDE.md` auto-load *before* the fail-closed Headless Access Check below, letting a project's own
-prose reach the session ahead of the check that authorizes it. Item 3b is where that load belongs.
-
-- `version`
-- `project`
-- `repo`
-- `protectionLevel`
-- `custom`
-
-This list is intentionally small — it includes only fields that every project should have regardless of type. Optional sections (`testing`, `database`, `services`, `infrastructure`, `deploy`, `security`, `ci`, `formatting`, `documentation`) are NOT checked because projects may legitimately omit them.
-
-**Compare field presence only** — do not validate values or nested structure.
-
-**If any universal fields are missing:** Print an advisory warning:
-
-```
-Config advisory: your .rawgentic.json is missing: <comma-separated list of missing fields>
-Run `/rawgentic:setup` to update your config (existing values will be preserved).
-```
-
-**If no fields are missing:** Silent pass — print nothing.
-
-### 2b. Feature-gap staleness nudge (#234)
-
-The universal-field check above only catches a *malformed/old-shape* config. It does
-NOT catch a project that predates newer **setup-requiring features** (adversarial
-review, model routing, peer consult, design artifact, …) — that project has a valid
-config, it's just behind. `hooks/post_update_reconcile.py`'s SessionStart pass nudges
-these once per plugin version, but switching to a project is the moment to surface
-*its own* gap. Run the per-project staleness check for the project you just bound
-(`<name>` = the target project's name; resolve the workspace + `claude_docs` paths as
-in Step 5):
+### 2b. Feature-gap staleness nudge
 
 ```bash
 python3 hooks/post_update_reconcile.py --staleness-project <name> \
   --workspace .rawgentic_workspace.json --state-dir claude_docs
 ```
 
-It prints an advisory line (or nothing) — surface any output to the user verbatim.
-This is **advisory, never blocking**: it always shows the gap on an explicit switch
-(no once-per-version gate, unlike the SessionStart `--staleness-active` pass), and it
-respects the workspace-level `"setupPrompt": false` opt-out. Fail-open: a non-zero
-exit or empty output means "nothing to nudge" — continue.
+Surface output verbatim. Advisory, fail-open.
 
 ### 3. Headless Access Check
 
-If the current session has `RAWGENTIC_HEADLESS=1` set (headless mode), check the target project's `headlessEnabled` field in `.rawgentic_workspace.json`. The field accepts a bool (legacy) or an object `{"enabled": bool, "triggers": [...], "auth": "..."}` (#165) — apply the SAME verdict the session-start gate computes:
+Only when `RAWGENTIC_HEADLESS=1`. Read the project's `headlessEnabled` — bool or
+`{"enabled":…,"triggers":[…]}` — and apply the SAME verdict the session-start gate computes:
 
-- **If `headlessEnabled` is `true`:** Silent pass — headless mode allowed, any trigger.
-- **If it is an object with `enabled: true`:** allowed only when `triggers` is absent, OR `$RAWGENTIC_HEADLESS_TRIGGER` is a member of the `triggers` array. A non-member, an unset trigger env, or a malformed `triggers` value fails CLOSED — STOP and tell user: "Headless mode for **[project-name]** does not allow this trigger (RAWGENTIC_HEADLESS_TRIGGER is not in the headlessEnabled.triggers allowlist)."
-- **If `headlessEnabled` is `false`, `{"enabled": false, ...}`, missing, or any other shape:** STOP and tell user:
-  "Headless mode is not enabled for **[project-name]**. Run `/rawgentic:setup` to enable it, or set `headlessEnabled: true` in the project's entry in `.rawgentic_workspace.json`."
-
-If not in headless mode: skip this check entirely.
+- `true` → silent pass.
+- `{"enabled": true}` → allowed only if `triggers` is absent OR
+  `$RAWGENTIC_HEADLESS_TRIGGER` is in it. Non-member, unset env or malformed `triggers`
+  **fails CLOSED** → STOP: "Headless mode for **[project-name]** does not allow this trigger
+  (RAWGENTIC_HEADLESS_TRIGGER is not in the headlessEnabled.triggers allowlist)."
+- anything else → STOP: "Headless mode is not enabled for **[project-name]**. Run
+  `/rawgentic:setup` to enable it, or set `headlessEnabled: true` in `.rawgentic_workspace.json`."
 
 ### 3b. Load the project's operating rules
 
 **Use the `Read` tool on `<project path>/.rawgentic.json`. Never Bash (`cat`/`head`/`jq`).**
 
-That one call is the whole mechanism: the harness's `CLAUDE.md` auto-load fires on its own file
-tools and cannot see inside a bash one-liner, so this is what puts the project's rules in context
-with memory-file authority. Item 2 already read this file via shell — the second read is
-deliberate, not duplication. Do not collapse them, and do not move this step: before the registry
-append `hooks/wal-bind-guard` Gate 1 denies it, and before the headless verdict it would let
-project prose influence a fail-closed authorization check.
+Item 2 already read this file via shell; this second read is deliberate. Do not collapse
+them and do not move this step.
 
-Projects with no `CLAUDE.md` need no handling — the harness injects nothing, so say nothing.
-Never announce a missing manual.
+Projects with no `CLAUDE.md` need no handling. Never announce a missing manual.
 
 If the `Read` fails, do not report Ready. Say: bound, but the project's rules did not load.
 
 ### 4. Confirm Ready
 
-After all checks complete, print the final confirmation:
-
 "Ready. All rawgentic workflow skills will use `<path>/.rawgentic.json` for this session."
 
----
+## Step 6: Deactivate (`off <name>`)
 
-## Step 6: Deactivate Mode (`/rawgentic:switch off <name>`)
-
-Find the project in the workspace (same as Step 3).
-
-1. Check `claude_docs/session_registry.jsonl` for sessions bound to this project in the last 24 hours.
-2. If recent sessions found → warn: "There are recent sessions bound to **<name>**. Deactivating will not unbind them, but new sessions won't auto-bind to it. Continue?"
-3. Set `active: false` for the project in `.rawgentic_workspace.json`.
-4. Write the updated workspace file.
-
-Report: "Deactivated **<name>**. It won't appear as an option for new sessions until reactivated."
+Find as in Step 3. If sessions bound to it in the last 24h, warn that deactivating won't
+unbind them but new sessions won't auto-bind, and ask to continue. Set `active: false`,
+write, report: "Deactivated **<name>**. It won't appear as an option for new sessions until
+reactivated."
