@@ -29,9 +29,20 @@ def test_corpus_includes_every_reference_file():
 
 
 def test_corpus_without_references_dir_is_just_skill_md():
-    # switch has no references/ — corpus degrades to SKILL.md alone
-    assert not (SKILLS_DIR / "switch" / "references").is_dir()
-    assert skill_corpus("switch") == (SKILLS_DIR / "switch" / "SKILL.md").read_text()
+    """A skill with no references/ — corpus degrades to SKILL.md alone.
+
+    COMPUTED from the tree rather than naming a skill (#720): this used to pin `switch`,
+    which then grew a `references/why.md` and turned a behavioural guard about
+    `skill_corpus()` into a claim about one skill's layout. Picking the candidate at
+    runtime keeps the guard testing the helper, which is its actual subject.
+    """
+    candidates = sorted(
+        d.name for d in SKILLS_DIR.iterdir()
+        if (d / "SKILL.md").is_file() and not (d / "references").is_dir()
+    )
+    assert candidates, "no skill lacks references/ — this guard would be vacuous"
+    name = candidates[0]
+    assert skill_corpus(name) == (SKILLS_DIR / name / "SKILL.md").read_text()
 
 
 def test_corpus_missing_skill_raises():
