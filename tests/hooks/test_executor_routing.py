@@ -1478,21 +1478,22 @@ def _valid_obs(requested="claude-sonnet-5", actual=None, correlation_id=None):
 
 
 class _StubSupervisor:
-    def __init__(self, state="completed"):
+    def __init__(self, state="completed", obs="__default__"):
         self.launched = []
         self._state = state
+        self._obs = obs  # "__default__" -> _valid_obs(); else returned verbatim (#733 tests)
 
     def launch(self, seat, prompt, **kw):  # noqa: D401 — records the call
         self.launched.append((seat, kw))
         return {"seat": seat, "kw": kw}
 
     def await_job(self, record, *, timeout_s=3600.0):
-        return self._state, _valid_obs()
+        return self._state, (_valid_obs() if self._obs == "__default__" else self._obs)
 
 
 def _supervised(tmp_path, *, probe_stream=None, final_argv=None, state="completed",
                 probe_raises=False, provision_calls=None, monkeypatch=None,
-                terminal_backend="tmux"):
+                terminal_backend="tmux", obs="__default__"):
     # The rich claude_mutating machinery (probes, init event) stays unit-tested even though
     # production refuses mutating-claude (STEP 0, MUTATING_FS_SANDBOXED): tests widen the module
     # constant — a monkeypatch of module state, NOT a caller input; production has no such knob.
@@ -1501,7 +1502,7 @@ def _supervised(tmp_path, *, probe_stream=None, final_argv=None, state="complete
         monkeypatch.setattr(er, "MUTATING_FS_SANDBOXED", frozenset({"codex", "claude"}))
     qc = QuotaCoordinator(tmp_path / "permits", {"claude": 2, "codex": 4, "zhipu": 2})
     audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
-    sup = _StubSupervisor(state=state)
+    sup = _StubSupervisor(state=state, obs=obs)
     gd, ctx = _gate()
     profile = _contract.LaunchProfile(session_policy="fresh", mutating=True)
     calls = provision_calls if provision_calls is not None else []
@@ -2058,9 +2059,10 @@ def test_probe_account_digest_no_delimiter_collision():
 # ---------------------------------------------------------------------------
 
 class _ResumeSup:
-    def __init__(self, *, mismatch=False, state="completed"):
+    def __init__(self, *, mismatch=False, state="completed", obs="__default__"):
         self.launched, self.awaited = [], []
         self._mismatch, self._state = mismatch, state
+        self._obs = obs  # "__default__" -> _valid_obs(); else returned verbatim (#733 tests)
 
     def launch(self, seat, prompt, **kw):
         self.launched.append((seat, kw))
@@ -2072,7 +2074,7 @@ class _ResumeSup:
             from phase_executor.supervisor import SupervisorError  # noqa: PLC0415  # pylint: disable=no-name-in-module
             raise SupervisorError(
                 f"resume identity mismatch: transport session_id 'other' != {expect_session_id!r}")
-        return self._state, _valid_obs()
+        return self._state, (_valid_obs() if self._obs == "__default__" else self._obs)
 
 
 def _resume_kw(tmp_path, sup, *, seat="intake", engine="claude", mutating=False):
@@ -2202,7 +2204,8 @@ class _FakeMgr:
             reason="" if self._promoted else "target advanced")
 
 
-def _seed_authorized_audit(audit, *, nonce="rn1", cid="c1", seat="build", run_id="run1"):
+def _seed_authorized_audit(audit, *, nonce="rn1", cid="c1", seat="build", run_id="run1",
+                           obs_status="ok"):
     """#571 F7: seed a passing BUILD receipt + a verified completed observation for `nonce` so
     collect_work_product's promotion-authorization precondition is satisfied. Uses _write_locked
     (records() validates on read-back) and a real contract.Observation so verify_post().verified
@@ -2222,8 +2225,10 @@ def _seed_authorized_audit(audit, *, nonce="rn1", cid="c1", seat="build", run_id
     obs = contract.Observation(
         run_id=run_id, attempt_id="0-a", correlation_id=cid, seat=seat, engine="codex",
         transport="cli", requested_model="codex-model", actual_model="codex-model",
-        prompt_hash="sha256:p", context_hashes=[], usage={"input": 1, "output": 1}, timing_ms=1,
-        queued_ms=0, process={"exit_code": 0, "timed_out": False}, parse_status="ok",
+        prompt_hash="sha256:p", context_hashes=[],
+        usage={"input": 1, "output": 1} if obs_status == "ok" else None, timing_ms=1,
+        queued_ms=0,
+        process={"exit_code": 0, "timed_out": obs_status == "timeout"}, parse_status=obs_status,
         parsed_payload=None, raw_capture_path=None, fallback_reason=None,
         routing_config_digest="sha256:d").to_dict()
     obs["dispatched_lane"] = {"provider": "openai", "transport": "cli", "auth_mode": "api_key",
@@ -2233,10 +2238,11 @@ def _seed_authorized_audit(audit, *, nonce="rn1", cid="c1", seat="build", run_id
 
 
 def _collect(tmp_path, reg, mgr, *, run_id="run1", session="sess1",
-             target="refs/heads/integration", expected="0" * 40, kind="docs", audit=None, seed=True):
+             target="refs/heads/integration", expected="0" * 40, kind="docs", audit=None, seed=True,
+             obs_status="ok"):
     audit = audit or enforce.RoutingAuditLog(tmp_path / "runs", run_id)
     if seed:  # F7 (#571): a promotion needs an authorized build receipt + verified obs
-        _seed_authorized_audit(audit, run_id=run_id)
+        _seed_authorized_audit(audit, run_id=run_id, obs_status=obs_status)
     res = er.collect_work_product(
         run_id=run_id, session_name=session, target_ref=target, expected_target_sha=expected,
         kind=kind, registry=reg, manager=mgr, audit=audit,
@@ -3560,3 +3566,192 @@ def test_resolve_dispatch_timeout_falls_back_when_no_usable_bound(entry):
     otherwise pass an isinstance(int) check and become a 1-second timeout.
     """
     assert er.resolve_dispatch_timeout(entry) == er.DISPATCH_TIMEOUT_FALLBACK_S == 300.0
+
+
+# ---------------------------------------------------------------------------
+# #733: a killed/failed dispatch must never return ok:true — process-failure
+# guard at the sync/supervised/resume/recover result assemblies, with partial
+# output preserved on correlation-OWNED failures and never on foreign ones.
+# ---------------------------------------------------------------------------
+
+_SHIP_MODELS = ("claude-sonnet-5", "claude-opus-4-8", "claude-fable-5")
+
+
+def _identity_stub(status, *, process=None, payload="__prompt__"):
+    """Every target returns `status` WITH a matching attested identity (the #733 escape
+    shape). Optional process/payload overrides via dataclasses.replace."""
+    import dataclasses as _dc
+
+    def dispatch(engine, req, *, run_id, attempt_id, capture_root, digest, queued_ms, fallback_reason):
+        obs = _obs(req, status=status, actual_override=req.requested_model)
+        kw = {}
+        if process is not None:
+            kw["process"] = dict(process)
+        if payload != "__prompt__":
+            kw["parsed_payload"] = payload
+        return _dc.replace(obs, **kw) if kw else obs
+    return dispatch
+
+
+def test_733_sync_timeout_with_identity_fails_with_partial(tmp_path):
+    # T1 (the bug): SIGKILLed-at-timeout final attempt carrying a matching identity must be
+    # ok:false / exit 3 with the partial payload preserved and flagged — never a passed gate.
+    res, _ = _dispatch("ship", tmp_path, dispatch_real=_identity_stub(contract.TIMEOUT))
+    assert res["ok"] is False, res
+    assert res["exit"] == er.EXIT_AVAILABILITY
+    assert res["error"]["code"] == "dispatch_timeout"
+    assert res["error"]["retryable"] is True  # sync kill is engine-issued: positive death evidence
+    assert res["partial"] is True
+    assert res["partial_payload"] == "hi"
+    assert "raw_capture_path" in res
+    assert res["observation"]["parse_status"] == "timeout"
+
+
+def test_733_sync_signalled_exit_fails(tmp_path):
+    # T2 (schema-valid signalled shape): nonzero_exit status with exit_code -9
+    res, _ = _dispatch("ship", tmp_path, dispatch_real=_identity_stub(
+        contract.NONZERO_EXIT, process={"exit_code": -9, "timed_out": False}))
+    assert res["ok"] is False and res["exit"] == er.EXIT_AVAILABILITY
+    assert res["error"]["code"] == "dispatch_signalled"
+
+
+def test_733_sync_nonzero_exit_fails(tmp_path):
+    # T3: positive non-zero exit with identity
+    res, _ = _dispatch("ship", tmp_path, dispatch_real=_identity_stub(contract.NONZERO_EXIT))
+    assert res["ok"] is False and res["exit"] == er.EXIT_AVAILABILITY
+    assert res["error"]["code"] == "dispatch_nonzero_exit"
+
+
+def test_733_sync_clean_run_unchanged(tmp_path):
+    # T4: the happy path is byte-compatible — no partial key, ok:true, exit 0
+    res, _ = _dispatch("ship", tmp_path)
+    assert res["ok"] is True and res["exit"] == er.EXIT_OK
+    assert "partial" not in res
+
+
+def test_733_sync_chain_fallback_unchanged(tmp_path):
+    # T5: an availability failure on the primary still walks the chain; a later success wins
+    res, _ = _dispatch("ship", tmp_path, dispatch_real=_stub(
+        status_by_model={"claude-sonnet-5": contract.TIMEOUT}))
+    assert res["ok"] is True and res["exit"] == er.EXIT_OK
+
+
+def test_733_sync_no_identity_timeout_keeps_exit3_and_gains_partial(tmp_path):
+    # T7: the pre-existing no-identity availability exhaustion stays exit 3 AND now carries
+    # the partial evidence (AC4 — the payload must not be dropped on this branch either).
+    res, _ = _dispatch("ship", tmp_path, dispatch_real=_stub(
+        status_by_model={m: contract.TIMEOUT for m in _SHIP_MODELS}))
+    assert res["ok"] is False and res["exit"] == er.EXIT_AVAILABILITY
+    assert res["error"]["code"] == "chain_exhausted_availability"
+    assert res["partial"] is True and res["partial_payload"] == "hi"
+
+
+def test_733_sync_parse_error_with_identity_fails_allowlist(tmp_path):
+    # T16 (dispatch leg): the Hermes shape — parse_error, matching identity, exit 0, no payload
+    res, _ = _dispatch("ship", tmp_path, dispatch_real=_identity_stub(
+        contract.PARSE_ERROR, payload=None))
+    assert res["ok"] is False and res["exit"] == er.EXIT_AVAILABILITY
+    assert res["error"]["code"] == "dispatch_parse_error"
+    assert res["partial"] is False  # nothing parsed -> must not claim a partial exists
+
+
+def test_733_sync_usage_unavailable_stays_ok(tmp_path):
+    # T16 (allowlist's accepted degraded state): attested identity, output, no usage counts
+    res, _ = _dispatch("ship", tmp_path, dispatch_real=_identity_stub(contract.USAGE_UNAVAILABLE))
+    assert res["ok"] is True and res["exit"] == er.EXIT_OK
+
+
+def test_733_sync_breach_beats_timeout_and_carries_partial(tmp_path):
+    # T14 (sync leg): identity breach + timeout evidence on the SAME observation -> the
+    # enforcement verdict (exit 4) retains precedence, and the owned partial evidence rides.
+    res, _ = _dispatch("ship", tmp_path, dispatch_real=_stub(
+        status_by_model={m: contract.TIMEOUT for m in _SHIP_MODELS},
+        actual_by_model={m: "claude-wrong-9" for m in _SHIP_MODELS}))
+    assert res["ok"] is False and res["exit"] == er.EXIT_ENFORCEMENT
+    assert res["partial"] is True and res["partial_payload"] == "hi"
+
+
+def _failed_obs_dict(status="timeout", exit_code=0, timed_out=True, payload="partial-review-text",
+                     correlation_id=None):
+    """A schema-valid FAILED observation dict that still attests the matching identity."""
+    o = _valid_obs(correlation_id=correlation_id)
+    o["parse_status"] = status
+    o["process"] = {"exit_code": exit_code, "timed_out": timed_out}
+    o["usage"] = None
+    o["parsed_payload"] = payload
+    return o
+
+
+def test_733_supervised_completed_timeout_envelope_fails(tmp_path, monkeypatch):
+    # T8: a supervised job that reaches state=completed with an availability-shaped envelope
+    # carrying a matching identity must fail, with the owned partial evidence attached.
+    res, _sup, _qc, _calls = _supervised(tmp_path, monkeypatch=monkeypatch,
+                                         obs=_failed_obs_dict())
+    assert res["ok"] is False, res
+    assert res["exit"] == er.EXIT_AVAILABILITY
+    assert res["error"]["code"] == "supervised_dispatch_timeout"
+    assert res["error"]["retryable"] is False  # completed-state failure is NOT proven death
+    assert res["partial"] is True and res["partial_payload"] == "partial-review-text"
+
+
+def test_733_supervised_completed_signalled_envelope_fails(tmp_path, monkeypatch):
+    res, _sup, _qc, _calls = _supervised(tmp_path, monkeypatch=monkeypatch,
+                                         obs=_failed_obs_dict(status="nonzero_exit",
+                                                              exit_code=-9, timed_out=False))
+    assert res["ok"] is False and res["exit"] == er.EXIT_AVAILABILITY
+    assert res["error"]["code"] == "supervised_dispatch_signalled"
+
+
+def test_733_supervised_foreign_correlation_carries_no_partial(tmp_path, monkeypatch):
+    # T15: a correlation_mismatch refusal must never leak the foreign observation's payload
+    res, _sup, _qc, _calls = _supervised(tmp_path, monkeypatch=monkeypatch,
+                                         obs=_failed_obs_dict(correlation_id="a-foreign-cid"))
+    assert res["exit"] == er.EXIT_ENFORCEMENT
+    assert res["error"]["code"] == "correlation_mismatch"
+    for k in ("partial", "partial_payload", "raw_capture_path", "observation"):
+        assert k not in res, k
+
+
+def test_733_resume_completed_timeout_envelope_fails(tmp_path):
+    # T9: same pair through resume_dispatch
+    sup = _ResumeSup(obs=_failed_obs_dict())
+    res = er.resume_dispatch(**_resume_kw(tmp_path, sup))
+    assert res["ok"] is False and res["exit"] == er.EXIT_AVAILABILITY
+    assert res["error"]["code"] == "resume_dispatch_timeout"
+    assert res["error"]["retryable"] is False
+    assert res["partial"] is True and res["partial_payload"] == "partial-review-text"
+
+
+def test_733_resume_foreign_correlation_carries_no_partial(tmp_path):
+    sup = _ResumeSup(obs=_failed_obs_dict(correlation_id="a-foreign-cid"))
+    res = er.resume_dispatch(**_resume_kw(tmp_path, sup))
+    assert res["exit"] == er.EXIT_ENFORCEMENT and res["error"]["code"] == "correlation_mismatch"
+    for k in ("partial", "partial_payload", "raw_capture_path", "observation"):
+        assert k not in res, k
+
+
+def test_733_recover_completed_timeout_envelope_fails(tmp_path):
+    # T13: a recovered completed entry whose envelope fails the predicate is availability, not ok
+    rec = _completed_record(tmp_path, seat="ship")
+
+    class _TimeoutRecoverSup(_RecoverSup):
+        def await_job(self, record, *, timeout_s=3600.0):
+            self.await_calls.append(record.session_name)
+            o = _failed_obs_dict()
+            o["correlation_id"] = "orig#resume1"
+            return "completed", o
+
+    res, _audit = _recover(tmp_path, _TimeoutRecoverSup(rec), seed_seat="ship")
+    assert res["ok"] is False and res["exit"] == er.EXIT_AVAILABILITY
+    entry = res["results"][0]
+    assert entry["verify"] == "process_failure: timeout"
+    assert entry["partial"] is True and entry["partial_payload"] == "partial-review-text"
+
+
+def test_733_collect_timeout_observation_does_not_authorize(tmp_path):
+    # T11: a verified-identity timeout observation bound to the build receipt must NOT
+    # authorize work-product promotion.
+    res, _audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), _FakeMgr(),
+                           obs_status="timeout")
+    assert res["ok"] is False and res["exit"] == er.EXIT_ENFORCEMENT
+    assert res["error"]["code"] == "unauthorized_work_product"

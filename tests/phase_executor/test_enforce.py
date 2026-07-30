@@ -1105,3 +1105,42 @@ def test_validate_record_pass_build_receipt_requires_single_outcome_464():
         enforce._validate_record(rec, 1)
     rec["gate_digest"] = "sha256:def"
     enforce._validate_record(rec, 1)  # canonical single receipt validates
+
+
+# ---- #733: a verified-identity process failure must not satisfy reconciliation ----
+
+def _timeout_obs_rec_with_identity(nonce, cid="c1"):
+    """A timeout observation that still ATTESTS the matching identity (the #733 escape shape) —
+    unlike _obs_rec, which nulls actual_model on every non-ok status."""
+    inner = _obs_dict(seat="review", correlation_id=cid, requested_model="claude-fable-5",
+                      actual_model="claude-fable-5", parse_status="timeout",
+                      routing_config_digest="sha256:d")
+    inner["usage"] = None
+    inner["process"] = {"exit_code": -9, "timed_out": True}
+    inner["dispatched_lane"] = _DEF_LANE
+    return {"kind": "observation", "receipt_nonce": nonce, "observation": inner}
+
+
+def test_733_reconcile_verified_identity_timeout_is_not_served():
+    # T10: an expected call whose only passed receipt binds a killed (timeout) observation is
+    # NOT served — a killed attempt must not reconcile as a served call, identity or not.
+    recs = [_receipt_rec("n1"), _timeout_obs_rec_with_identity("n1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok, res
+    assert ("review", "c1") in tuple(res.missing_receipt) + tuple(res.unverified), res
+
+
+def test_733_reconcile_breach_still_wins_over_verified_sibling():
+    # T10 precedence guard: a billed breach on one attempt is never laundered by a clean sibling
+    breach = _obs_rec("n1", actual="claude-wrong-9")
+    clean = _obs_rec("n2")
+    recs = [_receipt_rec("n1"), breach, _receipt_rec("n2"), clean]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and ("review", "c1") in tuple(res.unverified)
+
+
+def test_733_reconcile_availability_sibling_then_success_still_serves():
+    # unchanged behavior: a no-identity availability failure + a verified sibling = served
+    recs = [_receipt_rec("n1"), _obs_rec("n1", status="timeout"), _receipt_rec("n2"), _obs_rec("n2")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res

@@ -647,11 +647,15 @@ def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: b
                 saw_missing_obs = True
                 continue
             pc = verify_post(o["observation"])
-            if pc.verified:
+            if pc.verified and contract.observation_process_failure(o["observation"]) is None:
+                # #733: served requires identity AND a completed process — a killed attempt
+                # that still attested the right model must not reconcile as a served call.
                 saw_verified = True
             elif not pc.ok:
                 saw_breach = True
             # pc.ok and not verified => availability failure => a legitimate fallback attempt
+            # (#733: so is a verified-identity envelope whose process failed — neither served
+            # nor breach; the expected call stays unserved unless a sibling truly completed)
         # A BREACH (wrong/absent model) and a MISSING observation on an approved-launch attempt are
         # BOTH evaluated BEFORE saw_verified — a sibling attempt that verified must not launder a
         # recorded billed breach (Step-8a) NOR an approved dispatch that produced no observation at

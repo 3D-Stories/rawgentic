@@ -54,6 +54,44 @@ PARSE_STATUSES = frozenset(
 # breach (verified, not trusted). Single-sourced here so engine and enforce agree.
 AVAILABILITY_FAILURES = frozenset({NONZERO_EXIT, TIMEOUT, LAUNCH_ERROR, NO_RESPONSE})
 
+# #733: the two states a dispatch may report as SUCCESS. Everything else fails deny-by-default —
+# verify_post answers "did we route to the right model?" (identity), never "did the dispatch
+# succeed?", and every consumer that conflated the two let a SIGKILLed seat read as a passed gate.
+PROCESS_SUCCESS_STATUSES = frozenset({OK, USAGE_UNAVAILABLE})
+
+
+def observation_process_failure(obs) -> Optional[str]:
+    """Reason string when the observation records a process-level failure, else None (#733).
+
+    Success is an explicit ALLOWLIST: ``parse_status in PROCESS_SUCCESS_STATUSES`` with no
+    contradicting process evidence. Precedence within a failing observation: timeout evidence
+    (``process.timed_out`` or ``parse_status == TIMEOUT``) → ``"timeout"``; any non-zero
+    integer ``exit_code`` → ``"signalled"`` (negative) / ``"nonzero_exit"`` (positive); then
+    the non-allowlisted status string itself. A non-string ``parse_status`` fails as
+    ``"malformed_status"`` — the allowlist governs status, so malformed evidence can never
+    manufacture a success. A malformed ``process``/``exit_code`` reads as no-signal from THAT
+    field only (schema-validated appends keep garbage off the real paths). Identity is
+    deliberately not consulted — that is ``verify_post``'s job. Accepts an ``Observation`` or
+    its dict form. Never raises: this runs inside result assembly.
+    """
+    d = obs.to_dict() if isinstance(obs, Observation) else (obs if isinstance(obs, dict) else {})
+    status = d.get("parse_status")
+    proc = d.get("process")
+    proc = proc if isinstance(proc, dict) else {}
+    exit_code = proc.get("exit_code")
+    if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+        exit_code = None  # bool is an int subclass; neither is process-exit evidence
+    if proc.get("timed_out") is True or status == TIMEOUT:
+        return TIMEOUT
+    if exit_code is not None and exit_code != 0:
+        return "signalled" if exit_code < 0 else NONZERO_EXIT
+    if not isinstance(status, str):
+        return "malformed_status"
+    if status not in PROCESS_SUCCESS_STATUSES:
+        return status
+    return None
+
+
 _SCHEMA_DIR = Path(__file__).resolve().parent / "schemas"
 
 _PROVIDER_PREFIXES = (
