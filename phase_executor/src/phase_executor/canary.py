@@ -35,7 +35,7 @@ from . import contract
 
 # --- Pinned constants (re-pinned per release, drift-guarded by test_canary_digest_pin.py) ---
 POLICY_REVISION = 1
-EXPECTED_PLUGIN_VERSION = "3.109.6"
+EXPECTED_PLUGIN_VERSION = "3.109.7"
 # Computed live over hooks/hooks.json + the scripts referenced in its command fields (the
 # canonical length-framed encoding below). test_canary_digest_pin.py asserts pin == live.
 EXPECTED_REGISTRATION_DIGEST = "sha256:4edced6e6b3e1b216169ff890f30b8d3de8b6ea6429f115022b8fc86ba22c128"
