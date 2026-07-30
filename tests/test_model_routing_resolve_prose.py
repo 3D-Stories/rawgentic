@@ -58,9 +58,11 @@ def test_executor_dispatch_contract_present_in_shared_source():
     assert "Executor-dispatch contract (#470) — the PRIMARY tier." in norm
     assert "python3 hooks/executor_routing_lib.py dispatch" in norm
     assert "the input is `--plan-file`, NEVER `--plan-context`" in norm
-    # exit taxonomy: 6 additive (EXIT_REFUSED), 3 availability
+    # exit taxonomy: 6 additive (EXIT_REFUSED), 3 availability (#733 widened the gloss to the
+    # process-failure results — killed dispatches are exit 3 with the partial flagged)
     assert "`6` refused (`EXIT_REFUSED`" in norm
-    assert "`3` availability (chain exhausted / quota timeout)" in norm
+    assert ("`3` availability (chain exhausted / quota timeout / a timed-out, signalled, "
+            "or otherwise process-failed dispatch") in norm
 
 
 def test_mutating_engine_allowlist_fact_in_shared_source():
