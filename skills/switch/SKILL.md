@@ -151,7 +151,10 @@ This prompt runs once — subsequent binds see the field and skip.
 
 ### 2. Project-level: universal field check
 
-Check the project's `.rawgentic.json` for the following **universal fields** (hardcoded list):
+Check the project's `.rawgentic.json` **via Bash — never the `Read` tool** — for the following
+**universal fields** (hardcoded list). The tool matters: a `Read` here would trigger the harness's
+`CLAUDE.md` auto-load *before* the fail-closed Headless Access Check below, letting a project's own
+prose reach the session ahead of the check that authorizes it. Item 3b is where that load belongs.
 
 - `version`
 - `project`

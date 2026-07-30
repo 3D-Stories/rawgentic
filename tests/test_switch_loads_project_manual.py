@@ -132,6 +132,23 @@ def test_no_manual_case_is_silent():
     )
 
 
+def test_universal_field_check_mandates_bash_not_read():
+    """Item 2 must require Bash, so it cannot become an EARLIER load (Step 11 finding).
+
+    Item 2 reads the same `.rawgentic.json` that item 3b reads. If a model used the `Read`
+    tool there, the harness's auto-load would fire at item 2 — which sits BEFORE the
+    fail-closed Headless Access Check — letting a project's own prose reach the session
+    ahead of the check that authorizes it. Every other guard in this file would still
+    pass in that unsafe ordering, which is exactly why this one exists.
+    """
+    text = _norm(_text())
+    assert "via Bash — never the `Read` tool" in text, (
+        "Step 5b item 2 (universal field check) must explicitly mandate Bash and forbid "
+        "the Read tool, or it silently becomes a pre-authorization load of the project's "
+        "CLAUDE.md"
+    )
+
+
 def test_failed_read_does_not_report_ready():
     """A failed load must not be reported as a clean bind.
 
