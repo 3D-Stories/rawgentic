@@ -14,6 +14,25 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #756 — silent failures: the executor instruction layer (#735) · v3.109.6
+
+First slot of the epic #756 auto-run (17 children, AUTO MODE, session 048888d0). #735 was the
+spike-turned-fix: the executor machinery was proven working, but the always-loaded manuals named
+the legacy Agent-tool types for the work the executor owns, and documented a fallback the canary
+refuses (F7). Shipped: fix shape (a), owner-ratified through THREE two-way ask-owner round-trips
+(fork RG-065627; amended F7 policy RG-227616 after the gate proved the ratified fallback
+infeasible; budget-exhausted escalation RG-662910). The design took 3 gate passes x 2 cross-model
+reviewers (37 findings, 19 High dispositions, both design loop-backs consumed) and the pre-PR
+review hardened the fix's own residue (6 findings, 3 High fixed pre-PR). Acceptance highlight:
+the FIRST `executor:build` dispatch by a real WF2 run in recorded history (correlation
+`735-task2-build-r1`, gpt-5.6-terra, completed 100s, 186 in-worktree tests green) — which
+immediately found two new defects by existing: the gate refuses bakeoff-true plans outright
+(`gate_requires_bakeoff` — systemic note on #762) and a mutating build agent cannot COMMIT
+(worktree git metadata read-only → #767; recovered by orchestrator collection with provenance,
+commit `ba4ceec`). Issues filed from the run: #765, #766, #767. Out-of-repo manual edits land
+post-PR behind a normalized read-back merge gate. Suite 6190→6194. PR/merge/CI: filled by the
+next slot's pass.
+
 ## Epic #626 — the context meter: from a nag nobody acts on to a prompt that lands
 
 Section opened by the #718 slot. #713 (`d005749`) and #716 (`2c1e298`) shipped earlier the same
