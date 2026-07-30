@@ -24,7 +24,7 @@ workspace found. Run `/rawgentic:new-project` first." List each as
 
 Same file. Missing → Step 2's message. Malformed → STOP: "Workspace file is corrupted."
 Match `projects[]` by name (case-insensitive), then normalized path. Not found → list all,
-ask "Did you mean one of these?"
+ask: "No project matching '<input>'. Did you mean one of these?" — echo what was typed.
 
 ## Step 4: Verify the directory
 
@@ -74,8 +74,8 @@ Validate the answer is one of the three, add it **at the top level** by full rea
 
 Check the project's `.rawgentic.json` **via Bash — never the `Read` tool** — for `version`,
 `project`, `repo`, `protectionLevel`, `custom`. Presence only. Any missing → advisory only:
-"Config advisory: your .rawgentic.json is missing: <list>. Run `/rawgentic:setup`." Else
-print nothing.
+"Config advisory: your .rawgentic.json is missing: <list>. Run `/rawgentic:setup` to update
+your config (existing values will be preserved)." Else print nothing.
 
 ### 2b. Feature-gap staleness nudge
 
