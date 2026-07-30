@@ -194,8 +194,8 @@ load-bearing for resume. Never edit or truncate an existing entry.
 
 1. **Bumping some but not all FOUR version surfaces** (canary.py's
    `EXPECTED_PLUGIN_VERSION` is the one everyone forgets — #552 found it the hard
-   way). Rule: all four (§2), then
-   `pytest tests/hooks/test_adversarial_review_registration.py tests/phase_executor/test_canary_evidence.py -q`.
+   way; pinned by `tests/phase_executor/test_canary_digest_pin.py`). Rule: all four (§2), then
+   `pytest tests/hooks/test_adversarial_review_registration.py tests/phase_executor/test_canary_digest_pin.py tests/phase_executor/test_canary_evidence.py -q`.
 2. **Adding a skill by touching only `skills/<name>/`.** Registration spans **up to
    seven surfaces plus count guards — the authoritative list lives in the `add-skill`
    workspace skill; do not trust any restated count here or in the workspace manual.**
@@ -267,8 +267,10 @@ load-bearing for resume. Never edit or truncate an existing entry.
 19. **Putting a `SKILL.md` in a workspace dir or a `version` on the marketplace plugin
     entry.** The org-marketplace validator walks ALL `skills/**/SKILL.md` and rejects
     both (`docs/skill-development.md:141-160`; snapshots use `SKILL.snapshot.md`).
-20. **`git reset --hard` under auto-mode** — the permission classifier denies it. Rule:
-    `git checkout -- <path>` of named files.
+20. **`git reset --hard` under auto-mode** — the permission classifier denies it (no
+    rawgentic hook is involved — wal-guard deliberately does not block destructive local
+    commands). Rule: inspect `git status` / `git diff` first — `git checkout -- <path>` also
+    discards uncommitted changes; run it only against named files whose state you've checked.
 21. **Treating `estimate_agents` or lane thresholds as tunable prose.** Constants
     mirrored between `hooks/plan_lib.py` and SKILL.md `<constants>` have drift-guard
     tests asserting equality — change the Python source of truth and the mirror together.
@@ -333,7 +335,8 @@ snapshots regenerated (serve over `python3 -m http.server` — headless browsers
 `file:`; **FULL-PAGE** screenshot light+dark at 1440px-wide viewport, device scale →
 `docs/assets/` — a viewport-only 1440×1200 capture clips the sheet to ~6 of 19
 stations and passes CI, #337 review catch);
-`pytest tests/test_workflow_diagram.py` green.
+`pytest tests/test_workflow_diagram.py` green —
+`test_diagram_newest_rev_matches_plugin_version` guards the version linkage.
 
 ## 6. When uncertain — exact escalation rules
 
@@ -355,6 +358,9 @@ stations and passes CI, #337 review catch);
   stands — don't re-ask.
 
 ## 7. Updating the installed plugin (after merge)
+
+After a merge, the plugin cache update is a **separate, user-visible step** — never performed or
+deferred silently. Report it as a distinct action.
 
 1. Exit all sessions using rawgentic hooks.
 2. `claude plugin remove rawgentic@rawgentic && claude plugin install rawgentic@rawgentic`
