@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#735 — Executor Instruction Layer: Design (rev 4)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-30 13:53 MDT</div>
+<h1>#735 — Executor Instruction Layer: Design (rev 4)</h1>
+
+</header>
+<main>
+<h1>#735 — executor instruction layer: design (2026-07-30)</h1>
+<p><strong>Issue:</strong> #735 (epic #756) · <strong>Author:</strong> WF2 orchestrator, session 048888d0 · <strong>Status:</strong> owner-ratified rev 4 (FINAL — gate closed). Fork decision ratified 2026-07-30 (ask-owner token RG-065627, option 1: shape (a), both manual edits). Step-4 pass-1 findings + amended F7 policy ratified (token RG-227616, option 1). Budget-exhausted escalation after pass 3 ratified (token RG-662910, option 1: apply 5 fixes, proceed — no fourth pass). Rev 2 folded the 14 pass-1 findings; rev 3 the 12 pass-2 findings; rev 4 the 5 adopted pass-3 fixes (supervised-path retry predicate — verified vs <code>supervisor.py:1067-1102</code>; Vercel explicit linkage; retry-loop ownership vocabulary; rollout ordering; reviews-bullet scope). Declined pass-3 findings and reasons live in the dispositions ledger + session notes. Key rev-3 corrections: rev 2&#x27;s &quot;in-repo surfaces already agree&quot; was FALSE (steps.md §8 still carries pre-executor delegation prose — now in scope); the terminal-failure predicate is re-grounded in the real Observation vocabulary; the receipt-without-observation defect is tracked in <strong>#766</strong> (rev 2 mis-pointed it at #726).</p>
+<h2>Problem, one paragraph</h2>
+<p>The executor architecture is the shipped default (#474) and its machinery is proven working (build-seat spike: end-to-end, canary pass, worktree isolation — issue comment 5128276254), but real workflow runs almost never dispatch it: the engine census over all 31 recorded runs shows <strong>zero</strong> <code>build</code>-seat dispatches by a real run. Root cause (confirmed, D17–D19): two always-loaded manuals — the workspace tier (<code>~/rawgentic/CLAUDE.md</code> §2) and the user tier (<code>~/.claude/CLAUDE.md</code> standing authorization) — name the legacy Agent-tool subagent types (<code>rawgentic-implementer</code>, <code>rawgentic-reviewer</code>, <code>deep-reasoner</code>) for exactly the work the executor routes to seats, while the correct routing instruction lives only in a 1,889-line per-step reference file. The always-resident instruction wins. Worse, the workspace manual&#x27;s review-fallback clause names a substitution (<code>rawgentic:rawgentic-reviewer</code>) that the architecture canary REFUSES (verified live: <code>{&quot;refused&quot;: &quot;architecture_self_check&quot;}</code>), so a session whose executor review seat dies is routed into either a refusal or a violation (F7).</p>
+<h2>The fork (owner decision required — asked via /ask-owner)</h2>
+<table>
+<thead><tr><th>Shape</th><th>What it is</th><th>Assessment</th></tr></thead>
+<tbody>
+<tr><td><strong>(a) Rewrite the always-loaded manuals</strong> — the §2 subagent + review bullets name the executor seats; Agent-tool types demoted to the declared legacy-rollback path; the impossible F7 fallback clause replaced with an executable policy</td><td>Removes the contradiction at its source. The rewritten bullets themselves carry a one-line routing rule, so the always-loaded tier states the RULE and defers mechanics to the skill</td><td><strong>Recommended.</strong> One instruction, stated once at the widest tier where it is true (the tier-map&#x27;s own placement rule). Smallest stable surface: one sentence per bullet</td></tr>
+<tr><td><strong>(b) Promote the executor routing instruction into an always-loaded surface</strong> (keep existing guidance, add the routing contract alongside)</td><td>Leaves the legacy-naming guidance in place; two competing always-loaded instructions instead of one resident vs one buried — the conflict this issue exists to remove, now at equal footing</td><td>Rejected as primary: duplication is how the copies drift (the workspace manual&#x27;s own &quot;Where a rule belongs&quot; warns exactly this). Its useful essence — the rule being resident — is folded into (a)</td></tr>
+</tbody>
+</table>
+<p><strong>Recommendation: (a).</strong> (b)&#x27;s only advantage (residency) is achieved inside (a) because the rewritten bullets ARE the always-loaded routing rule.</p>
+<h3>Second decision inside the fork: the F7 fallback policy (rev 2 — gate-amended, owner-ratified)</h3>
+<p>&quot;The executor review seat died — now what?&quot; The rev-1 recommendation (substitute an executor <code>review</code>-seat dispatch for a failed Codex review) was REFUTED by the Step-4 gate (self-review F2): for Claude-authored work the cross-model-author rule leaves ONLY the codex pool eligible in the review chain, so the substitute would re-dispatch the engine that just failed; an ad-hoc dispatch also requires a declared run (<code>begin-run</code>). GLM is not installed on this host (verified: <code>ModuleNotFoundError: zhipuai</code>). The ratified policy (RG-227616 option 1):</p>
+<p>1. <strong>Inside a WFn run — retry gated on PROVABLE death.</strong> The ORCHESTRATOR owns the retry loop:    one *workflow dispatch* may comprise up to two *executor attempts*; each attempt uses a    distinct correlation id (<code>&lt;original&gt;</code>, <code>&lt;original&gt;-r1</code>) and produces its own receipt +    observation, and the workflow dispatch emits ONE canonical <code>DISPATCH</code> line after the loop    completes (retried-then-succeeded → <code>outcome=retried</code>, retried-and-failed → <code>outcome=error</code>) —    the attempt-level executor call never emits a session-note DISPATCH line of its own.    The retry predicate is path-specific, because death proof differs (rev-4 correction,    verified at source):</p>
+<ul>
+<li><strong>Non-mutating (synchronous) attempts:</strong> retry permitted when an observation is present AND</li>
+</ul>
+<p>     <code>parse_status != &quot;ok&quot;</code> (closed vocabulary, <code>contract.py:36-46</code>) — the sync adapter SIGKILLs      the whole process group and reaps it BEFORE the observation is written      (<code>adapters/base.py:91-99</code>), so a terminal observation proves death.</p>
+<ul>
+<li><strong>Mutating (supervised) attempts — the build seat</strong> (<code>executor_routing_lib.py:2487-2496</code></li>
+</ul>
+<p>     routes any mutating profile to the supervised branch): a timeout observation does NOT prove      death — the supervisor writes one even when its kill was unverified      (<code>supervisor.py:1067-1102</code>, state carries &quot;timeout kill unverified: residue&quot; / a      <code>completed_with_residue</code> terminal). Retry is permitted ONLY on positive death evidence: the      attempt&#x27;s terminal state shows a VERIFIED kill (no residue quarantine, no      <code>completed_with_residue</code>). Any residue/unverified-kill state, and any receipt with NO      observation (the F6 state, tracked as <strong>#766</strong>), goes DIRECTLY to the <strong>ERROR protocol</strong> —      no blind retry; two live mutating attempts is the worse failure.    This binds until #733/#766 ship terminal-observation guarantees, at which point    &quot;indeterminate&quot; shrinks to nothing and the branch stays correct. 2. <strong>The general high-stakes-review bullet</strong> (non-WFn, &quot;Codex fails or stalls&quot;): retry Codex once;    if it still fails, <strong>report the review as NOT OBTAINED</strong> (blocker/ERROR) — never a same-engine    substitute, never an unsanctioned harness agent, never silence. No cross-model substitute is    configured today; if one is wanted later (e.g. the GLM backend: <code>pip install zhipuai</code> +    <code>ZHIPUAI_API_KEY</code>), that is its own owner-approved issue. 3. Rejected: adversarial-review path as THE declared fallback (different mechanism — diff-lens    refutation, not a general reviewer; fine as an additional layer, wrong as the substitute). 4. Rejected: per-run <code>defaultArchitecture: legacy</code> rollback as the fallback (a joint owner+operator    config change by design — too heavy for a mid-run seat death, and exactly the &quot;quiet downgrade&quot;    the architecture forbids). 5. Rejected (rev 2): executor review-seat substitution — refuted above; kept here so it is not    re-proposed.</p>
+<h2>The build seat&#x27;s contract (AC1&#x27;s required statement)</h2>
+<p>The <code>build</code> seat is the WF2 Step-8 / WF3 implementation dispatch surface for MUTATING work:</p>
+<ul>
+<li><strong>Requires</strong> an authenticated #429 GateDecision (<code>--gate-file</code>) plus the live implementation plan</li>
+</ul>
+<p>  (<code>--plan-file</code>); the CLI derives plan context internally — no caller-assembled context crosses   the boundary (#464 §E).</p>
+<ul>
+<li><strong>Engine allowlist:</strong> mutating dispatch is codex-only until an FS-sandboxed child ships</li>
+</ul>
+<p>  (<code>MUTATING_FS_SANDBOXED = {codex}</code>); a mutating composition on any other engine is refused at   the canary with exit 6.</p>
+<ul>
+<li><strong>Isolation:</strong> per-dispatch git worktree + subprocess</li>
+</ul>
+<p>  (<code>.rawgentic/runtime/worktrees/&lt;run&gt;/&lt;seat&gt;-&lt;digest&gt;/&lt;attempt&gt;/</code>). <strong>The executor never splits a   pane</strong> — pane-per-phase was the owner&#x27;s mental model, not the shipped design (settled by spike;   whether pane visibility is wanted ON TOP is a separate design question, deliberately not this   issue).</p>
+<ul>
+<li><strong>Bounds:</strong> seat manifest <code>timeout_s: 3600</code> (the dispatch default since the F4 fix);</li>
+</ul>
+<p>  <code>--author-provider</code> is REQUIRED (its absence is a hard <code>pre_check_denied</code>, not a default); the   cross-model-author invariant applies (an author&#x27;s engine never builds/reviews its own work where   the table forbids it).</p>
+<ul>
+<li><strong>Evidence:</strong> every attempt emits a receipt + observation in</li>
+</ul>
+<p>  <code>.rawgentic/runs/&lt;run-id&gt;/routing-audit.jsonl</code> and every invocation one canonical <code>DISPATCH</code>   line in session notes. <strong>Caveat binding all guarantees above:</strong> until #733 (killed seat reports   ok:true) and #766 (killed wait leaves a receipt with no observation) ship, a DEAD dispatch can   misreport — so every consumer of these guarantees applies the AC3-style acceptance contract   (receipt+observation matched, <code>parse_status != ok</code> handling, attribution) rather than trusting   a single field. Those two defects are tracked children of epic #756, out of scope here.</p>
+<h2>Acceptance criteria → deliverables</h2>
+<table>
+<thead><tr><th>AC</th><th>Status</th><th>Deliverable</th></tr></thead>
+<tbody>
+<tr><td>1. Fork decision + build-seat contract</td><td>this doc + /ask-owner</td><td>Decision recorded here + in the epic decision log</td></tr>
+<tr><td>2. Surfaces agree</td><td>the core edit</td><td>Out-of-repo: rewrite <code>~/rawgentic/CLAUDE.md</code> §2 two bullets + amend <code>~/.claude/CLAUDE.md</code> standing-authorization line. In-repo (rev-3 correction — rev 2&#x27;s &quot;already agrees&quot; was FALSE): <code>skills/implement-feature/references/steps.md</code> §8&#x27;s modelRouting-delegation block (steps.md:981-1000) still prescribes Agent-tool subagent delegation and &quot;inherit → runs inline&quot;, contradicting the executor rule. Fix: legacy-condition that block (&quot;Under the LEGACY architecture (declared) …&quot;) and add the executor-primary sentence: &quot;Under the executor architecture (the default), Step-8 plan tasks dispatch via the <code>build</code> seat per the <code>&lt;model-routing-resolve&gt;</code> seat table; full receipts-asserted adoption across every WF2/WF3 run is #762&#x27;s acceptance surface.&quot; Add a section-sliced drift guard pinning the executor-primary sentence + asserting the delegation block is legacy-conditioned</td></tr>
+<tr><td>3. <code>executor:build</code> dispatches in a real WF2 run</td><td>THIS run</td><td>Step 8 dispatches the in-repo edit task through <code>--seat build</code>; the <code>^DISPATCH</code> line + receipt are the evidence</td></tr>
+<tr><td>4. Legacy fence</td><td>ALREADY MET</td><td>Struck per issue comment 5127226202 (canary refusal verified live); recorded, no work</td></tr>
+<tr><td>5. #472 carve-out pointer resolved</td><td>stale pointer</td><td>#472 CLOSED 2026-07-21 proving read-only seats only; its report never mentions the bake-off. Edit <code>shared/blocks/model-routing-resolve.md</code> (Step-3 seat-table row) to the exact replacement text below, then run <code>scripts/sync_shared_blocks.py</code>. Pointer target: <strong>#765</strong> (filed 2026-07-30)</td></tr>
+</tbody>
+</table>
+<p><strong>Exact Step-3 row replacement text (the canonical sentence a drift guard pins):</strong> the row&#x27;s notes-cell carve-out clause becomes:</p>
+<blockquote><strong>AC1 carve-out, current status (#735):</strong> the competitive wiring was never proven — #472 closed</blockquote>
+<blockquote>2026-07-21 covering read-only seats only. Step 3 design generation stays on its current</blockquote>
+<blockquote>mechanism; whether to wire or retire the bake-off is decided in #765.</blockquote>
+<h2>File changes</h2>
+<p><strong>In-repo (the PR):</strong> 1. <code>shared/blocks/model-routing-resolve.md</code> — the seat-mapping table&#x27;s Step-3 row: replace the    stale &quot;proven in #472 … Until then&quot; carve-out text with the current truth + live pointer    (#765). Run <code>scripts/sync_shared_blocks.py</code> (synced copy lands in    <code>skills/implement-feature/SKILL.md</code>). 1b. <code>skills/implement-feature/references/steps.md</code> §8 (rev-3 addition, self-review pass-2 F1):    legacy-condition the modelRouting-delegation block (steps.md:981-1000 — &quot;non-<code>inherit</code> model →    subagent delegation&quot;, &quot;inherit → Step 8 runs inline&quot;) so it reads as LEGACY-architecture    prose, and add the executor-primary sentence: &quot;Under the executor architecture (the default),    Step-8 plan tasks dispatch via the <code>build</code> seat per the <code>&lt;model-routing-resolve&gt;</code> seat table;    full receipts-asserted adoption across every WF2/WF3 run is #762&#x27;s acceptance surface.&quot; 2. <code>tests/</code> — red-before-green drift guards: (a) pin the corrected carve-out sentence (anchor ONE    canonical sentence, section-sliced per repo mistake #6); (b) pin the new §8 executor-primary    sentence and assert the delegation block is legacy-conditioned; update any existing pin that    holds the old sentences (<code>tests/test_model_routing_resolve_prose.py</code>,    <code>tests/test_wf2_clarity.py</code>, <code>tests/test_bundled_agents.py</code> — grep at implementation). 3. <code>docs/planning/2026-07-30-735-executor-instruction-layer-design.md</code> + <code>.html</code> (this doc,    rendered via <code>render_artifact.py</code>, deployed to Vercel per the standing mandate). 4. Version bump ×4 surfaces (3.109.5 → 3.109.6, patch — fix) + README changelog entry (diagram    decision: no workflow-spine change → no diagram REV; the routing spine is untouched — this is    instruction-surface text and a carve-out pointer). 5. PR body carries the EXACT final text of the out-of-repo manual edits (reviewability +    re-applicability — CI cannot see those files).</p>
+<p><strong>Out-of-repo (direct edits, alongside the PR, recorded in the epic decision log):</strong> 6. <code>~/rawgentic/CLAUDE.md</code> §2 &quot;Subagents and long-running work&quot;: replace the Sonnet/<code>deep-reasoner</code>    implementation-subagent bullet with the executor routing rule (WFn per-phase model work → executor    seats via the dispatch CLI; build-seat contract in one line; Agent-tool types = legacy rollback    only; ad-hoc non-WFn dispatch judgment unchanged; never Haiku). 7. <code>~/rawgentic/CLAUDE.md</code> §2 &quot;Reviews and second opinions&quot;: replace the impossible substitution    with policy 1+2 above. 8. <code>~/.claude/CLAUDE.md</code> &quot;Standing authorization: subagent dispatch&quot;: amend the sentence naming    the legacy types so the standing grant covers &quot;whatever dispatch mechanism the invoked skill    mandates (executor seats today; the named Agent-tool types only under the declared legacy    rollback)&quot;. The authorization itself stays — only the mechanism naming changes.</p>
+<h2>Drift prevention (AC2&#x27;s &quot;no session can read one and obey the other&quot;, kept honest)</h2>
+<ul>
+<li>In-repo prose stays CI-pinned (existing + new drift guards).</li>
+<li>The out-of-repo manuals CANNOT be CI-pinned (CI has no workspace). Mitigations, stated honestly:</li>
+</ul>
+<p>  the rewritten rule is ONE sentence per surface (small stable target); this doc + the PR body   carry the exact final text; the epic decision log records the edit date. Residual risk accepted:   a future hand-edit of the manuals can re-diverge — that is the tier-map&#x27;s standing discipline   problem, not newly created here.</p>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: <code>python3 hooks/executor_routing_lib.py dispatch --seat build --prompt-file &lt;brief&gt; --run-id wf2-735-048888d0 --correlation-id &lt;id&gt; --author-provider anthropic --gate-file &lt;gate.json&gt; --plan-file &lt;impl-plan.md&gt; --workspace &lt;ws&gt; --project rawgentic</code> (mutating, codex engine) on this repo&#x27;s phase_executor runtime</li>
+</ul>
+<p>  feasibility: verified via spike — REACHABILITY + gate-chain evidence, classified honestly: the #735 spike (issue comment 5128276254) dispatched the build seat end-to-end with the full precheck chain (gate-file, plan-file, plan-context equality, author-provider each refusing correctly before the passing run; canary codex_mutating pass on all three required checks; worktree isolation; receipt+observation written) — but its prompt was READ-ONLY, so the exact MUTATING invocation (edit → commit → collection/promotion) is NOT pre-proven. That is this design&#x27;s likeliest-wrong claim, named per #226: Task 2 itself exercises it under the ratified retry+ERROR failure path, and the AC3 contract below is the check. This session&#x27;s Step-4 dispatches exercised the same CLI on <code>--seat review</code> twice (parse_status ok, 443 s and 351 s — both past the old 300 s default)   failure: fail-silent   surface: AC3 acceptance contract — ALL must hold or AC3 is unmet and a logged ERROR is raised — (1) receipt AND observation both present in <code>.rawgentic/runs/wf2-735-048888d0/routing-audit.jsonl</code> with matching run/seat/correlation/attempt ids; (2) observation <code>parse_status: ok</code>, <code>timed_out</code> false, process exit 0, and NO residue/unverified-kill terminal state (an ok:true-while-killed record fails this); (3) attribution is executable: the attempt&#x27;s worktree (<code>.rawgentic/runtime/worktrees/wf2-735-048888d0/build-*/&lt;attempt&gt;/</code>) contains the produced commit, its SHA is recorded in session notes at collection time, and the promoted tree&#x27;s diff vs the pre-dispatch HEAD equals (4) the expected Task-2 edit exactly — the authoritative Task-2 file set and edit text live in the implementation plan (<code>claude_docs/.wf2-state/735/impl-plan-735.md</code>, Task 2). Never trust the dispatch exit code alone</p>
+<ul>
+<li>api: <code>vercel link --yes --scope &lt;team&gt; --project &lt;name&gt;</code> then <code>vercel deploy --yes --prod</code> (design-doc hosting) from a dedicated deploy dir holding the rendered page as index.html — rev-4 correction: the durable linkage is <code>.vercel/project.json</code> (org + project ids), NOT the directory name; an unlinked dir can mint a project under the DEFAULT scope, and the deploy still &quot;succeeds&quot;, so wrong-target resolution is fail-silent</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — standing convention on this account, verified live 2026-07-24 (team 3d-stories; workspace manual &quot;Vercel deploy specifics&quot;), exercised repeatedly since (per-project hosted docs across this workspace)   failure: fail-silent   surface: BEFORE deploying, assert <code>.vercel/project.json</code> exists and records the intended team&#x27;s org id + project; AFTER deploying, save the body and check both facts — <code>CB=$RANDOM; curl -s -w &#x27;%{http_code}&#x27; -o /tmp/vercel-check.html &quot;&lt;url&gt;?cb=${CB}&quot;</code> must print 200 AND <code>grep -F &quot;&lt;the doc&#x27;s real &lt;title&gt; text&gt;&quot; /tmp/vercel-check.html</code> must match (a bare 200 with an age: header can be a stale CDN copy; the cache-buster must expand OUTSIDE single quotes)</p>
+<p>Honest-classification note (build dispatch): dispatch ERRORS are loud (exit taxonomy 2/3/4/5/6), but the known #733/#766 defects mean a KILLED seat can report ok:true or nothing at all — so the call is treated as fail-silent until those children ship, and the acceptance contract above is mandatory. The out-of-repo manual edits are applied INLINE by the orchestrator (plain file edits — the build seat&#x27;s worktree confinement cannot and must not reach them); the only executor-mediated mutation is the in-repo Task-2 edit. Write access to both manuals is proven, not assumed: they are same-user files (<code>rocky00717</code>), and this very session already writes sibling paths in both trees (<code>.rawgentic_workspace.json</code> read-modify-write at bind; <code>claude_docs/</code> appends) — a failed write would surface as a plain tool error and gates the merge per the read-back check.</p>
+<h2>Security implications</h2>
+<p>Instruction-layer change; no new code paths. Net tightening: removes a documented path that routed review work to unsanctioned agent types when the sanctioned one died.</p>
+<h2>Error handling / failure modes</h2>
+<ul>
+<li><strong>Rollout ordering (rev 4 — no split-brain window):</strong> the sequence is fixed: (1) complete AC3</li>
+</ul>
+<p>  (build dispatch, acceptance contract) and every in-repo commit; (2) open the reviewable PR;   (3) ONLY THEN edit the two manuals, recording each file&#x27;s ORIGINAL section slice in the epic   decision log first (the restore source — the manuals are not in git); (4) read-back gate below;   (5) merge. A failure at any point before (3) leaves both manuals untouched — the split-brain   state this issue removes is never recreated mid-run. If either manual write or read-back fails,   restore BOTH manuals from the recorded slices and raise ERROR.</p>
+<ul>
+<li><strong>Merge gate (manual read-back):</strong> the PR is NOT merged and #735 is NOT closed until both</li>
+</ul>
+<p>  manual files have been read back and matched — whitespace-normalized, section-sliced — against   the checked-in replacement blocks, and the verification result is recorded in the epic decision   log. Either comparison failing is an ERROR (blocker), not a follow-up task.</p>
+<ul>
+<li><strong>Session-transition honesty (AC2 scope):</strong> the manuals load at session start; sessions already</li>
+</ul>
+<p>  running when the edit lands keep the OLD text until they end. AC2 is satisfied for sessions   started after the edit — acceptance evidence must come from such a session; existing sessions   age out (single-operator workspace, hours not weeks).</p>
+<ul>
+<li>The bake-off follow-up issue exists: <strong>#765</strong> (filed 2026-07-30, before design finalization).</li>
+<li><code>sync_shared_blocks.py</code> forgotten → CI <code>test_shared_block_drift.py</code> fails (designed catch).</li>
+<li>The build-seat dispatch (AC3) fails mid-run → the ratified retry policy (terminal-observation</li>
+</ul>
+<p>  gated, new correlation id, one retry; indeterminate → ERROR direct). If the retry also fails,   AC3 stays unmet and the issue gets an honest blocker comment rather than a hand-edit   masquerading as a seat dispatch.</p>
+<h2>Peer consult synthesis (gpt backend, blind both ways)</h2>
+<p>The cross-model peer proposal (Codex/gpt, produced blind to this draft) converged on the core: shape (a) hybrid, build-seat contract stated first, retry-once-at-seat-bound-then-ERROR, legacy only as an explicit clean-boundary rollback, never a mid-dispatch downgrade. Adopted from the peer (provenance: gpt consult, 2026-07-30):</p>
+<p>1. <strong>Verbatim replacement blocks checked into the repo</strong> (below) rather than PR-body-only — the    in-git copy is the durable re-application source for the out-of-repo manuals. 2. <strong>Confirm termination before retry</strong> — sharpened by the Step-4 gate into the ratified policy:    retry only on a TERMINAL failure observation; indeterminate liveness (receipt, no observation)    goes directly to ERROR, and each attempt keeps its own receipt (no obscured first attempt). 3. <strong>Concrete pointer, not an indefinite one</strong> for the carve-out (peer&#x27;s criticism of &quot;another    indefinite pointer&quot; accepted): the re-point targets a real filed issue. 4. <strong>Reachability ≠ adoption</strong>, stated honestly: this run&#x27;s single <code>executor:build</code> receipt proves    the instruction path is executable; sustained adoption is #762&#x27;s acceptance surface (receipts    census), not this issue&#x27;s.</p>
+<p>Rejected from the peer, with reasons: wiring the Step-3 bake-off now (real engineering with its own competitive contract — belongs with #762&#x27;s seat-wiring scope or the filed follow-up, and AC5 explicitly allows re-point-with-reason); a second &quot;routing charter&quot; copy near the top of SKILL.md (SKILL.md&#x27;s <code>&lt;model-routing-resolve&gt;</code> already carries the contract — a second copy is the drift the peer itself lists as its top risk); a new instruction-census test (the existing <code>test_model_routing_resolve_prose.py::test_agent_tool_dispatch_instructions_are_legacy_conditioned</code> already does this for the corpus — extend only if a gap is found at implementation).</p>
+<h2>Manual amendment — verbatim replacement blocks (the out-of-repo edits)</h2>
+<p><strong><code>~/rawgentic/CLAUDE.md</code> §2 &quot;Subagents and long-running work&quot;, bullet 1 (standing authorization pointer), REPLACE with:</strong></p>
+<blockquote>- The user tier&#x27;s standing dispatch authorization (owner decision 2026-07-27) covers, for the</blockquote>
+<blockquote>  rawgentic WFn workflows, exactly the executor CLI at `python3 hooks/executor_routing_lib.py</blockquote>
+<blockquote>  dispatch<code>, limited to the </code>analysis<code>, </code>review<code>, and </code>build` seats. Any new mechanism or seat</blockquote>
+<blockquote>  requires a new owner authorization before use. Invoking the workflow IS the request — never</blockquote>
+<blockquote>  re-ask permission, and never silently substitute inline work for a review a workflow step</blockquote>
+<blockquote>  mandates (mistake #8; WF2 Step 11 is the canonical example).</blockquote>
+<p><strong>Same section, bullet 2 (Sonnet/<code>deep-reasoner</code> guidance), REPLACE with:</strong></p>
+<blockquote>- **WFn per-phase model work routes through the executor seats the invoked skill names, never</blockquote>
+<blockquote>  Agent-tool subagent types** (#735). The <code>build</code> seat serves WF2 implementation dispatches</blockquote>
+<blockquote>  today (WF3 build adoption and broader project wiring: #762) — it requires the authenticated</blockquote>
+<blockquote>  gate + plan files, mutating work is codex-only by allowlist, and it isolates in a per-dispatch</blockquote>
+<blockquote>  git worktree (the executor never splits a pane).</blockquote>
+<blockquote>  <code>rawgentic:rawgentic-implementer</code> / <code>rawgentic:rawgentic-reviewer</code> are the declared legacy</blockquote>
+<blockquote>  rollback ONLY (<code>defaultArchitecture: legacy</code>; the canary refuses them otherwise), and harness</blockquote>
+<blockquote>  agents (<code>deep-reasoner</code>, <code>Explore</code>) are for ad-hoc non-WFn work. A failed executor seat</blockquote>
+<blockquote>  attempt mid-run: the orchestrator retries ONCE (new correlation id, own receipt; one DISPATCH</blockquote>
+<blockquote>  line for the whole dispatch) ONLY on proven death — for a mutating build attempt that means a</blockquote>
+<blockquote>  VERIFIED kill; residue, an unverified kill, or a receipt with no observation is NOT death and</blockquote>
+<blockquote>  goes directly to the ERROR protocol — no blind retry, never a downgrade. Ad-hoc (non-WFn)</blockquote>
+<blockquote>  subagent judgment unchanged: Sonnet default, Opus for genuinely hard reasoning, never Haiku.</blockquote>
+<p><strong>Same file, §2 &quot;Reviews and second opinions&quot;, the fallback sentence — REPLACE &quot;if Codex fails or stalls, substitute an independent Opus reviewer subagent (<code>rawgentic:rawgentic-reviewer</code>) — an established, accepted substitution.&quot; WITH:</strong></p>
+<blockquote>For an ad-hoc non-WFn high-stakes review: if Codex fails or stalls, retry it once; if it still</blockquote>
+<blockquote>fails, report the review as NOT OBTAINED (a blocker, not a silent skip) — an honestly missing</blockquote>
+<blockquote>review beats a fake substitute. Inside a WFn run, the workflow&#x27;s terminal-observation-gated</blockquote>
+<blockquote>retry policy controls instead (retry only on proven death; indeterminate → ERROR).</blockquote>
+<blockquote>(<code>rawgentic:rawgentic-reviewer</code> is NOT a substitute: the architecture canary refuses it outside</blockquote>
+<blockquote>the declared legacy rollback — #735 F7. An executor <code>review</code>-seat dispatch is NOT one either:</blockquote>
+<blockquote>for Claude-authored work the cross-model rule leaves only the just-failed Codex pool eligible.</blockquote>
+<blockquote>No cross-model substitute is configured today; adding one — e.g. the GLM backend — is its own</blockquote>
+<blockquote>owner-approved change.)</blockquote>
+<p><strong><code>~/.claude/CLAUDE.md</code> &quot;Standing authorization: subagent dispatch&quot;, first bolded bullet — APPEND after &quot;Do NOT re-ask for permission, and do NOT silently substitute inline work for a review agent a workflow step mandates — workflow-specific step rules live in the bound workspace/project manuals.&quot;:</strong></p>
+<blockquote>For rawgentic WFn workflows the grant covers exactly the executor CLI at</blockquote>
+<blockquote><code>python3 hooks/executor_routing_lib.py dispatch</code>, limited to the <code>analysis</code>, <code>review</code>, and</blockquote>
+<blockquote><code>build</code> seats; any new mechanism or seat requires a new owner authorization before use. The</blockquote>
+<blockquote>Agent-tool types stay pre-authorized only where a definition genuinely calls for them (the</blockquote>
+<blockquote>declared legacy rollback, or non-WFn skills that name them). Non-WFn authorizations in this</blockquote>
+<blockquote>block are unchanged.</blockquote>
+<h2>Multi-PR assessment</h2>
+<p>No — well under 500 lines, one coherent phase, single PR.</p>
+
+</main>
+<footer>Last updated: 2026-07-30 13:53 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
