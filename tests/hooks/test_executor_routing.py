@@ -3514,3 +3514,49 @@ def test_status_live_verdict_unrecognised_backend_is_indeterminate():
         herdr=_ProbeStub(Liveness.CONFIRMED_ALIVE), tmux_present=True)
     assert live is False
     assert probe_error and "unsupported terminal backend" in probe_error
+
+
+# --- #735 F4: an omitted --timeout must default to the SEAT'S declared bound ---------------
+
+def test_resolve_dispatch_timeout_uses_the_seats_declared_bound():
+    """#735 F4 root cause: the CLI defaulted --timeout to a flat 300.0 s while the review
+    seat's manifest declares bounds.timeout_s: 1800 and build declares 3600. Because
+    engine._effective_timeout is min(caller, bound) — it only ever TIGHTENS — every caller
+    that did not hand-tune the flag silently got a sixth of the review seat's sanctioned
+    budget. Measured cost: two of two real Step 11 reviews exceeded 300 s (#719 at 788 s,
+    #720 at 399.7 s), so both would have been SIGKILLed at the default.
+    """
+    review = {"role": "review", "manifest": {"bounds": {"timeout_s": 1800}}}
+    build = {"role": "build", "manifest": {"bounds": {"timeout_s": 3600}}}
+    assert er.resolve_dispatch_timeout(review) == 1800.0
+    assert er.resolve_dispatch_timeout(build) == 3600.0
+
+
+def test_resolve_dispatch_timeout_honours_an_explicit_caller_value():
+    """An explicit --timeout still wins here; engine._effective_timeout clamps it to the
+    bound afterwards, so this function must not pre-empt that (one clamp, one place)."""
+    review = {"role": "review", "manifest": {"bounds": {"timeout_s": 1800}}}
+    assert er.resolve_dispatch_timeout(review, 60.0) == 60.0
+    # Above the bound is deliberately NOT clamped here — _effective_timeout owns that.
+    assert er.resolve_dispatch_timeout(review, 9999.0) == 9999.0
+
+
+@pytest.mark.parametrize("entry", [
+    None,
+    {},
+    {"manifest": None},
+    {"manifest": {}},
+    {"manifest": {"bounds": None}},
+    {"manifest": {"bounds": {}}},
+    {"manifest": {"bounds": {"timeout_s": None}}},
+    {"manifest": {"bounds": {"timeout_s": 0}}},
+    {"manifest": {"bounds": {"timeout_s": -5}}},
+    {"manifest": {"bounds": {"timeout_s": "1800"}}},
+    {"manifest": {"bounds": {"timeout_s": True}}},
+])
+def test_resolve_dispatch_timeout_falls_back_when_no_usable_bound(entry):
+    """Fail-SAFE, not fail-closed: a seat that declares no usable bound keeps the historical
+    300 s rather than dispatching unbounded. bool is rejected explicitly because True would
+    otherwise pass an isinstance(int) check and become a 1-second timeout.
+    """
+    assert er.resolve_dispatch_timeout(entry) == er.DISPATCH_TIMEOUT_FALLBACK_S == 300.0

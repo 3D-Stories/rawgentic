@@ -71,6 +71,34 @@ EXIT_ENFORCEMENT: Final[int] = 4    # pre-check denial or requested!=actual iden
 EXIT_INTERNAL: Final[int] = 5       # audit/capture/internal/import failure (non-retryable)
 EXIT_REFUSED: Final[int] = 6        # #470 §2a: canary refusal (either phase) — ADDITIVE, no renumber
 
+# #735 F4: last-resort dispatch timeout, used ONLY when the seat declares no usable
+# `bounds.timeout_s`. This was the CLI's flat `--timeout` default, which is the bug:
+# `engine._effective_timeout` is `min(caller, bound)` and therefore only ever TIGHTENS,
+# so a flat 300 handed every caller who did not tune the flag a sixth of the review
+# seat's declared 1800 and a twelfth of build's 3600. Two of two real Step 11 reviews
+# exceeded it (#719 at 788 s, #720 at 399.7 s) and would have been SIGKILLed.
+DISPATCH_TIMEOUT_FALLBACK_S: Final[float] = 300.0
+
+
+def resolve_dispatch_timeout(seat_entry, caller_timeout=None) -> float:
+    """Resolve a dispatch timeout in SECONDS from the seat's own declared bound.
+
+    An omitted ``--timeout`` now means "the seat's sanctioned budget", not a flat 300 s.
+    An explicit caller value is returned unchanged — clamping stays the sole job of
+    ``engine._effective_timeout`` (one clamp, one place), so this must not pre-empt it.
+
+    Fail-SAFE rather than fail-closed: a seat with no usable bound keeps the historical
+    300 s instead of dispatching unbounded. ``bool`` is rejected explicitly because
+    ``True`` would otherwise satisfy ``isinstance(x, int)`` and become a 1-second timeout.
+    """
+    if caller_timeout is not None:
+        return float(caller_timeout)
+    bounds = ((seat_entry or {}).get("manifest") or {}).get("bounds") or {}
+    ts = bounds.get("timeout_s")
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts > 0:
+        return float(ts)
+    return DISPATCH_TIMEOUT_FALLBACK_S
+
 # Providers whose MUTATING path is OS-confined (contract.py "SECURITY-LAYER ASYMMETRY"): codex runs
 # under Landlock workspace-write pinned to the worktree; claude has no FS sandbox, so it is absent
 # until a bwrap/landlock child ships (owner decision 2026-07-20, #470). supervised_dispatch STEP 0
@@ -2322,6 +2350,14 @@ def _do_dispatch(args) -> int:
     except Exception as e:  # noqa: BLE001 — e.g. jsonschema.ValidationError on a schema-invalid table
         return _emit(_err(EXIT_INTERNAL, "routing_table_invalid", f"{type(e).__name__}: {e}", retryable=False,
                           correlation_id=args.correlation_id))
+    # #735 F4: resolve the dispatch timeout from THIS seat's declared bound now that the
+    # table is loaded. Done here, once, because all three downstream uses of args.timeout
+    # read it after this point — the single place every dispatch caller routes through.
+    try:
+        args.timeout = resolve_dispatch_timeout(snap.seat(args.seat), args.timeout)
+    except pe.routing.RoutingError as e:
+        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
     # Trust-boundary CLI inputs: a missing/unreadable prompt or context file is bad input (exit 2).
     try:
         prompt = Path(args.prompt_file).read_text(encoding="utf-8")
@@ -2976,7 +3012,10 @@ def main(argv: Optional[list] = None) -> int:
     d.add_argument("--author-provider", dest="author_provider")
     d.add_argument("--resume-session-id", dest="resume_session_id")  # #559 AC2a: claude-only resume
     d.add_argument("--effort")
-    d.add_argument("--timeout", type=float, default=300.0)
+    # #735 F4: no flat default. None means "resolve from the seat's bounds.timeout_s"
+    # (resolve_dispatch_timeout), so a caller who omits the flag gets the seat's
+    # sanctioned budget rather than a sixth of it.
+    d.add_argument("--timeout", type=float, default=None)
     d.add_argument("--workspace", required=True)
     d.add_argument("--project", required=True)
     d.set_defaults(fn=_do_dispatch)
