@@ -125,12 +125,15 @@ lowercase letter immediately followed by `###` fails
   installs only gitleaks/semgrep/osv-scanner (trivy + pip-audit deliberately omitted;
   their coverage is injected-runner unit tests).
 
-**CI lanes** — `test` (CI) and `lint` are HARD gates; `code-review` and
-`security-review` are ADVISORY (red = "not reviewed", NOT "rejected" —
-`docs/ci-review-lanes.md`; they deliberately dropped `continue-on-error` so green means
-actually-reviewed). Known infra false-red: log shows `Exchanging OIDC token for app
-token` → `Failed to parse JSON` = OAuth outage, not a finding. Triage by reading the
-failed log; check EVERY run on the PR.
+**CI lanes** — `test` (CI) and `lint` are HARD gates; `security-review` is ADVISORY
+(red = "not reviewed", NOT "rejected" — `docs/ci-review-lanes.md`; it deliberately
+dropped `continue-on-error` so green means actually-reviewed). The `code-review` lane was
+**REMOVED** (owner decision 2026-07-30): advisory-only, duplicated WF2's own Step 11, and
+the largest single component of PR wall-clock (~6 min hosted, up to ~15 when the fleet
+runner serialised lanes). `tests/test_review_lanes.py` asserts it stays gone — restoring it
+means deleting that guard in the same commit and saying why. Known infra false-red: log
+shows `Exchanging OIDC token for app token` → `Failed to parse JSON` = OAuth outage, not a
+finding. Triage by reading the failed log; check EVERY run on the PR.
 
 **Design/review docs** — render via
 `python3 hooks/render_artifact.py --md <doc>.md --out <doc>.html --title "..."` (never
