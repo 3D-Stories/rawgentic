@@ -74,9 +74,12 @@ orchestrator owns everything after the build.
 
 ## Collect before validation (worktree-isolated builds, #164)
 
-The build-subagent (`rawgentic:rawgentic-implementer`) runs `isolation:
-worktree`: its commits land in the shared object store, NOT on the feature
-branch. Validation Rule 4 diffs `base..HEAD` on the ORCHESTRATOR's checkout,
+Under the declared LEGACY architecture the build-subagent
+(`rawgentic:rawgentic-implementer`) runs `isolation: worktree`; under the
+executor architecture (the default) the whole-issue build dispatches the
+executor `build` seat, which isolates the same way (per-dispatch git
+worktree, #735). Either way the produced commits land in the shared object
+store, NOT on the feature branch. Validation Rule 4 diffs `base..HEAD` on the ORCHESTRATOR's checkout,
 so an un-collected worktree build always fails Rule 4 (empty diff) and would
 be discarded on every run. Therefore, before invoking
 `validate_build_receipt`: fast-forward the feature branch to the receipt's

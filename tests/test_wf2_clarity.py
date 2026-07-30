@@ -1132,10 +1132,12 @@ class TestStep8InlineVsDelegated:
     hard-wrap)."""
 
     CANONICAL = (
-        "When the resolved `implementation` model equals the "
-        "session/orchestrator model, inline execution is an expected, "
-        "acceptable outcome — delegation exists for isolation and "
-        "parallelism, not obligation."
+        # #735: legacy-scoped — inline-as-expected documents the LEGACY
+        # delegation path only; the executor branch rejects inline.
+        "Under the LEGACY architecture, when the resolved `implementation` "
+        "model equals the session/orchestrator model, inline execution is "
+        "an expected, acceptable outcome — delegation exists for isolation "
+        "and parallelism, not obligation."
     )
 
     def _step8(self) -> str:

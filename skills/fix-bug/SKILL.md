@@ -113,7 +113,7 @@ Also resolve the `review` role's effort tier with a second invocation appending 
 **Executor-dispatch contract (#470) — the PRIMARY tier.** Every `review`-seat model call dispatches through ONE skill-facing entry point — the executor `dispatch` CLI (one single entry point; no second entry point is ever named in prose, because the sync-vs-supervised split is an internal routing decision keyed on the staged launch profile):
 ```bash
 python3 hooks/executor_routing_lib.py dispatch \
-  --seat <review|review_fast> --prompt-file <brief-file> --run-id wf3-<issue>-<session> \
+  --seat review --prompt-file <brief-file> --run-id wf3-<issue>-<session> \
   --correlation-id <issue>-<step>-<slug> [--effort <tier>] [--timeout <s>] \
   [--context-file <path> ...] \
   --workspace <workspace-file> --project <name>

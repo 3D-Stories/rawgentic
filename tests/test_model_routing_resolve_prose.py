@@ -176,8 +176,10 @@ _STEP8_OLD_UNSCOPED_INLINE = (
 def _step8_section() -> str:
     steps = REPO / "skills" / "implement-feature" / "references" / "steps.md"
     text = steps.read_text(encoding="utf-8")
-    start = text.index("## Step 8: Implementation")
-    end = text.index("## Step 9:", start)
+    # Line-anchored heading boundaries (Step-11 R1-F2: a bare .index() could
+    # match a "## Step 8/9" substring inside prose).
+    start = text.index("\n## Step 8: Implementation")
+    end = text.index("\n## Step 9:", start)
     return _norm(text[start:end]).lower()
 
 
@@ -189,3 +191,37 @@ def test_step8_executor_primary_sentence():
         "steps.md §8 delegation block must be legacy-conditioned (#735 AC2)"
     assert _STEP8_OLD_UNSCOPED_INLINE not in s8, \
         "the unscoped 'inherit → Step 8 runs inline' sentence must be legacy-scoped (#735 AC2)"
+
+
+def test_step8_legacy_conditioning_reaches_every_delegation_directive():
+    """Step-11 findings R1-F1/R2-F1 (#735): the conditioning must cover the whole
+    delegation MECHANISM — the clean-state retry and never-blocks items by name,
+    the same-model inline paragraph, and the executor branch's own no-inline +
+    proven-death retry rules."""
+    s8 = _step8_section()
+    assert "including the clean-state restore-and-retry (item 4) and the never-blocks rule (item 5)" in s8, \
+        "items 4/5 of the delegation procedure must be named as legacy-only (#735 R2-F1)"
+    assert ("under the legacy architecture, when the resolved `implementation` model "
+            "equals the session/orchestrator model") in s8, \
+        "the same-model inline paragraph must be legacy-scoped (#735 R1-F1)"
+    assert "inline execution is not a sanctioned implementation path under the executor architecture" in s8, \
+        "the executor branch must reject inline implementation (#735 R1-F1)"
+    assert "retry once only on proven death" in s8, \
+        "the executor branch must carry the ratified proven-death retry rule (#735 R2-F1)"
+
+
+def test_review_seat_row_names_no_review_fast_seat():
+    """Step-11 R2-F4 (#735): review_fast is a lens/model tier, not a wired seat —
+    no dispatch prose may instruct dispatching it as a seat."""
+    from corpus import skill_corpus
+    shared = _norm(SHARED.read_text(encoding="utf-8"))
+    assert "`review` / `review_fast`" not in shared, \
+        "the seat-mapping review row must not present review_fast as a seat"
+    assert "NOT a wired seat" in shared, \
+        "the review row must state review_fast is a lens/model tier, not a seat"
+    for skill in ("implement-feature", "fix-bug"):
+        corpus = _norm(skill_corpus(skill))
+        assert "`review`/`review_fast` seats" not in corpus, \
+            f"{skill}: dispatch prose must not name review_fast as a seat"
+    assert "--seat <review|review_fast>" not in _norm(skill_corpus("fix-bug")), \
+        "fix-bug: the dispatch CLI template must use --seat review"
