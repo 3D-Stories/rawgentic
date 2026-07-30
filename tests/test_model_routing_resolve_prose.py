@@ -139,3 +139,53 @@ def test_agent_tool_dispatch_instructions_are_legacy_conditioned():
                     norm = _norm(para)
                     assert "LEGACY architecture" in norm, (
                         f"{f}: unconditioned Agent-tool dispatch instruction:\n{norm[:200]}")
+
+
+# --- #735: Step-3 carve-out states the current truth (drift guard) -----------
+# Anchors ONE canonical sentence in ONE file (the shared source) per the repo
+# drift-guard pattern; the corpus check proves the sync shipped it.
+
+_CARVEOUT_TRUTH = "whether to wire or retire the bake-off is decided in #765"
+_CARVEOUT_STALE = "proven in #472"
+
+
+def test_step3_carveout_states_current_truth():
+    from corpus import skill_corpus
+    shared = _norm(SHARED.read_text(encoding="utf-8")).lower()
+    corpus = _norm(skill_corpus("implement-feature")).lower()
+    assert _CARVEOUT_TRUTH in shared, \
+        "shared block Step-3 row must carry the current carve-out truth (#735)"
+    assert _CARVEOUT_TRUTH in corpus, \
+        "WF2 corpus must carry the synced carve-out truth (run sync_shared_blocks.py)"
+    assert _CARVEOUT_STALE not in shared, \
+        "stale '#472 proves it' carve-out text must be gone from the shared block (#735: #472 closed without proving the bake-off)"
+    assert _CARVEOUT_STALE not in corpus, \
+        "stale '#472 proves it' carve-out text must be gone from the corpus"
+
+
+# --- #735: Step-8 executor-primary sentence + legacy-conditioned delegation --
+
+_STEP8_EXECUTOR_PRIMARY = (
+    "full receipts-asserted adoption across every wf2/wf3 run is #762's acceptance surface"
+)
+_STEP8_OLD_UNSCOPED_INLINE = (
+    "when the `implementation` role is `inherit` (default), step 8 runs inline exactly as today"
+)
+
+
+def _step8_section() -> str:
+    steps = REPO / "skills" / "implement-feature" / "references" / "steps.md"
+    text = steps.read_text(encoding="utf-8")
+    start = text.index("## Step 8: Implementation")
+    end = text.index("## Step 9:", start)
+    return _norm(text[start:end]).lower()
+
+
+def test_step8_executor_primary_sentence():
+    s8 = _step8_section()
+    assert _STEP8_EXECUTOR_PRIMARY in s8, \
+        "steps.md §8 must carry the executor-primary sentence (#735 AC2)"
+    assert "legacy architecture only" in s8, \
+        "steps.md §8 delegation block must be legacy-conditioned (#735 AC2)"
+    assert _STEP8_OLD_UNSCOPED_INLINE not in s8, \
+        "the unscoped 'inherit → Step 8 runs inline' sentence must be legacy-scoped (#735 AC2)"
