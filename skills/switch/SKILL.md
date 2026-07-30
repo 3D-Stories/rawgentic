@@ -205,6 +205,22 @@ If the current session has `RAWGENTIC_HEADLESS=1` set (headless mode), check the
 
 If not in headless mode: skip this check entirely.
 
+### 3b. Load the project's operating rules
+
+**Use the `Read` tool on `<project path>/.rawgentic.json`. Never Bash (`cat`/`head`/`jq`).**
+
+That one call is the whole mechanism: the harness's `CLAUDE.md` auto-load fires on its own file
+tools and cannot see inside a bash one-liner, so this is what puts the project's rules in context
+with memory-file authority. Item 2 already read this file via shell — the second read is
+deliberate, not duplication. Do not collapse them, and do not move this step: before the registry
+append `hooks/wal-bind-guard` Gate 1 denies it, and before the headless verdict it would let
+project prose influence a fail-closed authorization check.
+
+Projects with no `CLAUDE.md` need no handling — the harness injects nothing, so say nothing.
+Never announce a missing manual.
+
+If the `Read` fails, do not report Ready. Say: bound, but the project's rules did not load.
+
 ### 4. Confirm Ready
 
 After all checks complete, print the final confirmation:
