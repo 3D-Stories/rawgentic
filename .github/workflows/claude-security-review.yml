@@ -36,8 +36,10 @@ name: Claude Security Review
 on:
   pull_request:
     branches: [main]
-    # #478: docs-only diffs skip this ADVISORY lane (same rationale + same
-    # narrow scope as claude-code-review.yml — see that file's on-block note).
+    # #478: docs-only diffs skip this ADVISORY lane. Scope is deliberately narrow —
+    # skills/** markdown, README.md and CLAUDE.md still trigger review, because docs
+    # are load-bearing here. (The sibling claude-code-review.yml lane that shared this
+    # rationale was removed 2026-07-30; see docs/ci-review-lanes.md.)
     paths-ignore:
       - "docs/**"
 

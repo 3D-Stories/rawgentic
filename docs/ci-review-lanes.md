@@ -1,21 +1,37 @@
-# Activating the CI review lanes (#233)
+# Activating the CI review lane (#233)
 
-rawgentic ships two **GitHub Action review lanes** that run on every PR to `main`,
-as a *bonus* second opinion on top of WF2's in-workflow Step 11 (code review) and
-Step 11.5 (security scan) — most valuable on **human-opened or non-Claude PRs** that
-never went through WF2:
+rawgentic ships one **GitHub Action review lane** that runs on every PR to `main`, as a
+*bonus* second opinion on top of WF2's in-workflow Step 11.5 (security scan) — most
+valuable on **human-opened or non-Claude PRs** that never went through WF2:
 
 | Lane | Workflow | What it runs |
 |------|----------|--------------|
 | `security-review` | `.github/workflows/claude-security-review.yml` | Claude's built-in `/security-review` over the PR diff, posting findings as inline PR comments. |
-| `code-review` | `.github/workflows/claude-code-review.yml` | Claude's built-in `/code-review` (draft PRs skipped). |
 
-They are **advisory** — neither is a *required* check, so a red result never blocks a
-merge. Their in-workflow counterparts (Step 11 / 11.5) remain the primary gate.
+It is **advisory** — not a *required* check, so a red result never blocks a merge. Its
+in-workflow counterpart (Step 11.5) remains the primary gate.
+
+## The `code-review` lane was removed (owner decision 2026-07-30)
+
+`.github/workflows/claude-code-review.yml` (#196) ran Claude's built-in `/code-review` on
+every PR. It is **gone**, deliberately, and `tests/test_review_lanes.py` now asserts it
+stays gone.
+
+Why: it was advisory-only, it duplicated WF2's own Step 11 code review (which dispatches
+two independent reviewers and is a hard gate), and it was **the largest single component of
+PR wall-clock** — roughly 6 minutes on a hosted runner, and up to ~15 when the fleet's
+single linux runner serialised the lanes. Worst signal-to-time ratio of any lane.
+
+`security-review` is retained because it is the only lane with **no** in-workflow
+equivalent that fires on non-WF2 PRs — a human-opened PR gets a security pass it would
+otherwise never get.
+
+Restoring it is a decision to re-take explicitly: delete the guard test in the same
+commit and say why.
 
 ## The signal is honest (green = actually reviewed) — #233 AC1
 
-Earlier these lanes showed a **green ✓ even when nothing was reviewed** (no auth
+Earlier this lane showed a **green ✓ even when nothing was reviewed** (no auth
 secret → a `::warning::` inside a green check). That is fixed:
 
 - **Green** — the review actually ran and succeeded.
@@ -23,11 +39,11 @@ secret → a `::warning::` inside a green check). That is fixed:
   action outage). Red here means *"not reviewed,"* not *"found problems"* — and
   because the check is advisory it does **not** block the merge.
 
-So a green review check now means what you'd expect. (The lanes drop the old
+So a green review check now means what you'd expect. (The lane drops the old
 `continue-on-error` mask; a `::warning::` inside a green check was not enough.)
 
-**Docs-only PRs skip both lanes entirely (#478).** A diff confined to `docs/**` does
-not trigger them (`paths-ignore` in each workflow's `on:` block) — an ABSENT check on
+**Docs-only PRs skip the lane entirely (#478).** A diff confined to `docs/**` does
+not trigger it (`paths-ignore` in the workflow's `on:` block) — an ABSENT check on
 such a PR means *path-skipped by design*, not "not reviewed"-red. Scope is deliberately
 narrow: `skills/**` markdown (product source), `README.md`, and `CLAUDE.md` still
 trigger review. The `test` and `lint` lanes stay unconditional on every PR — docs are
@@ -36,7 +52,7 @@ docs-only diff can legitimately fail them.
 
 ## Activate (one-time, owner)
 
-The lanes need an auth secret. **Two options — OAuth is preferred:**
+The lane needs an auth secret. **Two options — OAuth is preferred:**
 
 ### 1. Subscription OAuth token (Pro/Max) — recommended
 
@@ -71,11 +87,11 @@ If you'd rather bill an isolated API budget than a subscription:
 gh secret set ANTHROPIC_API_KEY --org <your-org> --visibility all
 ```
 
-The lanes resolve **OAuth first, then API key**. Either one activates both lanes.
+The lane resolves **OAuth first, then API key**. Either one activates it.
 
 ### 3. Zero-secret alternative
 
-Run the lanes on a **self-hosted runner already logged in to Claude** — no repo
+Run the lane on a **self-hosted runner already logged in to Claude** — no repo
 secret needed. See `docs/config-reference.md#ci-review-auth`.
 
 > One caveat: activating the token secret alone is not enough — the **Claude Code
@@ -87,7 +103,7 @@ secret needed. See `docs/config-reference.md#ci-review-auth`.
 On your next PR, open the lane's Action run → **Summary**. A working lane prints:
 
 ```
-Claude <security|code> review: executed=true (auth=oauth)
+Claude security review: executed=true (auth=oauth)
 ```
 
 and the PR check is **green**. If you still see red with `executed=false (no auth
@@ -98,7 +114,7 @@ isn't installed).
 
 To make a lane *block* merges (turn advisory-red into a hard gate), mark it a
 **required status check** in branch protection — recommended only after ~10 clean
-(`executed=true`) PRs, per the lanes' own promotion note. A required red then blocks,
+(`executed=true`) PRs, per the lane's own promotion note. A required red then blocks,
 exactly as intended.
 
 ## Runner routing (hosted-first, fleet fallback)

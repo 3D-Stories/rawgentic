@@ -534,15 +534,15 @@ Next steps:
 ```
 
 **Review-lane activation nudge (#233 AC2).** If the project ships the GitHub Action
-review lanes (`.github/workflows/claude-{security,code}-review.yml`) but **no
-`CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` secret is configured**, those lanes
-now go **RED ("not reviewed")** on every PR instead of a misleading green — they are
-advisory (non-blocking), but they won't do anything until activated. Tell the user
-how to turn them on and point them at the guide:
+review lane (`.github/workflows/claude-security-review.yml`) but **no
+`CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` secret is configured**, that lane
+now goes **RED ("not reviewed")** on every PR instead of a misleading green — it is
+advisory (non-blocking), but it won't do anything until activated. Tell the user
+how to turn it on and point them at the guide:
 
 ```
-The Claude review lanes are present but inactive (no auth secret) — every PR's
-security-review / code-review will show RED until you activate them:
+The Claude review lane is present but inactive (no auth secret) — every PR's
+security-review will show RED until you activate it:
   claude setup-token
   gh secret set CLAUDE_CODE_OAUTH_TOKEN --org <org> --visibility all   # org-wide
 (or ANTHROPIC_API_KEY as a fallback). The Claude Code GitHub App must also be

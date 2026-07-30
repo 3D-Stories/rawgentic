@@ -1,18 +1,39 @@
-"""Drift guards for the GitHub Action review lanes' honest-signal contract +
+"""Drift guards for the GitHub Action review lane's honest-signal contract +
 activation UX (issue #233).
 
-The lanes (#195 security, #196 code) previously showed a green check even when no
-auth secret was present and nothing was reviewed — a misleading "reviewed" signal.
-AC1: a skipped/failed review must NOT read as a green check. This repo's chosen
-mechanism is advisory-RED: drop the job-level `continue-on-error` mask, and make the
-no-auth path exit non-zero so the (non-required, advisory) check goes red instead of
-green. AC2/AC3: setup + a docs guide tell users how to activate the lanes.
+The lane (#195 security) previously showed a green check even when no auth secret was
+present and nothing was reviewed — a misleading "reviewed" signal. AC1: a skipped/failed
+review must NOT read as a green check. This repo's chosen mechanism is advisory-RED: drop
+the job-level `continue-on-error` mask, and make the no-auth path exit non-zero so the
+(non-required, advisory) check goes red instead of green. AC2/AC3: setup + a docs guide
+tell users how to activate it.
+
+The #196 `code-review` lane was REMOVED (owner decision 2026-07-30): it was advisory,
+duplicated WF2's own Step 11 code review, and cost ~6 min hosted / up to ~15 min when the
+fleet runner serialised the lanes — the largest single component of PR wall-clock for the
+least signal. `security-review` is retained: it is the only lane with no in-workflow
+equivalent that runs on non-WF2 PRs. This list is therefore deliberately one entry; a
+future lane gets appended here rather than the loop being un-parameterised.
 """
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WF = REPO_ROOT / ".github" / "workflows"
-LANES = ["claude-security-review.yml", "claude-code-review.yml"]
+LANES = ["claude-security-review.yml"]
+
+
+def test_code_review_lane_stays_removed():
+    """#196's lane was removed by owner decision 2026-07-30 — keep it removed.
+
+    Guards against a well-meaning restore: the lane's value was advisory-only and it
+    duplicated WF2 Step 11, while being the biggest single contributor to PR wall-clock.
+    Re-adding it is a decision to re-take explicitly, not a drive-by.
+    """
+    assert not (WF / "claude-code-review.yml").exists(), (
+        "the #196 code-review lane was removed on purpose (advisory, duplicated WF2 "
+        "Step 11, ~6-15 min per PR). If you are deliberately restoring it, delete this "
+        "test in the same commit and say why in the message."
+    )
 
 
 def test_lanes_drop_continue_on_error_mask():
