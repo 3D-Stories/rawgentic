@@ -4,6 +4,17 @@ This is the detail behind the thin `wholeIssueDelegation` block in `SKILL.md`
 Step 8. Read it in full before using the mode. The mode is **opt-in and
 default-off**; when it is not enabled Step 8 behaves exactly as it does today.
 
+**Architecture scope (#767).** This contract's `task_shas` trust boundary requires
+agent-authored commits, which only the LEGACY architecture's Agent-tool worktree
+dispatch can produce — a contained executor build agent cannot commit (its linked
+worktree's gitdir is read-only under containment). Under the EXECUTOR architecture
+(the default) this mode is unsupported pending #762: an enabled `wholeIssueDelegation`
+falls back loudly to per-task Step 8, whose executor collection path
+(`collect-work-product --promote-path …` + the guarded fast-forward landing) is the
+supported mutating route today. When #762 wires this mode for the executor tier, the
+commits will be orchestrator-created from per-task diff evidence with provenance,
+`task_shas` still binding each task to its commit.
+
 ## Why this exists
 
 Per-task delegation (#132) still runs the whole per-task ceremony — dispatch,
