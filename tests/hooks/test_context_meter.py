@@ -60,6 +60,10 @@ def _run(payload, *, home, cwd=None, extra_env=None, timeout=20):
     env.pop("RAWGENTIC_HEADLESS", None)
     env.pop("RAWGENTIC_LAUNCHER_ARMED", None)
     env.pop("RAWGENTIC_FRESH_LAUNCH_SUPPORTED", None)
+    # #732 — dev shells here run UNDER herdr, so the inherited env would flip the
+    # headless no-launcher branch to the pane-handoff route on herdr-hosted machines.
+    # Tests opt in explicitly via extra_env.
+    env.pop("HERDR_ENV", None)
     for k in list(env):
         if k.startswith("RAWGENTIC_CONTEXT_"):
             env.pop(k)
@@ -834,6 +838,15 @@ def test_only_both_capability_declarations_name_the_launcher_route(tmp_path):
 def test_launcher_armed_alone_is_not_enough(tmp_path):
     text = _nag(tmp_path, {"RAWGENTIC_LAUNCHER_ARMED": "1"})
     assert "launcher_lib" not in text
+
+
+def test_headless_with_a_herdr_pane_routes_to_pane_handoff(tmp_path):
+    """#732 AC4, whole-pipeline form: HERDR_ENV=1 reaches nag_text through the
+    caller's env read."""
+    text = _nag(tmp_path, {"RAWGENTIC_HEADLESS": "1", "HERDR_ENV": "1"})
+    assert "pane-handoff" in text
+    assert "launcher_lib" not in text
+    assert "stop cleanly for a manual resume" not in text
 
 
 def test_the_nag_states_the_assumed_window_and_its_provenance(tmp_path):
@@ -1646,6 +1659,38 @@ def test_directive_full_canonical_sentence_pin():
     as its complete current sentence (captured from source BEFORE the #732
     change), so a rewrite cannot hide behind a two-token containment check."""
     assert DIRECTIVE_SENTENCE in _norm(_text("directive"))
+
+
+HEADLESS_HERDR_SENTENCE = (
+    "Unattended with NO durable launcher armed, but a herdr pane is available: "
+    "run `/rawgentic:pane-handoff` — it wraps `clear-prep` and then actually "
+    "hands over, spawning and binding the successor."
+)
+
+HEADLESS_NO_HERDR_SENTENCE = (
+    "Unattended, but NO durable launcher is armed, so there is nothing to "
+    "relaunch you: run the `clear-prep` skill to write the durable checkpoint "
+    "and handoff, then stop cleanly for a manual resume."
+)
+
+
+def test_headless_with_a_herdr_pane_prefers_pane_handoff():
+    """AC4 (#732). Unattended + no launcher + a herdr pane: 'stop cleanly for a
+    manual resume' means stop with nobody to continue — the exact overnight
+    failure #713 documented — when a successor pane was available all along."""
+    text = _text("advisory", headless=True, herdr_available=True)
+    assert "pane-handoff" in text
+    assert HEADLESS_HERDR_SENTENCE in _norm(text)
+    assert "`clear-prep` ALONE leaves no successor" in text
+    assert "stop cleanly for a manual resume" not in text
+
+
+def test_headless_without_a_herdr_pane_keeps_the_stop_cleanly_text():
+    """AC4 (#732), the other half: with genuinely no pane to spawn into, the
+    existing clear-prep-then-stop text survives verbatim (full-sentence pin)."""
+    text = _text("advisory", headless=True, herdr_available=False)
+    assert HEADLESS_NO_HERDR_SENTENCE in _norm(text)
+    assert "pane-handoff" not in text
 
 
 # --------------------------------------------------------------------------

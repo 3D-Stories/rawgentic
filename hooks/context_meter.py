@@ -1108,10 +1108,11 @@ def emit_payload(event, text):
 
 
 def nag_text(*, tier, used, window, provenance, seam, seam_reason,
-             headless, fresh_handoff_capable):
+             headless, fresh_handoff_capable, herdr_available=False):
     """The injected advisory. Contains ONLY integers and the pointer's own
     fields — never any transcript content, which would leak the very context it
-    is measuring."""
+    is measuring. Pure: env is read at the caller (#732 `herdr_available`
+    follows the existing headless/fresh_handoff_capable pattern)."""
     pct = used * 100.0 / window if window else 0.0
     lines = [
         f"[rawgentic context meter] This session is using {used:,} tokens of an "
@@ -1169,6 +1170,16 @@ def nag_text(*, tier, used, window, provenance, seam, seam_reason,
         lines.append(
             "Unattended with an armed launcher: checkpoint and hand over via "
             "`launcher_lib.py handoff` — do not wait for a human."
+        )
+    elif headless and herdr_available:
+        # AC4 (#732) — "stop cleanly for a manual resume" means stop with nobody to
+        # continue (the overnight failure #713 documented). With a herdr pane available
+        # there IS a successor to spawn into, so prefer the route that actually hands over.
+        lines.append(
+            "Unattended with NO durable launcher armed, but a herdr pane is "
+            "available: run `/rawgentic:pane-handoff` — it wraps `clear-prep` and "
+            "then actually hands over, spawning and binding the successor. "
+            "`clear-prep` ALONE leaves no successor."
         )
     elif headless:
         lines.append(
@@ -1428,11 +1439,13 @@ def cmd_hook(argv) -> int:
     headless = env.get("RAWGENTIC_HEADLESS") == "1"
     fresh_handoff_capable = (env.get("RAWGENTIC_LAUNCHER_ARMED") == "1"
                              and env.get("RAWGENTIC_FRESH_LAUNCH_SUPPORTED") == "1")
+    herdr_available = env.get("HERDR_ENV") == "1"
     try:
         text = nag_text(tier=tier, used=used, window=window,
                         provenance=provenance, seam=seam,
                         seam_reason=seam_reason, headless=headless,
-                        fresh_handoff_capable=fresh_handoff_capable)
+                        fresh_handoff_capable=fresh_handoff_capable,
+                        herdr_available=herdr_available)
         payload_out = json.dumps(emit_payload(event, text))
     except Exception:
         save_state(home, session_id, state)
