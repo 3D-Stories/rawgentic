@@ -2251,6 +2251,8 @@ def _seed_authorized_audit(audit, *, nonce="rn1", cid="c1", seat="build", run_id
 def _collect(tmp_path, reg, mgr, *, run_id="run1", session="sess1",
              target="refs/heads/integration", expected="0" * 40, kind="docs", audit=None, seed=True,
              obs_status="ok", **collect_kw):
+    if kind == "code":  # #762 R5-B: code collects carry the landing-destination authorization
+        collect_kw.setdefault("expected_feature_ref", "refs/heads/integration")
     audit = audit or enforce.RoutingAuditLog(tmp_path / "runs", run_id)
     if seed:  # F7 (#571): a promotion needs an authorized build receipt + verified obs
         _seed_authorized_audit(audit, run_id=run_id, obs_status=obs_status)

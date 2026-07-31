@@ -1321,3 +1321,162 @@ def test_append_work_product_rejects_empty_identity(tmp_path):
     with pytest.raises(ValueError):
         log.append_expected_work_product(receipt_nonce="n1", candidate_tree_sha="t", new_sha="s",
                                          target_ref="", paths_digest="")
+
+
+# ---- #762 D1/R3-B/R5-B: the landed_work_product audit kind + expected_feature_ref field ----
+
+_SHA_A = "a" * 40
+_SHA_B = "b" * 40
+
+
+def _landing_rec(nonce="n1", *, feature_ref="refs/heads/feat", pre=_SHA_A, new=_SHA_B,
+                 temp="refs/rawgentic/collect/n1", status="landed", run_id="runL", ts=1000):
+    return {"kind": "landed_work_product", "landing_version": 1, "receipt_nonce": nonce,
+            "feature_ref": feature_ref, "pre_sha": pre, "new_sha": new, "temp_ref": temp,
+            "landing_status": status, "run_id": run_id, "ts": ts}
+
+
+def test_append_landed_work_product_roundtrip(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path / "runs", "runL")
+    log.append_landed_work_product(
+        receipt_nonce="n1", feature_ref="refs/heads/feat", pre_sha=_SHA_A, new_sha=_SHA_B,
+        temp_ref="refs/rawgentic/collect/n1", landing_status="landed", run_id="runL", ts=1000)
+    recs = log.records()
+    assert len(recs) == 1
+    r = recs[0]
+    assert r["kind"] == "landed_work_product" and r["landing_version"] == 1
+    assert r["feature_ref"] == "refs/heads/feat" and r["landing_status"] == "landed"
+    assert r["run_id"] == "runL" and r["ts"] == 1000
+
+
+def test_landed_missing_required_field_refuses(tmp_path):
+    for field in ("landing_version", "receipt_nonce", "feature_ref", "pre_sha", "new_sha",
+                  "temp_ref", "landing_status", "run_id", "ts"):
+        bad = _landing_rec()
+        del bad[field]
+        with pytest.raises(ValueError):
+            _audit_roundtrip(tmp_path / field, bad)
+
+
+def test_landed_version_exact_int_one(tmp_path):
+    # exact non-boolean int 1: True, 2, "1", 1.0 all refuse
+    for i, v in enumerate((True, 2, "1", 1.0)):
+        bad = _landing_rec()
+        bad["landing_version"] = v
+        with pytest.raises(ValueError):
+            _audit_roundtrip(tmp_path / f"v{i}", bad)
+
+
+def test_landed_ref_rooting_refused(tmp_path):
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path / "fr", _landing_rec(feature_ref="feat"))
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path / "tr", _landing_rec(temp="refs/heads/n1"))
+
+
+def test_landed_sha_shape_refused(tmp_path):
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path / "s1", _landing_rec(pre="abc"))
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path / "s2", _landing_rec(new="Z" * 40))
+
+
+def test_landed_status_enum_refused(tmp_path):
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path / "st", _landing_rec(status="merged"))
+
+
+def test_landed_ts_int_refused(tmp_path):
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path / "t1", _landing_rec(ts="1000"))
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path / "t2", _landing_rec(ts=True))
+
+
+def test_landed_schema_exclusivity_refuses_binding_fields(tmp_path):
+    # D1: mutually exclusive with the work_product v1/v2 schemas — any binding-vocabulary
+    # field on a landing record is refused.
+    for i, (k, v) in enumerate((("binding_version", 2), ("target_ref", "refs/heads/x"),
+                                ("paths_digest", "sha256:" + "0" * 64))):
+        bad = _landing_rec()
+        bad[k] = v
+        with pytest.raises(ValueError):
+            _audit_roundtrip(tmp_path / f"x{i}", bad)
+
+
+def test_landed_poison_diagnostic_names_line(tmp_path):
+    # R3-J: a malformed landing record makes records() raise with a loud line-numbered diagnostic
+    log = enforce.RoutingAuditLog(tmp_path / "runs", "runL")
+    log._write_locked(_landing_rec())  # pylint: disable=protected-access
+    log._write_locked(_landing_rec(status="bogus"))  # pylint: disable=protected-access
+    with pytest.raises(ValueError, match="audit line 2"):
+        log.records()
+
+
+def test_append_landed_work_product_writer_validates(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path / "runs", "runL")
+    kw = dict(receipt_nonce="n1", feature_ref="refs/heads/feat", pre_sha=_SHA_A, new_sha=_SHA_B,
+              temp_ref="refs/rawgentic/collect/n1", landing_status="landed", run_id="runL",
+              ts=1000)
+    for bad in (dict(kw, feature_ref="feat"), dict(kw, temp_ref="refs/heads/n1"),
+                dict(kw, pre_sha="xyz"), dict(kw, landing_status="merged"),
+                dict(kw, receipt_nonce=""), dict(kw, run_id=""), dict(kw, ts="1000")):
+        with pytest.raises(ValueError):
+            log.append_landed_work_product(**bad)
+    assert log.records() == []  # nothing bad was ever written
+
+
+def test_validate_v2_expected_feature_ref_roundtrip(tmp_path):
+    # R5-B: a v2 record may carry expected_feature_ref (refs/heads/-rooted non-empty string)
+    ok = _wp_rec_v2("n1")
+    ok["expected_feature_ref"] = "refs/heads/feat"
+    recs = _audit_roundtrip(tmp_path, ok)
+    assert recs and recs[0]["expected_feature_ref"] == "refs/heads/feat"
+
+
+def test_validate_expected_feature_ref_without_version_refuses(tmp_path):
+    # hybrid rule extension: the field is v2 vocabulary — present without binding_version refuses
+    bad = _wp_rec("n1")
+    bad["expected_feature_ref"] = "refs/heads/feat"
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path, bad)
+
+
+def test_validate_expected_feature_ref_shape_refused(tmp_path):
+    for i, v in enumerate(("", "feat", ["refs/heads/feat"])):
+        bad = _wp_rec_v2("n1")
+        bad["expected_feature_ref"] = v
+        with pytest.raises(ValueError):
+            _audit_roundtrip(tmp_path / f"e{i}", bad)
+
+
+def test_append_work_product_expected_feature_ref_requires_v2(tmp_path):
+    # writer hygiene: expected_feature_ref rides the v2 binding only — without target_ref it
+    # would be a version-downgraded hybrid at read time, so the writer refuses it up front.
+    log = enforce.RoutingAuditLog(tmp_path / "runs", "runv")
+    with pytest.raises(ValueError):
+        log.append_work_product(receipt_nonce="n1", candidate_tree_sha="t", new_sha="s",
+                                work_product=_valid_wp(),
+                                expected_feature_ref="refs/heads/feat")
+    with pytest.raises(ValueError):
+        log.append_expected_work_product(receipt_nonce="n1", candidate_tree_sha="t", new_sha="s",
+                                         expected_feature_ref="refs/heads/feat")
+    with pytest.raises(ValueError):
+        log.append_work_product(receipt_nonce="n1", candidate_tree_sha="t", new_sha="s",
+                                work_product=_valid_wp(), target_ref="refs/heads/x",
+                                paths_digest="sha256:" + "0" * 64,
+                                expected_feature_ref="not-rooted")
+
+
+def test_append_work_product_expected_feature_ref_roundtrip(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path / "runs", "runv")
+    log.append_expected_work_product(receipt_nonce="n1", candidate_tree_sha="t", new_sha="s",
+                                     target_ref="refs/heads/x",
+                                     paths_digest="sha256:" + "0" * 64,
+                                     expected_feature_ref="refs/heads/feat")
+    log.append_work_product(receipt_nonce="n1", candidate_tree_sha="t", new_sha="s",
+                            work_product=_valid_wp(), target_ref="refs/heads/x",
+                            paths_digest="sha256:" + "0" * 64,
+                            expected_feature_ref="refs/heads/feat")
+    recs = log.records()
+    assert [r["expected_feature_ref"] for r in recs] == ["refs/heads/feat", "refs/heads/feat"]

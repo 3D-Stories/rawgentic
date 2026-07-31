@@ -294,16 +294,35 @@ _EXPECTED_WORK_PRODUCT_REQUIRED = ("kind", "receipt_nonce", "candidate_tree_sha"
 # tuples above unchanged — historical logs stay readable. binding_version == 2 records ALSO
 # require the identity fields below (an incomplete v2 record refuses); any other version refuses.
 _BINDING_V2_EXTRA = ("target_ref", "paths_digest")
+# #762 R5-B: the collect-time destination authorization. OPTIONAL on a v2 record (docs/review/
+# design collects carry none); when present it is v2 vocabulary — present without
+# binding_version is the same version-downgraded hybrid the fields above refuse.
+_BINDING_V2_OPTIONAL = ("expected_feature_ref",)
+# #762 D1 (rev-2 adoption 1+3): the landed_work_product audit record — its own required tuple,
+# born versioned (landing_version, exact int 1), mutually exclusive with the work_product
+# v1/v2 binding vocabulary. Landing IDENTITY (R3-B) = every field here EXCEPT ts and
+# landing_status (retry metadata).
+_LANDING_REQUIRED = ("kind", "landing_version", "receipt_nonce", "feature_ref", "pre_sha",
+                     "new_sha", "temp_ref", "landing_status", "run_id", "ts")
+_LANDING_STATUSES = ("landed", "already_landed")
+_HEX40 = frozenset("0123456789abcdef")
+
+
+def _is_sha40(v) -> bool:
+    return isinstance(v, str) and len(v) == 40 and all(c in _HEX40 for c in v)
 # #637 (epic #635 C4): a WF2/WF3 design-level loop-back's park_and_reset record.
 _PARK_REQUIRED = ("kind", "run_id", "task_id", "design_version", "stash_name",
                   "worktree_path", "parked")
 _VERDICTS = ("pass", "fail")
 
 
-def _check_binding_identity(who: str, target_ref, paths_digest) -> None:
+def _check_binding_identity(who: str, target_ref, paths_digest,
+                            expected_feature_ref=None) -> None:
     """#767 writer-side binding hygiene (8a R2-M3 + Step-11 R1-F5): both identity halves or
     neither, and a SUPPLIED half must be a non-empty string — an empty string previously passed
-    the both-or-neither check but skipped the truthiness v2 tagging, a silent version downgrade."""
+    the both-or-neither check but skipped the truthiness v2 tagging, a silent version downgrade.
+    #762 R5-B: ``expected_feature_ref`` rides the v2 binding only — supplying it without the
+    v2 identity would write the exact version-downgraded hybrid the reader refuses."""
     if (target_ref is None) != (paths_digest is None):
         raise ValueError(f"{who}: partial binding identity — supply BOTH target_ref and "
                          f"paths_digest, or neither")
@@ -312,6 +331,13 @@ def _check_binding_identity(who: str, target_ref, paths_digest) -> None:
             if not isinstance(v, str) or not v:
                 raise ValueError(f"{who}: {name} must be a non-empty string when supplied "
                                  f"(got {v!r})")
+    if expected_feature_ref is not None:
+        if target_ref is None:
+            raise ValueError(f"{who}: expected_feature_ref requires the v2 binding identity "
+                             f"(target_ref + paths_digest)")
+        if not isinstance(expected_feature_ref, str) or not expected_feature_ref.startswith("refs/heads/"):
+            raise ValueError(f"{who}: expected_feature_ref must be a refs/heads/-rooted string "
+                             f"(got {expected_feature_ref!r})")
 
 
 def _validate_record(obj, lineno: int) -> None:
@@ -323,6 +349,7 @@ def _validate_record(obj, lineno: int) -> None:
     req = {"receipt": _RECEIPT_REQUIRED, "observation": _OBS_ENVELOPE_REQUIRED,
            "epoch": _EPOCH_REQUIRED, "work_product": _WORK_PRODUCT_REQUIRED,
            "expected_work_product": _EXPECTED_WORK_PRODUCT_REQUIRED,
+           "landed_work_product": _LANDING_REQUIRED,
            "park": _PARK_REQUIRED}.get(kind)
     if req is None:
         raise ValueError(f"audit line {lineno}: unknown kind {kind!r}")
@@ -334,7 +361,7 @@ def _validate_record(obj, lineno: int) -> None:
         # NO v2 identity fields; v2 has ALL of them. A hybrid (identity fields, no version)
         # would read as "legacy" while reconcile's _binding_key still matched on the fields.
         if "binding_version" not in obj:
-            hybrid = [k for k in _BINDING_V2_EXTRA if k in obj]
+            hybrid = [k for k in (*_BINDING_V2_EXTRA, *_BINDING_V2_OPTIONAL) if k in obj]
             if hybrid:
                 raise ValueError(
                     f"audit line {lineno}: {kind} carries v2 identity fields {hybrid} without "
@@ -364,6 +391,14 @@ def _validate_record(obj, lineno: int) -> None:
                 raise ValueError(
                     f"audit line {lineno}: {kind} paths_digest {pd!r} is neither "
                     f"'appendix-default' nor a canonical sha256:<64-hex> digest")
+            if "expected_feature_ref" in obj:
+                # #762 R5-B: optional on v2, but when present it must be a real branch ref —
+                # the landing verb compares it byte-exactly against --expected-ref.
+                efr = obj["expected_feature_ref"]
+                if not isinstance(efr, str) or not efr.startswith("refs/heads/"):
+                    raise ValueError(
+                        f"audit line {lineno}: {kind} expected_feature_ref {efr!r} is not a "
+                        f"refs/heads/-rooted string")
     if kind == "receipt" and obj["verdict"] not in _VERDICTS:
         raise ValueError(f"audit line {lineno}: bad verdict {obj['verdict']!r}")
     if kind == "receipt" and "recovered_from" in obj and not (
@@ -408,6 +443,38 @@ def _validate_record(obj, lineno: int) -> None:
             if not isinstance(obj.get(field), str) or not obj[field]:
                 raise ValueError(
                     f"audit line {lineno}: expected_work_product {field} not a non-empty string")
+    if kind == "landed_work_product":  # #762 D1
+        lv = obj["landing_version"]
+        if not isinstance(lv, int) or isinstance(lv, bool) or lv != 1:
+            # exact non-boolean int (the #767 R1-F5 lesson applied at birth): True, 1.0 and
+            # "1" are downgrade/confusion vectors, not version 1.
+            raise ValueError(f"audit line {lineno}: landed_work_product unknown "
+                             f"landing_version {lv!r}")
+        for field in ("receipt_nonce", "run_id"):
+            if not isinstance(obj.get(field), str) or not obj[field]:
+                raise ValueError(f"audit line {lineno}: landed_work_product {field} not a "
+                                 f"non-empty string")
+        if not isinstance(obj["feature_ref"], str) or not obj["feature_ref"].startswith("refs/heads/"):
+            raise ValueError(f"audit line {lineno}: landed_work_product feature_ref "
+                             f"{obj['feature_ref']!r} is not refs/heads/-rooted")
+        if not isinstance(obj["temp_ref"], str) or not obj["temp_ref"].startswith("refs/rawgentic/collect/"):
+            raise ValueError(f"audit line {lineno}: landed_work_product temp_ref "
+                             f"{obj['temp_ref']!r} is not refs/rawgentic/collect/-rooted")
+        for field in ("pre_sha", "new_sha"):
+            if not _is_sha40(obj[field]):
+                raise ValueError(f"audit line {lineno}: landed_work_product {field} "
+                                 f"{obj[field]!r} is not a 40-hex commit SHA")
+        if obj["landing_status"] not in _LANDING_STATUSES:
+            raise ValueError(f"audit line {lineno}: landed_work_product landing_status "
+                             f"{obj['landing_status']!r} not in {_LANDING_STATUSES}")
+        if not isinstance(obj["ts"], int) or isinstance(obj["ts"], bool):
+            raise ValueError(f"audit line {lineno}: landed_work_product ts not an int")
+        foreign = [k for k in ("binding_version", *_BINDING_V2_EXTRA) if k in obj]
+        if foreign:
+            # D1: schema exclusivity — the work_product binding vocabulary never rides a
+            # landing record (the #767 F3 versioned-evolution lesson).
+            raise ValueError(f"audit line {lineno}: landed_work_product carries work_product "
+                             f"binding fields {foreign} — schemas are mutually exclusive")
     if kind == "park":  # #637
         for field in ("run_id", "task_id", "design_version", "stash_name", "worktree_path"):
             if not isinstance(obj.get(field), str) or not obj[field]:
@@ -465,40 +532,87 @@ class RoutingAuditLog:
 
     def append_work_product(self, *, receipt_nonce: str, candidate_tree_sha: str,
                             new_sha: str, work_product: dict,
-                            target_ref: str = None, paths_digest: str = None) -> None:
+                            target_ref: str = None, paths_digest: str = None,
+                            expected_feature_ref: str = None) -> None:
         """#559 AC1 (design §2.6): bind a promoted work product to its build receipt. candidate_tree_sha
         + new_sha are recorded so the collect-work-product retry dedup can match on exactly these.
         #767: when target_ref + paths_digest are BOTH supplied, the record is written as
         binding_version=2 (the promotion identity rides the binding); BOTH omitted → legacy v1
-        shape; exactly one supplied → ValueError (a silent version downgrade, 8a R2-M3)."""
-        _check_binding_identity("append_work_product", target_ref, paths_digest)
+        shape; exactly one supplied → ValueError (a silent version downgrade, 8a R2-M3).
+        #762 R5-B: ``expected_feature_ref`` (v2-only, optional) persists the collect-time
+        destination authorization the landing verb compares against."""
+        _check_binding_identity("append_work_product", target_ref, paths_digest,
+                                expected_feature_ref)
         rec = {"kind": "work_product", "receipt_nonce": receipt_nonce,
                "candidate_tree_sha": candidate_tree_sha, "new_sha": new_sha,
                "work_product": dict(work_product)}
         if target_ref is not None:
             rec.update({"binding_version": 2, "target_ref": target_ref,
                         "paths_digest": paths_digest})
+        if expected_feature_ref is not None:
+            rec["expected_feature_ref"] = expected_feature_ref
         with self._lock:
             self._write_locked(rec)
 
     def append_expected_work_product(self, *, receipt_nonce: str, candidate_tree_sha: str,
                                      new_sha: str,
-                                     target_ref: str = None, paths_digest: str = None) -> None:
+                                     target_ref: str = None, paths_digest: str = None,
+                                     expected_feature_ref: str = None) -> None:
         """#570 L2: record that a promotion LANDED for ``receipt_nonce`` so reconcile can flag a
         landed-but-unrecorded work product (the "no missing" half — keyed off what collect actually
         writes, not Observation.work_product). collect_work_product writes it just before the
         work_product record; idempotency (search-then-append) is the caller's responsibility.
         #767: target_ref + paths_digest (both supplied) → binding_version=2, matching
         append_work_product — reconcile matches on the full binding key, never across versions;
-        exactly one supplied → ValueError (a silent version downgrade, 8a R2-M3)."""
-        _check_binding_identity("append_expected_work_product", target_ref, paths_digest)
+        exactly one supplied → ValueError (a silent version downgrade, 8a R2-M3).
+        #762 R5-B: ``expected_feature_ref`` mirrors append_work_product."""
+        _check_binding_identity("append_expected_work_product", target_ref, paths_digest,
+                                expected_feature_ref)
         rec = {"kind": "expected_work_product", "receipt_nonce": receipt_nonce,
                "candidate_tree_sha": candidate_tree_sha, "new_sha": new_sha}
         if target_ref is not None:
             rec.update({"binding_version": 2, "target_ref": target_ref,
                         "paths_digest": paths_digest})
+        if expected_feature_ref is not None:
+            rec["expected_feature_ref"] = expected_feature_ref
         with self._lock:
             self._write_locked(rec)
+
+    def append_landed_work_product(self, *, receipt_nonce: str, feature_ref: str, pre_sha: str,
+                                   new_sha: str, temp_ref: str, landing_status: str,
+                                   run_id: str, ts: int) -> None:
+        """#762 D1: record a guarded landing of a collected work product onto its feature
+        branch — the reconciliation substrate binding landing → work_product → receipt by
+        nonce. Written by ``land_work_product`` AFTER the merge succeeds and BEFORE the
+        CAS temp-ref delete (R4-B ordering: an append failure retains the temp ref so a
+        retry heals). Writer-side validation mirrors the reader exactly — a malformed
+        landing must fail HERE, because ``records()`` is read by collect authorization and
+        one poison line blocks collection for the whole run."""
+        for name, v in (("receipt_nonce", receipt_nonce), ("run_id", run_id)):
+            if not isinstance(v, str) or not v:
+                raise ValueError(f"append_landed_work_product: {name} must be a non-empty "
+                                 f"string (got {v!r})")
+        if not isinstance(feature_ref, str) or not feature_ref.startswith("refs/heads/"):
+            raise ValueError(f"append_landed_work_product: feature_ref {feature_ref!r} is not "
+                             f"refs/heads/-rooted")
+        if not isinstance(temp_ref, str) or not temp_ref.startswith("refs/rawgentic/collect/"):
+            raise ValueError(f"append_landed_work_product: temp_ref {temp_ref!r} is not "
+                             f"refs/rawgentic/collect/-rooted")
+        for name, v in (("pre_sha", pre_sha), ("new_sha", new_sha)):
+            if not _is_sha40(v):
+                raise ValueError(f"append_landed_work_product: {name} {v!r} is not a 40-hex "
+                                 f"commit SHA")
+        if landing_status not in _LANDING_STATUSES:
+            raise ValueError(f"append_landed_work_product: landing_status {landing_status!r} "
+                             f"not in {_LANDING_STATUSES}")
+        if not isinstance(ts, int) or isinstance(ts, bool):
+            raise ValueError(f"append_landed_work_product: ts must be an int (got {ts!r})")
+        with self._lock:
+            self._write_locked({
+                "kind": "landed_work_product", "landing_version": 1,
+                "receipt_nonce": receipt_nonce, "feature_ref": feature_ref,
+                "pre_sha": pre_sha, "new_sha": new_sha, "temp_ref": temp_ref,
+                "landing_status": landing_status, "run_id": run_id, "ts": ts})
 
     def append_park(self, *, run_id: str, task_id: str, design_version: str, stash_name: str,
                     worktree_path: str, parked: bool, stash_oid: Optional[str] = None) -> None:
