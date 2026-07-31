@@ -891,14 +891,31 @@ def dispatch_seat(
         return _err(EXIT_INTERNAL, "internal_error", f"{type(e).__name__}: {e}", retryable=False,
                     correlation_id=correlation_id, audit_path=str(audit.path))
 
+    # #733: compute process-failure evidence FIRST (rev-4 evaluation order) — every failure
+    # return below is correlation-owned (run_seat dispatched it), so partial evidence rides on
+    # all of them; the WINNING VERDICT is unchanged (enforcement > availability > ok).
+    fail = enforce.contract.observation_process_failure(final_obs)
     pc = enforce.verify_post(final_obs)
     if not pc.ok:  # requested!=actual identity breach (non-retryable) — receipt+obs already audited
-        return _err(EXIT_ENFORCEMENT, pc.reason, f"identity breach on seat {seat!r}", retryable=pc.retryable,
-                    correlation_id=correlation_id, audit_path=str(audit.path))
+        return _attach_partial(
+            _err(EXIT_ENFORCEMENT, pc.reason, f"identity breach on seat {seat!r}", retryable=pc.retryable,
+                 correlation_id=correlation_id, audit_path=str(audit.path)), final_obs)
     if not pc.verified:  # ok but unverified => the chain exhausted on availability failures
-        return _err(EXIT_AVAILABILITY, "chain_exhausted_availability",
-                    f"seat {seat!r} exhausted its chain on availability failures", retryable=True,
-                    correlation_id=correlation_id, audit_path=str(audit.path))
+        return _attach_partial(
+            _err(EXIT_AVAILABILITY, "chain_exhausted_availability",
+                 f"seat {seat!r} exhausted its chain on availability failures", retryable=True,
+                 correlation_id=correlation_id, audit_path=str(audit.path)), final_obs)
+    if fail is not None:
+        # a verified identity is NOT success (#733). Retryability derives from the FAILURE
+        # CLASS, not blanket-true (8a R2-H3): process-death/transport classes are positive
+        # death evidence (engine-observed); parse/identity/malformed classes are definite,
+        # potentially effectful failures (hermes encodes 4xx submit failures as parse_error
+        # with an explicit do-not-fall-back) — a retry must not be invited for those.
+        return _attach_partial(
+            _err(EXIT_AVAILABILITY, f"dispatch_{fail}",
+                 f"seat {seat!r} final attempt failed ({fail}) — partial output preserved; "
+                 f"see partial_payload/raw_capture_path", retryable=fail in _RETRYABLE_FAILS,
+                 correlation_id=correlation_id, audit_path=str(audit.path)), final_obs)
     return {
         "ok": True, "exit": EXIT_OK, "action": "executor", "seat": seat,
         "requested_model": final_obs.requested_model, "actual_model": final_obs.actual_model,
@@ -1354,24 +1371,59 @@ def supervised_dispatch(
                         retryable=False, correlation_id=ce, audit_path=audit_path)
 
     # STEP 7 — one dispatch result, only after identity capture + phase-2 pass.
+    # #733: everything past the correlation_mismatch refusal above is correlation-OWNED, so
+    # partial evidence rides on every observation-bearing failure return (rev-4 order: evidence
+    # first, verdict precedence unchanged — enforcement > availability > ok).
+    def _with_partial(res: dict) -> dict:
+        return _attach_partial(res, obs) if obs is not None else res
+    # 8a R1-H1/R2-H1 (narrowed): an ATTESTED-WRONG identity is a billed breach and wins over
+    # the state verdict — but ONLY requested_actual_mismatch. identity_missing keeps the state
+    # verdict: the supervisor deliberately emits no-identity synthetic envelopes (parse_error)
+    # for suspicious deaths, and treating those as breaches would turn honest-death recovery
+    # into non-retryable enforcement.
+    pc = enforce.verify_post(obs) if obs is not None else None
+    if pc is not None and not pc.ok and pc.reason == "requested_actual_mismatch":
+        return _with_partial(_err(EXIT_ENFORCEMENT, pc.reason,
+                                  f"identity breach on supervised seat {seat!r}", retryable=pc.retryable,
+                                  correlation_id=ce, audit_path=audit_path))
     if state != "completed":
         retryable = state in ("timed_out", "exited_no_sentinel", "quota_paused")
+        detail = f"supervised seat {seat!r} ended in state {state!r}"
+        if retryable:
+            # #733 Step-11 R1-H1: await_job returns "timed_out" whether or not _kill_job PROVED
+            # death — the fresh registry record carries quarantine_reason exactly when it did
+            # not. Residue is not proven death: the ratified policy forbids inviting a retry of
+            # a possibly-still-running mutation (EXIT_INTERNAL parity with completed_with_residue).
+            fresh = supervisor.job_record(record)
+            if fresh is not None and getattr(fresh, "quarantine_reason", None):
+                retryable = False
+                detail += (f" — kill unverified ({fresh.quarantine_reason}); "
+                           f"residue is not proven death, no retry")
         code = EXIT_AVAILABILITY if retryable else EXIT_INTERNAL
-        return _err(code, f"supervised_{state}",
-                    f"supervised seat {seat!r} ended in state {state!r}", retryable=retryable,
-                    correlation_id=ce, audit_path=audit_path)
+        return _with_partial(_err(code, f"supervised_{state}", detail, retryable=retryable,
+                                  correlation_id=ce, audit_path=audit_path))
     # verify_post on the final observation (Step-11 C2) — same breach semantics as the sync path:
     # an envelope with a wrong/missing identity is a NON-retryable enforcement failure; an
     # availability-shaped obs is exit 3.
-    pc = enforce.verify_post(obs or {})
+    fail = enforce.contract.observation_process_failure(obs or {})
+    pc = pc if pc is not None else enforce.verify_post(obs or {})
     if not pc.ok:
-        return _err(EXIT_ENFORCEMENT, pc.reason,
-                    f"identity breach on supervised seat {seat!r}", retryable=pc.retryable,
-                    correlation_id=ce, audit_path=audit_path)
+        return _with_partial(_err(EXIT_ENFORCEMENT, pc.reason,
+                                  f"identity breach on supervised seat {seat!r}", retryable=pc.retryable,
+                                  correlation_id=ce, audit_path=audit_path))
+    if fail is not None:
+        # #733: a completed-state envelope that fails the process predicate is NOT proven death
+        # under the ratified retry policy — retryable=False; the ERROR protocol owns any retry.
+        # Step-11 R1-H2: evaluated BEFORE the unverified verdict — a missing identity must never
+        # make a failed envelope MORE retryable than one that attested.
+        return _with_partial(_err(EXIT_AVAILABILITY, f"supervised_dispatch_{fail}",
+                                  f"supervised seat {seat!r} completed with a failed envelope ({fail}) — "
+                                  f"partial output preserved", retryable=False,
+                                  correlation_id=ce, audit_path=audit_path))
     if not pc.verified:
-        return _err(EXIT_AVAILABILITY, "supervised_unverified",
-                    f"supervised seat {seat!r} produced no verifiable envelope ({pc.reason})",
-                    retryable=True, correlation_id=ce, audit_path=audit_path)
+        return _with_partial(_err(EXIT_AVAILABILITY, "supervised_unverified",
+                                  f"supervised seat {seat!r} produced no verifiable envelope ({pc.reason})",
+                                  retryable=True, correlation_id=ce, audit_path=audit_path))
     return {
         "ok": True, "exit": EXIT_OK, "action": "executor_supervised", "seat": seat,
         "state": state, "correlation_id": ce, "audit_path": audit_path,
@@ -1464,19 +1516,47 @@ def resume_dispatch(
         if child_cid is None:
             stamped["correlation_id"] = ce
         audit.append_observation(stamped, receipt=receipt)
+    # #733: past the correlation_mismatch refusal above every return is correlation-owned —
+    # partial evidence rides on observation-bearing failures (rev-4 evaluation order).
+    def _with_partial(res: dict) -> dict:
+        return _attach_partial(res, obs) if obs is not None else res
+    # 8a R1-H1/R2-H1 (narrowed, mirror of supervised): attested-wrong identity wins over the
+    # state verdict; identity_missing keeps it (synthetic no-identity death envelopes).
+    pc = enforce.verify_post(obs) if obs is not None else None
+    if pc is not None and not pc.ok and pc.reason == "requested_actual_mismatch":
+        return _with_partial(_err(EXIT_ENFORCEMENT, pc.reason,
+                                  f"identity breach on resume seat {seat!r}",
+                                  retryable=pc.retryable, correlation_id=ce, audit_path=audit_path))
     if state != "completed":
         retryable = state in ("timed_out", "exited_no_sentinel", "quota_paused")
+        detail = f"resume seat {seat!r} ended in state {state!r}"
+        if retryable:
+            # #733 Step-11 R1-H1 (mirror of supervised): quarantine_reason on the fresh registry
+            # record marks a kill that was NOT verified — residue is not proven death, no retry.
+            fresh = supervisor.job_record(record)
+            if fresh is not None and getattr(fresh, "quarantine_reason", None):
+                retryable = False
+                detail += (f" — kill unverified ({fresh.quarantine_reason}); "
+                           f"residue is not proven death, no retry")
         code = EXIT_AVAILABILITY if retryable else EXIT_INTERNAL
-        return _err(code, f"resume_{state}", f"resume seat {seat!r} ended in state {state!r}",
-                    retryable=retryable, correlation_id=ce, audit_path=audit_path)
-    pc = enforce.verify_post(obs or {})
+        return _with_partial(_err(code, f"resume_{state}", detail,
+                                  retryable=retryable, correlation_id=ce, audit_path=audit_path))
+    fail = enforce.contract.observation_process_failure(obs or {})
+    pc = pc if pc is not None else enforce.verify_post(obs or {})
     if not pc.ok:
-        return _err(EXIT_ENFORCEMENT, pc.reason, f"identity breach on resume seat {seat!r}",
-                    retryable=pc.retryable, correlation_id=ce, audit_path=audit_path)
+        return _with_partial(_err(EXIT_ENFORCEMENT, pc.reason, f"identity breach on resume seat {seat!r}",
+                                  retryable=pc.retryable, correlation_id=ce, audit_path=audit_path))
+    if fail is not None:
+        # #733: completed-but-failed envelope is NOT proven death — retryable=False (D3 policy).
+        # Step-11 R1-H2: evaluated BEFORE the unverified verdict (mirror of supervised).
+        return _with_partial(_err(EXIT_AVAILABILITY, f"resume_dispatch_{fail}",
+                                  f"resume seat {seat!r} completed with a failed envelope ({fail}) — "
+                                  f"partial output preserved", retryable=False,
+                                  correlation_id=ce, audit_path=audit_path))
     if not pc.verified:
-        return _err(EXIT_AVAILABILITY, "resume_unverified",
-                    f"resume seat {seat!r} produced no verifiable envelope ({pc.reason})",
-                    retryable=True, correlation_id=ce, audit_path=audit_path)
+        return _with_partial(_err(EXIT_AVAILABILITY, "resume_unverified",
+                                  f"resume seat {seat!r} produced no verifiable envelope ({pc.reason})",
+                                  retryable=True, correlation_id=ce, audit_path=audit_path))
     return {
         "ok": True, "exit": EXIT_OK, "action": "executor_resume", "seat": seat,
         "state": state, "correlation_id": ce, "audit_path": audit_path,
@@ -1570,12 +1650,29 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
                     f"collect-work-product: expected exactly 1 passing build receipt for nonce "
                     f"{record.receipt_nonce!r}, found {len(_pass_build)} — refusing to promote",
                     retryable=False, correlation_id=ce)
-    if not any(_verify_post(o.get("observation") or {}).verified for o in _recs
+    # #733: authorization requires a verified identity AND a completed process — a killed build
+    # whose envelope still attested the right model must never authorize promoting partial output.
+    # Step-11 R2-H2: the authorizing observation must also BIND to the passing receipt's identity
+    # (same seat/run, matching correlation when both sides carry one) — nonce-sharing plus a
+    # verified model is not ownership; a foreign observation must never authorize this promotion.
+    from phase_executor.contract import observation_process_failure as _proc_fail  # noqa: PLC0415
+    _receipt_cid = _pass_build[0].get("correlation_id")
+
+    def _authorizes(envelope: dict) -> bool:
+        inner = envelope.get("observation") or {}
+        if inner.get("seat") != record.identity.seat or inner.get("run_id") != run_id:
+            return False
+        icid = inner.get("correlation_id")
+        if icid is not None and _receipt_cid is not None and icid != _receipt_cid:
+            return False
+        return _verify_post(inner).verified and _proc_fail(inner) is None
+
+    if not any(_authorizes(o) for o in _recs
                if o.get("kind") == "observation" and o.get("receipt_nonce") == record.receipt_nonce):
         return _err(EXIT_ENFORCEMENT, "unauthorized_work_product",
                     f"collect-work-product: no verified completed observation bound to receipt "
-                    f"{record.receipt_nonce!r} — refusing to promote", retryable=False,
-                    correlation_id=ce)
+                    f"{record.receipt_nonce!r} (identity-bound: seat/run/correlation) — refusing "
+                    f"to promote", retryable=False, correlation_id=ce)
     handle = handle_from_record(record)
     try:
         evidence = manager.content_evidence(handle)
@@ -1786,7 +1883,10 @@ def recover_run(*, run_id: str, supervisor, snapshot, audit, routing, enforce,
                 # resume_dispatch's F9) — a mismatched child envelope must never enter the ledger.
                 child_cid = stamped.get("correlation_id")
                 exp_cid = corr_by_sid.get(a.record.session_name)
-                if child_cid is not None and exp_cid is not None and child_cid != exp_cid:
+                # 8a R2-H4: when the CHILD supplies a correlation it must match exactly, even
+                # when the recovery derived no expected value (legacy) — a non-null foreign
+                # correlation must never bypass the refusal just because exp_cid is None.
+                if child_cid is not None and child_cid != exp_cid:
                     entry["verify"] = (f"correlation_mismatch: child {child_cid!r} != recovery "
                                        f"{exp_cid!r} — foreign observation refused")
                     worst = max(worst, EXIT_ENFORCEMENT)
@@ -1800,14 +1900,40 @@ def recover_run(*, run_id: str, supervisor, snapshot, audit, routing, enforce,
                     stamped["dispatched_lane"] = lane_by_sid[a.record.session_name]
                 audit.append_observation(stamped, receipt=_types.SimpleNamespace(nonce=nonce))
             if state == "completed":
+                # #733: the foreign-correlation refusal above already excluded unowned envelopes,
+                # so this entry's observation is correlation-owned — evidence first, then verdicts.
+                fail = enforce.contract.observation_process_failure(obs or {})
                 pc = enforce.verify_post(obs or {})
                 if not pc.ok:
                     entry["verify"] = pc.reason
                     worst = EXIT_ENFORCEMENT
+                    if obs is not None:
+                        _attach_partial(entry, obs)
+                elif fail is not None:
+                    # a recovered completed entry whose envelope failed the process predicate is
+                    # availability, never a clean recovery (#733). Step-11 R1-H2: process-failure
+                    # evidence labels the entry BEFORE the weaker unverified verdict (same
+                    # precedence rule as the supervised/resume result assembly).
+                    entry["verify"] = f"process_failure: {fail}"
+                    worst = max(worst, EXIT_AVAILABILITY)
+                    if obs is not None:
+                        _attach_partial(entry, obs)
                 elif not pc.verified:
                     entry["verify"] = f"unverified: {pc.reason}"
                     worst = max(worst, EXIT_AVAILABILITY)
+                    if obs is not None:
+                        _attach_partial(entry, obs)
             else:
+                # 8a R1-H1 (recover leg): a non-completed recovery entry keeps its availability
+                # verdict, but an ATTESTED-WRONG identity on its owned envelope is a billed
+                # breach (mismatch-only — identity_missing keeps the state verdict), and any
+                # owned envelope's partial evidence rides on the entry.
+                if obs is not None:
+                    pc_nc = enforce.verify_post(obs)
+                    if not pc_nc.ok and pc_nc.reason == "requested_actual_mismatch":
+                        entry["verify"] = pc_nc.reason
+                        worst = EXIT_ENFORCEMENT
+                    _attach_partial(entry, obs)
                 worst = max(worst, EXIT_AVAILABILITY)
         elif a.action.startswith("relaunch_refused") or a.action in ("fail", "quarantine"):
             worst = max(worst, EXIT_AVAILABILITY)
@@ -1824,6 +1950,40 @@ def _err(exit_code: int, code: str, message: str, *, retryable: bool, correlatio
     if audit_path is not None:
         out["audit_path"] = audit_path
     return out
+
+
+# #733 (8a R2-H3): sync `dispatch_<fail>` reasons whose retry is safe — the process died or the
+# transport delivered nothing (positive death / nothing-ran evidence). Every other reason
+# (parse_error, identity_failure, malformed_status, ...) is a definite, potentially effectful
+# failure: retryable=False, the ERROR protocol owns it.
+_RETRYABLE_FAILS: Final[frozenset] = frozenset(
+    {"timeout", "signalled", "nonzero_exit", "launch_error", "no_response"})
+
+
+def _attach_partial(res: dict, obs) -> dict:
+    """#733 AC4: attach partial-output evidence from a correlation-OWNED observation to a
+    failure result. ``partial`` is precisely ``parsed_payload is not None`` (empty containers,
+    "", 0 and False ARE payloads) — a dispatch that produced nothing must not claim a partial.
+    Callers must NEVER pass a foreign-correlation observation (the correlation_mismatch refusal
+    paths are excluded by design — another dispatch's payload must not ride back to this
+    caller). Accepts an Observation or its dict form; reads, never raises (a to_dict() that
+    raises or returns a non-dict degrades to minimal fields — 8a R1-M3)."""
+    if isinstance(obs, dict):
+        d = obs
+    else:
+        try:
+            d = obs.to_dict() if hasattr(obs, "to_dict") else {}
+        except Exception:  # noqa: BLE001 — never-raises contract inside result assembly
+            d = {}
+        if not isinstance(d, dict):
+            d = {}
+    payload = d.get("parsed_payload")
+    res["partial"] = payload is not None
+    res["parse_status"] = d.get("parse_status")
+    res["partial_payload"] = payload
+    res["raw_capture_path"] = d.get("raw_capture_path")
+    res["observation"] = d
+    return res
 
 
 # --- CLI (guarded phase_executor import lives here) --------------------------------------------

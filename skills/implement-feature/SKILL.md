@@ -158,15 +158,15 @@ python3 hooks/executor_routing_lib.py dispatch \
   [--gate-file <gate.json> --plan-file <impl-plan.md>] \
   --workspace <workspace-file> --project <name>
 ```
-Build seats require BOTH `--gate-file` and `--plan-file` (the authenticated #429 gate decision plus the live implementation plan the context is minted from). The CLI derives the canonical `REQUIRED_PLAN_CONTEXT_KEYS` internally from `--plan-file` after authenticating the gate — the input is `--plan-file`, NEVER `--plan-context`, so no caller-assembled context object crosses the boundary.
+Build seats require BOTH `--gate-file` and `--plan-file` (the authenticated #429 gate decision plus the live implementation plan the context is minted from). The CLI derives the canonical `REQUIRED_PLAN_CONTEXT_KEYS` internally from `--plan-file` after authenticating the gate — the input is `--plan-file`, NEVER `--plan-context`, so no caller-assembled context object crosses the boundary. An omitted `--timeout` defaults to the seat's own declared bound (`resolve_dispatch_timeout`, #753); `--timeout` only tightens, never loosens (#733).
 
-**Exit taxonomy (shipped numbering preserved; 6 is ADDITIVE):** `0` ok · `2` malformed input · `3` availability (chain exhausted / quota timeout) · `4` enforcement denial (incl. `gate_stale_for_plan`) · `5` internal · `6` refused (`EXIT_REFUSED` — canary refusal; NEW, no renumber of the shipped #427/#464 codes; the competitive-only-seat error stays exit 2 as shipped). Exit → DISPATCH `outcome` mapping (normative):
+**Exit taxonomy (shipped numbering preserved; 6 is ADDITIVE):** `0` ok · `2` malformed input · `3` availability (chain exhausted / quota timeout / a timed-out, signalled, or otherwise process-failed dispatch — `ok: false` with any partial output attached and flagged `partial: true`, #733) · `4` enforcement denial (incl. `gate_stale_for_plan`) · `5` internal · `6` refused (`EXIT_REFUSED` — canary refusal; NEW, no renumber of the shipped #427/#464 codes; the competitive-only-seat error stays exit 2 as shipped). Exit → DISPATCH `outcome` mapping (normative):
 
 | dispatch exit | DISPATCH `outcome` | condition |
 |---|---|---|
 | 0 | `ok` (or `retried` when a fallback attempt succeeded) | — |
 | 2 malformed | `error` | terminal caller error |
-| 3 availability | `error` after the orchestrator stops retrying; `dead` ONLY when it abandons a hung/vacuous supervised job (reap/quarantine) | retry policy is the orchestrator's |
+| 3 availability | `error` after the orchestrator stops retrying; `dead` ONLY when it abandons a hung/vacuous supervised job (reap/quarantine) | retry policy is the orchestrator's; includes the #733 process-failure results (`dispatch_timeout`/`dispatch_signalled`/`dispatch_<status>` and the supervised/resume siblings) — the ONE canonical DISPATCH line for a workflow dispatch whose final attempt was killed carries `outcome=error`, never `ok`; a `partial: true` payload is a lead, not a pass |
 | 4 enforcement (incl. `gate_stale_for_plan`) | `error` | terminal denial |
 | 5 internal | `error` | terminal internal fault |
 | 6 refused (canary) | `error` | terminal refusal |

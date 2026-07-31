@@ -17,6 +17,7 @@ from __future__ import annotations
 import functools
 import json
 import re
+from collections.abc import Mapping as _Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Optional
@@ -53,6 +54,62 @@ PARSE_STATUSES = frozenset(
 # but is not a clean success — routing enforcement treats an absent/mismatched identity there as a
 # breach (verified, not trusted). Single-sourced here so engine and enforce agree.
 AVAILABILITY_FAILURES = frozenset({NONZERO_EXIT, TIMEOUT, LAUNCH_ERROR, NO_RESPONSE})
+
+# #733: the two states a dispatch may report as SUCCESS. Everything else fails deny-by-default —
+# verify_post answers "did we route to the right model?" (identity), never "did the dispatch
+# succeed?", and every consumer that conflated the two let a SIGKILLed seat read as a passed gate.
+PROCESS_SUCCESS_STATUSES = frozenset({OK, USAGE_UNAVAILABLE})
+
+
+def observation_process_failure(obs) -> Optional[str]:
+    """Reason string when the observation records a process-level failure, else None (#733).
+
+    Success is an explicit ALLOWLIST: ``parse_status in PROCESS_SUCCESS_STATUSES`` with no
+    contradicting process evidence. Precedence within a failing observation: timeout evidence
+    (``process.timed_out`` or ``parse_status == TIMEOUT``) → ``"timeout"``; any non-zero
+    integer ``exit_code`` → ``"signalled"`` (negative) / ``"nonzero_exit"`` (positive); then
+    the non-allowlisted status string itself. A non-string ``parse_status`` fails as
+    ``"malformed_status"`` — the allowlist governs status, so malformed evidence can never
+    manufacture a success. A malformed ``process``/``exit_code`` reads as no-signal from THAT
+    field only (schema-validated appends keep garbage off the real paths). Identity is
+    deliberately not consulted — that is ``verify_post``'s job. Accepts an ``Observation`` or
+    its dict form. Never raises: this runs inside result assembly.
+
+    ``usage_unavailable`` additionally requires a payload (``parsed_payload is not None`` —
+    the AC4 rule: "", 0, False and empty containers ARE payloads): the status means "output
+    parsed, only token counts missing", so a no-output envelope claiming it is ``no_response``.
+    The producer already orders output before usage (adapters/base.py, 8a R2-H2), but
+    legacy/in-flight producers pre-date that reorder — the reader must not bless their
+    no-output shape (#733 Step-11 R2-H1).
+    """
+    if isinstance(obs, Observation):
+        # read the fields directly — a full to_dict() would raise on an Observation whose
+        # UNRELATED fields are malformed (e.g. process=None makes dict(self.process) raise),
+        # violating the never-raises contract (8a R1-M2)
+        status = obs.parse_status
+        proc = obs.process
+        payload = obs.parsed_payload
+    else:
+        d = obs if isinstance(obs, _Mapping) else {}
+        status = d.get("parse_status")
+        proc = d.get("process")
+        payload = d.get("parsed_payload")
+    proc = proc if isinstance(proc, _Mapping) else {}
+    exit_code = proc.get("exit_code")
+    if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+        exit_code = None  # bool is an int subclass; neither is process-exit evidence
+    if proc.get("timed_out") is True or status == TIMEOUT:
+        return TIMEOUT
+    if exit_code is not None and exit_code != 0:
+        return "signalled" if exit_code < 0 else NONZERO_EXIT
+    if not isinstance(status, str):
+        return "malformed_status"
+    if status not in PROCESS_SUCCESS_STATUSES:
+        return status
+    if status == USAGE_UNAVAILABLE and payload is None:
+        return NO_RESPONSE  # produced nothing — a usage-only success claim is not a success
+    return None
+
 
 _SCHEMA_DIR = Path(__file__).resolve().parent / "schemas"
 

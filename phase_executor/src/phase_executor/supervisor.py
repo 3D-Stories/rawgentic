@@ -899,6 +899,14 @@ class TmuxSupervisor:
             except OSError:
                 pass
 
+    def job_record(self, record: JobRecord) -> Optional[JobRecord]:
+        """The FRESH registry copy of ``record`` (post-``_finish`` state / quarantine_reason),
+        or None. #733 Step-11 R1-H1: ``_finish`` builds a new record via ``replace`` and
+        upserts it, so an ``await_job`` caller's reference is stale — dispatch result assembly
+        must read the registry to learn whether a timeout kill was verified (quarantine_reason
+        set = death NOT proven; residue may still be executing)."""
+        return self._registry.get(record.identity)
+
     def _finish(self, record: JobRecord, state: str, *, release_permit: bool = True,
                 **updates) -> JobRecord:
         """Terminal-state stamp. ``release_permit=False`` on any path where process death
