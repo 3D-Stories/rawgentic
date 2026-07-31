@@ -1,7 +1,20 @@
 # #758 — Owner-authored goals: verbatim carry across pane-handoffs (design note, small-standard lane)
 
-**Rev 4** — pass-3 finding resolved per owner decision (D18: apply final fixes, proceed, no
-fourth pass): the strict snapshot is enforced for EVERY validated teardown — including the
+**Step-11 amendments (same PR):** the pre-PR wave hardened four boundaries — an approval
+answer must read affirmative (an owner's "no" through the flag never authorizes; the audit
+field emits only when an override was actually consumed, and the flag is refused with
+`--no-teardown`); a torn/malformed NEWEST goal row is ambiguity that refuses on destructive
+paths (strict mode), never "no goal" or a stale fallback; truncated armed prefixes no longer
+vouch for differing over-cap texts; and `strict_goal_binding` refuses uncoupled parameters
+(requires teardown + predecessor session + an EXPLICIT snapshot, `None` meaning
+validated-no-goal). One pre-existing gap outside this issue's scope — the campaign and
+mid-child destructive paths still read goals via the recursive helpers — is filed as its own
+follow-up issue rather than silently absorbed; the Scope section below no longer overclaims
+those paths as provenance-bound.
+
+**Rev 4** — pass-3 finding resolved: the owner closed the design gate at pass 3 (decision
+record D18 in the epic run log) with these final amendments applied: the strict snapshot is
+enforced for EVERY validated teardown — including the
 "no live goal" state (`expected = None`; a goal appearing where none was → clear refused,
 pane left open) — with the cleared→B regression test added, and the residual read→clear race
 documented as the platform ceiling (`/goal clear` has no compare-and-clear form; mitigation:
@@ -150,6 +163,8 @@ platform_apis: none
 
 In: pane-handoff goal-carry contract + emitted guidance; ad-hoc-handoff guard path.
 Out (per issue): /goal evaluator (harness), stop-hook breaker (P3 sibling #760 holds the
-deferred authorization halves), deferral registry (P2 sibling). `mid-child-handoff` already
-validates — untouched. Campaign `handoff` derives its goal from the predecessor transcript
-itself — already provenance-bound, untouched.
+deferred authorization halves), deferral registry (P2 sibling). `mid-child-handoff` validates
+condition EQUALITY against its provenance transcript, and campaign `handoff` derives its goal
+from the predecessor transcript — but BOTH still read via the recursive, sentinel-insensitive
+helpers on their destructive paths (Step-11 wave finding, pre-existing): origin-binding those
+readers is a filed follow-up issue, deliberately not absorbed into this child.
