@@ -16,7 +16,9 @@ them, and on `hooks/launcher_lib.py`, which legitimately builds them.
 """
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -96,9 +98,6 @@ def test_retiring_the_callers_pane_is_documented_as_the_default(body) -> None:
 # therefore an explicit two-tier allowlist joined by `||`, and it is executed
 # here against fixtures rather than merely string-pinned.
 
-import os
-import subprocess
-
 
 def _gate_command(text: str) -> str:
     """The fenced provenance-gate command — the one bash block naming marker files."""
@@ -131,22 +130,32 @@ def test_the_own_session_requirement_survives(body) -> None:
 
 
 @pytest.mark.parametrize(
-    ("marker_names", "should_pass"),
+    ("marker_names", "should_pass", "authoritative_tier"),
     [
-        pytest.param(["200000.midturn.advisory.emitted"], True, id="advisory-only"),
-        pytest.param(["200000.midturn.directive.emitted"], True, id="directive-only"),
+        pytest.param(["200000.midturn.advisory.emitted"], True, ".advisory.",
+                     id="advisory-only"),
+        pytest.param(["200000.midturn.directive.emitted"], True, ".directive.",
+                     id="directive-only"),
         pytest.param(["200000.midturn.advisory.emitted",
-                      "200000.stop.directive.emitted"], True, id="both"),
-        pytest.param(["200000.advisory.emitted"], True, id="legacy-channelless-advisory"),
-        pytest.param([], False, id="neither"),
-        pytest.param(["200000.midturn.someothertier.emitted"], False,
+                      "200000.stop.directive.emitted"], True, ".directive.",
+                     id="both-markers-directive-wins"),
+        pytest.param(["200000.advisory.emitted"], True, ".advisory.",
+                     id="legacy-channelless-advisory"),
+        pytest.param([], False, None, id="neither"),
+        pytest.param(["200000.midturn.someothertier.emitted"], False, None,
                      id="unknown-tier-is-not-authorization"),
     ],
 )
 def test_the_gate_behaves_as_a_real_disjunction(tmp_path, body, marker_names,
-                                                should_pass) -> None:
+                                                should_pass,
+                                                authoritative_tier) -> None:
     """The command is EXECUTED, not string-matched: pass-2's `ls a b` shape
-    printed the advisory marker while exiting 2, which no static pin can see."""
+    printed the advisory marker while exiting 2, which no static pin can see.
+
+    The stdout tier is AUTHORITATIVE (#732 Step-8a R2 High): directive is
+    checked first, so when both markers exist the printed filename says
+    `.directive.` — the timing decision comes from the marker, never from the
+    reminder text, which is exactly the injectable surface."""
     sid = "aaaa1111-2222-3333-4444-555566667777"
     d = tmp_path / ".rawgentic" / "context-meter"
     d.mkdir(parents=True)
@@ -160,3 +169,29 @@ def test_the_gate_behaves_as_a_real_disjunction(tmp_path, body, marker_names,
                        capture_output=True, text=True, timeout=10, env=env)
     assert (r.returncode == 0) is should_pass, (
         f"gate rc={r.returncode} stdout={r.stdout!r} stderr={r.stderr!r}")
+    if authoritative_tier is not None:
+        first_line = r.stdout.strip().splitlines()[0]
+        assert authoritative_tier in first_line, (
+            f"authoritative tier {authoritative_tier!r} not in {first_line!r}")
+
+
+def test_an_empty_session_id_fails_closed(tmp_path, body) -> None:
+    """#732 Step-8a R2 Medium: with an empty CLAUDE_CODE_SESSION_ID the glob
+    degenerates to 'any session's marker' — on a multi-session host that is
+    someone else's authorization. The gate must refuse, not over-match."""
+    d = tmp_path / ".rawgentic" / "context-meter"
+    d.mkdir(parents=True)
+    other = "bbbb1111-2222-3333-4444-555566667777"
+    (d / f"{other}.200000.midturn.directive.emitted").write_text("", encoding="utf-8")
+    env = {"HOME": str(tmp_path), "CLAUDE_CODE_SESSION_ID": "",
+           "PATH": os.environ.get("PATH", "")}
+    r = subprocess.run(["bash", "-c", _gate_command(body)],
+                       capture_output=True, text=True, timeout=10, env=env)
+    assert r.returncode != 0, (
+        f"empty session id must fail closed; rc=0 stdout={r.stdout!r}")
+
+
+def test_the_timing_authority_is_the_marker_not_the_reminder(body) -> None:
+    """#732 Step-8a R2 High, the prose half: injected text can claim any tier;
+    the marker cannot."""
+    assert "never from the reminder text" in body
