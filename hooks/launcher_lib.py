@@ -875,6 +875,79 @@ def last_unmet_goal_condition(transcript_text: str) -> str | None:
     return found
 
 
+def live_owner_goal(transcript_text: str) -> str | None:
+    """The predecessor's LIVE owner goal, from sentinel-bearing rows only (#758).
+
+    Trust boundary: `_find_goal_status` is deliberately recursive, so structured user or
+    tool content embedded in a transcript line can carry a forged `type: goal_status`
+    object. Only the harness's own attachments carry `sentinel: true`, so this reader
+    keys on the sentinel — a forged sentinel-less row can neither inject a phantom goal
+    nor spoof "already cleared" (a forged `met: true` carrying the genuine condition was
+    exactly the #758 pass-2 bypass through `goal_currently_unmet`, which scans without a
+    sentinel check).
+
+    Liveness is decided by the LAST sentinel-bearing row with a non-blank condition:
+    `met` False → its condition is live (returned VERBATIM); `met` True → the guard was
+    cleared → None; no such rows → None. (`last_unmet_goal_condition` is historical — it
+    returns a met:false row even after a later clear — so it is deliberately not used.)
+    """
+    last: dict | None = None
+    for row in _iter_goal_status(transcript_text):
+        if row.get("sentinel") is not True:
+            continue
+        cond = row.get("condition")
+        if isinstance(cond, str) and cond.strip():
+            last = row
+    if last is None or last.get("met") is not False:
+        return None
+    return last["condition"]
+
+
+def validate_goal_carry(successor_goal: str, predecessor_live_goal: str | None, *,
+                        approved_answer: str | None = None) -> tuple[bool, str]:
+    """#758 — the successor's goal must be the predecessor's owner-authored goal VERBATIM.
+
+    Comparison is on ARMED forms (`armed_condition`) after ONE documented normalization:
+    a single trailing newline is stripped from the successor text, because a
+    goal-condition FILE ends with a newline while the armed row never carries one. No
+    other normalization — `strip()` equality was rejected at the design gate (pass-1 F4):
+    byte-identical or refused keeps the rule legible.
+
+    `approved_answer` is the owner's verbatim yes/no answer approving a DIFFERENT goal
+    text (the `--goal-rewrite-approved` value). It is a caller assertion — no crypto root
+    of trust exists, so the enforceable layer is the skill prose gating it on an explicit
+    owner question plus the audit record the CLI writes (AC3 permits "rejects or flags":
+    unapproved difference → rejected; approved → flagged).
+
+    `predecessor_live_goal is None` means no live guard existed at validation — nothing
+    to carry, nothing to validate.
+
+    A mismatch reason carries ONLY lengths and the numeric first-divergence offset —
+    never goal content (an owner goal must not leak into error logs; pass-1 F8).
+    """
+    if predecessor_live_goal is None:
+        return (True, "no live predecessor goal — nothing to validate")
+    succ = successor_goal[:-1] if successor_goal.endswith("\n") else successor_goal
+    armed_succ, _ = armed_condition(succ)
+    armed_pred, _ = armed_condition(predecessor_live_goal)
+    if armed_succ == armed_pred:
+        return (True, "verbatim carry confirmed (armed forms identical)")
+    if isinstance(approved_answer, str) and approved_answer.strip():
+        return (True, f"goal rewrite approved by owner: {approved_answer!r} "
+                      "(flagged in the audit output)")
+    offset = next((i for i, (a, b) in enumerate(zip(armed_succ, armed_pred)) if a != b),
+                  min(len(armed_succ), len(armed_pred)))
+    return (False,
+            f"successor goal differs from the predecessor's owner-authored goal "
+            f"(#758 verbatim-carry rule): successor {len(armed_succ)} chars, "
+            f"predecessor {len(armed_pred)} chars, first divergence at offset {offset}. "
+            f"Goals are owner-authored and carried verbatim — read the live goal with "
+            f"read-goal-condition, never retype or extend it. A genuine goal change "
+            f"needs an explicit owner yes/no first (then pass "
+            f"--goal-rewrite-approved '<the answer>'), or use --no-teardown for an "
+            f"additive helper handoff")
+
+
 def _iter_goal_status(transcript_text: str):
     """Yield every `goal_status` object in a JSONL transcript, in file order.
 
