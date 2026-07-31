@@ -1108,10 +1108,11 @@ def emit_payload(event, text):
 
 
 def nag_text(*, tier, used, window, provenance, seam, seam_reason,
-             headless, fresh_handoff_capable):
+             headless, fresh_handoff_capable, herdr_available=False):
     """The injected advisory. Contains ONLY integers and the pointer's own
     fields — never any transcript content, which would leak the very context it
-    is measuring."""
+    is measuring. Pure: env is read at the caller (#732 `herdr_available`
+    follows the existing headless/fresh_handoff_capable pattern)."""
     pct = used * 100.0 / window if window else 0.0
     lines = [
         f"[rawgentic context meter] This session is using {used:,} tokens of an "
@@ -1170,6 +1171,16 @@ def nag_text(*, tier, used, window, provenance, seam, seam_reason,
             "Unattended with an armed launcher: checkpoint and hand over via "
             "`launcher_lib.py handoff` — do not wait for a human."
         )
+    elif headless and herdr_available:
+        # AC4 (#732) — "stop cleanly for a manual resume" means stop with nobody to
+        # continue (the overnight failure #713 documented). With a herdr pane available
+        # there IS a successor to spawn into, so prefer the route that actually hands over.
+        lines.append(
+            "Unattended with NO durable launcher armed, but a herdr pane is "
+            "available: run `/rawgentic:pane-handoff` — it wraps `clear-prep` and "
+            "then actually hands over, spawning and binding the successor. "
+            "`clear-prep` ALONE leaves no successor."
+        )
     elif headless:
         lines.append(
             "Unattended, but NO durable launcher is armed, so there is nothing "
@@ -1191,13 +1202,18 @@ def nag_text(*, tier, used, window, provenance, seam, seam_reason,
             "successor rebuilds its task list from those via /tasklist."
         )
     else:
+        # AC1-AC3 (#732) — the advisory tier said "run clear-prep", and a session that
+        # obeyed it literally built every artifact and stopped with no successor: that is
+        # compliance, not misreading. #713 fixed the directive branch above and left this
+        # one carrying the bug it had just diagnosed. Same route as directive, softer
+        # TIMING ("at the next clean seam" vs "Break NOW") — the tiers decide WHEN to
+        # hand off, never WHETHER.
         lines.append(
-            "Run the `clear-prep` skill: it writes the mempalace checkpoint, "
-            "the durable handoff file, the resume prompt and the /goal text. "
-            "Its handoff carries `next actions, in order` — the successor "
-            "rebuilds its task list from those via /tasklist. When you are ready to hand "
-            "over rather than just prepare, `/rawgentic:pane-handoff` is what starts the "
-            "successor."
+            "Run `/rawgentic:pane-handoff` at the next clean seam: it wraps "
+            "`clear-prep` (the mempalace checkpoint, the durable handoff file, the "
+            "resume prompt and the /goal text) and then actually hands over — it "
+            "spawns the successor, binds it, delivers the prompt, arms its goal, and "
+            "clears this session's guard. `clear-prep` ALONE leaves no successor."
         )
     return " ".join(lines)
 
@@ -1423,11 +1439,13 @@ def cmd_hook(argv) -> int:
     headless = env.get("RAWGENTIC_HEADLESS") == "1"
     fresh_handoff_capable = (env.get("RAWGENTIC_LAUNCHER_ARMED") == "1"
                              and env.get("RAWGENTIC_FRESH_LAUNCH_SUPPORTED") == "1")
+    herdr_available = env.get("HERDR_ENV") == "1"
     try:
         text = nag_text(tier=tier, used=used, window=window,
                         provenance=provenance, seam=seam,
                         seam_reason=seam_reason, headless=headless,
-                        fresh_handoff_capable=fresh_handoff_capable)
+                        fresh_handoff_capable=fresh_handoff_capable,
+                        herdr_available=herdr_available)
         payload_out = json.dumps(emit_payload(event, text))
     except Exception:
         save_state(home, session_id, state)

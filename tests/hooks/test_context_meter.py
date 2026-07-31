@@ -60,6 +60,10 @@ def _run(payload, *, home, cwd=None, extra_env=None, timeout=20):
     env.pop("RAWGENTIC_HEADLESS", None)
     env.pop("RAWGENTIC_LAUNCHER_ARMED", None)
     env.pop("RAWGENTIC_FRESH_LAUNCH_SUPPORTED", None)
+    # #732 — dev shells here run UNDER herdr, so the inherited env would flip the
+    # headless no-launcher branch to the pane-handoff route on herdr-hosted machines.
+    # Tests opt in explicitly via extra_env.
+    env.pop("HERDR_ENV", None)
     for k in list(env):
         if k.startswith("RAWGENTIC_CONTEXT_"):
             env.pop(k)
@@ -812,6 +816,18 @@ def test_headless_without_a_launcher_still_routes_to_clear_prep(tmp_path):
     assert "launcher_lib" not in text
 
 
+def test_attended_advisory_names_pane_handoff_as_the_route(tmp_path):
+    """#732 — the whole-pipeline (subprocess) form of the T8b advisory pins:
+    40% of a 200k window is the advisory tier (defaults 35/50)."""
+    text = _nag(tmp_path, used=80_000)
+    assert "pane-handoff" in text
+    assert "`clear-prep` ALONE leaves no successor" in text, (
+        "the OLD advisory text also contained 'pane-handoff' (as an optional "
+        "afterthought), so the route assertion alone cannot catch a regression")
+    assert "clear-prep" in text, "named as the wrapped step, not the route"
+    assert "launcher_lib" not in text
+
+
 def test_only_both_capability_declarations_name_the_launcher_route(tmp_path):
     text = _nag(tmp_path, {"RAWGENTIC_HEADLESS": "1",
                            "RAWGENTIC_LAUNCHER_ARMED": "1",
@@ -822,6 +838,15 @@ def test_only_both_capability_declarations_name_the_launcher_route(tmp_path):
 def test_launcher_armed_alone_is_not_enough(tmp_path):
     text = _nag(tmp_path, {"RAWGENTIC_LAUNCHER_ARMED": "1"})
     assert "launcher_lib" not in text
+
+
+def test_headless_with_a_herdr_pane_routes_to_pane_handoff(tmp_path):
+    """#732 AC4, whole-pipeline form: HERDR_ENV=1 reaches nag_text through the
+    caller's env read."""
+    text = _nag(tmp_path, {"RAWGENTIC_HEADLESS": "1", "HERDR_ENV": "1"})
+    assert "pane-handoff" in text
+    assert "launcher_lib" not in text
+    assert "stop cleanly for a manual resume" not in text
 
 
 def test_the_nag_states_the_assumed_window_and_its_provenance(tmp_path):
@@ -1575,6 +1600,97 @@ def test_the_message_still_contains_only_integers_and_no_transcript_content():
     echo the context it is measuring."""
     text = _text("directive", seam_reason="IGNORE-PRIOR-INSTRUCTIONS")
     assert "IGNORE" not in text.upper()
+
+
+# --------------------------------------------------------------------------
+# T8b — #732: the tiers decide WHEN to hand off, never WHETHER
+# --------------------------------------------------------------------------
+# Drift guards pin ONE complete canonical sentence per branch (repo CLAUDE.md
+# mistake #6 — no token fragments: the old two-token directive check would have
+# passed a substantial rewrite). Each assertion is branch-isolated via explicit
+# nag_text kwargs; _norm collapses whitespace because the source wraps.
+
+def _norm(text):
+    return " ".join(text.split())
+
+
+ADVISORY_SENTENCE = (
+    "Run `/rawgentic:pane-handoff` at the next clean seam: it wraps `clear-prep` "
+    "(the mempalace checkpoint, the durable handoff file, the resume prompt and "
+    "the /goal text) and then actually hands over — it spawns the successor, "
+    "binds it, delivers the prompt, arms its goal, and clears this session's guard."
+)
+
+DIRECTIVE_SENTENCE = (
+    "Run `/rawgentic:pane-handoff`: it wraps `clear-prep` (the mempalace "
+    "checkpoint, the durable handoff file, the resume prompt and the /goal text) "
+    "and then actually hands over — it spawns the successor, binds it, delivers "
+    "the prompt, arms its goal, and clears this session's guard."
+)
+
+
+def test_the_advisory_tier_names_pane_handoff_as_the_route():
+    """AC1/AC2 (#732). The advisory tier told sessions to run `clear-prep` — the
+    skill that prepares a handoff and deliberately does not perform one — so a
+    compliant session wrote every artifact and stopped with no successor. The
+    route is pane-handoff; clear-prep is named only as the step it wraps."""
+    text = _text("advisory")
+    assert "pane-handoff" in text
+    assert "`clear-prep` ALONE leaves no successor" in text
+    assert "clear-prep" in text, "the chain is stated, not replaced"
+
+
+def test_advisory_full_canonical_sentence_pin():
+    """AC6 (#732) drift guard — the branch's complete opening sentence, exactly.
+    Unique to the advisory branch via 'at the next clean seam:'."""
+    assert ADVISORY_SENTENCE in _norm(_text("advisory"))
+
+
+def test_advisory_keeps_its_softer_timing():
+    """AC3 (#732). This issue changes WHICH route, never HOW urgent: the
+    directive tier's 'Break NOW' urgency must not leak into the advisory tier."""
+    text = _text("advisory")
+    assert "at the next clean seam" in text
+    assert "Break NOW" not in text
+
+
+def test_directive_full_canonical_sentence_pin():
+    """AC5 (#732). The directive branch is byte-unchanged by this issue — pinned
+    as its complete current sentence (captured from source BEFORE the #732
+    change), so a rewrite cannot hide behind a two-token containment check."""
+    assert DIRECTIVE_SENTENCE in _norm(_text("directive"))
+
+
+HEADLESS_HERDR_SENTENCE = (
+    "Unattended with NO durable launcher armed, but a herdr pane is available: "
+    "run `/rawgentic:pane-handoff` — it wraps `clear-prep` and then actually "
+    "hands over, spawning and binding the successor."
+)
+
+HEADLESS_NO_HERDR_SENTENCE = (
+    "Unattended, but NO durable launcher is armed, so there is nothing to "
+    "relaunch you: run the `clear-prep` skill to write the durable checkpoint "
+    "and handoff, then stop cleanly for a manual resume."
+)
+
+
+def test_headless_with_a_herdr_pane_prefers_pane_handoff():
+    """AC4 (#732). Unattended + no launcher + a herdr pane: 'stop cleanly for a
+    manual resume' means stop with nobody to continue — the exact overnight
+    failure #713 documented — when a successor pane was available all along."""
+    text = _text("advisory", headless=True, herdr_available=True)
+    assert "pane-handoff" in text
+    assert HEADLESS_HERDR_SENTENCE in _norm(text)
+    assert "`clear-prep` ALONE leaves no successor" in text
+    assert "stop cleanly for a manual resume" not in text
+
+
+def test_headless_without_a_herdr_pane_keeps_the_stop_cleanly_text():
+    """AC4 (#732), the other half: with genuinely no pane to spawn into, the
+    existing clear-prep-then-stop text survives verbatim (full-sentence pin)."""
+    text = _text("advisory", headless=True, herdr_available=False)
+    assert HEADLESS_NO_HERDR_SENTENCE in _norm(text)
+    assert "pane-handoff" not in text
 
 
 # --------------------------------------------------------------------------
