@@ -372,15 +372,18 @@ def run_competitive(
     degraded = bool(verdict.get("degraded", degraded))
     winner = results[winner_index]
     losers = [r for i, r in enumerate(results) if i != winner_index]
-    record = {
-        "run_id": run_id,
-        "correlation_id": correlation_id,
+    record = {"run_id": run_id}
+    # #765 Step-11 R2-F4: the pre-#765 record had NO correlation_id key — byte-compat for
+    # legacy callers means OMITTING it when identity was not supplied, never adding a None.
+    if correlation_id is not None:
+        record["correlation_id"] = correlation_id
+    record.update({
         "winner_index": winner_index,
         "n_candidates": len(results),
         "judge_degraded": degraded,
         "candidates": [r.to_dict() for r in results],
         "scores": verdict.get("scores"),
-    }
+    })
     if sink is not None:
         try:
             sink(record)

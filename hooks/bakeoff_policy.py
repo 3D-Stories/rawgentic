@@ -13,10 +13,13 @@ digest all raise rather than silently pick a wrong (or failed) winner.
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import os
 import random
+import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional, Sequence
@@ -150,6 +153,17 @@ def _parse_verdict(payload: str, n_drafts: int):
     return winner_draft, scores, verdict.get("confidence")
 
 
+DESIGN_JUDGE_MODEL = "glm-5.2"
+
+
+def _default_judge_complete():
+    """Step-11 R1-F3: the design-round judge is PINNED to glm-5.2, independently of the
+    adversarial-review env override (``RAWGENTIC_ADV_REVIEW_GLM_MODEL`` changes that
+    library's default) — an env-swapped judge must never run silently under the fixed
+    glm-5.2 contract the evidence records."""
+    return functools.partial(_adv.glm_complete, model=DESIGN_JUDGE_MODEL)
+
+
 def make_glm_judge(rubric_text: str, *, seed, complete_fn=None, build_evidence=None, retries: int = 1):
     """Return a ``judge(results, rubric=None)`` callable for ``run_competitive``.
 
@@ -159,7 +173,7 @@ def make_glm_judge(rubric_text: str, *, seed, complete_fn=None, build_evidence=N
     and returns ``{winner_index, scores, degraded: False}``. ``confidence`` is folded into ``scores``
     so ``run_competitive``'s record retains it (finding L1). Up to ``retries`` extra glm attempts on a
     None/unparseable verdict (§3.3 "after one retry"); a degenerate candidate set is NOT retried."""
-    complete = complete_fn or _adv.glm_complete
+    complete = complete_fn or _default_judge_complete()
 
     def judge(results, _rubric=None):
         drafts, order = anonymize_and_shuffle(results, seed=seed)  # <2 valid -> JudgeError (deterministic; no retry)
@@ -312,6 +326,11 @@ def run_design_round(prompt, *, snapshot, quota, capture_root, headless, seed,
     #765: a workflow caller passes its ``run_id``/``correlation_id`` — both land in the
     record and every candidate Observation, so the bake-off stream joins the run's audit
     context instead of minting a random identity."""
+    # Step-11 R2-F5: ``rubric_text`` is a single-read optimization for the CLI (which
+    # hashes the same text it passes), NOT a rubric bypass — callers must pass
+    # ``load_rubric()`` output; blank text refuses instead of judging on nothing.
+    if rubric_text is not None and not rubric_text.strip():
+        raise ValueError("rubric_text is blank — pass load_rubric('design') output or None")
     pe = _pe()
     candidates = _candidates_for(snapshot, models, prompt, seat="design", correlation_id=correlation_id)
     incumbent_index = models.index(INCUMBENT_MODEL) if INCUMBENT_MODEL in models else 0
@@ -401,15 +420,45 @@ def _clean_numeric_map(node, *, depth: int = 1):
     return out or None
 
 
-def sanitize_record(record: dict, *, prompt_text: str, rubric_text: str) -> dict:
+_SCORES_DRAFT_KEY_RE = re.compile(r"^Draft \d+$")
+# Step-11 R2-F3: run/correlation identity grammar — these strings land verbatim in the
+# committable evidence and in audit paths, so they carry no separators, spaces, or controls.
+_IDENTITY_RE = re.compile(r"[A-Za-z0-9._:-]{1,120}")
+
+
+def _clean_scores(node, rubric_text: str):
+    """Step-11 R1-F2: judge-controlled score KEYS are themselves a text channel into the
+    committable artifact — numeric-leaf filtering alone lets a hostile judge spell a
+    payload ACROSS keys. Depth 0 admits only ``Draft <n>`` labels and ``_confidence``;
+    depth 1 admits only keys that literally appear in the trusted, repo-committed rubric."""
+    if not isinstance(node, dict):
+        return None
+    out = {}
+    for k, v in node.items():
+        if not _safe_evidence_key(k):
+            continue
+        if k == "_confidence" and isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[k] = v
+        elif _SCORES_DRAFT_KEY_RE.match(k) and isinstance(v, dict):
+            inner = {ik: iv for ik, iv in v.items()
+                     if _safe_evidence_key(ik) and ik in rubric_text
+                     and isinstance(iv, (int, float)) and not isinstance(iv, bool)}
+            if inner:
+                out[k] = inner
+    return out or None
+
+
+def sanitize_record(record: dict, *, prompt_text: str, rubric_text: str,
+                    judge_model: str = DESIGN_JUDGE_MODEL) -> dict:
     """The COMMITTABLE projection of a ``run_competitive`` record (#765 AC2 evidence).
 
     Whitelist-only (never strip-and-hope) — and RECONSTRUCTED for the model-influenced
-    nested dicts (``scores``, per-candidate ``usage``): only numeric leaves under safe keys
-    survive (8a R1-H2/R2-F1). ``prompt_sha256``/``rubric_sha256`` bind the evidence to the
-    exact prompt and rubric that produced it."""
+    nested dicts: ``scores`` keys are BOUND to Draft labels + literal rubric substrings
+    (Step-11 R1-F2), per-candidate ``usage`` keeps only numeric leaves under safe keys
+    (8a R1-H2/R2-F1). ``prompt_sha256``/``rubric_sha256`` bind the evidence to the exact
+    prompt and rubric that produced it; ``judge_model`` names the pinned judge (R1-F3)."""
     clean = {k: record.get(k) for k in _EVIDENCE_TOP_FIELDS}
-    clean["scores"] = _clean_numeric_map(record.get("scores"))
+    clean["scores"] = _clean_scores(record.get("scores"), rubric_text)
     cands = []
     for c in record.get("candidates", []):
         row = {k: c.get(k) for k in _EVIDENCE_CANDIDATE_FIELDS if k in c}
@@ -419,6 +468,7 @@ def sanitize_record(record: dict, *, prompt_text: str, rubric_text: str) -> dict
     clean["candidates"] = cands
     clean["prompt_sha256"] = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
     clean["rubric_sha256"] = hashlib.sha256(rubric_text.encode("utf-8")).hexdigest()
+    clean["judge_model"] = judge_model
     return clean
 
 
@@ -450,12 +500,20 @@ def main(argv=None, *, complete_fn=None, dispatch=None) -> int:
           --prompt-file <brief> --run-id wf2-<issue>-<session> \\
           --correlation-id <issue>-s3-design \\
           --workspace <workspace-file> --project <name> \\
+          --winner-out <design-draft-path> \\
           [--headless] [--seed N] [--sink <path>] [--evidence-out <path>]
 
-    Exit taxonomy: 0 ok; 2 malformed input/config (argparse, unreadable prompt file, workspace
-    resolution); 3 round failure (judge/chain/quota/infeasible — interactive judge failure is
-    fail-loud here, never a degraded winner). ``complete_fn``/``dispatch`` are test injection
-    points; production runs use the live glm judge and real adapters."""
+    ``--winner-out`` is the winner-delivery channel (Step-11 ADV-1/R1-F1/R2-F1): the
+    sanitized evidence and stdout deliberately carry no payloads, so a workflow round
+    that omits it spends the candidates and the judge without producing a design draft —
+    the Step-3 prose names it in the canonical command.
+
+    Exit taxonomy: 0 ok; 2 malformed input/config (argparse, unreadable/empty prompt file,
+    invalid identity grammar, output-path collision, committable sink, workspace
+    resolution); 3 round failure (judge/chain/quota/infeasible — interactive judge failure
+    is fail-loud here, never a degraded winner); 4 gate disabled (the designBakeoff opt-in
+    is OFF for this project — owner decision D27, default OFF). ``complete_fn``/``dispatch``
+    are test injection points; production runs use the live glm judge and real adapters."""
     ap = argparse.ArgumentParser(prog="bakeoff_policy")
     sub = ap.add_subparsers(dest="cmd", required=True)
     dr = sub.add_parser("design-round", help="one competitive design round with workflow identity")
@@ -484,15 +542,36 @@ def main(argv=None, *, complete_fn=None, dispatch=None) -> int:
     import executor_routing_lib as er  # noqa: PLC0415 — sibling hook, lazy so import errors surface per-call
     from atomic_write_lib import atomic_write_text  # noqa: PLC0415
 
+    # Step-11 ADV-4: the round path ITSELF enforces the designBakeoff opt-in (owner
+    # decision D27, default OFF) — the probe verb is advisory for prose, this is the guard,
+    # so a stale or direct caller can never run a token-consuming round while disabled.
+    if not design_round_enabled(args.workspace, args.project):
+        print(json.dumps({"ok": False, "error": "design_round_disabled",
+                          "detail": "designBakeoff opt-in is not enabled for this project "
+                                    "(default OFF) — set designBakeoff.enabled true on the "
+                                    "workspace project entry to run competitive rounds"}))
+        return 4
     # 8a R1-L1: empty identity defeats attribution — refuse before any work.
     if not args.run_id or not args.correlation_id:
         print(json.dumps({"ok": False, "error": "identity_required",
                           "detail": "--run-id and --correlation-id must be non-empty"}))
         return 2
+    # Step-11 R2-F3: identity strings land verbatim in the COMMITTABLE evidence — grammar-
+    # validate at the boundary so a path-shaped or control-bearing value never gets there.
+    if not (_IDENTITY_RE.fullmatch(args.run_id) and _IDENTITY_RE.fullmatch(args.correlation_id)):
+        print(json.dumps({"ok": False, "error": "identity_invalid",
+                          "detail": "--run-id and --correlation-id must match "
+                                    "[A-Za-z0-9._:-]{1,120}"}))
+        return 2
     try:
         prompt = Path(args.prompt_file).read_text(encoding="utf-8")
     except (OSError, ValueError) as exc:  # ValueError covers UnicodeDecodeError (8a R2-F7)
         print(json.dumps({"ok": False, "error": "prompt_file_unreadable", "detail": str(exc)}))
+        return 2
+    # Step-11 ADV-5: a vacuous brief must not spend candidate/judge calls and mint evidence.
+    if not prompt.strip():
+        print(json.dumps({"ok": False, "error": "prompt_file_empty",
+                          "detail": "the design brief is empty or whitespace-only"}))
         return 2
     try:
         repo_root = er.resolve_repo_root(args.workspace, args.project)
@@ -507,6 +586,20 @@ def main(argv=None, *, complete_fn=None, dispatch=None) -> int:
         print(json.dumps({"ok": False, "error": "config_resolution_failed",
                           "detail": f"{type(exc).__name__}: {exc}"[:500]}))
         return 2
+    # Step-11 R1-F4: --sink/--winner-out/--evidence-out must be pairwise distinct — an
+    # alias silently erases the raw audit (os.replace over the sink) or overwrites the
+    # design draft with the evidence record.
+    outputs = {name: Path(p).resolve() for name, p in
+               (("--sink", args.sink), ("--winner-out", args.winner_out),
+                ("--evidence-out", args.evidence_out)) if p}
+    seen_paths = {}
+    for name, resolved in outputs.items():
+        if resolved in seen_paths:
+            print(json.dumps({"ok": False, "error": "output_path_collision",
+                              "detail": f"{name} and {seen_paths[resolved]} resolve to the "
+                                        f"same path — outputs must be distinct"}))
+            return 2
+        seen_paths[resolved] = name
     # 8a R2-F3: a raw-record sink INSIDE the repo would break the "raw sink stays
     # gitignored" guarantee — the sanctioned in-repo location is the gitignored default only.
     if args.sink is not None:
@@ -518,6 +611,23 @@ def main(argv=None, *, complete_fn=None, dispatch=None) -> int:
                                         f"— raw records carry full candidate payloads and must "
                                         f"never land on a committable path"}))
             return 2
+        # Step-11 R2-F2: ANY git work tree is a committable surface, not just the active
+        # repo — a sibling repository would silently receive full candidate payloads.
+        # Inside a work tree the sink must be check-ignored; outside any work tree is fine.
+        probe = subprocess.run(["git", "-C", str(sink_resolved.parent), "rev-parse",
+                                "--is-inside-work-tree"],
+                               capture_output=True, text=True, check=False)
+        if probe.returncode == 0 and probe.stdout.strip() == "true":
+            ignored = subprocess.run(["git", "-C", str(sink_resolved.parent), "check-ignore",
+                                      "-q", str(sink_resolved)],
+                                     capture_output=True, check=False)
+            if ignored.returncode != 0:
+                print(json.dumps({"ok": False, "error": "sink_committable_path",
+                                  "detail": f"--sink {args.sink!r} resolves inside a git work "
+                                            f"tree and is not gitignored — raw records carry "
+                                            f"full candidate payloads and must never land on "
+                                            f"a committable path"}))
+                return 2
     seed = args.seed if args.seed is not None else int.from_bytes(os.urandom(4), "big")
     try:
         rubric_text = load_rubric("design")

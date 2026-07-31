@@ -2,72 +2,73 @@
   "candidates": [
     {
       "actual_model": "gpt-5.6-sol",
-      "correlation_id": "765-s8-live-round",
+      "correlation_id": "765-s11-fix-round",
       "engine": "codex",
       "parse_status": "ok",
       "prompt_hash": "sha256:971e02e45e35184861953d387d423e4d72dc603fc161521be769708fd0ddebe9",
-      "queued_ms": 2,
+      "queued_ms": 1,
       "requested_model": "gpt-5.6-sol",
       "seat": "design",
-      "timing_ms": 25723,
+      "timing_ms": 102998,
       "transport": "native",
       "usage": {
-        "cached": 9984,
-        "input": 21689,
-        "output": 842
+        "cached": 124416,
+        "input": 147454,
+        "output": 3511
       }
     },
     {
       "actual_model": "claude-opus-5",
-      "correlation_id": "765-s8-live-round",
+      "correlation_id": "765-s11-fix-round",
       "engine": "claude",
       "parse_status": "ok",
       "prompt_hash": "sha256:971e02e45e35184861953d387d423e4d72dc603fc161521be769708fd0ddebe9",
       "queued_ms": 1,
       "requested_model": "claude-opus-5",
       "seat": "design",
-      "timing_ms": 26784,
+      "timing_ms": 47553,
       "transport": "native",
       "usage": {
         "cached": 17300,
-        "cost_proxy": 0.52578,
+        "cost_proxy": 0.571475,
         "input": 2,
-        "output": 1188
+        "output": 2977
       }
     }
   ],
-  "correlation_id": "765-s8-live-round",
+  "correlation_id": "765-s11-fix-round",
   "judge_degraded": false,
+  "judge_model": "glm-5.2",
   "n_candidates": 2,
   "prompt_sha256": "971e02e45e35184861953d387d423e4d72dc603fc161521be769708fd0ddebe9",
   "rubric_sha256": "31de4df433426a0ea5cd8eb1868b7240bbcb96f6fb1c7a82c92117a1e6d3a701",
-  "run_id": "wf2-765-b9a74758",
+  "run_id": "wf2-765-c2710ce0",
   "scores": {
     "Draft 1": {
       "API, failure, and recovery": 40,
-      "Architecture and data": 20,
-      "Constraint satisfaction": 20,
-      "Failure reasoning": 40,
-      "Fork quality": 0,
-      "Handoff evidence": 30,
-      "Safety and consistency": 10,
-      "Simplicity and maintainability": 40,
-      "Traceability": 10,
-      "UX, NFR, tests, run": 30
+      "Architecture and data": 40,
+      "Constraint satisfaction": 60,
+      "Failure reasoning": 50,
+      "Fork quality": 60,
+      "Handoff evidence": 60,
+      "Safety and consistency": 60,
+      "Simplicity and maintainability": 80,
+      "Traceability": 20,
+      "UX, NFR, tests, run": 60
     },
     "Draft 2": {
-      "API, failure, and recovery": 30,
-      "Architecture and data": 20,
-      "Constraint satisfaction": 20,
-      "Failure reasoning": 20,
-      "Fork quality": 0,
-      "Handoff evidence": 20,
-      "Safety and consistency": 10,
-      "Simplicity and maintainability": 30,
-      "Traceability": 10,
-      "UX, NFR, tests, run": 20
+      "API, failure, and recovery": 70,
+      "Architecture and data": 50,
+      "Constraint satisfaction": 60,
+      "Failure reasoning": 70,
+      "Fork quality": 60,
+      "Handoff evidence": 60,
+      "Safety and consistency": 60,
+      "Simplicity and maintainability": 60,
+      "Traceability": 20,
+      "UX, NFR, tests, run": 60
     },
     "_confidence": 0.8
   },
-  "winner_index": 1
+  "winner_index": 0
 }

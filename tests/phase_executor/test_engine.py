@@ -569,15 +569,16 @@ def test_run_competitive_record_carries_caller_run_identity(tmp_path):
 
 
 def test_run_competitive_omitted_identity_keeps_prior_shape(tmp_path):
-    """#765 compat: no identity supplied -> random-minted run_id (16 hex) and an
-    explicit correlation_id None in the record."""
+    """#765 compat (Step-11 R2-F4): no identity supplied -> random-minted run_id (16 hex)
+    and the record OMITS the correlation_id key entirely — the pre-#765 record had no such
+    key, so true byte-compatibility means absent, not an added None."""
     qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4, "zhipu": 2})
     _, _, _, record = run_competitive(
         _candidates_cross_pool(), judge=_judge_first, snapshot=_snapshot(), quota=qc,
         capture_root=tmp_path, dispatch=_stub(),
     )
     assert len(record["run_id"]) == 16 and all(c in "0123456789abcdef" for c in record["run_id"])
-    assert record["correlation_id"] is None
+    assert "correlation_id" not in record
 
 
 def test_candidate_correlation_reaches_adapter_request_and_observation(tmp_path):
