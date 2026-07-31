@@ -192,7 +192,8 @@ def make_glm_judge(rubric_text: str, *, seed, complete_fn=None, build_evidence=N
 
 
 # ---- failure strategy -------------------------------------------------------------------------
-def hybrid_failure_strategy(*, headless: bool, incumbent_index: int, sink=None):
+def hybrid_failure_strategy(*, headless: bool, incumbent_index: int, sink=None,
+                            run_id=None, correlation_id=None):
     """Return a ``failure_strategy(results, exc)`` for ``run_competitive``.
 
     - **headless** -> winner = the incumbent lane (must itself be an ``ok`` candidate, else fail
@@ -218,7 +219,10 @@ def hybrid_failure_strategy(*, headless: bool, incumbent_index: int, sink=None):
     def _interactive(results, exc):
         if sink is not None:
             try:
-                sink({"winner_index": None, "n_candidates": len(results), "judge_degraded": True,
+                # #765 (8a R1-M1): the degraded trace joins the identity contract too —
+                # a failure record the run cannot attribute is an audit gap.
+                sink({"run_id": run_id, "correlation_id": correlation_id,
+                      "winner_index": None, "n_candidates": len(results), "judge_degraded": True,
                       "candidates": [r.to_dict() for r in results], "scores": None,
                       "interactive_judge_failure": str(exc)})
             except Exception:  # noqa: BLE001 — a trace-write failure must not mask the stop-and-ask
@@ -300,7 +304,7 @@ def _verified_decision(gate_decision) -> bool:
 
 def run_design_round(prompt, *, snapshot, quota, capture_root, headless, seed,
                      sink_path=None, models=DESIGN_MODELS, complete_fn=None, dispatch=None,
-                     run_id=None, correlation_id=None):
+                     run_id=None, correlation_id=None, rubric_text=None):
     """Competitive design round (sol vs opus every round), glm-5.2 judge on the design rubric.
     Winner's exact bytes become the phase artifact. Returns ``run_competitive``'s
     ``(winner, losers, judge_obs, record)``.
@@ -311,9 +315,13 @@ def run_design_round(prompt, *, snapshot, quota, capture_root, headless, seed,
     pe = _pe()
     candidates = _candidates_for(snapshot, models, prompt, seat="design", correlation_id=correlation_id)
     incumbent_index = models.index(INCUMBENT_MODEL) if INCUMBENT_MODEL in models else 0
-    judge = make_glm_judge(load_rubric("design"), seed=seed, complete_fn=complete_fn)
+    # #765 (8a R1-M2): one rubric read — a caller that hashes the rubric passes the SAME
+    # text the judge sees, so the recorded hash can never describe a different rubric.
+    judge = make_glm_judge(rubric_text if rubric_text is not None else load_rubric("design"),
+                           seed=seed, complete_fn=complete_fn)
     sink = bakeoff_sink(sink_path)
-    strategy = hybrid_failure_strategy(headless=headless, incumbent_index=incumbent_index, sink=sink)
+    strategy = hybrid_failure_strategy(headless=headless, incumbent_index=incumbent_index, sink=sink,
+                                       run_id=run_id, correlation_id=correlation_id)
     kwargs = dict(judge=judge, failure_strategy=strategy, sink=sink, snapshot=snapshot, quota=quota,
                   capture_root=capture_root, require_parallel=True,
                   run_id=run_id, correlation_id=correlation_id)
@@ -365,19 +373,74 @@ _EVIDENCE_TOP_FIELDS = (
 )
 
 
+def _safe_evidence_key(k) -> bool:
+    """A key eligible for the committable evidence: short, no path separators/traversal
+    (8a R1-H2/R2-F1 — judge- and adapter-originated keys are model-influenced content)."""
+    return (isinstance(k, str) and 0 < len(k) <= 80
+            and "/" not in k and "\\" not in k and ".." not in k)
+
+
+def _clean_numeric_map(node, *, depth: int = 1):
+    """Reconstruct a judge/adapter-originated dict keeping ONLY numeric leaves under safe
+    keys (never copy model-influenced structures wholesale — injected draft text or paths
+    must not survive into the committable artifact). ``depth`` bounds nesting."""
+    if not isinstance(node, dict):
+        return None
+    out = {}
+    for k, v in node.items():
+        if not _safe_evidence_key(k):
+            continue
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, (int, float)):
+            out[k] = v
+        elif isinstance(v, dict) and depth > 0:
+            inner = _clean_numeric_map(v, depth=depth - 1)
+            if inner:
+                out[k] = inner
+    return out or None
+
+
 def sanitize_record(record: dict, *, prompt_text: str, rubric_text: str) -> dict:
     """The COMMITTABLE projection of a ``run_competitive`` record (#765 AC2 evidence).
 
-    Whitelist-only (never strip-and-hope), plus ``prompt_sha256``/``rubric_sha256`` so the
-    evidence binds to the exact prompt and rubric that produced it."""
+    Whitelist-only (never strip-and-hope) — and RECONSTRUCTED for the model-influenced
+    nested dicts (``scores``, per-candidate ``usage``): only numeric leaves under safe keys
+    survive (8a R1-H2/R2-F1). ``prompt_sha256``/``rubric_sha256`` bind the evidence to the
+    exact prompt and rubric that produced it."""
     clean = {k: record.get(k) for k in _EVIDENCE_TOP_FIELDS}
-    clean["candidates"] = [
-        {k: c.get(k) for k in _EVIDENCE_CANDIDATE_FIELDS if k in c}
-        for c in record.get("candidates", [])
-    ]
+    clean["scores"] = _clean_numeric_map(record.get("scores"))
+    cands = []
+    for c in record.get("candidates", []):
+        row = {k: c.get(k) for k in _EVIDENCE_CANDIDATE_FIELDS if k in c}
+        if "usage" in row:
+            row["usage"] = _clean_numeric_map(c.get("usage"), depth=0)
+        cands.append(row)
+    clean["candidates"] = cands
     clean["prompt_sha256"] = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
     clean["rubric_sha256"] = hashlib.sha256(rubric_text.encode("utf-8")).hexdigest()
     return clean
+
+
+def design_round_enabled(workspace_path: str, project: str) -> bool:
+    """The #765 on/off gate (owner decision 2026-07-31): the WF2 Step-3 competitive round
+    is OPT-IN via the project's workspace entry — ``designBakeoff: {"enabled": true}`` (or
+    bare ``true``). Absent, malformed, or unreadable config → DISABLED (the safe state:
+    Step 3 keeps its current mechanism). Fail-open-to-off, never an exception."""
+    import model_routing_lib as mr  # noqa: PLC0415 — sibling hook
+
+    try:
+        entry = mr._load_project_entry(workspace_path, project)  # noqa: SLF001 — shared loader (one home)
+    except Exception:  # noqa: BLE001 — a gate read failure means "not opted in"
+        return False
+    if not isinstance(entry, dict):
+        return False
+    gate = entry.get("designBakeoff")
+    if gate is True:
+        return True
+    if isinstance(gate, dict):
+        return gate.get("enabled") is True
+    return False
 
 
 def main(argv=None, *, complete_fn=None, dispatch=None) -> int:
@@ -404,15 +467,31 @@ def main(argv=None, *, complete_fn=None, dispatch=None) -> int:
     dr.add_argument("--headless", action="store_true",
                     help="judge failure degrades to the incumbent (recorded); default is fail-loud")
     dr.add_argument("--seed", type=int, default=None, help="shuffle seed (default: per-round nonce)")
-    dr.add_argument("--sink", default=None, help="raw-record sink override (default: gitignored bakeoff_results.jsonl)")
-    dr.add_argument("--evidence-out", default=None, help="write the SANITIZED committable record here")
+    dr.add_argument("--sink", default=None, help="raw-record sink override (default: gitignored bakeoff_results.jsonl); must resolve OUTSIDE the project repo")
+    dr.add_argument("--evidence-out", default=None, help="write the SANITIZED committable record here (atomic)")
+    dr.add_argument("--winner-out", default=None, help="write the WINNER's exact payload bytes here (the phase artifact; atomic)")
+    en = sub.add_parser("design-round-enabled",
+                        help="the #765 opt-in gate: exit 0 enabled, 1 disabled (default OFF)")
+    en.add_argument("--workspace", required=True)
+    en.add_argument("--project", required=True)
     args = ap.parse_args(argv)
 
-    import executor_routing_lib as er  # noqa: PLC0415 — sibling hook, lazy so import errors surface per-call
+    if args.cmd == "design-round-enabled":
+        enabled = design_round_enabled(args.workspace, args.project)
+        print(json.dumps({"enabled": enabled}))
+        return 0 if enabled else 1
 
+    import executor_routing_lib as er  # noqa: PLC0415 — sibling hook, lazy so import errors surface per-call
+    from atomic_write_lib import atomic_write_text  # noqa: PLC0415
+
+    # 8a R1-L1: empty identity defeats attribution — refuse before any work.
+    if not args.run_id or not args.correlation_id:
+        print(json.dumps({"ok": False, "error": "identity_required",
+                          "detail": "--run-id and --correlation-id must be non-empty"}))
+        return 2
     try:
         prompt = Path(args.prompt_file).read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, ValueError) as exc:  # ValueError covers UnicodeDecodeError (8a R2-F7)
         print(json.dumps({"ok": False, "error": "prompt_file_unreadable", "detail": str(exc)}))
         return 2
     try:
@@ -424,24 +503,60 @@ def main(argv=None, *, complete_fn=None, dispatch=None) -> int:
     except er.MalformedConfig as exc:
         print(json.dumps({"ok": False, "error": "malformed_config", "detail": str(exc)}))
         return 2
+    except Exception as exc:  # noqa: BLE001 — 8a R2-F7: routing/schema/IO faults here are config-class, exit 2
+        print(json.dumps({"ok": False, "error": "config_resolution_failed",
+                          "detail": f"{type(exc).__name__}: {exc}"[:500]}))
+        return 2
+    # 8a R2-F3: a raw-record sink INSIDE the repo would break the "raw sink stays
+    # gitignored" guarantee — the sanctioned in-repo location is the gitignored default only.
+    if args.sink is not None:
+        sink_resolved = Path(args.sink).resolve()
+        root = Path(repo_root).resolve()
+        if sink_resolved == root or root in sink_resolved.parents:
+            print(json.dumps({"ok": False, "error": "sink_inside_repo",
+                              "detail": f"--sink {args.sink!r} resolves inside the project repo "
+                                        f"— raw records carry full candidate payloads and must "
+                                        f"never land on a committable path"}))
+            return 2
     seed = args.seed if args.seed is not None else int.from_bytes(os.urandom(4), "big")
     try:
         rubric_text = load_rubric("design")
-        _winner, _losers, _judge_obs, record = run_design_round(
+        winner, _losers, _judge_obs, record = run_design_round(
             prompt, snapshot=snapshot, quota=quota, capture_root=paths["capture_root"],
             headless=args.headless, seed=seed, sink_path=args.sink,
-            run_id=args.run_id, correlation_id=args.correlation_id,
+            run_id=args.run_id, correlation_id=args.correlation_id, rubric_text=rubric_text,
             complete_fn=complete_fn, dispatch=dispatch)
     except Exception as exc:  # noqa: BLE001 — round failures (judge/chain/quota/infeasible) are one taxonomy class
         print(json.dumps({"ok": False, "error": "round_failed",
                           "detail": f"{type(exc).__name__}: {exc}"[:500]}))
         return 3
+    # 8a R2-F5: a swallowed raw-sink failure must not yield a green CLI — the full audit
+    # record was lost, so the round is a failure and no evidence is written.
+    if record.get("sink_error"):
+        print(json.dumps({"ok": False, "error": "raw_sink_write_failed",
+                          "detail": "run_competitive could not persist the raw record "
+                                    "(record['sink_error']) — refusing to emit evidence for "
+                                    "an unauditable round"}))
+        return 3
     clean = sanitize_record(record, prompt_text=prompt, rubric_text=rubric_text)
-    if args.evidence_out:
-        Path(args.evidence_out).write_text(json.dumps(clean, indent=2, sort_keys=True) + "\n",
-                                           encoding="utf-8")
-    print(json.dumps({"ok": True, "record": clean,
-                      "evidence_out": args.evidence_out}, sort_keys=True))
+    try:
+        if args.winner_out:
+            payload = getattr(winner, "parsed_payload", None)
+            if not payload:
+                print(json.dumps({"ok": False, "error": "winner_payload_missing",
+                                  "detail": "the winning Observation carries no parsed_payload"}))
+                return 3
+            atomic_write_text(args.winner_out, payload if isinstance(payload, str) else str(payload),
+                              prefix=".bakeoff-winner-", suffix=".tmp")
+        if args.evidence_out:
+            atomic_write_text(args.evidence_out,
+                              json.dumps(clean, indent=2, sort_keys=True) + "\n",
+                              prefix=".bakeoff-evidence-", suffix=".tmp")
+    except OSError as exc:  # 8a R2-F6/R1-M3: output failure is structured, never a traceback
+        print(json.dumps({"ok": False, "error": "output_write_failed", "detail": str(exc)[:500]}))
+        return 3
+    print(json.dumps({"ok": True, "record": clean, "evidence_out": args.evidence_out,
+                      "winner_out": args.winner_out}, sort_keys=True))
     return 0
 
 

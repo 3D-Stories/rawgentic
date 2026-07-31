@@ -149,6 +149,9 @@ def test_agent_tool_dispatch_instructions_are_legacy_conditioned():
 
 _WIRED_TRUTH = ("full-spine step 3 design generation dispatches one competitive design round "
                 "via `python3 hooks/bakeoff_policy.py design-round")
+_GATE_TRUTH = ("gated by `python3 hooks/bakeoff_policy.py design-round-enabled --workspace "
+               "<workspace-file> --project <name>` (exit 0 = opted in via `designbakeoff: "
+               '{"enabled": true}` on the project\'s workspace entry; default off')
 _CARVEOUT_DECIDED = "whether to wire or retire the bake-off is decided in #765"
 _CARVEOUT_STALE = "proven in #472"
 
@@ -161,6 +164,10 @@ def test_step3_row_states_wired_truth():
         "shared block Step-3 row must state the WIRED truth naming the design-round CLI (#765)"
     assert _WIRED_TRUTH in corpus, \
         "WF2 corpus must carry the synced wired truth (run sync_shared_blocks.py)"
+    assert _GATE_TRUTH in shared, \
+        "the Step-3 row must carry the designBakeoff opt-in gate, default OFF (#765 owner decision)"
+    assert _GATE_TRUTH in corpus, \
+        "the synced corpus must carry the designBakeoff gate (run sync_shared_blocks.py)"
     for stale, label in ((_CARVEOUT_DECIDED, "'decided in #765' pending text"),
                          (_CARVEOUT_STALE, "'#472 proves it' text"),
                          ("#472", "any #472 deferral pointer")):

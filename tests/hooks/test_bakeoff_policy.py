@@ -607,3 +607,193 @@ def test_765_evidence_artifact_exists_and_is_sanitized():
     for s in _all_strings(data):
         assert not re.match(_ABS_PATH_RE, s), f"absolute path in evidence: {s!r}"
         assert "/home/" not in s, f"sensitive path fragment in evidence: {s!r}"
+
+
+# ---- #765 Step-8a wave fixes ------------------------------------------------------------------
+
+def test_cli_winner_out_writes_exact_winner_bytes(tmp_path):
+    """8a R1-H1: the CLI must expose the winner's exact bytes — that IS the phase artifact."""
+    ws, proj = _cli_workspace(tmp_path)
+    prompt_file = tmp_path / "brief.md"
+    prompt_file.write_text("design the widget")
+    winner_out = tmp_path / "winner.md"
+    verdict = json.dumps({"winner_draft": 1, "scores": {}, "confidence": 0.7})
+    rc = bp.main([
+        "design-round", "--prompt-file", str(prompt_file),
+        "--run-id", "wf2-765-t", "--correlation-id", "765-s3-x",
+        "--workspace", str(ws), "--project", "proj", "--headless", "--seed", "3",
+        "--sink", str(tmp_path / "s.jsonl"), "--winner-out", str(winner_out),
+    ], complete_fn=lambda prompt: (verdict, ""), dispatch=_sleeping_dispatch(0.0))
+    assert rc == 0
+    text = winner_out.read_text()
+    assert text.startswith("draft from ")  # the stub's exact payload bytes
+
+
+def test_sanitize_record_strict_scores_and_usage():
+    """8a R1-H2/R2-F1: judge- and adapter-originated nested dicts are RECONSTRUCTED, not
+    copied — non-numeric leaves (injected draft text, paths) never reach the evidence."""
+    record = {
+        "run_id": "wf2-765-x", "correlation_id": "c", "winner_index": 0, "n_candidates": 2,
+        "judge_degraded": False,
+        "scores": {"Draft 1": {"quality": 90, "leak": "/home/user/secret", "note": "SECRET TEXT"},
+                   "evil/../key": {"q": 1}, "_confidence": 0.8,
+                   "Draft 2": "raw draft text spilled here"},
+        "candidates": [
+            {"seat": "design", "requested_model": "m1", "actual_model": "m1", "engine": "codex",
+             "transport": "native", "parse_status": "ok", "prompt_hash": "h", "timing_ms": 1,
+             "queued_ms": 0, "usage": {"input": 5, "trick": "/etc/passwd", "output": 7}},
+            {"seat": "design", "requested_model": "m2", "actual_model": "m2", "engine": "claude",
+             "transport": "native", "parse_status": "ok", "prompt_hash": "h", "timing_ms": 1,
+             "queued_ms": 0, "usage": None},
+        ],
+    }
+    clean = bp.sanitize_record(record, prompt_text="p", rubric_text="r")
+    text = json.dumps(clean)
+    for forbidden in ("SECRET TEXT", "/home/", "/etc/", "raw draft text", "evil"):
+        assert forbidden not in text, forbidden
+    assert clean["scores"]["Draft 1"]["quality"] == 90
+    assert clean["scores"]["_confidence"] == 0.8
+    assert clean["candidates"][0]["usage"] == {"input": 5, "output": 7}
+    assert clean["candidates"][1]["usage"] is None
+
+
+def test_cli_sink_inside_repo_refused(tmp_path):
+    """8a R2-F3: a raw-record sink override may never land inside the project repo — the
+    'raw sink stays gitignored' guarantee would silently break."""
+    ws, proj = _cli_workspace(tmp_path)
+    prompt_file = tmp_path / "brief.md"
+    prompt_file.write_text("p")
+    rc = bp.main([
+        "design-round", "--prompt-file", str(prompt_file),
+        "--run-id", "wf2-765-t", "--correlation-id", "765-s3-x",
+        "--workspace", str(ws), "--project", "proj", "--headless", "--seed", "3",
+        "--sink", str(proj / "tracked.jsonl"),
+    ], complete_fn=lambda prompt: ("{}", ""), dispatch=_sleeping_dispatch(0.0))
+    assert rc == 2
+
+
+def test_cli_empty_identity_refused(tmp_path):
+    """8a R1-L1: an empty --run-id/--correlation-id defeats attribution — exit 2."""
+    ws, proj = _cli_workspace(tmp_path)
+    prompt_file = tmp_path / "brief.md"
+    prompt_file.write_text("p")
+    for args in (["--run-id", "", "--correlation-id", "c"],
+                 ["--run-id", "r", "--correlation-id", ""]):
+        rc = bp.main([
+            "design-round", "--prompt-file", str(prompt_file), *args,
+            "--workspace", str(ws), "--project", "proj", "--headless", "--seed", "3",
+            "--sink", str(tmp_path / "s.jsonl"),
+        ], complete_fn=lambda prompt: ("{}", ""), dispatch=_sleeping_dispatch(0.0))
+        assert rc == 2
+
+
+def test_cli_sink_error_fails_loud(tmp_path, monkeypatch):
+    """8a R2-F5: a failed raw-sink write is a round failure (exit 3) — never a green CLI
+    with the audit record silently lost. No evidence artifact is written."""
+    ws, proj = _cli_workspace(tmp_path)
+    prompt_file = tmp_path / "brief.md"
+    prompt_file.write_text("p")
+    evidence = tmp_path / "evidence.json"
+    sink_dir = tmp_path / "not-writable.jsonl"
+    sink_dir.mkdir()  # a directory at the sink path makes open(..., "a") raise
+    verdict = json.dumps({"winner_draft": 1, "scores": {}, "confidence": 0.7})
+    rc = bp.main([
+        "design-round", "--prompt-file", str(prompt_file),
+        "--run-id", "wf2-765-t", "--correlation-id", "765-s3-x",
+        "--workspace", str(ws), "--project", "proj", "--headless", "--seed", "3",
+        "--sink", str(sink_dir), "--evidence-out", str(evidence),
+    ], complete_fn=lambda prompt: (verdict, ""), dispatch=_sleeping_dispatch(0.0))
+    assert rc == 3
+    assert not evidence.exists()
+
+
+def test_cli_evidence_write_failure_is_structured(tmp_path):
+    """8a R2-F6/F7: an unwritable --evidence-out is a structured failure, not a traceback."""
+    ws, proj = _cli_workspace(tmp_path)
+    prompt_file = tmp_path / "brief.md"
+    prompt_file.write_text("p")
+    verdict = json.dumps({"winner_draft": 1, "scores": {}, "confidence": 0.7})
+    rc = bp.main([
+        "design-round", "--prompt-file", str(prompt_file),
+        "--run-id", "wf2-765-t", "--correlation-id", "765-s3-x",
+        "--workspace", str(ws), "--project", "proj", "--headless", "--seed", "3",
+        "--sink", str(tmp_path / "s.jsonl"),
+        "--evidence-out", str(tmp_path / "no-such-dir" / "evidence.json"),
+    ], complete_fn=lambda prompt: (verdict, ""), dispatch=_sleeping_dispatch(0.0))
+    assert rc == 3
+
+
+def test_interactive_judge_failure_sink_record_carries_identity(tmp_path):
+    """8a R1-M1: the interactive degraded-trace record joins the identity contract too."""
+    snap = pe.snapshot_from_file(TABLE)
+    quota = pe.QuotaCoordinator(tmp_path / "permits", snap.pool_concurrency())
+    sink_path = tmp_path / "b.jsonl"
+    with pytest.raises(bp.JudgeError):
+        bp.run_design_round(
+            "design it", snapshot=snap, quota=quota, capture_root=tmp_path / "cap",
+            headless=False, seed=3, sink_path=sink_path,
+            run_id="wf2-765-t", correlation_id="765-s3-x",
+            complete_fn=lambda prompt: (None, "glm down"), dispatch=_sleeping_dispatch(0.0))
+    rec = json.loads(sink_path.read_text().splitlines()[0])
+    assert rec["run_id"] == "wf2-765-t"
+    assert rec["correlation_id"] == "765-s3-x"
+
+
+def test_run_design_round_accepts_preloaded_rubric(tmp_path):
+    """8a R1-M2: one rubric read — the caller's rubric_text is what the judge sees, so a
+    hash of it can never describe a different rubric than the judged one."""
+    snap = pe.snapshot_from_file(TABLE)
+    quota = pe.QuotaCoordinator(tmp_path / "permits", snap.pool_concurrency())
+    seen = []
+    def complete(prompt):
+        seen.append(prompt)
+        return json.dumps({"winner_draft": 1, "scores": {}, "confidence": 0.7}), ""
+    bp.run_design_round(
+        "design it", snapshot=snap, quota=quota, capture_root=tmp_path / "cap",
+        headless=True, seed=3, sink_path=tmp_path / "b.jsonl",
+        rubric_text="MY CUSTOM RUBRIC SENTINEL",
+        complete_fn=complete, dispatch=_sleeping_dispatch(0.0))
+    assert "MY CUSTOM RUBRIC SENTINEL" in seen[0]
+
+
+# ---- #765 owner scope (mid-run): the designBakeoff on/off gate ---------------------------------
+
+def _gate_ws(tmp_path, entry_extra=None):
+    proj = {"name": "proj", "path": "./proj"}
+    if entry_extra:
+        proj.update(entry_extra)
+    ws = tmp_path / "ws.json"
+    ws.write_text(json.dumps({"projects": [proj]}))
+    (tmp_path / "proj").mkdir(exist_ok=True)
+    return ws
+
+
+def test_design_round_enabled_default_off(tmp_path):
+    """Owner decision 2026-07-31: the bake-off is OPT-IN — absent config means DISABLED."""
+    ws = _gate_ws(tmp_path)
+    assert bp.design_round_enabled(str(ws), "proj") is False
+
+
+def test_design_round_enabled_block_and_bool_forms(tmp_path):
+    assert bp.design_round_enabled(
+        str(_gate_ws(tmp_path, {"designBakeoff": {"enabled": True}})), "proj") is True
+    assert bp.design_round_enabled(
+        str(_gate_ws(tmp_path, {"designBakeoff": True})), "proj") is True
+    assert bp.design_round_enabled(
+        str(_gate_ws(tmp_path, {"designBakeoff": {"enabled": False}})), "proj") is False
+
+
+def test_design_round_enabled_malformed_is_off(tmp_path):
+    """A malformed gate value fails to the SAFE state (disabled — the current mechanism
+    keeps working); never an exception, never silently on."""
+    assert bp.design_round_enabled(
+        str(_gate_ws(tmp_path, {"designBakeoff": "yes"})), "proj") is False
+    assert bp.design_round_enabled(str(tmp_path / "missing-ws.json"), "proj") is False
+
+
+def test_cli_design_round_enabled_verb(tmp_path):
+    """The Step-3 prose gates on this exact command: exit 0 enabled, 1 disabled."""
+    on = _gate_ws(tmp_path, {"designBakeoff": {"enabled": True}})
+    assert bp.main(["design-round-enabled", "--workspace", str(on), "--project", "proj"]) == 0
+    off = _gate_ws(tmp_path)
+    assert bp.main(["design-round-enabled", "--workspace", str(off), "--project", "proj"]) == 1

@@ -614,3 +614,29 @@ def test_harness_observation_carries_candidate_correlation(tmp_path):
     harness = [c for c in record["candidates"] if c["parse_status"] == "harness_error"]
     assert len(harness) == 1
     assert harness[0]["correlation_id"] == "765-s3-design"
+
+
+def test_run_competitive_correlation_harmonized_onto_candidates(tmp_path):
+    """#765 8a R2-F4: a run-level correlation_id is the single source — candidates with
+    None inherit it, so record and per-candidate identity can never silently disagree."""
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4, "zhipu": 2})
+    _, _, _, record = run_competitive(
+        _candidates_cross_pool(), judge=_judge_first, snapshot=_snapshot(), quota=qc,
+        capture_root=tmp_path, correlation_id="765-s3-x", dispatch=_stub(),
+    )
+    assert record["correlation_id"] == "765-s3-x"
+    assert [c["correlation_id"] for c in record["candidates"]] == ["765-s3-x"] * 3
+
+
+def test_run_competitive_conflicting_candidate_correlation_fails_closed(tmp_path):
+    """#765 8a R2-F4: a candidate carrying a DIFFERENT non-None correlation than the
+    run-level value is a contradictory audit identity — refuse, never record both."""
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4, "zhipu": 2})
+    cands = [
+        Candidate(seat="design", model="claude-opus-4-8", prompt="p", provider="anthropic",
+                  pool="claude", correlation_id="OTHER"),
+        Candidate(seat="design", model="gpt-5.6-sol", prompt="p", provider="openai", pool="codex"),
+    ]
+    with pytest.raises(ValueError, match="correlation"):
+        run_competitive(cands, judge=_judge_first, snapshot=_snapshot(), quota=qc,
+                        capture_root=tmp_path, correlation_id="765-s3-x", dispatch=_stub())

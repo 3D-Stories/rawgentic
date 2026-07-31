@@ -294,6 +294,18 @@ def run_competitive(
     already released in ``_run_candidate``'s ``finally``. A sink exception never erases results."""
     run_id = run_id or _new_run_id()
     candidates = list(candidates)
+    # #765 (8a R2-F4): the run-level correlation_id is the single identity source — a
+    # None-carrying candidate inherits it; a candidate carrying a DIFFERENT non-None value
+    # is a contradictory audit identity and refuses fail-closed (record vs candidates could
+    # otherwise silently disagree).
+    if correlation_id is not None:
+        for c in candidates:
+            if c.correlation_id is not None and c.correlation_id != correlation_id:
+                raise ValueError(
+                    f"candidate {c.model!r}: correlation_id {c.correlation_id!r} conflicts with "
+                    f"the run-level correlation_id {correlation_id!r} — contradictory audit identity")
+        candidates = [replace(c, correlation_id=correlation_id) if c.correlation_id is None else c
+                      for c in candidates]
     # #558 AC2 (r6/A-F1): mutating manifests reject fail-loud BEFORE candidate fan-out —
     # inside the pool a raise would soften into a harness_error Observation
     for c in candidates:
