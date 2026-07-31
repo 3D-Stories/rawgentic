@@ -14,7 +14,27 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
-## Epic #756 — silent failures: the executor instruction layer (#735 → #733) · v3.109.7
+## Epic #756 — silent failures: the executor instruction layer (#735 → #733 → #732) · v3.109.8
+
+Third slot (#732, session b8905b86, v3.109.8, queue-front by owner decision D13): the trap that
+strands sessions at the advisory tier — the meter's own text sent them to `clear-prep`, the
+skill that prepares a handoff and never performs one (#713 fixed the directive tier only), and
+the pane-handoff provenance gate recognized only directive markers, so from the advisory tier
+there was NO compliant path to a successor (this run's own field evidence: three observed
+outcomes). Shipped on the small-standard lane (the epic's first): the advisory branch names
+pane-handoff as the route (owner wording verbatim, next-clean-seam timing kept — the tiers
+decide WHEN, never WHETHER); `herdr_available` threads pure through `nag_text` so the headless
+no-launcher branch prefers pane-handoff over stop-and-wait when a pane exists; the provenance
+gate becomes a directive-first two-tier `compgen -G` disjunction where the printed marker's
+tier is the timing authority, never the injectable reminder text (Step-8a security High).
+Review catches en route: one `ls` with two globs exits 2 in the advisory-only case even while
+printing the marker (Step-4 pass-2); a bare `.*.emitted` would admit future marker types
+(Step-4 pass-1 High → design loop-back 1/2); empty session id fails closed — all pinned by
+executable fixture tests that RUN the gate command per case, plus full-canonical-sentence
+drift guards per branch. Adversarial diff High declined with a dispositions entry
+(attended-unconditional mirrors the #713 directive shape; AC4 conditions only the headless
+branch); freshness + standing run-contract authorization deferred to #760. Suite 6273→6292.
+PR/merge/CI: filled by the next slot's pass.
 
 Second slot (#733, session cf8ac68a → 33b3f9ef across two pane-handoffs, v3.109.7): the defect
 class the epic is named for — a SIGKILLed executor seat returned `ok: true` / exit 0, so a
@@ -28,7 +48,8 @@ survived a mid-wave Claude process restart (both executor jobs completed and wer
 their observations — the fix's own discipline applied to its review) and adopted 4 more Highs
 (8b5b793): residue never retryable, evidence-first verdict ordering, usage_unavailable requires
 a payload, audit read-boundary validation + receipt-bound collect authorization. Suite
-6194→6273. PR/merge/CI: filled by the next slot's pass.
+6194→6273. PR #770, squash-merged `9bdce86` 2026-07-30, CI green (test+lint hard lanes), issue
+auto-closed, epic box ticked.
 
 First slot of the epic #756 auto-run (17 children, AUTO MODE, session 048888d0). #735 was the
 spike-turned-fix: the executor machinery was proven working, but the always-loaded manuals named
