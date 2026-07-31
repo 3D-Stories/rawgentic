@@ -886,14 +886,32 @@ def live_owner_goal(transcript_text: str) -> str | None:
     exactly the #758 pass-2 bypass through `goal_currently_unmet`, which scans without a
     sentinel check).
 
-    Liveness is decided by the LAST sentinel-bearing row with a non-blank condition:
+    Origin-bound, not merely sentinel-keyed (#758 Step-8a wave): `sentinel: true` is a
+    field any forged object can carry, so trust requires the row to sit at the REAL
+    harness attachment location — the record's TOP-LEVEL `attachment` object — never a
+    recursively discovered nested one (`_iter_goal_status`'s recursion exists for other,
+    non-destructive readers). And `met` must be a literal boolean: a row whose `met` is
+    missing or malformed is not trusted at all — a corrupt row must not read as "cleared".
+
+    Liveness is decided by the LAST trusted row with a non-blank condition:
     `met` False → its condition is live (returned VERBATIM); `met` True → the guard was
-    cleared → None; no such rows → None. (`last_unmet_goal_condition` is historical — it
-    returns a met:false row even after a later clear — so it is deliberately not used.)
+    cleared → None; no trusted rows → None. (`last_unmet_goal_condition` is historical —
+    it returns a met:false row even after a later clear — so it is deliberately not used.)
     """
     last: dict | None = None
-    for row in _iter_goal_status(transcript_text):
-        if row.get("sentinel") is not True:
+    for line in transcript_text.splitlines():
+        if "goal_status" not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        row = rec.get("attachment")
+        if not isinstance(row, dict) or row.get("type") != "goal_status":
+            continue
+        if row.get("sentinel") is not True or not isinstance(row.get("met"), bool):
             continue
         cond = row.get("condition")
         if isinstance(cond, str) and cond.strip():
@@ -1675,8 +1693,20 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                         f"pane; clear and close it by hand only after reading its goal")
                     return out
 
-            live_condition = latest_goal_status_condition(pred_text)
-            armed = live_condition is not None and goal_currently_unmet(pred_text, live_condition)
+            if strict_goal_binding:
+                # Step-8a wave Critical (#758): under strict binding the #707 three-state
+                # classification must derive from the SAME trusted verdict the binding just
+                # validated — the sentinel-insensitive helpers below would let a forged
+                # sentinel-less met:true row for the UNCHANGED condition read as
+                # already_clear, skipping `/goal clear` and closing a still-guarded pane.
+                # The validated snapshot IS the state: it equals `live_owner_goal(pred_text)`
+                # (the binding check above just proved it), so no second read is needed.
+                live_condition = expected_predecessor_goal
+                armed = expected_predecessor_goal is not None
+            else:
+                live_condition = latest_goal_status_condition(pred_text)
+                armed = (live_condition is not None
+                         and goal_currently_unmet(pred_text, live_condition))
             if not armed:
                 # Nothing to clear, so nothing to confirm. Recorded as its own result value rather
                 # than a silent skip: "already_clear" is a materially different fact from "cleared
@@ -3201,7 +3231,7 @@ def _cmd_ad_hoc_handoff(args) -> int:
         try:
             with open(own_transcript, encoding="utf-8") as fh:
                 own_text = fh.read()
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             raise LauncherError(
                 f"cannot read this session's own transcript {own_transcript!r} ({exc}) — "
                 "refusing the retirement handoff: without provenance the verbatim goal carry "
