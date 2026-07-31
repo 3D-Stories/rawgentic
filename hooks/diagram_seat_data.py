@@ -40,7 +40,7 @@ _CLASSIFICATIONS = ("executor-wired", "competitive", "bake-off")
 PHASE_SEAT_MAP = (
     ("1", "intake", "Executor", ("#447",)),
     ("2", "analysis", "Agent tool", ("#447",)),
-    ("3", "design", "Executor (competitive)", ("#447",)),
+    ("3", "design", "Executor (competitive)", ("#447", "#765")),
     ("4", "review", "Executor (design-critique)", ("#447",)),
     ("5", "plan", "Executor", ("#447",)),
     ("8", "build", "Agent tool (worktree)", ("#447",)),

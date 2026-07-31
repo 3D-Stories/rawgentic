@@ -75,7 +75,12 @@ fi
 capture() {
   local theme="$1" dest_tmp="$2"
   echo "==> capturing $theme theme -> $dest_tmp" >&2
+  # --wait-for-timeout: the sheet's draw-in animation staggers nodes by
+  # calc(var(--i)*45ms) + .45s (~1.3s for 19 stations); capturing at load-time
+  # freezes late stations at opacity 0 (#765 review catch — the shipped pair
+  # faded out after station 4). 3s lets every node land before the shot.
   if ! npx "$PW" screenshot --full-page --viewport-size=1440,900 \
+      --wait-for-timeout=3000 \
       "$BASE_URL/workflow-diagram.html?theme=${theme}" \
       "$dest_tmp" 2>"$CAPTURE_ERR"; then
     if grep -q "Executable doesn't exist" "$CAPTURE_ERR"; then

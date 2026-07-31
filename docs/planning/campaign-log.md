@@ -14,7 +14,31 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
-## Epic #756 — silent failures: the executor instruction layer (#735 → #733 → #732 → #758 → #767) · v3.110.1
+## Epic #756 — silent failures: the executor instruction layer (#735 → #733 → #732 → #758 → #767 → #765) · v3.111.0
+
+Sixth slot (#765, session 4ac8c4b0 → b9a74758 → c2710ce0 across two clean-seam pane-handoffs,
+v3.111.0, full spine after an honest lane re-run): the bake-off decision child — the WIRE-vs-RETIRE
+fork the #735 gate filed. Owner D26 chose WIRE (the RETIRE recommendation presented and declined,
+two-way /ask-owner RG-761044); owner D27 mid-run scoped it DISABLEABLE-first (`designBakeoff.enabled`
+opt-in, default OFF, fail-open-to-off; hardening follow-up filed as #775, owner-joined to the epic
+at the queue tail, D28). Shipped: run-identity plumbing through `run_competitive` (additive;
+legacy callers keep their exact record shape — the `correlation_id` key is OMITTED, not null),
+the workflow-callable `design-round` CLI (identity REQUIRED + grammar-validated, `--winner-out`
+delivering the winner's exact bytes as the design draft, whitelist-only sanitized `--evidence-out`
+with rubric-bound score keys + `judge_model`, raw sinks refusing ANY committable path in ANY git
+work tree, in-path gate enforcement exit 4, empty-brief and output-collision refusals), a LIVE
+glm-judged sol-vs-opus proving round committed as fail-closed AC2 evidence (regenerated under the
+final hardened code, run `wf2-765-c2710ce0`), the Step-3 prose/diagram wired-opt-in truth with
+`_WIRED/_GATE` drift pins and the stale-#472 sweep, and diagram REV 3.111.0 (station 3 delta,
+snapshots regenerated with the draw-in-animation wait fix — the shipped pair had been clipped).
+Gate economics: design 3 passes (10 findings, D25 budget-exhausted close per owner precedent);
+plan gate 6 adversarial findings; Step-8a wave 2 reviewers over the two high-risk commits (the
+winner-bytes-discard High caught there); Step-11 wave 2 executor reviewers + adversarial diff —
+13 unique findings, the winner-DELIVERY contract gap raised independently by ALL THREE layers
+(fixed: the operative command now names `--winner-out`), 12 adopted + 1 declined with disposition
+(tri-state gate vs the owner-ratified D27 fail-open-to-off; #775 owns the diagnostics). No
+loop-back consumed at Steps 9/11 (design 2/2 spent at the gate, global 2/3). All red-before-green
+(10 red Step-11 tests). Suite 6414→6447. PR #776; merge/CI: filled by the next slot's pass.
 
 Fifth slot (#767, session 0dfdd03a → 4ac8c4b0 across a mid-child pane-handoff at the Step-11
 JOIN seam, v3.110.1, small-standard lane, lane-widened 8>7 at Step 9): the blocker #735's first
@@ -40,8 +64,8 @@ exercise the production op), `PromotionResult.content_tree_sha` binding all thre
 snapshots (A==B in collect, B==C in reconcile), and mutually exclusive audit binding schemas
 (hybrid v2-fields-no-version refused, exact non-bool int version, writers reject empty
 identity). Audit-side FEATURE-ref landing binding deferred to #762. Dispositions ledger 19.
-All red-before-green (24 red Step-11 tests). Suite 6348→6414. PR #774; merge/CI: filled by
-the next slot's pass.
+All red-before-green (24 red Step-11 tests). Suite 6348→6414. PR #774, squash-merged
+`e9c10b0` 2026-07-31, CI green (test+lint hard, security-review advisory — all green).
 
 Fourth slot (#758, session f6996e2f, v3.110.0, small-standard lane): owner-authored goals now
 carry VERBATIM across pane-handoffs, enforced at the handoff boundary — the measured failure was

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#765 Bake-off Decision — WIRE (owner D26)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-31 11:27 MDT</div>
+<h1>#765 Bake-off Decision — WIRE (owner D26)</h1>
+
+</header>
+<main>
+<h1>#765 — Step-3 competitive bake-off: the recorded decision (WIRE)</h1>
+<p>Epic #756 child 6/20 · 2026-07-31 · sessions 4ac8c4b0 (Steps 1–4, fork) + b9a74758 (Steps 5–16) · plugin v3.111.0</p>
+<h2>The decision</h2>
+<p><strong>WIRE the bake-off — owner decision D26 (2026-07-31).</strong> Two-way /ask-owner (token RG-761044, option_required): the owner selected option 2, &quot;WIRE the bake-off now in this child,&quot; answering in ~4 minutes (delivery 0f0ec03c3646). The RETIRE recommendation was presented alongside it and <strong>declined</strong> — recorded here per the run&#x27;s decision log (<code>claude_docs/session_notes/epic-756-autorun-log.md</code> D26).</p>
+<p>This satisfies <strong>AC1</strong> (a recorded decision with reason). <strong>AC3</strong> (the RETIRE branch&#x27;s carve-out wording) is n/a under WIRE. AC2 and AC4 are covered by the shipped changes below.</p>
+<h2>The fork as it was presented (both branches honestly costed)</h2>
+<p>The issue&#x27;s binary fork, evidence-hardened by a three-pass Step-4 gate (10 unique findings, all adopted; the gate twice caught this session&#x27;s own evidence errors — an overclaimed &quot;no wiring exists&quot; and a glm probe that repeated the documented 2026-07-17 false-defer):</p>
+<ul>
+<li><strong>(a) WIRE now</strong> — the policy layer (<code>hooks/bakeoff_policy.run_design_round</code>: sol-vs-opus</li>
+</ul>
+<p>  candidates, glm-5.2 judge, winner&#x27;s exact bytes become the artifact) already existed; what   was missing was a workflow-callable adapter carrying the WF2 run identity (the engine   minted a random <code>run_id</code>; <code>Candidate</code> had no correlation field), a sanitized committable   evidence artifact (the raw sink is gitignored by owner decision — it embeds full candidate   payloads and local paths), one live proving round, and the Step-3 prose + drift-guard   flips. Recurring cost thereafter: one extra full design generation plus a judge call per   gated design round — concurrent across quota pools, so tokens/quota rather than   wall-clock. Benefit: always-on candidate diversity in the phase with the highest gate   iteration this epic (4 of 5 children needed 3 Step-4 passes) — plausible but unmeasured.</p>
+<ul>
+<li><strong>(b) RETIRE permanently</strong> — kill the drift debt (the carve-out had outlived its closed</li>
+</ul>
+<p>  #472 pointer), keep the machinery for the build bake-off and the kukakuka extraction,   and gate any re-open on fresh evidence (e.g. an A/B of one child&#x27;s design run both ways).</p>
+<p><strong>The recommendation was RETIRE, narrowly</strong> — adoption-follows-demand: the build seat earned its wiring through a measured defect trail (#735 → #767 → #762), while the design bake-off had zero measured demand against a real recurring token cost. The margin was explicitly narrow (WIRE executable now, the mechanism genuinely non-redundant with critique-of-one-candidate), which is why it went to the owner as a genuine call rather than a foregone conclusion. The owner chose WIRE; that call is the decision of record.</p>
+<h2>What shipped (PR: feature/765-wire-step3-bakeoff, v3.111.0)</h2>
+<p>1. <strong>Run-identity plumbing</strong> (<code>phase_executor/engine.py</code>): <code>run_competitive</code> accepts and    records the caller&#x27;s <code>run_id</code>/<code>correlation_id</code>; <code>Candidate.correlation_id</code> reaches the    <code>AdapterRequest</code> and the harness Observation. Omitted identity keeps the prior shape. 2. <strong>Workflow-callable CLI</strong> (<code>hooks/bakeoff_policy.py design-round</code>): the exact command the    WF2 Step-3 prose names — requires <code>--run-id</code>/<code>--correlation-id</code> (exit 2 without), exits 3    fail-loud on an interactive judge failure, and writes a <strong>sanitized</strong> <code>--evidence-out</code>    record (whitelist-only; <code>prompt_sha256</code>/<code>rubric_sha256</code> bind the evidence to its inputs). 3. <strong>AC2 evidence</strong> (<code>docs/measurements/bakeoff-765-design-round-evidence.json</code>): one LIVE    glm-judged sol-vs-opus round dispatched through that CLI under the run&#x27;s own identity    (<code>wf2-765-b9a74758</code> / <code>765-s8-live-round</code>), <code>judge_degraded: false</code>, both candidates ok    — pinned by a fail-closed guard test that rejects a degraded or wrong-model round and    any payload/absolute-path leak. 4. <strong>Prose + guards (AC4)</strong>: the shared-block Step-3 row states the wired truth (command,    judge-env prerequisite, failure semantics, lane exemption); <code>_CARVEOUT_TRUTH</code> flipped    with negative pins — no <code>#472</code> deferral survives in the block, corpus, or    <code>docs/run-records.md</code>, whose reconciliation section now states the honest per-stream    join truth (design rounds carry workflow identity; the build stream&#x27;s wiring is #762&#x27;s). 5. <strong>Diagram REV 3.111.0</strong> (station-3 delta): the official sheet&#x27;s Design Solution station    documents the wired round; classification legitimately stays <code>competitive</code> — now true.</p>
+<h2>Re-open / reversal path</h2>
+<p>Reversal is a prose + guard flip of the same surfaces (the RETIRE implementation shape is preserved in the gate-ratified design note, rev 4) behind a fresh owner-approved issue — ideally carrying the A/B evidence this decision ships the instrumentation for: every wired round&#x27;s sanitized record is now attributable to its run, so bake-off value is measurable per child from here on.</p>
+
+</main>
+<footer>Last updated: 2026-07-31 11:27 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

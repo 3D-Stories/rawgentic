@@ -71,8 +71,11 @@ noisy seat *in-run* with fresh evidence. The mechanism is `hooks/bakeoff_policy.
 policy) plugging into the extraction-clean `phase_executor.run_competitive` engine (execution +
 failure semantics):
 
-- **Design round** — sol vs opus every round; **build bake-off** — gate-flagged (the #429
-  `needs_bakeoff` verdict) `{sonnet, opus, terra}`. Authors run concurrently across quota pools
+- **Design round** — sol vs opus every round, **wired into WF2 Step 3 since #765** (the
+  workflow-callable `bakeoff_policy.py design-round` CLI carries the run's `run_id`/
+  `correlation_id` into the record); **build bake-off** — gate-flagged (the #429
+  `needs_bakeoff` verdict) `{sonnet, opus, terra}`, no workflow caller yet (that wiring is
+  #762's). Authors run concurrently across quota pools
   (sol/terra on codex, sonnet/opus on the claude pool at its ceiling 2); wall-clock ≈ the slowest
   candidate, not the sum.
 - **Judge** — glm-5.2 (`make_glm_judge`), the vendored **bench-#14 rubric**
