@@ -275,12 +275,13 @@ Amended RCA (findings applied) OR blocked state (circuit breaker triggered).
 ### Instructions
 
 1. Break the fix into ordered TDD tasks:
-   - Task 1: Write failing reproduction test
-   - Task 2: Implement the fix (minimal change)
-   - Task 3: Add regression/edge case tests
-   - Task 4: Update documentation if behavior changes
-2. Document the fix branch name: `fix/<issue-number>-<short-desc>`
-3. Estimate: most bugs should have 3-6 tasks.
+   - `### Task 1: Write failing reproduction test`
+   - `### Task 2: Implement the fix (minimal change)`
+   - `### Task 3: Add regression/edge case tests`
+   - `### Task 4: Update documentation if behavior changes`
+2. Use the mint-gate-compatible grammar. Every task heading is exactly `### Task <id>: <title>` (`##` headings parse to zero tasks); each task includes `- riskLevel: high|standard` and `- files: <declared paths>`; and the plan has one canonical `- estimated-lines: <nonnegative int>` line.
+3. Document the fix branch name: `fix/<issue-number>-<short-desc>` and estimate 3-6 tasks.
+4. For `mint-gate`, derive `--issue-complexity` from the Step 2 WF3 complexity classification via the R4-D mapping (`trivial_work=true → trivial`; `simple_bug|moderate_bug → standard`; `complex_bug → complex`) and derive `--plan-est-lines` from this plan's own `estimated-lines` line.
 
 ### Output
 
@@ -322,6 +323,8 @@ Active fix branch with dependencies installed.
 ## Step 7: TDD Bug Fix (Reproduce-First Pattern)
 
 ### Instructions
+
+**Executor-primary implementation loop (#762): for each task in the 3-6-task fix plan, record pre-task state → dispatch → collect → land audited → assert branch advance plus non-empty content → run the scoped suite; emit exactly one canonical `DISPATCH` line per workflow dispatch.** Under the executor architecture, first mint the gate from the Step 5 plan (`mint-gate --plan-file <fix-plan> --issue-complexity <mapped> --plan-est-lines <from the plan's own estimated-lines>`), then dispatch the task through `dispatch --seat build --gate-file <gate.json> --plan-file <fix-plan>`. Collect code with `collect-work-product --run-id <run-id> --session-name <job> --target-ref refs/rawgentic/collect/<receipt-nonce> --expected-target-sha 0000000000000000000000000000000000000000 --kind code --promote-path <declared files> --expected-feature-ref <recorded fix ref> --workspace <workspace-file> --project <name>` and land it through audited `land-work-product --expected-ref <recorded fix ref> --pre-sha <recorded pre-task SHA> --new-sha <new_sha> --temp-ref refs/rawgentic/collect/<receipt-nonce> --run-id <run-id> --workspace <workspace-file> --project <name>` before the advance-and-content assertion and scoped suite. Under the declared LEGACY architecture, implement the task inline as today.
 
 Execute the plan from Step 5 using strict reproduce-first TDD:
 

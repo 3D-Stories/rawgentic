@@ -46,6 +46,15 @@ def test_wf3_fix_bug_carries_concurrency_and_fallback():
     assert "handled hard failure, never a silent downgrade" in norm
 
 
+def test_wf3_fix_bug_carries_build_seat_clause():
+    # #762: WF3's bespoke block now dispatches fix-plan implementation work through
+    # the build seat; whitespace-normalized single-file anchor.
+    norm = _norm((REPO / "skills" / "fix-bug" / "SKILL.md").read_text(encoding="utf-8"))
+    assert ("WF3 fix-plan tasks dispatch through the executor `build` seat: mint "
+            "the gate from the WF3 fix plan, dispatch with `--gate-file` and "
+            "`--plan-file`, then collect and land the work product audited.") in norm
+
+
 # --- #470: the executor-dispatch contract replaced the Agent-tool-only prose. ---
 # New canonical sentences in the single-source shared block. Anchored to the
 # shared source (single source of truth), whitespace-normalized per the repo

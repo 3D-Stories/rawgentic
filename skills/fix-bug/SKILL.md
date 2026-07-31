@@ -101,14 +101,14 @@ All subsequent steps use `config` and `capabilities` — never probe the filesys
 </config-loading>
 
 <model-routing-resolve>
-Resolve model routing (optional, fail-open) right after `<config-loading>`, before any subagent dispatch. For the `review` role this skill dispatches, resolve the configured model:
+Resolve model routing (optional, fail-open) right after `<config-loading>`, before any subagent dispatch. For each role this skill dispatches (`review`, `implementation`), resolve the configured model:
 ```bash
 python3 hooks/model_routing_lib.py resolve \
-  --workspace .rawgentic_workspace.json --project <name> --role review
+  --workspace .rawgentic_workspace.json --project <name> --role <review|implementation>
 ```
-Exit is always 0; stdout is a model name or `inherit`. If `hooks/model_routing_lib.py` is missing (e.g. a stale plugin cache), the invocation may exit non-zero — treat that, and any non-zero/absent output, as `inherit`. Carry the resolved value as a literal into later steps (fresh-shell rule). When the value is `inherit`, dispatch review subagents with NO `model:` parameter (session model). Otherwise pass `model: <value>` on every Agent dispatch for review. A stderr warning is advisory — never treat it as failure.
+Run once per role. Exit is always 0; stdout is a model name or `inherit`. If `hooks/model_routing_lib.py` is missing (e.g. a stale plugin cache), the invocation may exit non-zero — treat that, and any non-zero/absent output, as `inherit`. Carry each resolved value as a literal into later steps (fresh-shell rule). When a value is `inherit`, dispatch that role's subagents with NO `model:` parameter (session model). Otherwise pass `model: <value>` on every Agent dispatch for that role. A stderr warning is advisory — never treat it as failure.
 
-Also resolve the `review` role's effort tier with a second invocation appending `--effort`, printing the effort string or `none`; carry both the model and the effort as literals. When the resolved effort is `none`, dispatch exactly as today. When it is non-`none`: the Agent tool has no per-invocation effort parameter, so effort is carried dual-path — (a) pass it where the dispatch layer supports effort (the Workflow tool's `agent(prompt, {effort: <value>})` option, or a Codex dispatch's reasoning-effort flag), and (b) always record it in the dispatch's session-note/audit line (e.g. `dispatch review: model <model>, effort <effort>`) so the resolved tier stays observable even where delivery is definition-level only (bundled agent-definition files are an M3 follow-up, out of scope here).
+Also resolve each role's effort tier with a second invocation appending `--effort`, printing the effort string or `none`; carry both the model and the effort as literals. When the resolved effort is `none`, dispatch exactly as today. When it is non-`none`: the Agent tool has no per-invocation effort parameter, so effort is carried dual-path — (a) pass it where the dispatch layer supports effort (the Workflow tool's `agent(prompt, {effort: <value>})` option, or a Codex dispatch's reasoning-effort flag), and (b) always record it in the dispatch's session-note/audit line (e.g. `dispatch <role>: model <model>, effort <effort>`) so the resolved tier stays observable even where delivery is definition-level only (bundled agent-definition files are an M3 follow-up, out of scope here).
 
 **Executor-dispatch contract (#470) — the PRIMARY tier.** Every `review`-seat model call dispatches through ONE skill-facing entry point — the executor `dispatch` CLI (one single entry point; no second entry point is ever named in prose, because the sync-vs-supervised split is an internal routing decision keyed on the staged launch profile):
 ```bash
@@ -118,7 +118,7 @@ python3 hooks/executor_routing_lib.py dispatch \
   [--context-file <path> ...] \
   --workspace <workspace-file> --project <name>
 ```
-WF3 dispatches ONLY review seats — it has no build seat, so no `--gate-file`/`--plan-file` material ever crosses this boundary (those flags are WF2 build-seat-only; a review dispatch never carries them, and the review seats are non-mutating so the mutating-engine canary does not apply). An omitted `--timeout` defaults to the seat's own declared bound (`resolve_dispatch_timeout`, #753); `--timeout` only tightens, never loosens (#733).
+WF3 review dispatches use the `review` seat and never carry `--gate-file`/`--plan-file` material. WF3 fix-plan tasks dispatch through the executor `build` seat: mint the gate from the WF3 fix plan, dispatch with `--gate-file` and `--plan-file`, then collect and land the work product audited. First mint the authenticated gate: `python3 hooks/executor_routing_lib.py mint-gate --plan-file <fix-plan> --issue-complexity <mapped> --plan-est-lines <from the plan's own estimated-lines> --out <gate.json>`; then dispatch `--seat build --gate-file <gate.json> --plan-file <fix-plan>`. WF3 complexity mapping for `mint-gate`: `trivial_work=true → trivial`; `simple_bug|moderate_bug → standard`; `complex_bug → complex` (normally upgrade to WF2; this mapping covers an owner-overridden stay-in-WF3 case). After a successful build result, use `python3 hooks/executor_routing_lib.py collect-work-product --run-id <run-id> --session-name <job> --target-ref refs/rawgentic/collect/<receipt-nonce> --expected-target-sha 0000000000000000000000000000000000000000 --kind code --promote-path <declared file> [--promote-path <declared file> ...] --expected-feature-ref <recorded fix ref> --workspace <workspace-file> --project <name>`, then audited `python3 hooks/executor_routing_lib.py land-work-product --expected-ref <recorded fix ref> --pre-sha <recorded pre-task SHA> --new-sha <new_sha> --temp-ref refs/rawgentic/collect/<receipt-nonce> --run-id <run-id> --workspace <workspace-file> --project <name>`. An omitted `--timeout` defaults to the seat's own declared bound (`resolve_dispatch_timeout`, #753); `--timeout` only tightens, never loosens (#733).
 
 **Exit taxonomy (shipped numbering preserved; 6 is ADDITIVE):** `0` ok · `2` malformed input · `3` availability (chain exhausted / quota timeout / a timed-out, signalled, or otherwise process-failed dispatch — `ok: false` with any partial output attached and flagged `partial: true`, #733) · `4` enforcement denial · `5` internal · `6` refused (`EXIT_REFUSED` — canary refusal; NEW, no renumber of the shipped #427/#464 codes). Exit → DISPATCH `outcome` mapping (normative):
 
@@ -137,15 +137,15 @@ WF3 dispatches ONLY review seats — it has no build seat, so no `--gate-file`/`
 
 **An executor seat is never a gate bypass — every mandatory gate (Steps 4, 8a, 9, 11, 11.5) runs with identical semantics whichever tier dispatches its model calls, and every EXECUTOR-tier build-seat dispatch requires the authenticated gate decision plus the internally minted plan context.** WF2/WF3 prose runs the complexity-gate step before any legacy-architecture build dispatch.
 
-**Bundled agent dispatch (#164) — the LEGACY architecture (manual rollback target, #474).** Since the W12 flip (#474) the executor IS the architecture everywhere by default; the Agent-tool path remains in-tree ONLY as the legacy architecture, reachable solely via the deliberate joint rollback (`defaultArchitecture: "legacy"`), NEVER via runtime fallback. **Under the LEGACY architecture** (declared: `resolve-seat` returns `inherit`) it dispatches review seats with `rawgentic:rawgentic-reviewer` and carries `resolution=fallback` on the DISPATCH line; the definition's first-instruction architecture SELF-CHECK refuses unless the workspace declares legacy. Do not delete the definitions: they are the rollback target.
+**Bundled agent dispatch (#164) — the LEGACY architecture (manual rollback target, #474).** Since the W12 flip (#474) the executor IS the architecture everywhere by default; the Agent-tool path remains in-tree ONLY as the legacy architecture, reachable solely via the deliberate joint rollback (`defaultArchitecture: "legacy"`), NEVER via runtime fallback. **Under the LEGACY architecture** (declared: `resolve-seat` returns `inherit`) it dispatches review seats with `rawgentic:rawgentic-reviewer` and carries `resolution=fallback` on the DISPATCH line; fix-plan implementation runs inline as today. The definition's first-instruction architecture SELF-CHECK refuses unless the workspace declares legacy. Do not delete the definitions: they are the rollback target.
 
-**Canonical DISPATCH audit line (#330).** The lowercase start-time line above stays as-is (observability only, never parsed). At the point each `review` dispatch decision COMPLETES — or the orchestrator declares it dead/abandoned — ALSO append one uppercase canonical line carrying the issue number and all six schema fields, fixed key order, single-space-separated, one line. WF3 dispatches only the `review` role, so `role` is always `review`:
+**Canonical DISPATCH audit line (#330).** The lowercase start-time line above stays as-is (observability only, never parsed). At the point each `review` or `implementation` dispatch decision COMPLETES — or the orchestrator declares it dead/abandoned — ALSO append one uppercase canonical line carrying the issue number and all six schema fields, fixed key order, single-space-separated, one line. WF3 review dispatches use `role=review`; executor build-seat fix-plan dispatches use `role=implementation`:
 ```
-DISPATCH issue=<n> role=review type=<subagent_type> model=<model|null> effort=<effort|null> outcome=<ok|error|retried|dead> resolution=<primary|fallback|generic>
+DISPATCH issue=<n> role=<review|implementation> type=<subagent_type> model=<model|null> effort=<effort|null> outcome=<ok|error|retried|dead> resolution=<primary|fallback|generic>
 ```
 Canonical regex (assembly's scoped grep + validator):
 ```
-^DISPATCH issue=(\d+) role=(review) type=([A-Za-z0-9_.:/-]+) model=(null|[A-Za-z0-9_.:/-]+) effort=(null|[A-Za-z0-9_.:/-]+) outcome=(ok|error|retried|dead) resolution=(primary|fallback|generic)$
+^DISPATCH issue=(\d+) role=(review|implementation) type=([A-Za-z0-9_.:/-]+) model=(null|[A-Za-z0-9_.:/-]+) effort=(null|[A-Za-z0-9_.:/-]+) outcome=(ok|error|retried|dead) resolution=(primary|fallback|generic)$
 ```
 Emission rules:
 - One line per SUBAGENT INVOCATION dispatched (not per attempt) — WF3 Step 9's two review agents = two lines at a single tier; a slot that descends on a RUNTIME ERROR adds the abandoned tier's terminal line, while a resolve-failure descent adds none (an unresolvable tier never ran).
@@ -156,7 +156,7 @@ Emission rules:
 - A generic inline-prompt review dispatch (no bundled agent type ran) uses the stable `subagent_type` token `generic-review` and carries `resolution=generic`.
 - `issue=<n>` is this run's issue number (scoping key — assembly greps the whole session-notes file for `^DISPATCH issue=<n> `). `DISPATCH` is uppercase so it can never collide with the lowercase start-time prose line.
 
-Resolution decision table (WF3 dispatches only `review`):
+Resolution decision table (WF3 review dispatches):
 
 | Dispatch path | resolution |
 |---|---|

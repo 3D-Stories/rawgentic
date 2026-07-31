@@ -3,6 +3,7 @@ no live provider call), CLI contract, guarded import. Asserts the ACTUAL executi
 paths (executor -> routed model; inherit -> prior behavior untouched)."""
 import json
 import os
+import re
 import subprocess
 import sys
 import types
@@ -589,6 +590,33 @@ def test_dispatch_design_refused_exit2(tmp_path):
 _PLAN_STD = ("### Task 1: build the thing (#470)\n"
              "- riskLevel: standard\n"
              "- files: hooks/foo.py, hooks/bar.py\n")
+
+
+def test_mint_gate_e2e_from_wf3_format_fix_plan(tmp_path):
+    """#762: a WF3-format plan supplies the gate's two CLI facts end-to-end."""
+    plan = tmp_path / "fix-plan.md"
+    gate = tmp_path / "gate.json"
+    plan.write_text(
+        "- wf3-complexity: moderate_bug\n"
+        "- estimated-lines: 9\n\n"
+        "### Task 1: reproduce the bug\n"
+        "- riskLevel: standard\n"
+        "- files: tests/test_widget.py\n\n"
+        "### Task 2: make the minimal fix\n"
+        "- riskLevel: standard\n"
+        "- files: src/widget.py\n\n"
+        "### Task 3: cover the regression\n"
+        "- riskLevel: standard\n"
+        "- files: tests/test_widget.py\n",
+        encoding="utf-8")
+    fields = dict(re.findall(r"^- ([a-z0-9-]+): (.+)$", plan.read_text(encoding="utf-8"), re.M))
+    mapped_complexity = {"simple_bug": "standard", "moderate_bug": "standard",
+                         "complex_bug": "complex"}[fields["wf3-complexity"]]
+    result = _run_cli("mint-gate", "--plan-file", str(plan),
+                      "--issue-complexity", mapped_complexity,
+                      "--plan-est-lines", fields["estimated-lines"], "--out", str(gate))
+    assert result.returncode == 0, result.stderr
+    assert json.loads(gate.read_text(encoding="utf-8"))["decision"] is False
 
 
 def _gate470(plan_content=_PLAN_STD, *, risk="standard", complexity="standard", lines=7, file_count=2):
