@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#765 Design Bake-off — Wiring Map</title>
+<style>
+:root{
+  --bg:#f4f1e8; --grid:#e8e2d2; --card:#fffdf6; --card2:#faf7ec;
+  --ink:#1e2430; --ink2:#5a6172; --frame:#2b3a55; --blue:#2b5ea7;
+  --wired:#1a7a4a; --wiredbg:#e8f5ec; --notwired:#b3382e; --notwiredbg:#fbeae8;
+  --partial:#a06b12; --partialbg:#faf1dd;
+  --accent:#c0392b; --gold:#c9a227;
+  --mono:ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace;
+  --sans:'Avenir Next','Segoe UI',system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#101826; --grid:#182236; --card:#162032; --card2:#1b2740;
+    --ink:#e7ebf4; --ink2:#93a0b8; --frame:#4a6da8; --blue:#6f9fe0;
+    --wired:#4ecb8d; --wiredbg:#12321f; --notwired:#ef7b6d; --notwiredbg:#3c1a15;
+    --partial:#e0b45c; --partialbg:#39301a;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#101826; --grid:#182236; --card:#162032; --card2:#1b2740;
+  --ink:#e7ebf4; --ink2:#93a0b8; --frame:#4a6da8; --blue:#6f9fe0;
+  --wired:#4ecb8d; --wiredbg:#12321f; --notwired:#ef7b6d; --notwiredbg:#3c1a15;
+  --partial:#e0b45c; --partialbg:#39301a;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--bg) ;
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:28px 28px;
+  color:var(--ink); font-family:var(--sans); line-height:1.5; padding:24px 16px 60px;
+}
+.sheet{max-width:980px;margin:0 auto;border:2px solid var(--frame);background:var(--card);box-shadow:0 4px 30px rgba(0,0,0,.12)}
+header{display:flex;flex-wrap:wrap;border-bottom:2px solid var(--frame)}
+.tb{padding:14px 20px;border-right:1px solid var(--frame)}
+.tb:last-child{border-right:none;flex:1}
+.tb .k{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--ink2);text-transform:uppercase}
+.tb .v{font-weight:700;font-size:15px}
+h1{font-size:26px;letter-spacing:.02em;padding:22px 26px 4px;text-transform:uppercase}
+.sub{padding:0 26px 8px;color:var(--ink2);font-size:14px}
+section{padding:18px 26px}
+h2{font-size:13px;font-family:var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--blue);border-bottom:1.5px solid var(--grid);padding-bottom:6px;margin-bottom:14px}
+.verdict{margin:14px 26px 0;border:2.5px solid var(--gold);background:var(--partialbg);padding:16px 20px;border-radius:2px}
+.verdict b{color:var(--partial)}
+.verdict .big{font-size:17px;font-weight:800;display:block;margin-bottom:6px;color:var(--ink)}
+.pill{display:inline-block;font-family:var(--mono);font-size:10.5px;font-weight:700;letter-spacing:.08em;padding:2px 9px;border-radius:2px;border:1.5px solid;vertical-align:middle}
+.p-wired{color:var(--wired);border-color:var(--wired);background:var(--wiredbg)}
+.p-not{color:var(--notwired);border-color:var(--notwired);background:var(--notwiredbg)}
+.p-partial{color:var(--partial);border-color:var(--partial);background:var(--partialbg)}
+.flow{display:flex;flex-direction:column;gap:0;max-width:760px;margin:0 auto}
+.node{border:1.8px solid var(--frame);background:var(--card2);padding:14px 18px;border-radius:3px;position:relative}
+.node.nw{border-color:var(--notwired);border-style:dashed;background:var(--notwiredbg)}
+.node.pw{border-color:var(--partial);background:var(--partialbg)}
+.node.w{border-left:6px solid var(--wired)}
+.node h3{font-size:15px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.node p{font-size:13.5px;color:var(--ink2);margin-top:5px}
+.node code{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid var(--grid);padding:1px 5px;border-radius:2px;color:var(--ink)}
+.arrow{align-self:center;height:26px;width:0;border-left:2.5px solid var(--frame);position:relative;margin:2px 0}
+.arrow::after{content:"";position:absolute;bottom:-1px;left:-5.5px;border:5px solid transparent;border-top:7px solid var(--frame)}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:640px){.split{grid-template-columns:1fr}}
+.cand{border:1.8px solid var(--blue);background:var(--card2);padding:12px 16px;border-radius:3px;text-align:center}
+.cand .m{font-family:var(--mono);font-weight:700;font-size:14px}
+.cand .t{font-size:12px;color:var(--ink2)}
+.flag{border:2.5px solid var(--accent);background:var(--card2);padding:16px 20px;border-radius:3px;position:relative;margin-bottom:6px}
+.flag::before{content:"⚑ THE OFF SWITCH";position:absolute;top:-11px;left:14px;background:var(--card);padding:0 8px;font-family:var(--mono);font-size:10.5px;font-weight:800;letter-spacing:.12em;color:var(--accent)}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:720px){.cols{grid-template-columns:1fr}}
+.col{border:1.8px solid;border-radius:3px;padding:16px 18px}
+.col.ok{border-color:var(--wired);background:var(--wiredbg)}
+.col.gap{border-color:var(--notwired);background:var(--notwiredbg)}
+.col h3{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;margin-bottom:10px}
+.col.ok h3{color:var(--wired)}.col.gap h3{color:var(--notwired)}
+.col ul{list-style:none}
+.col li{font-size:13.5px;padding:5px 0 5px 22px;position:relative;border-bottom:1px dashed rgba(128,128,128,.25)}
+.col li:last-child{border-bottom:none}
+.col.ok li::before{content:"✔";position:absolute;left:0;color:var(--wired);font-weight:800}
+.col.gap li::before{content:"✘";position:absolute;left:0;color:var(--notwired);font-weight:800}
+.col li code{font-family:var(--mono);font-size:11.5px}
+footer{border-top:2px solid var(--frame);padding:12px 26px;font-family:var(--mono);font-size:11px;color:var(--ink2)}
+.ev{font-family:var(--mono);font-size:11.5px;color:var(--wired)}
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <div class="tb"><div class="k">Document</div><div class="v">RWG-765-MAP</div></div>
+    <div class="tb"><div class="k">Date</div><div class="v">2026-07-31</div></div>
+    <div class="tb"><div class="k">Plugin</div><div class="v">v3.111.0 (PR in flight)</div></div>
+    <div class="tb"><div class="k">Status</div><div class="v"><span class="pill p-partial">DISABLED BY DEFAULT · HARDEN VIA #775</span></div></div>
+  </header>
+
+  <h1>#765 Design Bake-off — Wiring Map</h1>
+  <div class="sub">How the WF2 Step-3 head-to-head works, what is wired today, and exactly what stands between it and "runs every child".</div>
+
+  <div class="verdict">
+    <span class="big">Verdict: not fully run-ready — exactly ONE issue away (#775).</span>
+    The head-to-head mechanics are real and were <b>live-proven twice today</b> (two models concurrent, glm judge, winner's exact bytes out, both candidates recorded).
+    What's missing is plumbing, not mechanics: the judge environment is hand-prepared per session, and no real child has used the round as its actual design step yet.
+    Per your call it ships <b>OFF by default</b> behind a flag; #775 hardens it to run-ready.
+  </div>
+
+  <section>
+    <h2>01 · The on/off flag (shipped, default OFF)</h2>
+    <div class="flag">
+      <p style="font-size:14px">Per-project, in <code>.rawgentic_workspace.json</code>: <code>"designBakeoff": {"enabled": true}</code> — absent, malformed, or unreadable always means <b>OFF</b> (Step 3 keeps today's mechanism and logs a one-line skip). Nothing runs, nothing costs tokens, unless a project opts in.</p>
+      <p style="margin-top:8px;font-size:13px;color:var(--ink2)">The workflow checks it with: <code>python3 hooks/bakeoff_policy.py design-round-enabled --workspace &lt;ws&gt; --project &lt;name&gt;</code> → exit 0 on, 1 off. <span class="pill p-wired">WIRED + TESTED</span></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>02 · The flow when it's ON</h2>
+    <div class="flow">
+      <div class="node w"><h3>Design brief goes in <span class="pill p-wired">WIRED</span></h3>
+        <p><code>design-round --prompt-file &lt;brief&gt; --run-id wf2-&lt;issue&gt;-&lt;session&gt; --correlation-id &lt;issue&gt;-s3-design</code> — identity is REQUIRED, so every round is attributable to its run (a missing id refuses, exit 2).</p></div>
+      <div class="arrow"></div>
+      <div class="node w"><h3>Two models, head-to-head <span class="pill p-wired">WIRED · LIVE-PROVEN ×2</span></h3>
+        <div class="split" style="margin-top:8px">
+          <div class="cand"><div class="m">gpt-5.6-sol</div><div class="t">codex quota pool · 8.3s / 25.7s live</div></div>
+          <div class="cand"><div class="m">claude-opus-5</div><div class="t">claude quota pool · 10.7s / 26.8s live</div></div>
+        </div>
+        <p>Genuinely concurrent (separate pools — tokens, not wall-clock). A crashing candidate is isolated; it can never abort the round or win.</p></div>
+      <div class="arrow"></div>
+      <div class="node pw"><h3>glm-5.2 judges <span class="pill p-partial">WIRED · ENV IS MANUAL (#775)</span></h3>
+        <p>Drafts are anonymized and shuffled (the judge can't tell whose is whose), scored on the vendored design rubric, winner picked. <b>The catch:</b> the judge needs the API key + zhipuai SDK — today that means running under the workspace bench venv with the key file sourced. Fail-loud if missing (exit 3), never silent — but it won't self-bootstrap yet.</p></div>
+      <div class="arrow"></div>
+      <div class="node pw"><h3>Winner's exact bytes come out <span class="pill p-partial">MECHANICALLY WIRED (#775 adopts)</span></h3>
+        <p><code>--winner-out</code> writes the winning draft byte-for-byte — today's review wave caught the CLI <b>discarding</b> it (your "doesn't feel plumbed in" instinct was correct). Fixed and tested — but no real child has consumed it as its design draft yet.</p></div>
+      <div class="arrow"></div>
+      <div class="node w"><h3>Both sets of information recorded <span class="pill p-wired">WIRED</span></h3>
+        <p>Raw record (both candidates' full text) → local gitignored sink. Sanitized record (models, timings, scores, usage, prompt/rubric hashes — no payloads, no paths) → <code>--evidence-out</code>, committable, locked by a fail-closed test. Live proof: <span class="ev">docs/measurements/bakeoff-765-design-round-evidence.json</span></p></div>
+      <div class="arrow"></div>
+      <div class="node w"><h3>Workflow moves on <span class="pill p-wired">WIRED</span></h3>
+        <p>Step 3 continues with the winner. Judge down? Interactive = stop loudly (exit 3). Headless = the incumbent (opus) wins with a <code>judge_degraded</code> flag on the record — a degraded round can never pass as clean evidence.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>03 · Wired today vs not yet</h2>
+    <div class="cols">
+      <div class="col ok">
+        <h3>Wired &amp; tested (this PR)</h3>
+        <ul>
+          <li>The on/off flag, default OFF (<code>designBakeoff.enabled</code>)</li>
+          <li>Run-identity plumbing — every round + every candidate carries the run's id</li>
+          <li>The workflow-callable CLI the Step-3 prose names verbatim</li>
+          <li>Concurrent head-to-head on separate quota pools (live ×2)</li>
+          <li>Anonymized glm judging + degraded-round flagging</li>
+          <li>Winner's exact bytes via <code>--winner-out</code> (atomic)</li>
+          <li>Raw + sanitized dual recording; committed live evidence, fail-closed guard</li>
+          <li>10 review-wave hardenings (strict sanitizer, sink containment, fail-loud everywhere)</li>
+        </ul>
+      </div>
+      <div class="col gap">
+        <h3>Not wired yet → #775</h3>
+        <ul>
+          <li>Judge env self-bootstrap (key file + zhipuai interpreter) — manual per session today</li>
+          <li>First real child running the round as its actual Step-3 design step</li>
+          <li>Winner bytes → the child's design draft, exercised end-to-end in a live run</li>
+          <li>Per-run evidence naming convention + run-record hook (makes value measurable)</li>
+          <li>The default-ON decision — owner-gated, brought with measured evidence</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>SOURCE · hooks/bakeoff_policy.py + phase_executor/engine.py @ PR feature/765-wire-step3-bakeoff · decision of record: owner D26 (WIRE) + 2026-07-31 mid-run (flag first, harden via #775) · companion md committed alongside</footer>
+</div>
+</body>
+</html>
