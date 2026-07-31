@@ -929,6 +929,65 @@ class TestResolveTable:
             er.resolve_table(repo, routing)
 
 
+def _supervised_no_sandboxed_lane(*, rt, monkeypatch):
+    """Drive only the chain filter; no provider/worktree side effect is reachable."""
+    pe = er._import_phase_executor()  # noqa: SLF001 - test the CLI's resolved-package seam
+    monkeypatch.setattr(pe, "PROVIDER_ENGINE", {"anthropic": "claude", "openai": "claude"})
+    args = types.SimpleNamespace(seat="build", correlation_id="762-r3h", author_provider=None)
+    return er._run_supervised(  # noqa: SLF001 - refusal is owned by this helper
+        args, pe, rt.snapshot, {}, None, types.SimpleNamespace(path="audit.jsonl"), {},
+        rt.path.parent, "", None, None, resolved_table=rt)
+
+
+def test_no_sandboxed_mutating_lane_names_package_default_provenance(tmp_path, monkeypatch):
+    repo = tmp_path / "default-project"
+    repo.mkdir()
+    rt = er.resolve_table(repo, routing)
+    result = _supervised_no_sandboxed_lane(rt=rt, monkeypatch=monkeypatch)
+    message = result["error"]["message"]
+    assert rt.source in message and str(rt.path) in message
+
+
+def test_no_sandboxed_mutating_lane_names_project_override_provenance(tmp_path, monkeypatch):
+    repo = tmp_path / "override-project"
+    _cfg(repo, pointer="claude_docs/routing/table.json")
+    table = repo / "claude_docs" / "routing" / "table.json"
+    table.parent.mkdir(parents=True)
+    table.write_bytes(routing.default_table_path().read_bytes())
+    rt = er.resolve_table(repo, routing)
+    result = _supervised_no_sandboxed_lane(rt=rt, monkeypatch=monkeypatch)
+    message = result["error"]["message"]
+    assert rt.source == "project_file"
+    assert rt.source in message and str(rt.path) in message
+
+
+def test_retuned_package_table_resolves_and_review_keeps_cross_model_chain_eligible(tmp_path):
+    repo = tmp_path / "retuned-package-default"
+    repo.mkdir()
+    rt = er.resolve_table(repo, routing)  # package schema + semantic validation entry point
+    expected = {
+        "intake": ("claude-sonnet-5", ["claude-fable-5", "claude-sonnet-5"], "xhigh"),
+        "analysis": ("claude-opus-5", ["claude-fable-5", "claude-sonnet-5"], "high"),
+        "design": ("gpt-5.6-sol", ["claude-fable-5"], "high"),
+        "plan": ("claude-opus-5", ["claude-fable-5", "claude-sonnet-5"], "high"),
+        "build": ("claude-sonnet-5", ["claude-opus-5", "gpt-5.6-terra"], "high"),
+        "review": ("gpt-5.6-sol", ["claude-fable-5", "claude-sonnet-5"], "high"),
+        "ship": ("claude-sonnet-5", ["claude-opus-5", "claude-fable-5"], "high"),
+        "offload": ("hermes-agent", ["claude-sonnet-5"], "medium"),
+    }
+    for seat, (primary, chain, effort) in expected.items():
+        spec = rt.snapshot.seat(seat)
+        assert spec["primary"]["model"] == primary
+        assert [entry["model"] for entry in spec["chain"]] == chain
+        assert spec["manifest"]["effort"] == effort
+        assert [target["model"] for target in routing.eligible_targets(seat, rt.snapshot)] == [
+            primary, *chain]
+    assert rt.snapshot.seat("analysis")["manifest"]["bounds"]["max_budget_usd"] == 10.0
+    review = routing.eligible_targets("review", rt.snapshot, author_provider="anthropic")
+    assert review[0]["model"] == "gpt-5.6-sol"
+    assert [target["model"] for target in review] == ["gpt-5.6-sol"]
+
+
 class TestResolveTerminalBackend:
     """#638: resolve_terminal_backend mirrors resolve_table's config-read pattern (absent
     config/section -> "tmux"; present-but-malformed fails closed, never a silent tmux)."""

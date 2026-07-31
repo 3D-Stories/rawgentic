@@ -64,6 +64,21 @@ policy this doc sets.) A "no change" decision is stamped too, so a seat's value 
 carried forward without a fresh evidence check each bench cycle (the config-rot guard, plan §4:
 floor-based picks must be **re-derived** every bench, not persist by inertia).
 
+## Current seat matrix
+
+| Seat | Primary model | Manifest effort | Fallback chain |
+|---|---|---|---|
+| intake | claude-sonnet-5 | xhigh | claude-fable-5 → claude-sonnet-5 |
+| analysis | claude-opus-5 | high | claude-fable-5 → claude-sonnet-5 |
+| design | gpt-5.6-sol | high | claude-fable-5 |
+| plan | claude-opus-5 | high | claude-fable-5 → claude-sonnet-5 |
+| build | claude-sonnet-5 | high | claude-opus-5 → gpt-5.6-terra |
+| review | gpt-5.6-sol | high | claude-fable-5 → claude-sonnet-5 |
+| ship | claude-sonnet-5 | high | claude-opus-5 → claude-fable-5 |
+| offload | hermes-agent | medium | claude-sonnet-5 |
+
+Provenance: owner retune 2026-07-31 (#762).
+
 ## Competitive rounds & build bake-off (#428)
 
 Where routing above picks ONE model per seat from prior bench evidence, competitive rounds settle a
@@ -71,7 +86,7 @@ noisy seat *in-run* with fresh evidence. The mechanism is `hooks/bakeoff_policy.
 policy) plugging into the extraction-clean `phase_executor.run_competitive` engine (execution +
 failure semantics):
 
-- **Design round** — sol vs opus every round, **wired into WF2 Step 3 since #765** (the
+- **Design round** — sol vs fable every round, **wired into WF2 Step 3 since #765** (the
   workflow-callable `bakeoff_policy.py design-round` CLI carries the run's `run_id`/
   `correlation_id` into the record); **build bake-off** — gate-flagged (the #429
   `needs_bakeoff` verdict) `{sonnet, opus, terra}`, no workflow caller yet (that wiring is
@@ -81,7 +96,7 @@ failure semantics):
 - **Judge** — glm-5.2 (`make_glm_judge`), the vendored **bench-#14 rubric**
   (`hooks/data/bakeoff_rubrics/`), scoring **anonymized, seed-shuffled** drafts (only ok candidates;
   a failed candidate can never win). Build bake-offs judge on deterministic test evidence, not vibes.
-- **Judge failure** (after one retry) — headless: winner = incumbent (opus) + `judge_degraded`,
+- **Judge failure** (after one retry) — headless: winner = incumbent (fable) + `judge_degraded`,
   excluded from telemetry, surfaced in the morning report; interactive: persist a degraded trace,
   then stop and ask. Winner bytes + losers persist to `bakeoff_results.jsonl` (no auto-retirement).
 - **D9** — the winner's engine picks the adversarial-review backend: a gpt-authored winner forces a

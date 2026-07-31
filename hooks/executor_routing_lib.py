@@ -2813,7 +2813,7 @@ def _git_runner(cmd, env=None):
 
 
 def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
-                    prompt, gate_decision, plan_context) -> dict:
+                    prompt, gate_decision, plan_context, *, resolved_table: ResolvedTable) -> dict:
     """#470 §1 provisioning — construct the ``Supervisor`` (quota coordinator, registry/capture
     roots, tmux socket from the same config the CLI already resolved) + the seat's git worktree via
     ``WorktreeManager``, then run ``supervised_dispatch``. The provider-touching steps (probe-session
@@ -2837,7 +2837,8 @@ def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
             return _err(EXIT_AVAILABILITY, "no_sandboxed_mutating_lane",
                         f"mutating seat {args.seat!r}: no FS-sandboxed provider in its chain "
                         f"(allowlist: {sorted(MUTATING_FS_SANDBOXED)}) — declare a codex lane or "
-                        f"ship the FS-sandbox child", retryable=False,
+                        f"ship the FS-sandbox child; resolved table "
+                        f"{resolved_table.source} at {resolved_table.path}", retryable=False,
                         correlation_id=ce, audit_path=str(audit.path))
         target = sandboxed[0]
         lane = target["lane"]
@@ -3027,7 +3028,8 @@ def _do_dispatch(args) -> int:
     # project phaseExecutorTable override) fails CLOSED (like the import guard) rather than
     # crashing to a bare traceback (Step-8a R1/R2; #445 resolve_table).
     try:
-        snap = resolve_table(repo_root, pe.routing).snapshot
+        rt = resolve_table(repo_root, pe.routing)
+        snap = rt.snapshot
         paths = derive_paths(repo_root, args.project, args.run_id, snap.pool_concurrency())
     except MalformedConfig as e:
         return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False,
@@ -3184,7 +3186,7 @@ def _do_dispatch(args) -> int:
     mutating = bool({"edit", "bash"} & set(manifest.get("tool_grants") or ()))
     if mutating:
         result = _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
-                                 prompt, gate_decision, plan_context)
+                                 prompt, gate_decision, plan_context, resolved_table=rt)
         if plan_freshness is not None and isinstance(result, dict):
             result["plan_freshness"] = plan_freshness
         return _emit(result)

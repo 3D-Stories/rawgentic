@@ -285,12 +285,10 @@ def test_build_bakeoff_tampered_decision_field_is_ignored():
         return "SINGLE-SEAT"
 
     verdict = json.dumps({"winner_draft": 1, "scores": {}, "confidence": 0.5})
-    # #558 AC2 (design r7 item 6, A-F1): the build bake-off dispatches via run_competitive,
-    # which now REJECTS a mutating manifest fail-loud before fan-out — live build bake-off
-    # is documented unavailable until a capped mutating composition exists. The tamper
-    # invariant still holds: decision=False was NOT honored (the single-seat path never ran;
-    # the re-derived bake-off path was entered and rejected on the manifest, not the gate).
-    with pytest.raises(pe.contract.CompositionError):
+    # #762 R4-E: BUILD_MODELS deliberately has no fable incumbent. The re-derived bake-off
+    # must therefore fail loud before any false index-0 judge-degrade winner; decision=False
+    # was still NOT honored and the single-seat path remains unreachable.
+    with pytest.raises(ValueError, match="incumbent.*absent"):
         bp.run_build_bakeoff(
             "build this", gate_decision=tampered, snapshot=snap,
             quota=pe.QuotaCoordinator(REPO / ".tmp-none2", snap.pool_concurrency()),
@@ -334,12 +332,35 @@ def test_design_models_equals_design_seat_models():
     assert set(bp.DESIGN_MODELS) == _seat_models(design)
 
 
+def test_design_models_and_incumbent_follow_owner_retune():
+    # #762 R4-E: this pins the ratified row, not merely set equality with the table.
+    assert bp.DESIGN_MODELS == ("gpt-5.6-sol", "claude-fable-5")
+    assert bp.INCUMBENT_MODEL == "claude-fable-5"
+
+
+def test_design_judge_degrade_refuses_when_incumbent_is_not_a_competitor(tmp_path):
+    # #762 R4-E: silent index-0 fallback would falsely declare sol the incumbent here.
+    snap = pe.snapshot_from_file(TABLE)
+    with pytest.raises(ValueError, match=r"claude-fable-5.*gpt-5.6-sol.*claude-opus-5"):
+        bp.run_design_round(
+            "design it", snapshot=snap,
+            quota=pe.QuotaCoordinator(tmp_path / "permits", snap.pool_concurrency()),
+            capture_root=tmp_path / "cap", headless=True, seed=3,
+            models=("gpt-5.6-sol", "claude-opus-5"),
+            complete_fn=lambda prompt: (None, "glm down"), dispatch=_sleeping_dispatch(0.0))
+
+
+def test_incumbent_is_a_design_competitor():
+    # The design judge-degrade path stays live under the owner-retuned competitor tuple.
+    assert bp.INCUMBENT_MODEL in bp.DESIGN_MODELS
+
+
 def test_design_row_manifest_read_only_for_models_shared_with_other_chains():
     """§B P3 (normative rule pin, DATA invariant): a competitive candidate's governing manifest is
     ALWAYS the REQUESTED design row's, NEVER the seat its lane happened to be discovered from — a
     duplicate model id found via e.g. the build chain must not resolve build's WRITE-granting
     manifest for a design dispatch. This pins the data that makes the rule meaningful: for every
-    DESIGN_MODELS id that ALSO lives in another seat's chain (opus appears in build/analysis/ship
+    DESIGN_MODELS id that ALSO lives in another seat's chain (fable appears in analysis/plan/ship
     chains; build is write-granting), the design row declares read-only tool_grants (["read"]), so a
     candidate that must resolve the design manifest never inherits write grants. Runtime resolution
     enforcement is W2 #465; W1 pins only the data invariant."""
@@ -372,7 +393,7 @@ def test_design_round_end_to_end_and_parallel(tmp_path):
         headless=True, seed=3, sink_path=sink_path,
         complete_fn=lambda prompt: (verdict, ""), dispatch=_sleeping_dispatch(delay))
     elapsed = time.monotonic() - t0
-    # sol (codex pool) + opus (claude pool) run concurrently -> ~1x delay, never the 2x serial sum.
+    # sol (codex pool) + fable (claude pool) run concurrently -> ~1x delay, never the 2x serial sum.
     assert elapsed < delay * 1.6, f"design round not parallel: {elapsed:.2f}s for 2x {delay}s authors"
     assert record["n_candidates"] == 2
     assert record["winner_index"] in (0, 1)
@@ -380,15 +401,13 @@ def test_design_round_end_to_end_and_parallel(tmp_path):
 
 
 def test_build_bakeoff_saturates_claude_pool_but_stays_parallel(tmp_path):
-    # M3's concurrency invariant is covered at the engine level
-    # (test_run_competitive_parallel_wall_clock, cross-pool). #558 AC2 (design r7 item 6,
-    # A-F1): the real build set carries a MUTATING manifest, so run_competitive rejects it
-    # fail-loud BEFORE fan-out — live build bake-off is documented unavailable until a
-    # capped mutating composition exists. This pin keeps the unavailability honest.
+    # #762 R4-E: the build tuple has no fable incumbent, so any judge-degrade path must
+    # refuse instead of silently selecting candidate zero. The build bake-off has no workflow
+    # caller today (#762 R3-G), making this intended loud incompatibility safe.
     snap = pe.snapshot_from_file(TABLE)
     quota = pe.QuotaCoordinator(tmp_path / "permits", snap.pool_concurrency())
     verdict = json.dumps({"winner_draft": 1, "scores": {}, "confidence": 0.6})
-    with pytest.raises(pe.contract.CompositionError):
+    with pytest.raises(ValueError, match="incumbent.*absent"):
         bp.run_build_bakeoff(
             "build the widget", gate_decision=_real_gate(bake=True), snapshot=snap, quota=quota,
             capture_root=tmp_path / "cap", headless=True, seed=2, sink_path=tmp_path / "b.jsonl",
@@ -397,7 +416,7 @@ def test_build_bakeoff_saturates_claude_pool_but_stays_parallel(tmp_path):
 
 def test_headless_judge_failure_degrades_to_incumbent_through_engine(tmp_path):
     # The core resilience path exercised END-TO-END through run_competitive: a failing glm judge in a
-    # headless design round yields winner = incumbent (opus) with judge_degraded True in the record.
+    # headless design round yields winner = incumbent (fable) with judge_degraded True in the record.
     snap = pe.snapshot_from_file(TABLE)
     quota = pe.QuotaCoordinator(tmp_path / "permits", snap.pool_concurrency())
     winner, losers, judge_obs, record = bp.run_design_round(
@@ -406,7 +425,7 @@ def test_headless_judge_failure_degrades_to_incumbent_through_engine(tmp_path):
         complete_fn=lambda prompt: (None, "glm down"),          # judge fails on every attempt
         dispatch=_sleeping_dispatch(0.0))
     assert record["judge_degraded"] is True
-    # incumbent = opus = DESIGN_MODELS index 1; the winner Observation is that candidate.
+    # incumbent = fable = DESIGN_MODELS index 1; the winner Observation is that candidate.
     assert bp.DESIGN_MODELS[record["winner_index"]] == bp.INCUMBENT_MODEL
     assert winner.requested_model == bp.INCUMBENT_MODEL
 
@@ -593,7 +612,7 @@ def _all_strings(node):
 def test_765_evidence_artifact_exists_and_is_sanitized():
     """#765 AC2, fail-CLOSED: the committed evidence must exist (its absence FAILS — a
     skip path would let the required evidence vanish behind a green suite) and must
-    prove a REAL judged competitive round: never degraded, both expected models, ok
+    prove the historical REAL judged competitive round: never degraded, both recorded models, ok
     candidates, a valid winner, and prompt/rubric binding hashes."""
     import re
     assert EVIDENCE_PATH.exists(), (
@@ -605,7 +624,9 @@ def test_765_evidence_artifact_exists_and_is_sanitized():
     assert data["n_candidates"] == 2
     cands = data["candidates"]
     assert len(cands) == 2
-    assert {c["requested_model"] for c in cands} == set(bp.DESIGN_MODELS)
+    # This committed #765 artifact predates the #762 owner retune. Preserve its exact historical
+    # author identities rather than pretending it proves the current sol-vs-fable configuration.
+    assert {c["requested_model"] for c in cands} == {"gpt-5.6-sol", "claude-opus-5"}
     assert all(c["parse_status"] == "ok" for c in cands)
     # Step-11 ADV-3: EXACT model identity — a substituted actual model or engine can
     # never pass as evidence (nonempty was not a check)
