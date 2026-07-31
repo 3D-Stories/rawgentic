@@ -313,3 +313,35 @@ rule (self M4); supervised/resume assembly tests (adv M2); type-checked never-ra
 (adv M3); drift guards (adv M5). Refuted with evidence (not applied): adv H1's exit-code half
 (no-identity timeout already exits 3 via `chain_exhausted_availability`); adv M4's platform
 worry (`resolve_parse_status`, `adapters/base.py:102-110`, cannot produce `ok`+signalled).
+
+## Step-11 pre-PR review amendments (2026-07-30, session 33b3f9ef, commit 8b5b793)
+
+The pre-PR wave (2 executor review-seat agents on gpt-5.6-sol + adversarial diff review,
+dispositions-armed) merged 7 High, 0 ambiguous. Four adopted — all implementation-class
+alignment with this design's own rules, no design change:
+
+1. **Residue is never retryable (R1-H1).** `await_job` returns `timed_out` whether or not
+   `_kill_job` proved death; the state-based retryable sets in supervised/resume dispatch
+   contradicted the ratified proven-death policy this design pins. New public
+   `Supervisor.job_record` fresh-registry read; `retryable` gated on `quarantine_reason`
+   absence (residue ⇒ `EXIT_INTERNAL`, parity with `completed_with_residue`).
+2. **Evidence before verdicts, completed branch included (R1-H2).** The completed
+   supervised/resume branches checked `not pc.verified` (retryable) before the process
+   predicate (non-retryable) — a MISSING identity made a failed envelope MORE retryable.
+   Reordered fail-before-unverified (breach precedence intact); recover_run's verify
+   labels aligned to the same precedence.
+3. **`usage_unavailable` requires a payload, reader-side (R2-H1).** The status means
+   "output parsed, token counts missing"; legacy/in-flight producers pre-dating the
+   adapters/base.py reorder can emit it for produced-nothing invocations. The predicate
+   now returns `no_response` when `parsed_payload is None` (falsy payloads ARE payloads).
+4. **The read boundary is as strict as the write boundary (R2-H2, adv-H3 converged).**
+   `records()` schema-validates every inner observation per its declared version
+   (fail-closed); `collect_work_product` authorization additionally binds the observation
+   to the passing receipt's seat/run/correlation — nonce-sharing plus verified identity
+   is not ownership.
+
+Refuted with evidence (dispositions 733-s11-5/6): sync retryable classes are safe — sync is
+structurally non-mutating (mutating compositions exist only via `compose_supervised_argv`
+under `MUTATING_FS_SANDBOXED`, canary-refused at supervised STEP 0); recover's None-cid
+stamping is the F6 binding rule, not an ownership bypass (both-None ownership = tmux-identity
+adoption; 733-p2-2 not reopened).

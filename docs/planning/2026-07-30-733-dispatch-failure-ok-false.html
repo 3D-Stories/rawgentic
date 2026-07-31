@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#733 killed dispatches return ok:false — design (rev 4 + Step-11 amendments)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-30 18:16 MDT</div>
+<h1>#733 killed dispatches return ok:false — design (rev 4 + Step-11 amendments)</h1>
+
+</header>
+<main>
+<h1>#733 — a SIGKILLed seat returns ok:true / exit 0: design</h1>
+<p>Issue: [#733](https://github.com/3D-Stories/rawgentic/issues/733) · Epic #756 child 2/17 · Complexity: standard_feature (full spine) · Author session: cf8ac68a · Date: 2026-07-30 · <strong>rev 4 — FINAL</strong> (pass-3 budget-exhausted close, owner RG-255373 option 1: apply final fixes, proceed to build, no fourth review round; pass-1 owner-approved RG-562362)</p>
+<h2>Problem (confirmed at main c46d8e8)</h2>
+<p><code>executor_routing_lib.py dispatch</code> returns <code>ok: true</code> / exit 0 for a seat whose process was SIGKILLed at the timeout, so a killed, half-finished review reads as a passed gate.</p>
+<p>Root cause chain (all confirmed at source, Step 2 + gate pass 1):</p>
+<p>1. <code>run_seat</code> (<code>phase_executor/src/phase_executor/engine.py:163-166</code>) correctly treats    <code>AVAILABILITY_FAILURES = {nonzero_exit, timeout, launch_error, no_response}</code> as    walk-the-chain failures — and on chain exhaustion deliberately <strong>returns the last failed    observation</strong> (&quot;honest, non-ok&quot;) so the audit keeps the evidence. 2. <code>enforce.verify_post</code> (<code>phase_executor/src/phase_executor/enforce.py:244-278</code>) returns    <code>verified=True</code> for <strong>any</strong> observation carrying a matching attested <code>actual_model</code>,    regardless of <code>parse_status</code> — deliberate identity semantics. It answers &quot;did we route to    the right model?&quot;, never &quot;did the dispatch succeed?&quot;. 3. <strong>Every consumer that equates <code>verified</code> with success inherits the bug</strong> (gate pass-1    finding, all confirmed at source):</p>
+<ul>
+<li>sync dispatch result assembly (<code>hooks/executor_routing_lib.py:894-908</code>) — the observed</li>
+</ul>
+<p>     #733 case;</p>
+<ul>
+<li><code>reconcile_run</code>&#x27;s served-call check (<code>enforce.py:649-651</code> — a verified-identity timeout</li>
+</ul>
+<p>     counts as <code>saw_verified</code>, so a killed attempt reads as a served expected call);</p>
+<ul>
+<li><code>collect_work_product</code> authorization (<code>executor_routing_lib.py:1573-1578</code> — a</li>
+</ul>
+<p>     verified-identity timeout observation can authorize promotion of PARTIAL build output);</p>
+<ul>
+<li><code>recover_run</code>&#x27;s completed branch (<code>executor_routing_lib.py:1803-1808</code>);</li>
+<li>supervised (<code>:1357-1384</code>) and resume (<code>:1467-1488</code>) gate <code>state != &quot;completed&quot;</code> first,</li>
+</ul>
+<p>     so only the completed-with-availability-envelope sibling remains there.</p>
+<p>Out of scope / already done: the flat 300 s default timeout was fixed by PR #753 (<code>resolve_dispatch_timeout</code>, <code>executor_routing_lib.py:83</code>, wired <code>:2357</code>) — AC5&#x27;s remaining half is contract prose only (D9 reassessment).</p>
+<h2>Approaches</h2>
+<p><strong>A (chosen, rev 2 shape) — one process-success predicate in the core contract, applied at every consumer.</strong> The predicate lives in <code>phase_executor/src/phase_executor/contract.py</code> (the shared leaf both <code>enforce</code> and the hooks CLI can import without cycles — the <code>AVAILABILITY_FAILURES</code> precedent), and every consumer that today reads <code>pc.verified</code> as success also consults it. Identity verification (<code>verify_post</code>) is deliberately untouched.</p>
+<p><strong>B (rejected) — overload <code>verify_post</code>/<code>verified</code>.</strong> <code>verified</code> has precise identity semantics reconcile/audit depend on (<code>usage_unavailable</code> with matching id is deliberately verified); overloading re-creates the confusion this bug is made of.</p>
+<p><strong>C (rejected) — raise from <code>run_seat</code> on chain exhaustion.</strong> Returning the last observation is a deliberate engine contract (audit keeps the evidence); raising loses the partial payload.</p>
+<h2>Design (rev 2)</h2>
+<h3>1. Core predicate — <code>contract.observation_process_failure(obs) -&gt; Optional[str]</code></h3>
+<p>New pure function in <code>phase_executor/src/phase_executor/contract.py</code>, beside <code>AVAILABILITY_FAILURES</code> (its consumers: hooks CLI, <code>enforce.reconcile_run</code>, <code>collect_work_product</code>, <code>recover_run</code>):</p>
+<ul>
+<li>Accepts an <code>Observation</code> or its dict form (the <code>verify_post</code> precedent).</li>
+<li><strong>Type-checked, never raises</strong> (gate findings, adopted; Step-6 REOPENS 733-p2-1 resolved):</li>
+</ul>
+<p>  <code>process</code> contributes only when it is a mapping (or the Observation&#x27;s own dict);   <code>exit_code</code> contributes only when it is an <code>int</code> and not a <code>bool</code> — a malformed   <code>exit_code</code>/<code>process</code> reads as &quot;no signal from THAT field&quot;. <strong><code>parse_status</code> is governed by   the allowlist, not the no-signal rule:</strong> a non-string or otherwise malformed   <code>parse_status</code> is not an allowlisted success value, so under deny-by-default it FAILS with   reason <code>&quot;malformed_status&quot;</code> — malformed evidence can weaken a failure label, never   manufacture a success. T6 pins this exact outcome for list/dict/None status rows.</p>
+<ul>
+<li><strong>Success is an explicit ALLOWLIST (rev 4, pass-3 High — deny-by-default):</strong> the predicate</li>
+</ul>
+<p>  returns <code>None</code> (no failure) ONLY when <code>parse_status ∈ {OK, USAGE_UNAVAILABLE}</code> (the two   deliberately-accepted states: clean success, and attested-identity output missing only   usage counts) AND no process evidence contradicts it. Every other status fails — this   closes the confirmed Hermes escape (<code>hermes_http.py:284-291</code> reports a definite submission   failure with matching platform identity, <code>parse_error</code>, exit 0; <code>base.py:115</code> yields   <code>PARSE_ERROR</code>; identity-only verification passes it) and the whole not-yet-enumerated   class with it.</p>
+<ul>
+<li><strong>Classification precedence</strong> (within a failing observation): timeout evidence first</li>
+</ul>
+<p>  (<code>process.timed_out is True</code> or <code>parse_status == TIMEOUT</code>) → <code>&quot;timeout&quot;</code>; then <strong>any   non-zero integer <code>exit_code</code></strong> — <code>&quot;signalled&quot;</code> when negative, <code>&quot;nonzero_exit&quot;</code> when   positive (a non-zero exit did not complete cleanly regardless of claimed status); then the   non-allowlisted <code>parse_status</code> string itself (e.g. <code>&quot;parse_error&quot;</code>). Labeling note   (pass-3): the same SIGKILL can surface as <code>-9</code> (POSIX child) or <code>137</code> (wrapper-mediated) —   the failure VERDICT is identical either way; only the best-effort label differs, and no   consumer branches on the label.</p>
+<ul>
+<li>Adapter provenance (gate finding, addressed as prose): real observations are produced by</li>
+</ul>
+<p>  <code>adapters/base.py</code> — <code>resolve_parse_status</code> (<code>:102-110</code>) maps <code>timed_out</code> → <code>timeout</code> and   any nonzero exit → <code>nonzero_exit</code>, so an adapter-produced <code>parse_status: &quot;ok&quot;</code> implies   <code>exit_code ∈ {0, None}</code> and <code>timed_out: false</code> (<code>observation.schema.json</code> pins this).   The negative-exit and <code>timed_out</code> checks therefore guard synthetic/legacy/supervised   envelopes, not a platform-dependent decoding of adapter exits.</p>
+<h3>2. Result enrichment — partial evidence on EVERY observation-bearing failure path</h3>
+<p>Small helper in <code>hooks/executor_routing_lib.py</code>:</p>
+<pre><code>def _attach_partial(res: dict, obs) -&gt; dict:
+    &quot;&quot;&quot;Attach partial-output evidence from obs to a failure result (AC4). partial is
+    true only when a payload exists — a dispatch that produced nothing must not claim
+    a partial. Reads Observation or dict form; never raises.&quot;&quot;&quot;</code></pre>
+<p>sets <code>partial</code> (payload-conditional), <code>parse_status</code>, <code>partial_payload</code>, <code>raw_capture_path</code>, <code>observation</code> on the result dict. <strong><code>partial</code> is precisely <code>parsed_payload is not None</code> (rev 4):</strong> empty containers, <code>&quot;&quot;</code>, <code>0</code>, and <code>false</code> ARE payloads (partial: true); only absent/<code>null</code> is no-payload — key presence is not the test, the parsed value is. Applied to (gate finding, adopted — the no-identity paths must not drop the payload):</p>
+<ul>
+<li>the NEW process-failure returns (below);</li>
+<li>the existing sync <code>chain_exhausted_availability</code> return (<code>:898-901</code>);</li>
+<li>the supervised/resume <code>state != &quot;completed&quot;</code> and <code>not pc.verified</code> returns, when an</li>
+</ul>
+<p>  observation exists (<code>completed_with_residue</code> etc. carry one);</p>
+<ul>
+<li>correlation-valid <code>recover_run</code> entries whose completed observation fails the predicate</li>
+</ul>
+<p>  (rev 3 — the recovery path is a failure path too, and its entry keeps the evidence).</p>
+<p><strong>Correlation-ownership boundary (rev 3, pass-2 High — normative):</strong> <code>_attach_partial</code> is permitted ONLY on results whose observation the current dispatch OWNS (its own correlation). The <code>correlation_mismatch</code> refusal paths (supervised <code>:1346-1354</code>, resume <code>:1457-1463</code>, and recovery&#x27;s foreign-correlation handling <code>:1785-1794</code>) are explicitly EXCLUDED: a foreign observation&#x27;s <code>parsed_payload</code>/<code>raw_capture_path</code> must never ride back to the current caller — those results expose only the minimal mismatch metadata they already carry (the two correlation ids). &quot;Every observation-bearing failure path&quot; in this design means every correlation-owned one; regression tests pin the exclusion (T15).</p>
+<p><strong>Failure precedence and evaluation order, stated normatively (rev 4, pass-3 High):</strong> in each of the four result assemblies (sync, supervised, resume, recovery), the process-failure value is computed FIRST — before any correlation-owned failure return — and <code>_attach_partial</code> runs on every correlation-owned failure result, the breach returns included. The WINNING VERDICT is unchanged: an identity breach (<code>pc.ok == False</code>) stays <code>EXIT_ENFORCEMENT</code> (retrying re-bills the wrong route; never softened to availability); process failure owns the verdict only when no breach won. Foreign-correlation refusals stay excluded (§2 boundary). <strong><code>retryable</code> per path (rev 4):</strong> sync process-failure results carry <code>retryable: True</code> — the engine itself killed/observed the subprocess, so death evidence is positive by construction. Supervised and resume process-failure results carry <code>retryable: False</code> — a completed-state envelope that fails the predicate is NOT proven death under the ratified policy (epic log D3); the ERROR protocol owns any retry decision there.</p>
+<h3>3. Consumer application</h3>
+<table>
+<thead><tr><th>Consumer</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td>sync dispatch (<code>:894-908</code>)</td><td>after <code>pc</code> checks: <code>fail = contract.observation_process_failure(final_obs)</code> → <code>_attach_partial(_err(EXIT_AVAILABILITY, f&quot;dispatch_{fail}&quot;, ..., retryable=True), final_obs)</code></td></tr>
+<tr><td>supervised (<code>:1366-1384</code>)</td><td>same guard between <code>pc.verified</code> and ok-return, code <code>supervised_dispatch_&lt;fail&gt;</code>; <code>_attach_partial</code> on its failure returns</td></tr>
+<tr><td>resume (<code>:1472-1488</code>)</td><td>same, code <code>resume_dispatch_&lt;fail&gt;</code></td></tr>
+<tr><td><code>reconcile_run</code> (<code>enforce.py:649-651</code>)</td><td><code>saw_verified</code> requires <code>verified AND observation_process_failure(o) is None</code>; a verified-identity availability failure falls into the existing &quot;legitimate fallback attempt&quot; bucket (neither served nor breach) — the run-end verdict semantics for breaches are unchanged</td></tr>
+<tr><td><code>collect_work_product</code> (<code>:1573-1578</code>)</td><td>the authorizing <code>any(...)</code> additionally requires <code>observation_process_failure(...) is None</code> — a killed build can no longer authorize promotion of partial output</td></tr>
+<tr><td><code>recover_run</code> (<code>:1803-1808</code>)</td><td>in the completed branch, after the <code>pc</code> checks: process failure → <code>entry[&quot;verify&quot;] = f&quot;process_failure: {fail}&quot;</code>, <code>worst = max(worst, EXIT_AVAILABILITY)</code>, and the entry carries the partial-evidence fields via <code>_attach_partial</code> (rev 3 — correlation-valid entries only)</td></tr>
+</tbody>
+</table>
+<ul>
+<li>Exit code: <code>EXIT_AVAILABILITY</code> (3) — no renumbering of shipped codes (#427/#464/#470).</li>
+<li><code>retryable: True</code> is honest on the sync path: the engine itself killed the subprocess at</li>
+</ul>
+<p>  the timeout, so death evidence is positive by construction — consistent with the ratified   proven-death retry policy (epic log D3/D4). For supervised envelopes the retry decision   stays the orchestrator&#x27;s under that same policy (a timeout observation from a supervised   job is NOT a verified kill).</p>
+<h3>4. Prose — exit taxonomy + emission harmonization (AC3, AC7)</h3>
+<ul>
+<li><code>shared/blocks/model-routing-resolve.md</code> (source; <code>scripts/sync_shared_blocks.py</code></li>
+</ul>
+<p>  regenerates the <code>implement-feature</code> copy):</p>
+<ul>
+<li>taxonomy line: exit <code>3</code> gloss gains &quot;timed-out or signalled dispatch — partial output,</li>
+</ul>
+<p>    when any exists, is attached and flagged <code>partial: true</code>&quot;.</p>
+<ul>
+<li>exit-3 table row condition gains the timed-out/signalled case; outcome mapping is</li>
+</ul>
+<p>    unchanged (<code>error</code> when the workflow dispatch ends failed; <code>dead</code> only on an abandoned     supervised job) — under the #735 owner-ratified <strong>per-workflow-dispatch</strong> emission rule,     so the ONE canonical DISPATCH line for a dispatch whose final attempt timed out carries     <code>outcome=error</code>, never <code>ok</code> (AC7). No per-attempt lines (rev-2 rewording; the rev-1 text     said &quot;attempt&#x27;s line&quot;, contradicting the ratified rule).</p>
+<ul>
+<li>the AC5 contract sentence: omitted <code>--timeout</code> defaults to the seat&#x27;s declared bound</li>
+</ul>
+<p>    (<code>resolve_dispatch_timeout</code>, #753); <code>--timeout</code> only tightens.</p>
+<ul>
+<li><code>skills/fix-bug/SKILL.md</code> (bespoke copy, direct edit): the same taxonomy/table edits, PLUS</li>
+</ul>
+<p>  <strong>harmonizing its stale &quot;Per-attempt emission rule&quot; paragraph (<code>:134</code>) to the #735   per-workflow-dispatch rule</strong> — a confirmed #735 leftover: the two normative surfaces   currently make mutually exclusive emission claims (gate finding, adopted).</p>
+<ul>
+<li><strong>Drift guard</strong> (gate finding, adopted): one test pinning the new canonical exit-3</li>
+</ul>
+<p>  sentence in ONE file (the shared block source), header-index-sliced, whitespace-normalized   (repo mistake-#6 pattern) — plus the same-sentence pin on the fix-bug copy so the   harmonized paragraphs cannot re-diverge.</p>
+<h3>5. Tests (red before green, <code>tests/hooks/test_executor_routing.py</code> + <code>tests/phase_executor/</code>)</h3>
+<p>1. <strong>T1 (the bug, sync):</strong> injected runner returns a <code>timeout</code> observation WITH matching    attested identity and a real <code>parsed_payload</code> → <code>ok: false</code>, exit 3,    <code>error.code == &quot;dispatch_timeout&quot;</code>, <code>partial: true</code>, payload verbatim,    <code>raw_capture_path</code> present, <code>observation</code> attached. (Red: returns <code>ok: true</code> today.) 2. <strong>T2 (signalled, schema-valid — rev 2):</strong> <code>parse_status: &quot;nonzero_exit&quot;</code> with    <code>process.exit_code: -9</code> and matching identity → <code>ok: false</code>, exit 3,    <code>error.code == &quot;dispatch_signalled&quot;</code> (precedence: signalled beats the generic status). 3. <strong>T3 (nonzero_exit positive):</strong> exit 2 with identity → <code>ok: false</code>, exit 3,    <code>dispatch_nonzero_exit</code>. 4. <strong>T4 (clean run unchanged):</strong> <code>ok</code> status, exit 0 → <code>ok: true</code>, exit 0, no <code>partial</code> key. 5. <strong>T5 (chain fallback unchanged):</strong> target 1 timeout → target 2 success → <code>ok: true</code>. 6. <strong>T6 (predicate unit table, <code>tests/phase_executor/</code>):</strong> status × process matrix;    precedence rows (timeout beats signalled beats status); malformed inputs (non-mapping    <code>process</code>, bool/str <code>exit_code</code>, absent fields) → no-signal, never raises; Observation    and dict forms. 7. <strong>T7 (no-identity partial preservation — rev 2):</strong> timeout observation with NO identity →    existing <code>chain_exhausted_availability</code> exit 3 now ALSO carries the partial fields. 8. <strong>T8 (supervised assembly — rev 2):</strong> in-process supervised harness (<code>test_executor_routing.py:1445+</code>    precedent), state <code>completed</code> + matching identity + timeout envelope → exit 3,    <code>supervised_dispatch_timeout</code>, partial fields, no ok-return; negative-exit variant. 9. <strong>T9 (resume assembly — rev 2):</strong> same pair through <code>resume_dispatch</code>. 10. <strong>T10 (reconcile — rev 2, <code>tests/phase_executor/</code>):</strong> an expected call whose only passed     receipt binds a verified-identity timeout observation is NOT served (falls to     <code>missing_receipt</code>/unserved), and a breach still wins over a sibling verified attempt. 11. <strong>T11 (collect authorization — rev 2):</strong> a verified-identity timeout observation bound to     the build receipt does NOT authorize promotion (<code>unauthorized_work_product</code>). 12. <strong>T12 (drift guards — rev 3):</strong> canonical exit-3 sentence pins on ALL THREE normative     surfaces — the shared block source, the GENERATED <code>skills/implement-feature/SKILL.md</code>     copy (a failed/no-op sync must fail the guard, not pass silently), and the fix-bug     bespoke copy; fix-bug emission paragraph carries the per-workflow-dispatch rule. 13. <strong>T13 (recover_run — rev 3):</strong> a recovered <code>state=&quot;completed&quot;</code> entry with matching     identity and a timeout/signalled observation → <code>verify == &quot;process_failure: &lt;fail&gt;&quot;</code>,     <code>worst</code> raised to <code>EXIT_AVAILABILITY</code> (<code>ok: false</code>, exit 3), partial evidence retained     on the entry. 14. <strong>T14 (breach precedence — rev 3):</strong> identity breach PLUS timeout/signalled evidence on     the SAME observation, across all four result-assembly paths (sync, supervised, resume,     recovery) → <code>EXIT_ENFORCEMENT</code> (4) retains precedence, never downgraded to 3. 15. <strong>T15 (foreign-payload exclusion — rev 3):</strong> <code>correlation_mismatch</code> results on     supervised/resume/recovery carry NO <code>partial_payload</code>, <code>raw_capture_path</code>, or foreign     observation — only the two correlation ids. 16. <strong>T16 (allowlist end-to-end — rev 4):</strong> an injected Hermes-shaped envelope     (<code>parse_error</code>, matching identity, exit 0, <code>parsed_payload: null</code>) → sync dispatch     <code>ok: false</code> exit 3 <code>dispatch_parse_error</code> with <code>partial: false</code>; the same observation is     NOT served in reconcile and does NOT authorize collection. A <code>usage_unavailable</code>     matching-identity observation stays <code>ok: true</code> (the allowlist&#x27;s accepted degraded state).     T14 additionally asserts breach results carry the partial-evidence fields (rev 4     ordering).</p>
+<h3>6. File changes</h3>
+<table>
+<thead><tr><th>File</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td><code>phase_executor/src/phase_executor/contract.py</code></td><td><code>observation_process_failure</code> predicate</td></tr>
+<tr><td><code>phase_executor/src/phase_executor/enforce.py</code></td><td>reconcile <code>saw_verified</code> conjunct</td></tr>
+<tr><td><code>hooks/executor_routing_lib.py</code></td><td><code>_attach_partial</code>, guards at sync/supervised/resume, collect authorization conjunct, recover_run check</td></tr>
+<tr><td><code>tests/hooks/test_executor_routing.py</code></td><td>T1–T5, T7–T9, T11</td></tr>
+<tr><td><code>tests/phase_executor/</code> (new/existing modules)</td><td>T6, T10</td></tr>
+<tr><td><code>tests/</code> guard file</td><td>T12</td></tr>
+<tr><td><code>shared/blocks/model-routing-resolve.md</code></td><td>taxonomy gloss + table row + AC5 sentence</td></tr>
+<tr><td><code>skills/implement-feature/SKILL.md</code></td><td>regenerated by sync</td></tr>
+<tr><td><code>skills/fix-bug/SKILL.md</code></td><td>same edits + emission-rule harmonization</td></tr>
+<tr><td>version ×4 + README changelog</td><td>patch bump; <code>Suite old→new</code>; diagram decision</td></tr>
+</tbody>
+</table>
+<p>Diagram decision (pre-assessed): <strong>no workflow-spine change</strong> — dispatch-contract prose inside existing stations → no REV.</p>
+<h2>Error handling and failure modes</h2>
+<ul>
+<li>The predicate and <code>_attach_partial</code> never raise: malformed fields read as no-signal, and</li>
+</ul>
+<p>  the existing verdicts then govern — the fix can only tighten, never loosen.</p>
+<ul>
+<li>Observation audit appends are untouched and happen before result assembly (per-attempt in</li>
+</ul>
+<p>  <code>wrapped_dispatch</code>; STEP 6.5 supervised) — a failed dispatch never vanishes from the audit.</p>
+<ul>
+<li>Reconcile semantics: breaches and missing observations keep their existing precedence over</li>
+</ul>
+<p>  <code>saw_verified</code> (the Step-8a/Step-11 rules); the new conjunct only stops a killed attempt   from counting as served.</p>
+<h2>Security implications</h2>
+<p>Gate-integrity fix: a killed review can no longer read as a passed gate, a killed build can no longer authorize work-product promotion, and a killed attempt no longer satisfies run-end reconciliation. No new inputs parsed, no new subprocesses, no path handling.</p>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis: none</p>
+<h2>Multi-PR assessment</h2>
+<p>Single PR (~300 net lines incl. tests). No separable phases.</p>
+<h2>Peer-consult provenance (WF13, backend gpt, 2026-07-30)</h2>
+<p>Independent proposal read AFTER the rev-1 draft was on disk (blindness rule). Convergent on the classifier approach, three-signal predicate, exit 3, partial preservation, doc surfaces, table-driven tests. Adopted from the peer: payload-conditional <code>partial</code>. Declined: <code>state</code> param in the classifier (the state gates precede it).</p>
+<h2>Gate pass-3 provenance (2026-07-30, budget-exhausted close — owner RG-255373 option 1)</h2>
+<p>Merged 2 High + 4 Medium. Adopted into rev 4: success allowlist <code>{ok, usage_unavailable}</code> deny-by-default (self p3 #1 — Hermes <code>parse_error</code> escape confirmed at <code>hermes_http.py:284-291</code> + <code>base.py:115</code>); failure-evidence-first evaluation order with breach results enriched (adv p3 #1 — rev-3 self-contradiction); precise <code>partial</code> definition (adv p3 #2); per-path <code>retryable</code> (adv p3 #3); SIGKILL labeling note (adv p3 #5); T16 end-to-end regression. Refuted: adv p3 #4 (runtime DISPATCH-emission test — emission is orchestrator prose by architecture; pass-1 precedent; drift guards are the mechanical check). Design loop-back budget was exhausted (2/2) — the close is owner-authorized with no fourth review pass.</p>
+<h2>Gate pass-2 provenance (2026-07-30, resolved by source verification per the pass-1 policy)</h2>
+<p>Merged 2 High + 6 Medium + 1 Low (adversarial p2 dispositions-armed + executor self-review p2). Adopted into rev 3: predicate tightened to fail any non-zero integer exit regardless of claimed status + <code>parse_status</code> type guard (adv p2 #1, self p2 #4); partial attachment NARROWED to correlation-owned observations with the foreign-payload exclusion normative + T15 (self p2 #1 — a real information-flow catch); recover_run partial enrichment + T13 (adv p2 #3, self p2 #2); T12 pins all three surfaces (adv p2 #4); T14 breach-precedence combined tests (self p2 #3). Refuted with evidence: adv p2 #2 (per-attempt worktree isolation <code>worktree.py:235-241</code> + <code>candidate_tree_sha</code> INTENT binding <code>:1523-1633</code> contradict the residue-promotion scenario); adv p2 #5 (adapter provenance, and the rev-3 predicate makes signal encoding moot). Breaker ambiguities all resolved factually at source; owner not re-asked per escalation hygiene and the pass-1 standing policy (adopt-verified / refute-with-evidence / revise / re-run).</p>
+<h2>Gate pass-1 provenance (2026-07-30, owner decision RG-562362 option 1)</h2>
+<p>Merged 2 High + 7 Medium across the executor self-review (gpt-5.6-sol) and the adversarial review (gpt). Adopted into rev 2: core-contract predicate applied at reconcile/collect/ recover too (self H1); partial enrichment on all observation-bearing failure paths with enforcement precedence stated (adv H1 residue + self M2); schema-valid T2 + classification precedence (self M3); emission-rule harmonization + AC7 rewording to the per-workflow-dispatch rule (self M4); supervised/resume assembly tests (adv M2); type-checked never-raise extraction (adv M3); drift guards (adv M5). Refuted with evidence (not applied): adv H1&#x27;s exit-code half (no-identity timeout already exits 3 via <code>chain_exhausted_availability</code>); adv M4&#x27;s platform worry (<code>resolve_parse_status</code>, <code>adapters/base.py:102-110</code>, cannot produce <code>ok</code>+signalled).</p>
+<h2>Step-11 pre-PR review amendments (2026-07-30, session 33b3f9ef, commit 8b5b793)</h2>
+<p>The pre-PR wave (2 executor review-seat agents on gpt-5.6-sol + adversarial diff review, dispositions-armed) merged 7 High, 0 ambiguous. Four adopted — all implementation-class alignment with this design&#x27;s own rules, no design change:</p>
+<p>1. <strong>Residue is never retryable (R1-H1).</strong> <code>await_job</code> returns <code>timed_out</code> whether or not    <code>_kill_job</code> proved death; the state-based retryable sets in supervised/resume dispatch    contradicted the ratified proven-death policy this design pins. New public    <code>Supervisor.job_record</code> fresh-registry read; <code>retryable</code> gated on <code>quarantine_reason</code>    absence (residue ⇒ <code>EXIT_INTERNAL</code>, parity with <code>completed_with_residue</code>). 2. <strong>Evidence before verdicts, completed branch included (R1-H2).</strong> The completed    supervised/resume branches checked <code>not pc.verified</code> (retryable) before the process    predicate (non-retryable) — a MISSING identity made a failed envelope MORE retryable.    Reordered fail-before-unverified (breach precedence intact); recover_run&#x27;s verify    labels aligned to the same precedence. 3. <strong><code>usage_unavailable</code> requires a payload, reader-side (R2-H1).</strong> The status means    &quot;output parsed, token counts missing&quot;; legacy/in-flight producers pre-dating the    adapters/base.py reorder can emit it for produced-nothing invocations. The predicate    now returns <code>no_response</code> when <code>parsed_payload is None</code> (falsy payloads ARE payloads). 4. <strong>The read boundary is as strict as the write boundary (R2-H2, adv-H3 converged).</strong>    <code>records()</code> schema-validates every inner observation per its declared version    (fail-closed); <code>collect_work_product</code> authorization additionally binds the observation    to the passing receipt&#x27;s seat/run/correlation — nonce-sharing plus verified identity    is not ownership.</p>
+<p>Refuted with evidence (dispositions 733-s11-5/6): sync retryable classes are safe — sync is structurally non-mutating (mutating compositions exist only via <code>compose_supervised_argv</code> under <code>MUTATING_FS_SANDBOXED</code>, canary-refused at supervised STEP 0); recover&#x27;s None-cid stamping is the F6 binding rule, not an ownership bypass (both-None ownership = tmux-identity adoption; 733-p2-2 not reopened).</p>
+
+</main>
+<footer>Last updated: 2026-07-30 18:16 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

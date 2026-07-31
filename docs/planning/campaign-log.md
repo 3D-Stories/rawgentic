@@ -14,7 +14,21 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
-## Epic #756 — silent failures: the executor instruction layer (#735) · v3.109.6
+## Epic #756 — silent failures: the executor instruction layer (#735 → #733) · v3.109.7
+
+Second slot (#733, session cf8ac68a → 33b3f9ef across two pane-handoffs, v3.109.7): the defect
+class the epic is named for — a SIGKILLed executor seat returned `ok: true` / exit 0, so a
+killed review read as a passed gate. Root cause: `verify_post` answers identity, never success,
+and every consumer equated the two. Shipped: the `contract.observation_process_failure`
+allowlist predicate ({ok, usage_unavailable}, deny-by-default) at all six consumers; partial
+output preserved and flagged on every correlation-owned failure; class-derived retryability
+(proven death only). The 3-pass design gate consumed both design loop-backs (owner RG-562362,
+RG-255373); the Step-8a wave adopted 6 findings (remediation 423f956); the Step-11 pre-PR wave
+survived a mid-wave Claude process restart (both executor jobs completed and were consumed from
+their observations — the fix's own discipline applied to its review) and adopted 4 more Highs
+(8b5b793): residue never retryable, evidence-first verdict ordering, usage_unavailable requires
+a payload, audit read-boundary validation + receipt-bound collect authorization. Suite
+6194→6273. PR/merge/CI: filled by the next slot's pass.
 
 First slot of the epic #756 auto-run (17 children, AUTO MODE, session 048888d0). #735 was the
 spike-turned-fix: the executor machinery was proven working, but the always-loaded manuals named
@@ -30,8 +44,9 @@ immediately found two new defects by existing: the gate refuses bakeoff-true pla
 (`gate_requires_bakeoff` — systemic note on #762) and a mutating build agent cannot COMMIT
 (worktree git metadata read-only → #767; recovered by orchestrator collection with provenance,
 commit `ba4ceec`). Issues filed from the run: #765, #766, #767. Out-of-repo manual edits land
-post-PR behind a normalized read-back merge gate. Suite 6190→6194. PR/merge/CI: filled by the
-next slot's pass.
+post-PR behind a normalized read-back merge gate (applied + read-back PASS, epic log D5/D7).
+Suite 6190→6194. PR #768, squash-merged `c46d8e8` 2026-07-30, CI green (test+lint hard lanes),
+issue auto-closed, epic box ticked.
 
 ## Epic #626 — the context meter: from a nag nobody acts on to a prompt that lands
 
