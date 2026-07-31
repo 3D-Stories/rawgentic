@@ -142,6 +142,34 @@ def test_derive_refuses_mismatched_promotion(repo, mgr, tmp_path):
         contract.derive_work_product(mgr, h, kind="code", promotion=liar2)
 
 
+def test_promote_result_carries_content_tree_sha(repo, mgr, tmp_path):
+    # #767 Step-11 lane R1-F3 (TOCTOU): promote returns the tree it actually COMMITTED, so the
+    # caller can bind snapshot B to the candidate evidence (snapshot A) without a re-read.
+    h = _wt(repo, mgr, tmp_path)
+    (open(os.path.join(h.path, "new.txt"), "w")).write("x\n")
+    ev = mgr.content_evidence(h)
+    res = mgr.promote(h, target_ref="refs/heads/integration", expected_target_sha="0" * 40,
+                      message="promote", path_policy=wt.PROMOTE_ANY)
+    assert res.promoted is True
+    assert res.content_tree_sha == ev["content_tree_sha"]
+
+
+def test_derive_refuses_promotion_tree_mismatch(repo, mgr, tmp_path):
+    # #767 Step-11 lane R1-F3: reconciliation previously compared only base/head + the changed-
+    # path SET — same paths with different CONTENT reconciled clean. A promotion carrying a
+    # content tree that is not the executor-derived one must refuse (snapshot B == snapshot C).
+    h = _wt(repo, mgr, tmp_path)
+    (open(os.path.join(h.path, "new.txt"), "w")).write("x\n")
+    real = mgr.promote(h, target_ref="refs/heads/integration", expected_target_sha="0" * 40,
+                       message="promote", path_policy=wt.PROMOTE_ANY)
+    liar = wt.PromotionResult(promoted=True, new_target_sha=real.new_target_sha,
+                              base_sha=real.base_sha, head_sha=real.head_sha,
+                              changed_paths=real.changed_paths, reason="",
+                              content_tree_sha="a" * 40)
+    with pytest.raises(ValueError, match="content_tree_sha"):
+        contract.derive_work_product(mgr, h, kind="code", promotion=liar)
+
+
 def test_not_promoted_status_from_refused_promotion(repo, mgr, tmp_path):
     """A base-stale/CAS refusal (promoted=False) with reconciling evidence -> 'not_promoted'."""
     base = _base(repo)

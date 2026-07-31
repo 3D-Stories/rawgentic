@@ -1283,3 +1283,41 @@ def test_validate_v2_accepts_appendix_default_digest(tmp_path):
     ok = _wp_rec_v2("n1", digest="appendix-default")
     recs = _audit_roundtrip(tmp_path, ok)
     assert recs and recs[0]["paths_digest"] == "appendix-default"
+
+
+# ---- #767 Step-11 lane R1-F5: mutually exclusive binding schemas ----
+
+def test_validate_refuses_v2_fields_without_version(tmp_path):
+    # A hybrid record carrying v2 identity fields but NO binding_version must refuse — it
+    # otherwise reads as "legacy" while reconcile's _binding_key still matches on the identity
+    # fields, so two hybrids match despite the "legacy set OR complete v2" fail-closed contract.
+    bad = _wp_rec_v2("n1")
+    del bad["binding_version"]
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path / "wp", bad)
+    bad2 = _expected_wp_rec_v2("n1")
+    del bad2["binding_version"]
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path / "ewp", bad2)
+
+
+def test_validate_refuses_non_exact_int_binding_version(tmp_path):
+    # binding_version must be the exact non-boolean integer 2 — float 2.0 (== 2 in Python),
+    # the string "2", and True all refuse.
+    for i, v in enumerate((2.0, "2", True)):
+        bad = _wp_rec_v2("n1")
+        bad["binding_version"] = v
+        with pytest.raises(ValueError):
+            _audit_roundtrip(tmp_path / f"case{i}", bad)
+
+
+def test_append_work_product_rejects_empty_identity(tmp_path):
+    # R1-F5 writer half: empty strings pass the both-or-neither XOR but skipped the truthiness
+    # v2 tagging — a SILENT version downgrade. Supplied identity must be non-empty strings.
+    log = enforce.RoutingAuditLog(tmp_path / "runs", "runv")
+    with pytest.raises(ValueError):
+        log.append_work_product(receipt_nonce="n1", candidate_tree_sha="t", new_sha="s",
+                                work_product=_valid_wp(), target_ref="", paths_digest="")
+    with pytest.raises(ValueError):
+        log.append_expected_work_product(receipt_nonce="n1", candidate_tree_sha="t", new_sha="s",
+                                         target_ref="", paths_digest="")

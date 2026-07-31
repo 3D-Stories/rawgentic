@@ -2211,7 +2211,8 @@ class _FakeMgr:
         return PromotionResult(
             promoted=self._promoted, new_target_sha=("newsha" if self._promoted else None),
             base_sha="b", head_sha="h", changed_paths=tuple(self._changed),
-            reason="" if self._promoted else "target advanced")
+            reason="" if self._promoted else "target advanced",
+            content_tree_sha="ctree")  # matches _EV — the A==B tree guard passes by default
 
 
 def _seed_authorized_audit(audit, *, nonce="rn1", cid="c1", seat="build", run_id="run1",
@@ -3969,17 +3970,22 @@ def test_733_s11_collect_refuses_foreign_seat_observation(tmp_path):
 # #767: per-task exact-path collection — promote_paths param + intent identity v2
 # ---------------------------------------------------------------------------
 
+# Step-11 adv F2: exact-path collection is confined to the per-receipt temp-ref namespace
+# with create semantics — these tests use the canonical ref for the fixture nonce rn1.
+COLLECT_REF = "refs/rawgentic/collect/rn1"
+
+
 def test_collect_promote_paths_admits_declared_only(tmp_path):
     mgr = _FakeMgr(changed=["src/a.py"])
     res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr,
-                      kind="code", promote_paths=["src/a.py"])
+                      kind="code", promote_paths=["src/a.py"], target=COLLECT_REF)
     assert res["ok"] and res["status"] == "recorded"
 
 
 def test_collect_promote_paths_refuses_outside_path(tmp_path):
     mgr = _FakeMgr(changed=["src/a.py", "src/evil.py"])
     res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr,
-                      kind="code", promote_paths=["src/a.py"])
+                      kind="code", promote_paths=["src/a.py"], target=COLLECT_REF)
     assert res["ok"] is False
     assert res["error"]["code"] == "promote_refused"
 
@@ -4003,26 +4009,29 @@ def test_collect_default_policy_stays_appendix(tmp_path):
 
 
 def test_collect_intent_conflict_on_different_target(tmp_path):
-    # #767 (pass-2 F3): a consumed intent re-requested against a DIFFERENT target must refuse
-    # loudly, never report already_recorded for a branch that was never advanced.
+    # #767 (pass-2 F3, tightened by Step-11 adv F2): an exact-path re-request against any
+    # non-canonical target never even reaches the intent — the ref gate refuses it first.
     rec = _completed_record(tmp_path)
     reg = _FakeReg(rec)
     mgr = _FakeMgr(changed=["src/a.py"])
-    r1, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"])
+    r1, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"],
+                     target=COLLECT_REF)
     assert r1["ok"] and r1["status"] == "recorded"
     r2, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"],
                      target="refs/heads/other-branch")
     assert r2["ok"] is False
-    assert r2["error"]["code"] == "intent_conflict"
+    assert r2["error"]["code"] == "invalid_collect_ref"
 
 
 def test_collect_intent_conflict_on_different_paths(tmp_path):
     rec = _completed_record(tmp_path)
     reg = _FakeReg(rec)
     mgr = _FakeMgr(changed=["src/a.py"])
-    r1, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"])
+    r1, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"],
+                     target=COLLECT_REF)
     assert r1["ok"] and r1["status"] == "recorded"
-    r2, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py", "src/b.py"])
+    r2, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py", "src/b.py"],
+                     target=COLLECT_REF)
     assert r2["ok"] is False
     assert r2["error"]["code"] == "intent_conflict"
 
@@ -4031,9 +4040,11 @@ def test_collect_identical_rerun_still_already_recorded(tmp_path):
     rec = _completed_record(tmp_path)
     reg = _FakeReg(rec)
     mgr = _FakeMgr(changed=["src/a.py"])
-    r1, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"])
+    r1, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"],
+                     target=COLLECT_REF)
     assert r1["ok"] and r1["status"] == "recorded"
-    r2, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"])
+    r2, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"],
+                     target=COLLECT_REF)
     assert r2["ok"] and r2["status"] == "already_recorded"
 
 
@@ -4041,13 +4052,13 @@ def test_collect_v2_binding_fields_on_audited_records(tmp_path):
     # rev-4 F3: new records carry binding_version=2 + target_ref + paths_digest
     mgr = _FakeMgr(changed=["src/a.py"])
     res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr,
-                          kind="code", promote_paths=["src/a.py"])
+                          kind="code", promote_paths=["src/a.py"], target=COLLECT_REF)
     assert res["ok"]
     wps = [r for r in audit.records() if r.get("kind") == "work_product"]
     exps = [r for r in audit.records() if r.get("kind") == "expected_work_product"]
     for r in wps + exps:
         assert r.get("binding_version") == 2
-        assert r.get("target_ref") == "refs/heads/integration"
+        assert r.get("target_ref") == COLLECT_REF
         assert r.get("paths_digest") and r["paths_digest"] != "appendix-default"
 
 
@@ -4071,20 +4082,21 @@ def test_collect_empty_worktree_refused(tmp_path):
     # and satisfy "branch actually advanced" vacuously.
     mgr = _FakeMgr(changed=[])
     res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr,
-                      kind="code", promote_paths=["src/a.py"])
+                      kind="code", promote_paths=["src/a.py"], target=COLLECT_REF)
     assert res["ok"] is False
     assert res["error"]["code"] == "empty_work_product"
 
 
 def test_collect_landed_intent_locks_all_fields(tmp_path):
     # 8a R2-H1: with a LANDED intent, a re-request whose candidate/expected differ must refuse —
-    # the old matching3 predicate skipped the conflict check entirely on that path.
+    # the old matching3 predicate skipped the conflict check entirely on that path. Exercised on
+    # the appendix path (Step-11 adv F2's ref gate now precedes the intent on exact-path).
     rec = _completed_record(tmp_path)
     reg = _FakeReg(rec)
-    mgr = _FakeMgr(changed=["src/a.py"])
-    r1, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"])
+    mgr = _FakeMgr()
+    r1, _ = _collect(tmp_path, reg, mgr)
     assert r1["ok"] and r1["status"] == "recorded"
-    r2, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"],
+    r2, _ = _collect(tmp_path, reg, mgr,
                      expected="1234567890abcdef1234567890abcdef12345678")
     assert r2["ok"] is False
     assert r2["error"]["code"] == "intent_conflict"
@@ -4130,9 +4142,9 @@ def test_collect_paths_digest_encoding_unambiguous(tmp_path):
     m1 = _FakeMgr(changed=["a\nb", "c"])
     m2 = _FakeMgr(changed=["a", "b\nc"])
     _r1, a1 = _collect(d1, _FakeReg(_completed_record(tmp_path)), m1,
-                       kind="code", promote_paths=["a\nb", "c"])
+                       kind="code", promote_paths=["a\nb", "c"], target=COLLECT_REF)
     _r2, a2 = _collect(d2, _FakeReg(_completed_record(tmp_path)), m2,
-                       kind="code", promote_paths=["a", "b\nc"])
+                       kind="code", promote_paths=["a", "b\nc"], target=COLLECT_REF)
     assert _r1["ok"] and _r2["ok"]
     pd1 = [r for r in a1.records() if r.get("kind") == "work_product"][0]["paths_digest"]
     pd2 = [r for r in a2.records() if r.get("kind") == "work_product"][0]["paths_digest"]
@@ -4146,9 +4158,185 @@ def test_collect_audit_dedup_uses_full_binding_key(tmp_path):
                               work_product={"kind": "docs", "promotion_status": "promoted"})
     mgr = _FakeMgr(changed=["src/a.py"])
     res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr,
-                          kind="code", promote_paths=["src/a.py"], audit=audit)
+                          kind="code", promote_paths=["src/a.py"], audit=audit,
+                          target=COLLECT_REF)
     assert res["ok"]
     wps = _wp_records(audit)
     assert len(wps) == 2  # the v1 foreign record did NOT suppress our v2 binding
     assert any(r.get("binding_version") == 2 and r.get("paths_digest") != "appendix-default"
                for r in wps)
+
+
+# ---------------------------------------------------------------------------
+# #767 Step-11 fixes: unconditional empty guard, canonical collect ref, legacy/semantic
+# intent strictness, F-l rebind guard, promoted-tree (TOCTOU) binding
+# ---------------------------------------------------------------------------
+
+def test_collect_appendix_empty_worktree_refused(tmp_path):
+    # Step-11 adv F1: the empty-work-product guard is UNCONDITIONAL — a default-policy
+    # (appendix) collection with zero changed paths must refuse, not land an empty commit
+    # that satisfies "branch actually advanced" while every diff-scoped gate passes vacuously.
+    mgr = _FakeMgr(changed=[])
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "empty_work_product"
+    assert mgr.promote_calls == []
+    assert _wp_records(audit) == []
+
+
+def test_collect_exact_path_requires_canonical_ref(tmp_path):
+    # Step-11 adv F2 + lane R1-F1: exact-path collection must target ONLY the per-receipt
+    # temp ref refs/rawgentic/collect/<nonce> — otherwise a caller-controlled target reaches
+    # update-ref and can advance a checked-out refs/heads/* branch with a stale checkout.
+    mgr = _FakeMgr(changed=["src/a.py"])
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr,
+                          kind="code", promote_paths=["src/a.py"])  # default refs/heads target
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_collect_ref"
+    assert mgr.promote_calls == []  # refused BEFORE any intent write or promote
+    assert _wp_records(audit) == []
+    assert not (tmp_path / "intents" / "collect-rn1.json").exists()
+
+
+def test_collect_exact_path_requires_zero_sha_create(tmp_path):
+    # Step-11 adv F2: the canonical temp ref uses create semantics — a real expected SHA
+    # would let a caller CAS an EXISTING ref through the exact-path route.
+    mgr = _FakeMgr(changed=["src/a.py"])
+    res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr,
+                      kind="code", promote_paths=["src/a.py"], target=COLLECT_REF,
+                      expected="1234567890abcdef1234567890abcdef12345678")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_collect_ref"
+
+
+def test_collect_code_kind_requires_paths(tmp_path):
+    # lane R1-F1 (flag half): code collection must not silently downgrade to the appendix
+    # policy when --promote-path is omitted — the staging backstop is not an optional flag.
+    res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), _FakeMgr(), kind="code")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_promote_paths"
+
+
+def test_collect_unlanded_legacy_intent_always_refuses(tmp_path):
+    # Step-11 adv F3: an unlanded legacy intent carries no target identity — in the F-l window
+    # its promotion may have landed on an unknown ORIGINAL target, so accepting it for ANY
+    # requested target (the old appendix-default carve-out) can spend the receipt twice.
+    intents = tmp_path / "intents"
+    intents.mkdir(parents=True, exist_ok=True)
+    (intents / "collect-rn1.json").write_text(json.dumps({
+        "receipt_nonce": "rn1", "candidate_tree_sha": "ctree",
+        "expected_target_sha": "0" * 40, "new_sha": None, "consumed": False}), encoding="utf-8")
+    mgr = _FakeMgr()
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "intent_conflict"
+    assert mgr.promote_calls == []
+    assert _wp_records(audit) == []
+
+
+def test_collect_non_dict_intent_refuses(tmp_path):
+    # Step-11 adv F4 + lane R1-F4: a parseable non-dict intent is CORRUPTION, not absence —
+    # degrading to the absent-intent path overwrites the receipt's only recovery identity.
+    intents = tmp_path / "intents"
+    intents.mkdir(parents=True, exist_ok=True)
+    (intents / "collect-rn1.json").write_text("[]", encoding="utf-8")
+    res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), _FakeMgr())
+    assert res["ok"] is False
+    assert res["error"]["code"] == "intent_corrupt"
+
+
+def test_collect_wrong_nonce_intent_refuses(tmp_path):
+    # adv F4: the intent file is nonce-NAMED — a dict carrying a different nonce is corruption.
+    intents = tmp_path / "intents"
+    intents.mkdir(parents=True, exist_ok=True)
+    (intents / "collect-rn1.json").write_text(json.dumps({
+        "receipt_nonce": "OTHER", "candidate_tree_sha": "ctree",
+        "expected_target_sha": "0" * 40, "new_sha": None, "consumed": False}), encoding="utf-8")
+    res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), _FakeMgr())
+    assert res["ok"] is False
+    assert res["error"]["code"] == "intent_corrupt"
+
+
+def test_collect_mistyped_intent_fields_refuse(tmp_path):
+    # adv F4: required fields must be correctly typed — a right-nonce intent with a mangled
+    # candidate_tree_sha (or non-bool consumed, or non-str new_sha) is corruption.
+    for mangled in ({"candidate_tree_sha": 123}, {"consumed": "yes"}, {"new_sha": 7},
+                    {"expected_target_sha": ""}):
+        sub = tmp_path / f"case-{sorted(mangled)[0]}-{type(list(mangled.values())[0]).__name__}"
+        intents = sub / "intents"
+        intents.mkdir(parents=True, exist_ok=True)
+        base = {"receipt_nonce": "rn1", "candidate_tree_sha": "ctree",
+                "expected_target_sha": "0" * 40, "new_sha": None, "consumed": False}
+        base.update(mangled)
+        (intents / "collect-rn1.json").write_text(json.dumps(base), encoding="utf-8")
+        res, _ = _collect(sub, _FakeReg(_completed_record(tmp_path)), _FakeMgr())
+        assert res["ok"] is False, mangled
+        assert res["error"]["code"] == "intent_corrupt", mangled
+
+
+def test_collect_unlanded_rebind_after_landed_promotion_refuses(tmp_path):
+    # lane R1-F4 (F-l half): an unlanded same-binding intent whose ORIGINAL promotion actually
+    # LANDED (live tip matches ITS candidate tree, parented on ITS expected) must refuse an
+    # identity-changed retry — rebinding would erase the only recovery identity and let one
+    # receipt authorize a second update.
+    intents = tmp_path / "intents"
+    intents.mkdir(parents=True, exist_ok=True)
+    (intents / "collect-rn1.json").write_text(json.dumps({
+        "receipt_nonce": "rn1", "candidate_tree_sha": "oldtree",
+        "expected_target_sha": "t1sha", "target_ref": "refs/heads/integration",
+        "paths_digest": "appendix-default", "new_sha": None, "consumed": False}),
+        encoding="utf-8")
+    mgr = _FakeMgr(tip={"sha": "t2sha", "tree": "oldtree", "parents": ("t1sha",), "message": "m"})
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr, expected="t2sha")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "intent_conflict"
+    assert mgr.promote_calls == []
+    assert _wp_records(audit) == []
+
+
+def test_collect_unlanded_rebind_without_landing_still_recuts(tmp_path):
+    # The legitimate retry-after-CAS-refusal re-cut (rev-4 design): same binding, new candidate,
+    # and the live target shows NO landing of the OLD candidate → re-promote proceeds.
+    intents = tmp_path / "intents"
+    intents.mkdir(parents=True, exist_ok=True)
+    (intents / "collect-rn1.json").write_text(json.dumps({
+        "receipt_nonce": "rn1", "candidate_tree_sha": "oldtree",
+        "expected_target_sha": "t1sha", "target_ref": "refs/heads/integration",
+        "paths_digest": "appendix-default", "new_sha": None, "consumed": False}),
+        encoding="utf-8")
+    mgr = _FakeMgr(tip=None)
+    res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr)
+    assert res["ok"] and res["status"] == "recorded"
+    assert mgr.promote_calls == [("refs/heads/integration", "0" * 40)]
+
+
+def test_collect_promoted_tree_mismatch_refuses(tmp_path):
+    # lane R1-F3 (TOCTOU): promote's COMMITTED tree must equal the candidate tree captured by
+    # the initial evidence (snapshot A == snapshot B) — a worktree that drifted between the
+    # empty-check/intent and the commit must refuse, never record.
+    class _DriftMgr(_FakeMgr):
+        def promote(self, handle, *, target_ref, expected_target_sha, message, path_policy):
+            from phase_executor.worktree import PromotionResult  # noqa: PLC0415  # pylint: disable=no-name-in-module
+            self.promote_calls.append((target_ref, expected_target_sha))
+            return PromotionResult(promoted=True, new_target_sha="newsha", base_sha="b",
+                                   head_sha="h", changed_paths=tuple(self._changed), reason="",
+                                   content_tree_sha="driftedtree")
+
+    mgr = _DriftMgr()
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "promoted_tree_mismatch"
+    assert _wp_records(audit) == [] and _ewp_records(audit) == []
+
+
+def test_collect_appendix_different_target_intent_conflict(tmp_path):
+    # pass-2 F3 pinned on the appendix path (target may legitimately vary there): a consumed
+    # intent re-requested against a DIFFERENT target refuses loudly, never already_recorded.
+    rec = _completed_record(tmp_path)
+    reg = _FakeReg(rec)
+    mgr = _FakeMgr()
+    r1, _ = _collect(tmp_path, reg, mgr)
+    assert r1["ok"] and r1["status"] == "recorded"
+    r2, _ = _collect(tmp_path, reg, mgr, target="refs/heads/other-branch")
+    assert r2["ok"] is False
+    assert r2["error"]["code"] == "intent_conflict"

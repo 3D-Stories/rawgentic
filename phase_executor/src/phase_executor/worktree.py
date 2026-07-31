@@ -135,6 +135,10 @@ class PromotionResult:
     head_sha: Optional[str] = None
     changed_paths: tuple = ()
     reason: str = ""
+    # #767 Step-11 (lane R1-F3, TOCTOU): the tree promote actually COMMITTED. Callers bind it to
+    # the candidate evidence they captured up front; None (a reconstructing/legacy caller) skips
+    # that check rather than failing closed on records that never carried it.
+    content_tree_sha: Optional[str] = None
 
 
 def PROMOTE_ANY(path: str) -> bool:  # pylint: disable=invalid-name,unused-argument
@@ -874,7 +878,8 @@ class WorktreeManager:
                 changed_paths=tuple(changed), reason="target advanced or ref state changed")
         return PromotionResult(
             promoted=True, new_target_sha=new_commit, base_sha=handle.base_sha,
-            head_sha=head_sha, changed_paths=tuple(changed), reason="")
+            head_sha=head_sha, changed_paths=tuple(changed), reason="",
+            content_tree_sha=tree)
 
     def _meta_populate(self, handle: WorktreeHandle, dst_abs: str, state: str) -> None:
         meta = self._read_meta(handle)

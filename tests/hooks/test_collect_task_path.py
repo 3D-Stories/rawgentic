@@ -148,29 +148,14 @@ def _collect(repo, tmp_path, record, mgr, *, paths, target=TEMP_REF):
 
 
 def _land(repo, *, expected_ref, pre_sha, new_sha, temp_ref=TEMP_REF):
-    """The documented Step-8 (b) landing, exactly as the prose specifies (rev-4 tri-state)."""
-    rc, out, _e = _git(repo, "status", "--porcelain")
-    if rc != 0 or out.strip():
-        return False, "dirty"
-    rc, ref, _e = _git(repo, "symbolic-ref", "-q", "HEAD")
-    if rc != 0 or ref.strip() != expected_ref:
-        return False, "wrong-ref"
-    rc, head, _e = _git(repo, "rev-parse", "HEAD")
-    head = head.strip()
-    if head == new_sha:
-        _git(repo, "update-ref", "-d", temp_ref, new_sha)  # already landed: cleanup only
-        return True, "already-landed"
-    if head != pre_sha:
-        return False, "unexpected-sha"
-    rc, _o, err = _git(repo, "merge", "--ff-only", new_sha)
-    if rc != 0:
-        return False, f"ff-refused: {err.strip()[:60]}"
-    rc, head2, _e = _git(repo, "rev-parse", "HEAD")
-    rc2, ref2, _e = _git(repo, "rev-parse", expected_ref)
-    if head2.strip() != new_sha or ref2.strip() != new_sha:
-        return False, "postcondition"
-    _git(repo, "update-ref", "-d", temp_ref, new_sha)
-    return True, "landed"
+    """Step-11 lane R1-F2: the landing is a PRODUCTION operation (`land_work_product` /
+    the `land-work-product` CLI verb), not a test-owned facsimile — these tests exercise it.
+    Returns (ok, why) mapped from the production result for the assertions below."""
+    res = er.land_work_product(repo=str(repo), expected_ref=expected_ref, pre_sha=pre_sha,
+                               new_sha=new_sha, temp_ref=temp_ref)
+    if res["ok"]:
+        return True, res["status"]
+    return False, res["error"]["code"]
 
 
 def test_collect_and_land_end_to_end(repo, tmp_path):
@@ -209,7 +194,7 @@ def test_land_refuses_detached_head(repo, tmp_path):
     assert res["ok"], res
     _git(repo, "checkout", "-q", "--detach", base)  # detached at the pre-task SHA
     ok, why = _land(repo, expected_ref="refs/heads/feat-x", pre_sha=base, new_sha=res["new_sha"])
-    assert not ok and why == "wrong-ref"
+    assert not ok and why == "landing_wrong_ref"
 
 
 def test_land_refuses_other_branch_at_same_sha(repo, tmp_path):
@@ -220,7 +205,7 @@ def test_land_refuses_other_branch_at_same_sha(repo, tmp_path):
     assert res["ok"], res
     _git(repo, "checkout", "-qb", "impostor")  # different branch, same SHA
     ok, why = _land(repo, expected_ref="refs/heads/feat-x", pre_sha=base, new_sha=res["new_sha"])
-    assert not ok and why == "wrong-ref"
+    assert not ok and why == "landing_wrong_ref"
 
 
 def test_land_refuses_when_branch_advanced(repo, tmp_path):
@@ -233,7 +218,7 @@ def test_land_refuses_when_branch_advanced(repo, tmp_path):
     _git(repo, "add", "peer.txt")
     _git(repo, "commit", "-qm", "peer advance")
     ok, why = _land(repo, expected_ref="refs/heads/feat-x", pre_sha=base, new_sha=res["new_sha"])
-    assert not ok and why.startswith(("unexpected-sha", "ff-refused"))
+    assert not ok and why in ("landing_unexpected_sha", "landing_ff_refused")
 
 
 def test_land_rerun_after_merge_is_already_landed(repo, tmp_path):
@@ -246,4 +231,35 @@ def test_land_rerun_after_merge_is_already_landed(repo, tmp_path):
     ok, why = _land(repo, expected_ref="refs/heads/feat-x", pre_sha=base, new_sha=res["new_sha"])
     assert ok
     ok2, why2 = _land(repo, expected_ref="refs/heads/feat-x", pre_sha=base, new_sha=res["new_sha"])
-    assert ok2 and why2 == "already-landed"
+    assert ok2 and why2 == "already_landed"
+
+
+def test_land_refuses_dirty_tree(repo, tmp_path):
+    # rev-4: the landing materializes the checkout — a dirty operator tree must refuse first.
+    _git(repo, "checkout", "-qb", "feat-x")
+    mgr, h, record, base = _mk_worktree(repo, tmp_path)
+    Path(h.path, "a.txt").write_text("CHANGED\n")
+    res = _collect(repo, tmp_path, record, mgr, paths=["a.txt"])
+    assert res["ok"], res
+    (repo / "dirty.txt").write_text("uncommitted\n")
+    ok, why = _land(repo, expected_ref="refs/heads/feat-x", pre_sha=base, new_sha=res["new_sha"])
+    assert not ok and why == "landing_dirty_tree"
+
+
+def test_land_cli_end_to_end(repo, tmp_path):
+    # quality bar: the CLI surface exercised via subprocess exactly as an orchestrator calls it.
+    import json as _json  # noqa: PLC0415
+    _git(repo, "checkout", "-qb", "feat-x")
+    mgr, h, record, base = _mk_worktree(repo, tmp_path)
+    Path(h.path, "a.txt").write_text("CHANGED\n")
+    res = _collect(repo, tmp_path, record, mgr, paths=["a.txt"])
+    assert res["ok"], res
+    rc, out, err = _run([sys.executable, str(HOOKS / "executor_routing_lib.py"),
+                         "land-work-product", "--repo", str(repo),
+                         "--expected-ref", "refs/heads/feat-x", "--pre-sha", base,
+                         "--new-sha", res["new_sha"], "--temp-ref", TEMP_REF])
+    assert rc == 0, err
+    payload = _json.loads(out)
+    assert payload["ok"] and payload["status"] == "landed"
+    assert _git(repo, "rev-parse", "refs/heads/feat-x")[1].strip() == res["new_sha"]
+    assert _git(repo, "rev-parse", "--verify", TEMP_REF)[0] != 0  # temp ref cleaned

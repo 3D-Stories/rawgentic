@@ -228,6 +228,8 @@ def test_wf2_step8_documents_executor_collection():
     assert "gitdir is read-only under containment" in section
     assert "collect-work-product" in section
     assert "--promote-path" in section
+    # Step-11 lane R1-F2: the landing is a named PRODUCTION verb, not a prose git recipe
+    assert "land-work-product" in section
     assert "bare `update-ref` on the checked-out feature branch is forbidden" in section
     # the legacy (agent-commit) path stays documented alongside, explicitly scoped
     assert "cherry-pick or fast-forward" in section

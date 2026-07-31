@@ -300,6 +300,20 @@ _PARK_REQUIRED = ("kind", "run_id", "task_id", "design_version", "stash_name",
 _VERDICTS = ("pass", "fail")
 
 
+def _check_binding_identity(who: str, target_ref, paths_digest) -> None:
+    """#767 writer-side binding hygiene (8a R2-M3 + Step-11 R1-F5): both identity halves or
+    neither, and a SUPPLIED half must be a non-empty string — an empty string previously passed
+    the both-or-neither check but skipped the truthiness v2 tagging, a silent version downgrade."""
+    if (target_ref is None) != (paths_digest is None):
+        raise ValueError(f"{who}: partial binding identity — supply BOTH target_ref and "
+                         f"paths_digest, or neither")
+    if target_ref is not None:
+        for name, v in (("target_ref", target_ref), ("paths_digest", paths_digest)):
+            if not isinstance(v, str) or not v:
+                raise ValueError(f"{who}: {name} must be a non-empty string when supplied "
+                                 f"(got {v!r})")
+
+
 def _validate_record(obj, lineno: int) -> None:
     """Fail-closed audit-record shape check: unknown kind, a missing required field, a bad verdict,
     or a malformed epoch transition all raise ValueError — a corrupt/tampered audit is never clean."""
@@ -315,29 +329,41 @@ def _validate_record(obj, lineno: int) -> None:
     missing = [k for k in req if k not in obj]
     if missing:
         raise ValueError(f"audit line {lineno}: {kind} missing fields {missing}")
-    if kind in ("work_product", "expected_work_product") and "binding_version" in obj:
-        # #767: v2 bindings also carry the promotion identity; legacy (no version) stays as-is.
-        # Strict types (8a R1-M5/R2-M3): a truthy non-string here would later crash
-        # reconcile's _binding_key set construction (unhashable) or admit a garbage identity.
-        if obj["binding_version"] != 2:
-            raise ValueError(
-                f"audit line {lineno}: {kind} unknown binding_version {obj['binding_version']!r}")
-        for k in _BINDING_V2_EXTRA:
-            v = obj.get(k)
-            if not isinstance(v, str) or not v:
+    if kind in ("work_product", "expected_work_product"):
+        # #767: versioned binding schemas are MUTUALLY EXCLUSIVE (Step-11 R1-F5) — legacy has
+        # NO v2 identity fields; v2 has ALL of them. A hybrid (identity fields, no version)
+        # would read as "legacy" while reconcile's _binding_key still matched on the fields.
+        if "binding_version" not in obj:
+            hybrid = [k for k in _BINDING_V2_EXTRA if k in obj]
+            if hybrid:
                 raise ValueError(
-                    f"audit line {lineno}: {kind} binding_version=2 field {k} must be a "
-                    f"non-empty string (got {type(v).__name__})")
-        if not obj["target_ref"].startswith("refs/"):
-            raise ValueError(
-                f"audit line {lineno}: {kind} target_ref {obj['target_ref']!r} is not refs/-rooted")
-        pd = obj["paths_digest"]
-        if pd != "appendix-default" and not (
-                pd.startswith("sha256:") and len(pd) == 71
-                and all(c in "0123456789abcdef" for c in pd[7:])):
-            raise ValueError(
-                f"audit line {lineno}: {kind} paths_digest {pd!r} is neither 'appendix-default' "
-                f"nor a canonical sha256:<64-hex> digest")
+                    f"audit line {lineno}: {kind} carries v2 identity fields {hybrid} without "
+                    f"binding_version — a version-downgraded hybrid is refused")
+        else:
+            # Strict types (8a R1-M5/R2-M3): a truthy non-string here would later crash
+            # reconcile's _binding_key set construction (unhashable) or admit a garbage identity.
+            bv = obj["binding_version"]
+            if not isinstance(bv, int) or isinstance(bv, bool) or bv != 2:
+                # exact non-boolean int (R1-F5): float 2.0 and "2" are downgrade vectors, not v2
+                raise ValueError(
+                    f"audit line {lineno}: {kind} unknown binding_version {bv!r}")
+            for k in _BINDING_V2_EXTRA:
+                v = obj.get(k)
+                if not isinstance(v, str) or not v:
+                    raise ValueError(
+                        f"audit line {lineno}: {kind} binding_version=2 field {k} must be a "
+                        f"non-empty string (got {type(v).__name__})")
+            if not obj["target_ref"].startswith("refs/"):
+                raise ValueError(
+                    f"audit line {lineno}: {kind} target_ref {obj['target_ref']!r} is not "
+                    f"refs/-rooted")
+            pd = obj["paths_digest"]
+            if pd != "appendix-default" and not (
+                    pd.startswith("sha256:") and len(pd) == 71
+                    and all(c in "0123456789abcdef" for c in pd[7:])):
+                raise ValueError(
+                    f"audit line {lineno}: {kind} paths_digest {pd!r} is neither "
+                    f"'appendix-default' nor a canonical sha256:<64-hex> digest")
     if kind == "receipt" and obj["verdict"] not in _VERDICTS:
         raise ValueError(f"audit line {lineno}: bad verdict {obj['verdict']!r}")
     if kind == "receipt" and "recovered_from" in obj and not (
@@ -445,13 +471,11 @@ class RoutingAuditLog:
         #767: when target_ref + paths_digest are BOTH supplied, the record is written as
         binding_version=2 (the promotion identity rides the binding); BOTH omitted → legacy v1
         shape; exactly one supplied → ValueError (a silent version downgrade, 8a R2-M3)."""
-        if (target_ref is None) != (paths_digest is None):
-            raise ValueError("append_work_product: partial binding identity — supply BOTH "
-                             "target_ref and paths_digest, or neither")
+        _check_binding_identity("append_work_product", target_ref, paths_digest)
         rec = {"kind": "work_product", "receipt_nonce": receipt_nonce,
                "candidate_tree_sha": candidate_tree_sha, "new_sha": new_sha,
                "work_product": dict(work_product)}
-        if target_ref and paths_digest:
+        if target_ref is not None:
             rec.update({"binding_version": 2, "target_ref": target_ref,
                         "paths_digest": paths_digest})
         with self._lock:
@@ -467,12 +491,10 @@ class RoutingAuditLog:
         #767: target_ref + paths_digest (both supplied) → binding_version=2, matching
         append_work_product — reconcile matches on the full binding key, never across versions;
         exactly one supplied → ValueError (a silent version downgrade, 8a R2-M3)."""
-        if (target_ref is None) != (paths_digest is None):
-            raise ValueError("append_expected_work_product: partial binding identity — supply "
-                             "BOTH target_ref and paths_digest, or neither")
+        _check_binding_identity("append_expected_work_product", target_ref, paths_digest)
         rec = {"kind": "expected_work_product", "receipt_nonce": receipt_nonce,
                "candidate_tree_sha": candidate_tree_sha, "new_sha": new_sha}
-        if target_ref and paths_digest:
+        if target_ref is not None:
             rec.update({"binding_version": 2, "target_ref": target_ref,
                         "paths_digest": paths_digest})
         with self._lock:
