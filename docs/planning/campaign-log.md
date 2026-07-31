@@ -14,7 +14,34 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
-## Epic #756 — silent failures: the executor instruction layer (#735 → #733 → #732 → #758) · v3.110.0
+## Epic #756 — silent failures: the executor instruction layer (#735 → #733 → #732 → #758 → #767) · v3.110.1
+
+Fifth slot (#767, session 0dfdd03a → 4ac8c4b0 across a mid-child pane-handoff at the Step-11
+JOIN seam, v3.110.1, small-standard lane, lane-widened 8>7 at Step 9): the blocker #735's first
+real build dispatch exposed — a contained mutating build agent CANNOT commit (the linked
+worktree's gitdir is read-only under containment), and a live probe REFUTED the issue's
+widen-the-grant candidate (`git add` already needs the common objects DB; a sufficient grant
+opens most of the shared `.git` that spike-#452 containment protects). Shipped: orchestrator
+collection as the sanctioned mechanized path — `collect_work_product` generalized to an
+exact-path per-task policy (`promote_paths_only`, component-tuple equality; repeatable
+`--promote-path`), promotion identity on the durable intent + audited v2 bindings
+(`intent_conflict` on mistargeted retries, legacy v1 logs readable, reconcile never
+cross-matches versions), Step-8 prose two-tier contract (executor: collect onto
+`refs/rawgentic/collect/<nonce>` then guarded landing; legacy: cherry-pick/fast-forward),
+whole-issue delegation fenced fail-closed pending #762. The Step-11 wave (9 unique findings,
+one TOCTOU breaker adjudicated at source, decision log D23 — owner asleep D21, D22-pattern
+self-resolution, veto point before merge) hardened the route end-to-end: unconditional
+empty-work-product guard, canonical-ref + create-semantics ENFORCEMENT for exact-path collects
+(`invalid_collect_ref`; `--kind code` requires paths), every unlanded legacy intent refused,
+strict semantic intent validation + a landed-detection guard before identity rebinds (F-l
+double-spend closed), the **production `land-work-product` CLI verb** (clean tree, exact
+symbolic ref, tri-state SHA, ff-only, postconditions, CAS temp-ref delete — integration tests
+exercise the production op), `PromotionResult.content_tree_sha` binding all three worktree
+snapshots (A==B in collect, B==C in reconcile), and mutually exclusive audit binding schemas
+(hybrid v2-fields-no-version refused, exact non-bool int version, writers reject empty
+identity). Audit-side FEATURE-ref landing binding deferred to #762. Dispositions ledger 19.
+All red-before-green (24 red Step-11 tests). Suite 6348→6414. PR #774; merge/CI: filled by
+the next slot's pass.
 
 Fourth slot (#758, session f6996e2f, v3.110.0, small-standard lane): owner-authored goals now
 carry VERBATIM across pane-handoffs, enforced at the handoff boundary — the measured failure was
@@ -36,7 +63,8 @@ origin-binding gap (`sentinel: true` is forgeable — trust needs the attachment
 Step-11 wave added affirmative-only approval (an owner "no" through the flag never authorizes),
 torn-tail ambiguity refusal, the truncation guard, and param coupling — pre-existing
 campaign/mid-child recursive-reader exposure filed as #772, never silently absorbed. All
-red-before-green. Suite 6292→6348. PR/merge/CI: filled by the next slot's pass.
+red-before-green. Suite 6292→6348. PR #773, squash-merged `158b6ee` 2026-07-31, CI green
+(test+lint hard lanes + security-review), issue auto-closed, epic box ticked.
 
 Third slot (#732, session b8905b86, v3.109.8, queue-front by owner decision D13): the trap that
 strands sessions at the advisory tier — the meter's own text sent them to `clear-prep`, the
