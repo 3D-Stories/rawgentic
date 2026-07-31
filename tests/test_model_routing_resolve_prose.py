@@ -143,26 +143,44 @@ def test_agent_tool_dispatch_instructions_are_legacy_conditioned():
                         f"{f}: unconditioned Agent-tool dispatch instruction:\n{norm[:200]}")
 
 
-# --- #735: Step-3 carve-out states the current truth (drift guard) -----------
+# --- #765: the Step-3 bake-off is WIRED (drift guard; supersedes the #735 carve-out pin) ---
 # Anchors ONE canonical sentence in ONE file (the shared source) per the repo
 # drift-guard pattern; the corpus check proves the sync shipped it.
 
-_CARVEOUT_TRUTH = "whether to wire or retire the bake-off is decided in #765"
+_WIRED_TRUTH = ("full-spine step 3 design generation dispatches one competitive design round "
+                "via `python3 hooks/bakeoff_policy.py design-round")
+_CARVEOUT_DECIDED = "whether to wire or retire the bake-off is decided in #765"
 _CARVEOUT_STALE = "proven in #472"
 
 
-def test_step3_carveout_states_current_truth():
+def test_step3_row_states_wired_truth():
     from corpus import skill_corpus
     shared = _norm(SHARED.read_text(encoding="utf-8")).lower()
     corpus = _norm(skill_corpus("implement-feature")).lower()
-    assert _CARVEOUT_TRUTH in shared, \
-        "shared block Step-3 row must carry the current carve-out truth (#735)"
-    assert _CARVEOUT_TRUTH in corpus, \
-        "WF2 corpus must carry the synced carve-out truth (run sync_shared_blocks.py)"
-    assert _CARVEOUT_STALE not in shared, \
-        "stale '#472 proves it' carve-out text must be gone from the shared block (#735: #472 closed without proving the bake-off)"
-    assert _CARVEOUT_STALE not in corpus, \
-        "stale '#472 proves it' carve-out text must be gone from the corpus"
+    assert _WIRED_TRUTH in shared, \
+        "shared block Step-3 row must state the WIRED truth naming the design-round CLI (#765)"
+    assert _WIRED_TRUTH in corpus, \
+        "WF2 corpus must carry the synced wired truth (run sync_shared_blocks.py)"
+    for stale, label in ((_CARVEOUT_DECIDED, "'decided in #765' pending text"),
+                         (_CARVEOUT_STALE, "'#472 proves it' text"),
+                         ("#472", "any #472 deferral pointer")):
+        assert stale not in shared, f"stale {label} must be gone from the shared block (#765)"
+        assert stale not in corpus, f"stale {label} must be gone from the corpus (#765)"
+
+
+def test_run_records_reconciliation_states_wired_join_truth():
+    """#765: the run-records reconciliation section must not defer to the CLOSED #472,
+    and must state the honest per-stream join truth (design rounds carry workflow
+    identity; the build stream's wiring is #762's)."""
+    text = (REPO / "docs" / "run-records.md").read_text(encoding="utf-8")
+    start = text.index("### Audit-stream reconciliation")
+    end = text.index("### Capture", start)
+    section = _norm(text[start:end])
+    assert "#472" not in section, \
+        "run-records reconciliation must not defer to the closed #472 (#765)"
+    assert "#762" in section, \
+        "the build bake-off stream's wiring/reconciliation must point at the OPEN #762"
+    assert "correlation_id" in section
 
 
 # --- #735: Step-8 executor-primary sentence + legacy-conditioned delegation --

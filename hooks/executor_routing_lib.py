@@ -55,6 +55,8 @@ from model_routing_lib import _ABSENT, _load_block, _load_project_entry
 # The executor seat VOCABULARY (#464 §B, AC2): the names enforcement/naming recognises — NOT proof
 # each is single-dispatchable. ``COMPETITIVE_ONLY`` seats ARE in the vocabulary but the bake-off owns
 # their dispatch, so they are refused from single-dispatch executorRouting / resolve-seat / dispatch.
+# The design seat's owning dispatcher is ``bakeoff_policy.py design-round`` (WF2-wired, #765);
+# the refusal semantics here are unchanged — single-dispatching a competitive seat stays exit 2.
 WIRED_SEATS: Final[frozenset[str]] = frozenset(
     {"intake", "analysis", "design", "plan", "build", "review", "ship", "offload"})
 COMPETITIVE_ONLY: Final[frozenset[str]] = frozenset({"design"})

@@ -280,8 +280,7 @@ schema fields are unchanged either way.
 ### Audit-stream reconciliation: competitive/bake-off vs RoutingAuditLog (#470, declared)
 
 Two audit streams exist by design and are reconciled by DECLARATION, not by wiring (the
-#464 carry's "either" arm, chosen in #470's design §2d because the competitive path has no
-live consumer until the #472 proving run):
+#464 carry's "either" arm, chosen in #470's design §2d):
 
 - **RoutingAuditLog** (`.rawgentic/runs/<run_id>/` receipts + observations) is the
   authoritative per-attempt enforcement record for SINGLE-dispatch seats — every
@@ -290,9 +289,14 @@ live consumer until the #472 proving run):
 - **Bake-off records** (competitive design seats) carry their own audit spine
   (`bakeoff_results` + gate attestations); a competitive round is NEVER single-dispatched
   (`COMPETITIVE_ONLY` refusal), so the two streams cannot double-count one dispatch.
-- **Join key:** `run_id` + `correlation_id` — both streams carry them; a consumer joins on
-  those, never on wall-clock. Wiring the competitive stream INTO RoutingAuditLog (one
-  physical stream) is deliberately deferred to the wired-path proving work (#472+); until
+- **Join keys, per stream (the honest state since #765):** a **design round** dispatched
+  through the wired WF2 Step-3 caller (`bakeoff_policy.py design-round`, #765) carries the
+  workflow's `run_id` AND `correlation_id` in its record and on every candidate — a
+  consumer joins those on identity, never on wall-clock. The **build bake-off** stream has
+  no workflow caller yet: its records carry a `run_id` only (`correlation_id: None` unless
+  a caller supplies one), so it is NOT currently joinable on `correlation_id` — its wiring
+  and reconciliation land with the build-seat adoption work (#762). Merging the competitive
+  stream INTO RoutingAuditLog (one physical stream) remains deliberately deferred; until
   then this section IS the reconciliation contract.
 
 ### Capture (#330)
