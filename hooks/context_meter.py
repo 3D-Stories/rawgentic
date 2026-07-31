@@ -1191,13 +1191,18 @@ def nag_text(*, tier, used, window, provenance, seam, seam_reason,
             "successor rebuilds its task list from those via /tasklist."
         )
     else:
+        # AC1-AC3 (#732) — the advisory tier said "run clear-prep", and a session that
+        # obeyed it literally built every artifact and stopped with no successor: that is
+        # compliance, not misreading. #713 fixed the directive branch above and left this
+        # one carrying the bug it had just diagnosed. Same route as directive, softer
+        # TIMING ("at the next clean seam" vs "Break NOW") — the tiers decide WHEN to
+        # hand off, never WHETHER.
         lines.append(
-            "Run the `clear-prep` skill: it writes the mempalace checkpoint, "
-            "the durable handoff file, the resume prompt and the /goal text. "
-            "Its handoff carries `next actions, in order` — the successor "
-            "rebuilds its task list from those via /tasklist. When you are ready to hand "
-            "over rather than just prepare, `/rawgentic:pane-handoff` is what starts the "
-            "successor."
+            "Run `/rawgentic:pane-handoff` at the next clean seam: it wraps "
+            "`clear-prep` (the mempalace checkpoint, the durable handoff file, the "
+            "resume prompt and the /goal text) and then actually hands over — it "
+            "spawns the successor, binds it, delivers the prompt, arms its goal, and "
+            "clears this session's guard. `clear-prep` ALONE leaves no successor."
         )
     return " ".join(lines)
 
