@@ -83,3 +83,80 @@ def test_retiring_the_callers_pane_is_documented_as_the_default(body) -> None:
     assert "--no-teardown" in body
     assert "DEFAULT" in body, "the skill must say retirement is the default, not bury it"
     assert "/goal clear" in body, "the additive path's cost must be named"
+
+
+# ---------------------------------------------------------------------------
+# #732 — the provenance gate accepts either meter tier, as a real disjunction
+# ---------------------------------------------------------------------------
+# Two hazards, both from #732's Step-4 review: a bare `.*.emitted` glob would
+# silently admit any FUTURE marker type dropped in that directory (pass-1 High);
+# and a single `ls` with two glob operands exits 2 when either is unmatched, so
+# the principal advisory-only case would print the valid marker while "failing"
+# (pass-2 Medium) — recreating the exact stall this issue removes. The gate is
+# therefore an explicit two-tier allowlist joined by `||`, and it is executed
+# here against fixtures rather than merely string-pinned.
+
+import os
+import subprocess
+
+
+def _gate_command(text: str) -> str:
+    """The fenced provenance-gate command — the one bash block naming marker files."""
+    blocks = re.findall(r"```bash\n(.*?)```", text, re.DOTALL)
+    hits = [b for b in blocks if ".emitted" in b]
+    assert len(hits) == 1, f"expected exactly one marker-gate block, found {len(hits)}"
+    return hits[0]
+
+
+def test_the_gate_names_both_tiers_explicitly(body) -> None:
+    cmd = _gate_command(body)
+    assert ".advisory.emitted" in cmd
+    assert ".directive.emitted" in cmd
+
+
+def test_the_gate_is_an_explicit_allowlist_never_a_bare_glob(body) -> None:
+    """Every `.emitted` pattern in the gate must name one of the two real tiers
+    (the tier vocabulary is closed — hooks/context_meter.py tier_for)."""
+    cmd = _gate_command(body)
+    tokens = re.findall(r"\S*\.emitted\S*", cmd)
+    assert tokens, "the gate must reference marker files"
+    for token in tokens:
+        assert ".advisory.emitted" in token or ".directive.emitted" in token, (
+            f"bare marker glob {token!r} would admit future marker types")
+
+
+def test_the_own_session_requirement_survives(body) -> None:
+    """Widening the tier set must not loosen WHOSE marker counts."""
+    assert "came from THIS session's own hook" in body
+
+
+@pytest.mark.parametrize(
+    ("marker_names", "should_pass"),
+    [
+        pytest.param(["200000.midturn.advisory.emitted"], True, id="advisory-only"),
+        pytest.param(["200000.midturn.directive.emitted"], True, id="directive-only"),
+        pytest.param(["200000.midturn.advisory.emitted",
+                      "200000.stop.directive.emitted"], True, id="both"),
+        pytest.param(["200000.advisory.emitted"], True, id="legacy-channelless-advisory"),
+        pytest.param([], False, id="neither"),
+        pytest.param(["200000.midturn.someothertier.emitted"], False,
+                     id="unknown-tier-is-not-authorization"),
+    ],
+)
+def test_the_gate_behaves_as_a_real_disjunction(tmp_path, body, marker_names,
+                                                should_pass) -> None:
+    """The command is EXECUTED, not string-matched: pass-2's `ls a b` shape
+    printed the advisory marker while exiting 2, which no static pin can see."""
+    sid = "aaaa1111-2222-3333-4444-555566667777"
+    d = tmp_path / ".rawgentic" / "context-meter"
+    d.mkdir(parents=True)
+    for name in marker_names:
+        (d / f"{sid}.{name}").write_text("", encoding="utf-8")
+    other = "bbbb1111-2222-3333-4444-555566667777"
+    (d / f"{other}.200000.midturn.directive.emitted").write_text("", encoding="utf-8")
+    env = {"HOME": str(tmp_path), "CLAUDE_CODE_SESSION_ID": sid,
+           "PATH": os.environ.get("PATH", "")}
+    r = subprocess.run(["bash", "-c", _gate_command(body)],
+                       capture_output=True, text=True, timeout=10, env=env)
+    assert (r.returncode == 0) is should_pass, (
+        f"gate rc={r.returncode} stdout={r.stdout!r} stderr={r.stderr!r}")
