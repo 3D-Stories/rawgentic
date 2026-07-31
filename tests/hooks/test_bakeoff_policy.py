@@ -434,3 +434,123 @@ def test_live_glm_judge_scores_two_drafts():
     out = judge(results)
     assert out["winner_index"] in (0, 1)
     assert isinstance(out["scores"], dict)
+
+
+# ---- #765: run-identity forwarding + the workflow-callable design-round CLI -------------------
+
+def test_run_design_round_forwards_run_identity(tmp_path):
+    """#765: the policy layer forwards the workflow's run_id/correlation into
+    run_competitive — the record carries them, and every candidate is attributed."""
+    snap = pe.snapshot_from_file(TABLE)
+    quota = pe.QuotaCoordinator(tmp_path / "permits", snap.pool_concurrency())
+    verdict = json.dumps({"winner_draft": 1, "scores": {}, "confidence": 0.7})
+    _w, _l, _j, record = bp.run_design_round(
+        "design the widget", snapshot=snap, quota=quota, capture_root=tmp_path / "cap",
+        headless=True, seed=3, sink_path=tmp_path / "b.jsonl",
+        run_id="wf2-765-testsess", correlation_id="765-s3-design",
+        complete_fn=lambda prompt: (verdict, ""), dispatch=_sleeping_dispatch(0.0))
+    assert record["run_id"] == "wf2-765-testsess"
+    assert record["correlation_id"] == "765-s3-design"
+
+
+def test_sanitize_record_whitelists_and_hashes():
+    """#765: sanitize_record keeps ONLY the whitelisted fields (payloads, capture paths
+    and any absolute path never survive) and binds the evidence to prompt + rubric by hash."""
+    import hashlib
+    record = {
+        "run_id": "wf2-765-x", "correlation_id": "765-s3-design", "winner_index": 0,
+        "n_candidates": 2, "judge_degraded": False, "scores": {"1": {"q": 90}},
+        "sink_error": True,
+        "candidates": [
+            {"seat": "design", "requested_model": "gpt-5.6-sol", "actual_model": "gpt-5.6-sol",
+             "engine": "codex", "transport": "native", "parse_status": "ok",
+             "prompt_hash": "sha256:p", "timing_ms": 5, "queued_ms": 0, "usage": {"input": 1},
+             "correlation_id": "765-s3-design",
+             "parsed_payload": "SECRET DRAFT", "raw_capture_path": "/home/user/.rawgentic/runs/x",
+             "dispatched_lane": {"credential_ref": None, "pool": "codex"}},
+            {"seat": "design", "requested_model": "claude-opus-5", "actual_model": "claude-opus-5",
+             "engine": "claude", "transport": "native", "parse_status": "ok",
+             "prompt_hash": "sha256:q", "timing_ms": 6, "queued_ms": 0, "usage": None,
+             "correlation_id": "765-s3-design",
+             "parsed_payload": "OTHER DRAFT", "raw_capture_path": "/tmp/elsewhere"},
+        ],
+    }
+    clean = bp.sanitize_record(record, prompt_text="the prompt", rubric_text="the rubric")
+    text = json.dumps(clean)
+    for forbidden in ("parsed_payload", "raw_capture_path", "SECRET DRAFT", "/home/", "/tmp/"):
+        assert forbidden not in text, forbidden
+    assert clean["run_id"] == "wf2-765-x" and clean["correlation_id"] == "765-s3-design"
+    assert clean["judge_degraded"] is False and clean["n_candidates"] == 2
+    assert clean["prompt_sha256"] == hashlib.sha256(b"the prompt").hexdigest()
+    assert clean["rubric_sha256"] == hashlib.sha256(b"the rubric").hexdigest()
+    assert [c["requested_model"] for c in clean["candidates"]] == ["gpt-5.6-sol", "claude-opus-5"]
+    assert all(c["parse_status"] == "ok" for c in clean["candidates"])
+
+
+def _cli_workspace(tmp_path):
+    """A minimal workspace + project dir for the CLI (no .rawgentic.json -> package-default table)."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    ws = tmp_path / "ws.json"
+    ws.write_text(json.dumps({"projects": [{"name": "proj", "path": "./proj"}]}))
+    return ws, proj
+
+
+def test_cli_design_round_exact_prose_command(tmp_path):
+    """#765 integration: the EXACT command shape the Step-3 prose names, in-process with
+    injected stubs — the emitted record carries the CALLER's identity, never a random mint."""
+    ws, proj = _cli_workspace(tmp_path)
+    prompt_file = tmp_path / "brief.md"
+    prompt_file.write_text("design the widget")
+    evidence = tmp_path / "evidence.json"
+    sink = tmp_path / "sink.jsonl"
+    verdict = json.dumps({"winner_draft": 1, "scores": {}, "confidence": 0.7})
+    rc = bp.main([
+        "design-round",
+        "--prompt-file", str(prompt_file),
+        "--run-id", "wf2-765-testsess",
+        "--correlation-id", "765-s3-design",
+        "--workspace", str(ws), "--project", "proj",
+        "--headless", "--seed", "3",
+        "--sink", str(sink),
+        "--evidence-out", str(evidence),
+    ], complete_fn=lambda prompt: (verdict, ""), dispatch=_sleeping_dispatch(0.0))
+    assert rc == 0
+    clean = json.loads(evidence.read_text())
+    assert clean["run_id"] == "wf2-765-testsess"
+    assert clean["correlation_id"] == "765-s3-design"
+    assert clean["judge_degraded"] is False
+    assert "parsed_payload" not in json.dumps(clean)
+    # the RAW record (payloads included) went to the sink, not the evidence artifact
+    raw = json.loads(sink.read_text().splitlines()[0])
+    assert raw["run_id"] == "wf2-765-testsess"
+    assert any("draft from" in (c.get("parsed_payload") or "") for c in raw["candidates"])
+
+
+def test_cli_design_round_missing_run_id_exits_2(tmp_path):
+    """#765: the CLI is workflow-callable ONLY with an explicit run identity — a missing
+    --run-id/--correlation-id is a malformed call (exit 2), never a silent random mint."""
+    import subprocess
+    ws, proj = _cli_workspace(tmp_path)
+    prompt_file = tmp_path / "brief.md"
+    prompt_file.write_text("p")
+    out = subprocess.run(
+        [sys.executable, str(HOOKS / "bakeoff_policy.py"), "design-round",
+         "--prompt-file", str(prompt_file), "--workspace", str(ws), "--project", "proj"],
+        capture_output=True, text=True, check=False)
+    assert out.returncode == 2
+
+
+def test_cli_design_round_judge_failure_interactive_exits_3(tmp_path):
+    """#765: an interactive (non-headless) judge failure is a structured exit 3 —
+    fail-loud, no degraded winner."""
+    ws, proj = _cli_workspace(tmp_path)
+    prompt_file = tmp_path / "brief.md"
+    prompt_file.write_text("p")
+    rc = bp.main([
+        "design-round", "--prompt-file", str(prompt_file),
+        "--run-id", "wf2-765-t", "--correlation-id", "765-s3-x",
+        "--workspace", str(ws), "--project", "proj", "--seed", "3",
+        "--sink", str(tmp_path / "s.jsonl"),
+    ], complete_fn=lambda prompt: (None, "glm down"), dispatch=_sleeping_dispatch(0.0))
+    assert rc == 3

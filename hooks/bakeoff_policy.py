@@ -12,7 +12,10 @@ digest all raise rather than silently pick a wrong (or failed) winner.
 """
 from __future__ import annotations
 
+import argparse
+import hashlib
 import json
+import os
 import random
 import sys
 from pathlib import Path
@@ -267,7 +270,7 @@ def _lane_for_model(snapshot, model) -> Optional[dict]:
     return None
 
 
-def _candidates_for(snapshot, models, prompt, *, seat):
+def _candidates_for(snapshot, models, prompt, *, seat, correlation_id=None):
     pe = _pe()
     candidates = []
     for model in models:
@@ -277,7 +280,7 @@ def _candidates_for(snapshot, models, prompt, *, seat):
         candidates.append(pe.Candidate(
             seat=seat, model=model, prompt=prompt, provider=lane["provider"], pool=lane["pool"],
             transport=lane.get("transport", "native"), auth_mode=lane.get("auth_mode", "subscription_oauth"),
-            credential_ref=lane.get("credential_ref")))
+            credential_ref=lane.get("credential_ref"), correlation_id=correlation_id))
     return candidates
 
 
@@ -296,18 +299,24 @@ def _verified_decision(gate_decision) -> bool:
 
 
 def run_design_round(prompt, *, snapshot, quota, capture_root, headless, seed,
-                     sink_path=None, models=DESIGN_MODELS, complete_fn=None, dispatch=None):
+                     sink_path=None, models=DESIGN_MODELS, complete_fn=None, dispatch=None,
+                     run_id=None, correlation_id=None):
     """Competitive design round (sol vs opus every round), glm-5.2 judge on the design rubric.
     Winner's exact bytes become the phase artifact. Returns ``run_competitive``'s
-    ``(winner, losers, judge_obs, record)``."""
+    ``(winner, losers, judge_obs, record)``.
+
+    #765: a workflow caller passes its ``run_id``/``correlation_id`` — both land in the
+    record and every candidate Observation, so the bake-off stream joins the run's audit
+    context instead of minting a random identity."""
     pe = _pe()
-    candidates = _candidates_for(snapshot, models, prompt, seat="design")
+    candidates = _candidates_for(snapshot, models, prompt, seat="design", correlation_id=correlation_id)
     incumbent_index = models.index(INCUMBENT_MODEL) if INCUMBENT_MODEL in models else 0
     judge = make_glm_judge(load_rubric("design"), seed=seed, complete_fn=complete_fn)
     sink = bakeoff_sink(sink_path)
     strategy = hybrid_failure_strategy(headless=headless, incumbent_index=incumbent_index, sink=sink)
     kwargs = dict(judge=judge, failure_strategy=strategy, sink=sink, snapshot=snapshot, quota=quota,
-                  capture_root=capture_root, require_parallel=True)
+                  capture_root=capture_root, require_parallel=True,
+                  run_id=run_id, correlation_id=correlation_id)
     if dispatch is not None:
         kwargs["dispatch"] = dispatch
     return pe.run_competitive(candidates, **kwargs)
@@ -340,3 +349,101 @@ def run_build_bakeoff(prompt, *, gate_decision, snapshot, quota, capture_root, h
     if dispatch is not None:
         kwargs["dispatch"] = dispatch
     return pe.run_competitive(candidates, **kwargs)
+
+
+# ---- sanitized evidence + the workflow-callable CLI (#765) -------------------------------------
+# Per-candidate WHITELIST — sanitization keeps only these (fail-safe: an unknown field never
+# survives). parsed_payload / raw_capture_path / dispatched_lane are deliberately absent: the
+# committable evidence must never embed candidate payloads or local paths (the raw sink stays
+# gitignored by owner decision 2026-07-20).
+_EVIDENCE_CANDIDATE_FIELDS = (
+    "seat", "requested_model", "actual_model", "engine", "transport", "parse_status",
+    "prompt_hash", "timing_ms", "queued_ms", "usage", "correlation_id",
+)
+_EVIDENCE_TOP_FIELDS = (
+    "run_id", "correlation_id", "winner_index", "n_candidates", "judge_degraded", "scores",
+)
+
+
+def sanitize_record(record: dict, *, prompt_text: str, rubric_text: str) -> dict:
+    """The COMMITTABLE projection of a ``run_competitive`` record (#765 AC2 evidence).
+
+    Whitelist-only (never strip-and-hope), plus ``prompt_sha256``/``rubric_sha256`` so the
+    evidence binds to the exact prompt and rubric that produced it."""
+    clean = {k: record.get(k) for k in _EVIDENCE_TOP_FIELDS}
+    clean["candidates"] = [
+        {k: c.get(k) for k in _EVIDENCE_CANDIDATE_FIELDS if k in c}
+        for c in record.get("candidates", [])
+    ]
+    clean["prompt_sha256"] = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
+    clean["rubric_sha256"] = hashlib.sha256(rubric_text.encode("utf-8")).hexdigest()
+    return clean
+
+
+def main(argv=None, *, complete_fn=None, dispatch=None) -> int:
+    """The workflow-callable design-round CLI (#765) — WF2 Step-3 prose names this command:
+
+        python3 hooks/bakeoff_policy.py design-round \\
+          --prompt-file <brief> --run-id wf2-<issue>-<session> \\
+          --correlation-id <issue>-s3-design \\
+          --workspace <workspace-file> --project <name> \\
+          [--headless] [--seed N] [--sink <path>] [--evidence-out <path>]
+
+    Exit taxonomy: 0 ok; 2 malformed input/config (argparse, unreadable prompt file, workspace
+    resolution); 3 round failure (judge/chain/quota/infeasible — interactive judge failure is
+    fail-loud here, never a degraded winner). ``complete_fn``/``dispatch`` are test injection
+    points; production runs use the live glm judge and real adapters."""
+    ap = argparse.ArgumentParser(prog="bakeoff_policy")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    dr = sub.add_parser("design-round", help="one competitive design round with workflow identity")
+    dr.add_argument("--prompt-file", required=True)
+    dr.add_argument("--run-id", required=True, help="the workflow run id (e.g. wf2-<issue>-<session>)")
+    dr.add_argument("--correlation-id", required=True, help="the workflow dispatch correlation id")
+    dr.add_argument("--workspace", required=True)
+    dr.add_argument("--project", required=True)
+    dr.add_argument("--headless", action="store_true",
+                    help="judge failure degrades to the incumbent (recorded); default is fail-loud")
+    dr.add_argument("--seed", type=int, default=None, help="shuffle seed (default: per-round nonce)")
+    dr.add_argument("--sink", default=None, help="raw-record sink override (default: gitignored bakeoff_results.jsonl)")
+    dr.add_argument("--evidence-out", default=None, help="write the SANITIZED committable record here")
+    args = ap.parse_args(argv)
+
+    import executor_routing_lib as er  # noqa: PLC0415 — sibling hook, lazy so import errors surface per-call
+
+    try:
+        prompt = Path(args.prompt_file).read_text(encoding="utf-8")
+    except OSError as exc:
+        print(json.dumps({"ok": False, "error": "prompt_file_unreadable", "detail": str(exc)}))
+        return 2
+    try:
+        repo_root = er.resolve_repo_root(args.workspace, args.project)
+        pe = _pe()
+        snapshot = er.resolve_table(repo_root, pe.routing).snapshot
+        paths = er.derive_paths(repo_root, args.project, args.run_id, snapshot.pool_concurrency())
+        quota = pe.QuotaCoordinator(paths["permits_dir"], snapshot.pool_concurrency())
+    except er.MalformedConfig as exc:
+        print(json.dumps({"ok": False, "error": "malformed_config", "detail": str(exc)}))
+        return 2
+    seed = args.seed if args.seed is not None else int.from_bytes(os.urandom(4), "big")
+    try:
+        rubric_text = load_rubric("design")
+        _winner, _losers, _judge_obs, record = run_design_round(
+            prompt, snapshot=snapshot, quota=quota, capture_root=paths["capture_root"],
+            headless=args.headless, seed=seed, sink_path=args.sink,
+            run_id=args.run_id, correlation_id=args.correlation_id,
+            complete_fn=complete_fn, dispatch=dispatch)
+    except Exception as exc:  # noqa: BLE001 — round failures (judge/chain/quota/infeasible) are one taxonomy class
+        print(json.dumps({"ok": False, "error": "round_failed",
+                          "detail": f"{type(exc).__name__}: {exc}"[:500]}))
+        return 3
+    clean = sanitize_record(record, prompt_text=prompt, rubric_text=rubric_text)
+    if args.evidence_out:
+        Path(args.evidence_out).write_text(json.dumps(clean, indent=2, sort_keys=True) + "\n",
+                                           encoding="utf-8")
+    print(json.dumps({"ok": True, "record": clean,
+                      "evidence_out": args.evidence_out}, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
