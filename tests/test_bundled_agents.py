@@ -228,8 +228,22 @@ def test_wf2_step8_documents_executor_collection():
     assert "gitdir is read-only under containment" in section
     assert "collect-work-product" in section
     assert "--promote-path" in section
+    assert (
+        "collect-work-product --run-id <run> --session-name <job> --target-ref "
+        "refs/rawgentic/collect/<receipt-nonce> --expected-target-sha "
+        "0000000000000000000000000000000000000000 --expected-feature-ref "
+        "<feature-ref recorded before dispatch> --kind code --promote-path <file> "
+        "[--promote-path <file> …] --workspace <ws> --project <name>"
+    ) in section
     # Step-11 lane R1-F2: the landing is a named PRODUCTION verb, not a prose git recipe
     assert "land-work-product" in section
+    assert (
+        "land-work-product --expected-ref <feature-ref recorded before dispatch> "
+        "--pre-sha <recorded pre-task sha> --new-sha <new_sha> --temp-ref "
+        "refs/rawgentic/collect/<receipt-nonce> --run-id <run> --workspace <ws> "
+        "--project <name>"
+    ) in section
+    assert "land-work-product --repo ." not in section
     assert "bare `update-ref` on the checked-out feature branch is forbidden" in section
     # the legacy (agent-commit) path stays documented alongside, explicitly scoped
     assert "cherry-pick or fast-forward" in section
@@ -242,7 +256,8 @@ def test_wf2_step8_documents_executor_collection():
 def test_wf2_whole_issue_executor_falls_back():
     """#767 (pass-1 F3): the whole-issue receipt contract requires agent-authored commits a
     contained executor build agent cannot produce — under the executor architecture an enabled
-    wholeIssueDelegation must fall back fail-closed to per-task Step 8 until #762."""
+    wholeIssueDelegation must fall back fail-closed to per-task Step 8 until #779 ships
+    executor-tier receipts."""
     section = _steps_section(
         SKILLS_DIR / "implement-feature" / "references" / "steps.md", "## Step 8: Implementation")
     assert "falls back to the normal per-task step 8" in section
@@ -251,5 +266,7 @@ def test_wf2_whole_issue_executor_falls_back():
     ref = (SKILLS_DIR / "implement-feature" / "references" / "whole-issue-delegation.md").read_text(
         encoding="utf-8")
     assert "LEGACY architecture" in ref
-    assert "#762" in ref
-    assert "cannot commit at all" in ref
+    assert "#779" in ref
+    assert "executor-tier receipts" in ref
+    assert "gitdir is read-only under containment" in ref
+    assert "commit write-set spans the common `.git`" in ref
