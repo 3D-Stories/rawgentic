@@ -108,3 +108,39 @@ def test_observation_with_malformed_process_never_raises():
         parsed_payload=None, raw_capture_path=None, fallback_reason=None,
         routing_config_digest="sha256:d")
     assert contract.observation_process_failure(obs) == "timeout"
+
+
+# -- Step-11 R2-H1 (#733): usage_unavailable requires a payload on the READER side too --
+# The producer fix (adapters/base.py: output checked before usage) covers only newly produced
+# observations; legacy/in-flight producers (pre-reorder caches) can still emit
+# usage_unavailable with nothing produced. The predicate must not bless a no-output success.
+
+def test_733_s11_usage_unavailable_without_payload_is_no_response():
+    assert contract.observation_process_failure(
+        _obs_dict(status="usage_unavailable", payload=None)) == "no_response"
+    # bare dict form (no parsed_payload key at all) is the same no-output shape
+    assert contract.observation_process_failure(
+        {"parse_status": "usage_unavailable"}) == "no_response"
+
+
+@pytest.mark.parametrize("payload", ["", 0, False, {}, []])
+def test_733_s11_usage_unavailable_with_falsy_payload_is_success(payload):
+    # empty containers / "" / 0 / False ARE payloads (the AC4 partial rule's own definition)
+    assert contract.observation_process_failure(
+        _obs_dict(status="usage_unavailable", payload=payload)) is None
+
+
+def test_733_s11_ok_without_payload_stays_success():
+    # parse_status "ok" asserts the adapter parsed real output — payload-independence unchanged
+    assert contract.observation_process_failure(_obs_dict(status="ok", payload=None)) is None
+
+
+def test_733_s11_usage_unavailable_observation_form_requires_payload():
+    obs = contract.Observation(
+        run_id="r", attempt_id="0-x", correlation_id="c", seat="review", engine="claude",
+        transport="native", requested_model="m", actual_model="m", prompt_hash="sha256:x",
+        context_hashes=[], usage=None, timing_ms=1, queued_ms=0,
+        process={"exit_code": 0, "timed_out": False}, parse_status="usage_unavailable",
+        parsed_payload=None, raw_capture_path=None, fallback_reason=None,
+        routing_config_digest="sha256:d")
+    assert contract.observation_process_failure(obs) == "no_response"

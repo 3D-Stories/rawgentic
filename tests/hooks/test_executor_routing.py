@@ -1478,10 +1478,11 @@ def _valid_obs(requested="claude-sonnet-5", actual=None, correlation_id=None):
 
 
 class _StubSupervisor:
-    def __init__(self, state="completed", obs="__default__"):
+    def __init__(self, state="completed", obs="__default__", fresh=None):
         self.launched = []
         self._state = state
         self._obs = obs  # "__default__" -> _valid_obs(); else returned verbatim (#733 tests)
+        self._fresh = fresh  # #733 Step-11 R1-H1: the post-_finish registry record (or None)
 
     def launch(self, seat, prompt, **kw):  # noqa: D401 — records the call
         self.launched.append((seat, kw))
@@ -1490,10 +1491,13 @@ class _StubSupervisor:
     def await_job(self, record, *, timeout_s=3600.0):
         return self._state, (_valid_obs() if self._obs == "__default__" else self._obs)
 
+    def job_record(self, record):  # #733 Step-11 R1-H1: fresh registry read seam
+        return self._fresh
+
 
 def _supervised(tmp_path, *, probe_stream=None, final_argv=None, state="completed",
                 probe_raises=False, provision_calls=None, monkeypatch=None,
-                terminal_backend="tmux", obs="__default__"):
+                terminal_backend="tmux", obs="__default__", fresh=None):
     # The rich claude_mutating machinery (probes, init event) stays unit-tested even though
     # production refuses mutating-claude (STEP 0, MUTATING_FS_SANDBOXED): tests widen the module
     # constant — a monkeypatch of module state, NOT a caller input; production has no such knob.
@@ -1502,7 +1506,7 @@ def _supervised(tmp_path, *, probe_stream=None, final_argv=None, state="complete
         monkeypatch.setattr(er, "MUTATING_FS_SANDBOXED", frozenset({"codex", "claude"}))
     qc = QuotaCoordinator(tmp_path / "permits", {"claude": 2, "codex": 4, "zhipu": 2})
     audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
-    sup = _StubSupervisor(state=state, obs=obs)
+    sup = _StubSupervisor(state=state, obs=obs, fresh=fresh)
     gd, ctx = _gate()
     profile = _contract.LaunchProfile(session_policy="fresh", mutating=True)
     calls = provision_calls if provision_calls is not None else []
@@ -2059,10 +2063,14 @@ def test_probe_account_digest_no_delimiter_collision():
 # ---------------------------------------------------------------------------
 
 class _ResumeSup:
-    def __init__(self, *, mismatch=False, state="completed", obs="__default__"):
+    def __init__(self, *, mismatch=False, state="completed", obs="__default__", fresh=None):
         self.launched, self.awaited = [], []
         self._mismatch, self._state = mismatch, state
         self._obs = obs  # "__default__" -> _valid_obs(); else returned verbatim (#733 tests)
+        self._fresh = fresh  # #733 Step-11 R1-H1: post-_finish registry record (or None)
+
+    def job_record(self, record):  # #733 Step-11 R1-H1: fresh registry read seam
+        return self._fresh
 
     def launch(self, seat, prompt, **kw):
         self.launched.append((seat, kw))
@@ -3843,3 +3851,109 @@ def test_733_attach_partial_broken_to_dict_never_raises():
     for bad in (_Broken(), _NonDict()):
         res = er._attach_partial({"ok": False}, bad)  # pylint: disable=protected-access
         assert res["partial"] is False and res["partial_payload"] is None
+
+
+# ---------------------------------------------------------------------------
+# #733 Step-11 pre-PR review findings (R1-H1, R1-H2, R2-H2) — red-before-green
+# ---------------------------------------------------------------------------
+
+def _no_identity_timeout_obs():
+    """A completed-state envelope shaped like the supervisor's synthetic timeout: no attested
+    identity (verify_post: ok=True, verified=False), process evidence says timeout."""
+    o = _valid_obs()
+    o["actual_model"] = None
+    o["parse_status"] = "timeout"
+    o["usage"] = None
+    o["process"] = {"exit_code": None, "timed_out": True}
+    o["parsed_payload"] = "partial text"
+    return o
+
+
+def test_733_s11_supervised_timeout_unverified_kill_not_retryable(tmp_path, monkeypatch):
+    # R1-H1: await_job returns "timed_out" whether or not _kill_job PROVED death; the fresh
+    # registry record carries quarantine_reason exactly when it did not. Residue is not proven
+    # death — the ratified policy forbids inviting a retry of a possibly-still-running mutation.
+    import types as _types
+    fresh = _types.SimpleNamespace(quarantine_reason="timeout kill unverified: residue")
+    res, _sup, _qc, _calls = _supervised(tmp_path, monkeypatch=monkeypatch,
+                                         state="timed_out", fresh=fresh)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "supervised_timed_out"
+    assert res["error"]["retryable"] is False
+    assert res["exit"] == er.EXIT_INTERNAL  # residue parity with completed_with_residue
+
+
+def test_733_s11_supervised_timeout_clean_kill_stays_retryable(tmp_path, monkeypatch):
+    # R1-H1 counterpart: a VERIFIED kill (no quarantine_reason) is positive death evidence.
+    import types as _types
+    fresh = _types.SimpleNamespace(quarantine_reason=None)
+    res, _sup, _qc, _calls = _supervised(tmp_path, monkeypatch=monkeypatch,
+                                         state="timed_out", fresh=fresh)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "supervised_timed_out"
+    assert res["error"]["retryable"] is True
+    assert res["exit"] == er.EXIT_AVAILABILITY
+
+
+def test_733_s11_resume_timeout_unverified_kill_not_retryable(tmp_path):
+    import types as _types
+    fresh = _types.SimpleNamespace(quarantine_reason="timeout kill unverified: residue")
+    sup = _ResumeSup(state="timed_out", fresh=fresh)
+    res = er.resume_dispatch(**_resume_kw(tmp_path, sup))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "resume_timed_out"
+    assert res["error"]["retryable"] is False
+    assert res["exit"] == er.EXIT_INTERNAL
+
+
+def test_733_s11_supervised_completed_no_identity_process_failure_not_retryable(
+        tmp_path, monkeypatch):
+    # R1-H2: process-failure evidence must be evaluated BEFORE the unverified verdict — a
+    # missing identity must never make a failed envelope MORE retryable than one that attested.
+    res, _sup, _qc, _calls = _supervised(tmp_path, monkeypatch=monkeypatch,
+                                         state="completed", obs=_no_identity_timeout_obs())
+    assert res["ok"] is False
+    assert res["error"]["code"] == "supervised_dispatch_timeout"  # not supervised_unverified
+    assert res["error"]["retryable"] is False
+    assert res["exit"] == er.EXIT_AVAILABILITY
+    assert res["partial"] is True and res["partial_payload"] == "partial text"
+
+
+def test_733_s11_resume_completed_no_identity_process_failure_not_retryable(tmp_path):
+    sup = _ResumeSup(obs=_no_identity_timeout_obs())
+    res = er.resume_dispatch(**_resume_kw(tmp_path, sup))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "resume_dispatch_timeout"  # not resume_unverified
+    assert res["error"]["retryable"] is False
+    assert res["exit"] == er.EXIT_AVAILABILITY
+    assert res["partial"] is True
+
+
+def test_733_s11_collect_refuses_foreign_seat_observation(tmp_path):
+    # R2-H2: the authorizing observation must BIND to the passing build receipt's identity —
+    # same seat/run/correlation — not merely share its nonce with verified identity.
+    from phase_executor import contract  # noqa: PLC0415  # pylint: disable=no-name-in-module
+    rec = _completed_record(tmp_path)
+    reg, mgr = _FakeReg(rec), _FakeMgr()
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    audit._write_locked({  # pylint: disable=protected-access
+        "kind": "receipt", "nonce": "rn1", "seat": "build", "correlation_id": "c1",
+        "attempt_id": "0-a",
+        "target_identity": ["codex-model", "openai", "cli", "api_key", "codex", None, None],
+        "config_digest": "sha256:d", "gate_digest": "sha256:g", "author_provider": None,
+        "verdict": "pass", "violations": [], "role": "build", "gate_outcome": "single",
+        "gate_input_digest": "sha256:gi", "recovered_from": None})
+    foreign = contract.Observation(
+        run_id="run1", attempt_id="0-a", correlation_id="c1", seat="review", engine="codex",
+        transport="cli", requested_model="codex-model", actual_model="codex-model",
+        prompt_hash="sha256:p", context_hashes=[], usage={"input": 1, "output": 1},
+        timing_ms=1, queued_ms=0, process={"exit_code": 0, "timed_out": False},
+        parse_status="ok", parsed_payload=None, raw_capture_path=None, fallback_reason=None,
+        routing_config_digest="sha256:d").to_dict()
+    foreign["dispatched_lane"] = {"provider": "openai", "transport": "cli",
+                                  "auth_mode": "api_key", "pool": "codex", "credential_ref": None}
+    audit._write_locked({"kind": "observation", "receipt_nonce": "rn1",  # pylint: disable=protected-access
+                         "observation": foreign})
+    res, _audit = _collect(tmp_path, reg, mgr, seed=False, audit=audit)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unauthorized_work_product"

@@ -1144,3 +1144,26 @@ def test_733_reconcile_availability_sibling_then_success_still_serves():
     recs = [_receipt_rec("n1"), _obs_rec("n1", status="timeout"), _receipt_rec("n2"), _obs_rec("n2")]
     res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
     assert res.ok, res
+
+
+# -- Step-11 R2-H2 (#733): the audit READ boundary validates inner observations --
+# append_observation is fail-loud (schema-validated), but records() only shape-checked the
+# envelope keys — an inner observation written by anything other than append_observation
+# (tampered file, foreign tool) flowed unvalidated into consumers like collect_work_product,
+# where the predicate's documented no-signal forgiveness assumes schema-valid inputs.
+
+def test_733_s11_records_validates_inner_observation(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-v")
+    log._write_locked({"kind": "observation", "receipt_nonce": "n1",  # pylint: disable=protected-access
+                       "observation": {"parse_status": "ok"}})
+    with pytest.raises(ValueError, match="inner observation"):
+        log.records()
+
+
+def test_733_s11_records_accepts_append_written_observation(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-v2")
+    obs = _obs_rec("n1")["observation"]
+    log._write_locked({"kind": "observation", "receipt_nonce": "n1",  # pylint: disable=protected-access
+                       "observation": obs})
+    recs = log.records()
+    assert len(recs) == 1 and recs[0]["observation"]["parse_status"] == obs["parse_status"]

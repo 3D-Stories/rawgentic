@@ -74,17 +74,26 @@ def observation_process_failure(obs) -> Optional[str]:
     field only (schema-validated appends keep garbage off the real paths). Identity is
     deliberately not consulted — that is ``verify_post``'s job. Accepts an ``Observation`` or
     its dict form. Never raises: this runs inside result assembly.
+
+    ``usage_unavailable`` additionally requires a payload (``parsed_payload is not None`` —
+    the AC4 rule: "", 0, False and empty containers ARE payloads): the status means "output
+    parsed, only token counts missing", so a no-output envelope claiming it is ``no_response``.
+    The producer already orders output before usage (adapters/base.py, 8a R2-H2), but
+    legacy/in-flight producers pre-date that reorder — the reader must not bless their
+    no-output shape (#733 Step-11 R2-H1).
     """
     if isinstance(obs, Observation):
-        # read the two fields directly — a full to_dict() would raise on an Observation whose
+        # read the fields directly — a full to_dict() would raise on an Observation whose
         # UNRELATED fields are malformed (e.g. process=None makes dict(self.process) raise),
         # violating the never-raises contract (8a R1-M2)
         status = obs.parse_status
         proc = obs.process
+        payload = obs.parsed_payload
     else:
         d = obs if isinstance(obs, _Mapping) else {}
         status = d.get("parse_status")
         proc = d.get("process")
+        payload = d.get("parsed_payload")
     proc = proc if isinstance(proc, _Mapping) else {}
     exit_code = proc.get("exit_code")
     if isinstance(exit_code, bool) or not isinstance(exit_code, int):
@@ -97,6 +106,8 @@ def observation_process_failure(obs) -> Optional[str]:
         return "malformed_status"
     if status not in PROCESS_SUCCESS_STATUSES:
         return status
+    if status == USAGE_UNAVAILABLE and payload is None:
+        return NO_RESPONSE  # produced nothing — a usage-only success claim is not a success
     return None
 
 

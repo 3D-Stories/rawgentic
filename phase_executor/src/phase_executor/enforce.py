@@ -470,7 +470,14 @@ class RoutingAuditLog:
                 "worktree_path": worktree_path, "parked": parked, "stash_oid": stash_oid})
 
     def records(self) -> list:
-        """Parse + fail-closed-validate every line. A malformed line raises (never silently dropped)."""
+        """Parse + fail-closed-validate every line. A malformed line raises (never silently dropped).
+
+        Observation envelopes additionally get their INNER observation schema-validated
+        (#733 Step-11 R2-H2): ``append_observation`` is fail-loud at write, but anything else
+        that wrote the file (tampering, a foreign tool) bypassed that — and downstream
+        consumers (``collect_work_product`` authorization, ``observation_process_failure``'s
+        documented no-signal forgiveness) assume schema-valid inputs. The read boundary must
+        be as strict as the write boundary."""
         out = []
         if not self.path.exists():
             return out
@@ -483,6 +490,13 @@ class RoutingAuditLog:
             except json.JSONDecodeError as e:
                 raise ValueError(f"audit line {i}: malformed JSON ({e})") from e
             _validate_record(obj, i)
+            if obj.get("kind") == "observation":
+                try:
+                    contract.validate_observation(obj["observation"])
+                except Exception as e:  # noqa: BLE001 — fail-closed read boundary
+                    raise ValueError(
+                        f"audit line {i}: inner observation failed schema validation "
+                        f"({type(e).__name__}: {str(e).splitlines()[0][:200]})") from e
             out.append(obj)
         return out
 
