@@ -1154,7 +1154,9 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     expected_project_path: str | None = None, steps=None,
                     on_successor=None, now=time.monotonic,
                     predecessor_session: str | None = None,
-                    predecessor_goal_condition: str | None = None) -> dict:
+                    predecessor_goal_condition: str | None = None,
+                    strict_goal_binding: bool = False,
+                    expected_predecessor_goal: str | None = None) -> dict:
     """Execute the ordered handoff. Effects are injected so tests drive the whole sequence.
 
     THE ORDER, and why each position is load-bearing:
@@ -1639,6 +1641,39 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     f"transcript could not be read ({exc}), and an unreadable transcript is not "
                     f"evidence that nothing is armed. Run {_CLEAR_COMMAND!r} in it by hand")
                 return out
+
+            # #758 strict goal binding (D18). The validated snapshot — the sentinel-only live
+            # goal the caller's verbatim-carry check ran against, INCLUDING the explicit
+            # "no live goal" state (None) — must still hold at the destructive step. ANY
+            # divergence refuses the clear and keeps the pane: a goal that changed, appeared,
+            # or disappeared mid-handoff means an instruction this close could destroy. The
+            # residual race between this read and the clear send is a platform ceiling
+            # (`/goal clear` has no compare-and-clear form); mitigation: a goal cannot arm
+            # mid-turn in a busy pane — arming requires a Stop evaluation.
+            if strict_goal_binding:
+                live_now = live_owner_goal(pred_text)
+                if live_now != expected_predecessor_goal:
+                    def _shape(v):
+                        return "none" if v is None else f"{len(v)} chars"
+                    detail = (f"validated snapshot {_shape(expected_predecessor_goal)}, "
+                              f"live now {_shape(live_now)}")
+                    if isinstance(live_now, str) and isinstance(expected_predecessor_goal, str):
+                        off = next((i for i, (a, b) in
+                                    enumerate(zip(live_now, expected_predecessor_goal))
+                                    if a != b),
+                                   min(len(live_now), len(expected_predecessor_goal)))
+                        detail += f", first divergence at offset {off}"
+                    out["failed_step"] = "predecessor_goal_binding"
+                    record("predecessor_goal_binding", [], None,
+                           note=f"strict binding REFUSED the clear (#758): {detail}")
+                    out["predecessor_guard"] = (
+                        f"the predecessor pane {anchor_pane} is LEFT OPEN and its guard "
+                        f"untouched — the goal state changed between validation and teardown "
+                        f"({detail}), and closing a pane over an instruction that changed "
+                        f"underneath the handoff is exactly what #758 forbids. The successor "
+                        f"is armed with the VALIDATED goal and keeps running. Inspect the "
+                        f"pane; clear and close it by hand only after reading its goal")
+                    return out
 
             live_condition = latest_goal_status_condition(pred_text)
             armed = live_condition is not None and goal_currently_unmet(pred_text, live_condition)

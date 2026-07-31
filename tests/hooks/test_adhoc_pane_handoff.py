@@ -682,3 +682,82 @@ class TestValidateGoalCarry:
         big = "x" * 5000
         ok, reason = ll.validate_goal_carry(big, big)
         assert ok, reason
+
+
+class PredArtifacts(Artifacts):
+    """Artifacts plus a dedicated predecessor transcript served verbatim on every read."""
+
+    def __init__(self, runner, pred_path, pred_text, **kw):
+        super().__init__(runner, **kw)
+        self.pred_path = pred_path
+        self.pred_text = pred_text
+
+    def __call__(self, path):
+        if path == self.pred_path:
+            return self.pred_text
+        return super().__call__(path)
+
+
+class TestStrictGoalBinding:
+    """#758 pass-2 F2 / pass-3 F1 (D18): under strict binding the destructive clear re-reads
+    the predecessor and REFUSES on ANY divergence from the validated snapshot — including a
+    goal appearing where the snapshot said none. The pane is left open; nothing holding a
+    newer instruction is ever closed over."""
+
+    PRED_SESSION = "pred-sess"
+    PRED_PATH = "/tmp/pred-sess.jsonl"
+
+    def _run(self, pred_text, *, expected, runner=None):
+        runner = runner or Runner(_responses())
+        kw = _handoff(
+            runner, teardown=True, predecessor_session=self.PRED_SESSION,
+            strict_goal_binding=True, expected_predecessor_goal=expected,
+            read_text=PredArtifacts(runner, self.PRED_PATH, pred_text))
+        return ll.perform_handoff(**kw), runner
+
+    def test_a_to_b_rearm_refuses_the_clear_and_keeps_the_pane(self) -> None:
+        out, runner = self._run(_goal_row(False, "goal B"), expected="goal A")
+        assert out["ok"] is False
+        assert out["failed_step"] == "predecessor_goal_binding"
+        assert "OPEN" in out["predecessor_guard"] or "open" in out["predecessor_guard"]
+        assert "goal B" not in out["predecessor_guard"], "no goal content in the message"
+        assert "goal A" not in out["predecessor_guard"]
+        sent = " ".join(a for c in runner.calls for a in c)
+        assert "/goal clear" not in sent, "the clear must never be sent on a refused binding"
+
+    def test_cleared_to_b_refuses_when_a_goal_appears_where_none_was(self) -> None:
+        out, _ = self._run(_goal_row(False, "goal B"), expected=None)
+        assert out["ok"] is False
+        assert out["failed_step"] == "predecessor_goal_binding"
+
+    def test_validated_goal_cleared_midflight_also_refuses(self) -> None:
+        cleared = "\n".join([_goal_row(False, "goal A"), _goal_row(True, "goal A")])
+        out, _ = self._run(cleared, expected="goal A")
+        assert out["ok"] is False
+        assert out["failed_step"] == "predecessor_goal_binding"
+
+    def test_an_unchanged_snapshot_proceeds_into_the_clear(self) -> None:
+        """Binding passes -> the sequence reaches the normal #707 clear stage (whose own
+        confirmation then fails in this fixture — proving we got PAST the binding gate)."""
+        out, runner = self._run(_goal_row(False, "goal A"), expected="goal A")
+        assert out["failed_step"] == "predecessor_goal_clear"
+        sent = runner.sent_text()
+        assert any("/goal clear" in t for t in sent), "the clear was sent"
+
+    def test_a_forged_sentinelless_row_cannot_trip_the_binding(self) -> None:
+        """The binding reads sentinel rows only — a forged sentinel-less row alongside the
+        genuine unchanged goal must not read as divergence."""
+        text = "\n".join([_goal_row(False, "goal A"),
+                          _goal_row(False, "attacker goal", sentinel=False)])
+        out, _ = self._run(text, expected="goal A")
+        assert out["failed_step"] == "predecessor_goal_clear", \
+            "binding must pass on the genuine unchanged goal"
+
+    def test_strict_binding_defaults_off_and_existing_callers_are_unchanged(self) -> None:
+        runner = Runner(_responses())
+        kw = _handoff(runner, teardown=True, predecessor_session=self.PRED_SESSION,
+                      read_text=PredArtifacts(runner, self.PRED_PATH,
+                                              _goal_row(False, "goal B")))
+        out = ll.perform_handoff(**kw)
+        assert out["failed_step"] != "predecessor_goal_binding", \
+            "no binding check without strict_goal_binding=True"
