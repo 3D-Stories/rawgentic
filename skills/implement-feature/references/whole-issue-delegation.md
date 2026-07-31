@@ -83,13 +83,14 @@ orchestrator owns everything after the build.
 - `promotions` — mid-flight risk promotions the builder flagged; the
   orchestrator dispatches Step 8a for each.
 
-## Collect before validation (worktree-isolated builds, #164)
+## Collect before validation (worktree-isolated builds, #164 — LEGACY architecture)
 
-Under the declared LEGACY architecture the build-subagent
-(`rawgentic:rawgentic-implementer`) runs `isolation: worktree`; under the
-executor architecture (the default) the whole-issue build dispatches the
-executor `build` seat, which isolates the same way (per-dispatch git
-worktree, #735). Either way the produced commits land in the shared object
+This whole section is LEGACY-architecture mechanics (#767): only the LEGACY
+build-subagent (`rawgentic:rawgentic-implementer`, `isolation: worktree`) can
+produce the agent-authored commits this contract collects — a contained
+executor build agent cannot commit at all, which is why the executor
+architecture falls back to per-task Step 8 (see the Architecture-scope note
+above). Under LEGACY, the produced commits land in the shared object
 store, NOT on the feature branch. Validation Rule 4 diffs `base..HEAD` on the ORCHESTRATOR's checkout,
 so an un-collected worktree build always fails Rule 4 (empty diff) and would
 be discarded on every run. Therefore, before invoking

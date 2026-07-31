@@ -2188,7 +2188,9 @@ class _FakeMgr:
 
     def __init__(self, *, changed=None, promoted=True, tip=None):
         self.promote_calls = []
-        self._changed = changed or list(self._EV["changed_paths"])
+        # None -> the appendix default; an EXPLICIT [] means a genuinely unchanged worktree
+        # (#767 empty_work_product) and must not silently fall back to the default.
+        self._changed = list(self._EV["changed_paths"]) if changed is None else list(changed)
         self._promoted = promoted
         self._tip = tip  # #570 L1: live target-ref tip {"sha","message"} or None (ref unresolved)
 
@@ -2287,7 +2289,7 @@ def test_collect_work_product_resumes_phase2_after_promote_crash(tmp_path):
     intents.mkdir(parents=True, exist_ok=True)
     (intents / "collect-rn1.json").write_text(json.dumps({
         "receipt_nonce": "rn1", "candidate_tree_sha": "ctree",
-        "expected_target_sha": "0" * 40, "new_sha": "newsha", "consumed": False}), encoding="utf-8")
+        "expected_target_sha": "0" * 40, "target_ref": "refs/heads/integration", "paths_digest": "appendix-default", "new_sha": "newsha", "consumed": False}), encoding="utf-8")
     mgr = _FakeMgr()
     res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr)
     assert res["ok"] and res["status"] == "recorded" and res["new_sha"] == "newsha"
@@ -2298,13 +2300,17 @@ def test_collect_work_product_resumes_phase2_after_promote_crash(tmp_path):
 def test_collect_work_product_audit_search_prevents_duplicate(tmp_path):
     # crash AFTER append BEFORE consume: record already present + an unconsumed intent
     audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    # our own crash-after-append: post-#767 the record carries the v2 binding (same identity
+    # the retry recomputes) — the full-key dedup must still find it
     audit.append_work_product(receipt_nonce="rn1", candidate_tree_sha="ctree", new_sha="newsha",
-                              work_product={"kind": "docs", "promotion_status": "promoted"})
+                              work_product={"kind": "docs", "promotion_status": "promoted"},
+                              target_ref="refs/heads/integration",
+                              paths_digest="appendix-default")
     intents = tmp_path / "intents"
     intents.mkdir(parents=True, exist_ok=True)
     (intents / "collect-rn1.json").write_text(json.dumps({
         "receipt_nonce": "rn1", "candidate_tree_sha": "ctree",
-        "expected_target_sha": "0" * 40, "new_sha": "newsha", "consumed": False}), encoding="utf-8")
+        "expected_target_sha": "0" * 40, "target_ref": "refs/heads/integration", "paths_digest": "appendix-default", "new_sha": "newsha", "consumed": False}), encoding="utf-8")
     res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), _FakeMgr(), audit=audit)
     assert res["ok"] and res["status"] == "already_recorded"
     assert len(_wp_records(audit)) == 1  # audit-search prevented a duplicate
@@ -2353,7 +2359,7 @@ def test_collect_work_product_recovers_landed_promotion_after_crash(tmp_path):
     intents.mkdir(parents=True, exist_ok=True)
     (intents / "collect-rn1.json").write_text(json.dumps({
         "receipt_nonce": "rn1", "candidate_tree_sha": "ctree",
-        "expected_target_sha": "0" * 40, "new_sha": None, "consumed": False}), encoding="utf-8")
+        "expected_target_sha": "0" * 40, "target_ref": "refs/heads/integration", "paths_digest": "appendix-default", "new_sha": None, "consumed": False}), encoding="utf-8")
     # structural landed-match: tip.tree == candidate_tree_sha ("ctree"); expected is all-zero
     # (ref-create) so parents are not required.
     mgr = _FakeMgr(tip={"sha": "landedsha", "tree": "ctree", "parents": (),
@@ -2371,7 +2377,7 @@ def test_collect_work_product_crash_window_not_landed_still_promotes(tmp_path):
     intents.mkdir(parents=True, exist_ok=True)
     (intents / "collect-rn1.json").write_text(json.dumps({
         "receipt_nonce": "rn1", "candidate_tree_sha": "ctree",
-        "expected_target_sha": "0" * 40, "new_sha": None, "consumed": False}), encoding="utf-8")
+        "expected_target_sha": "0" * 40, "target_ref": "refs/heads/integration", "paths_digest": "appendix-default", "new_sha": None, "consumed": False}), encoding="utf-8")
     mgr = _FakeMgr(tip=None)
     res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr)
     assert res["ok"] and res["status"] == "recorded" and res["new_sha"] == "newsha"
@@ -2386,7 +2392,7 @@ def test_collect_work_product_foreign_tip_not_reconstructed(tmp_path):
     intents.mkdir(parents=True, exist_ok=True)
     (intents / "collect-rn1.json").write_text(json.dumps({
         "receipt_nonce": "rn1", "candidate_tree_sha": "ctree",
-        "expected_target_sha": "0" * 40, "new_sha": None, "consumed": False}), encoding="utf-8")
+        "expected_target_sha": "0" * 40, "target_ref": "refs/heads/integration", "paths_digest": "appendix-default", "new_sha": None, "consumed": False}), encoding="utf-8")
     mgr = _FakeMgr(promoted=False, tip={"sha": "othersha", "tree": "foreigntree",
                                         "parents": ("0" * 40,),
                                         "message": "collect work product (docs) for rn1"})
@@ -4054,3 +4060,95 @@ def test_collect_cli_accepts_promote_path_flag(tmp_path):
                   "--kind", "code", "--promote-path", "src/a.py", "--promote-path", "src/b.py",
                   "--workspace", str(ws), "--project", "nope"])
     assert isinstance(rc, int)  # parses; downstream config failure is fine here
+
+
+# ---------------------------------------------------------------------------
+# #767 Step-8a fixes: empty work product, intent strictness, digest encoding, dedup key
+# ---------------------------------------------------------------------------
+
+def test_collect_empty_worktree_refused(tmp_path):
+    # 8a R1/R2-H2: zero changed paths must refuse — an empty commit would advance the branch
+    # and satisfy "branch actually advanced" vacuously.
+    mgr = _FakeMgr(changed=[])
+    res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr,
+                      kind="code", promote_paths=["src/a.py"])
+    assert res["ok"] is False
+    assert res["error"]["code"] == "empty_work_product"
+
+
+def test_collect_landed_intent_locks_all_fields(tmp_path):
+    # 8a R2-H1: with a LANDED intent, a re-request whose candidate/expected differ must refuse —
+    # the old matching3 predicate skipped the conflict check entirely on that path.
+    rec = _completed_record(tmp_path)
+    reg = _FakeReg(rec)
+    mgr = _FakeMgr(changed=["src/a.py"])
+    r1, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"])
+    assert r1["ok"] and r1["status"] == "recorded"
+    r2, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"],
+                     expected="1234567890abcdef1234567890abcdef12345678")
+    assert r2["ok"] is False
+    assert r2["error"]["code"] == "intent_conflict"
+
+
+def test_collect_corrupt_intent_refuses(tmp_path):
+    # 8a R2-H1: an unreadable intent must not silently degrade to "no intent".
+    intents = tmp_path / "intents"
+    intents.mkdir(parents=True, exist_ok=True)
+    (intents / "collect-rn1.json").write_text("{not json", encoding="utf-8")
+    res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), _FakeMgr())
+    assert res["ok"] is False
+    assert res["error"]["code"] == "intent_corrupt"
+
+
+def test_collect_legacy_landed_intent_verifies_target(tmp_path):
+    # 8a R1-H1: a pre-#767 (legacy) landed intent carries no target binding — success requires
+    # the REQUESTED target to actually hold the landed sha; the old default made any target pass.
+    intents = tmp_path / "intents"
+    intents.mkdir(parents=True, exist_ok=True)
+    (intents / "collect-rn1.json").write_text(json.dumps({
+        "receipt_nonce": "rn1", "candidate_tree_sha": "ctree",
+        "expected_target_sha": "0" * 40, "new_sha": "newsha", "consumed": True}), encoding="utf-8")
+    ok_mgr = _FakeMgr(tip={"sha": "newsha", "tree": "ctree", "parents": (), "message": "m"})
+    res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), ok_mgr)
+    assert res["ok"] and res["status"] == "already_recorded"
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    (bad / "intents").mkdir()
+    ((bad / "intents") / "collect-rn1.json").write_text(json.dumps({
+        "receipt_nonce": "rn1", "candidate_tree_sha": "ctree",
+        "expected_target_sha": "0" * 40, "new_sha": "newsha", "consumed": True}), encoding="utf-8")
+    res2, _ = _collect(bad, _FakeReg(_completed_record(tmp_path)), _FakeMgr(tip=None))
+    assert res2["ok"] is False
+    assert res2["error"]["code"] == "intent_conflict"
+
+
+def test_collect_paths_digest_encoding_unambiguous(tmp_path):
+    # 8a R1-M3: newline-joined serialization collides ["a\nb","c"] with ["a","b\nc"] — the
+    # recorded digests must differ.
+    d1, d2 = tmp_path / "one", tmp_path / "two"
+    d1.mkdir(), d2.mkdir()
+    m1 = _FakeMgr(changed=["a\nb", "c"])
+    m2 = _FakeMgr(changed=["a", "b\nc"])
+    _r1, a1 = _collect(d1, _FakeReg(_completed_record(tmp_path)), m1,
+                       kind="code", promote_paths=["a\nb", "c"])
+    _r2, a2 = _collect(d2, _FakeReg(_completed_record(tmp_path)), m2,
+                       kind="code", promote_paths=["a", "b\nc"])
+    assert _r1["ok"] and _r2["ok"]
+    pd1 = [r for r in a1.records() if r.get("kind") == "work_product"][0]["paths_digest"]
+    pd2 = [r for r in a2.records() if r.get("kind") == "work_product"][0]["paths_digest"]
+    assert pd1 != pd2
+
+
+def test_collect_audit_dedup_uses_full_binding_key(tmp_path):
+    # 8a R1-M4: a same-3-tuple record with a DIFFERENT binding must not suppress writing ours.
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    audit.append_work_product(receipt_nonce="rn1", candidate_tree_sha="ctree", new_sha="newsha",
+                              work_product={"kind": "docs", "promotion_status": "promoted"})
+    mgr = _FakeMgr(changed=["src/a.py"])
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr,
+                          kind="code", promote_paths=["src/a.py"], audit=audit)
+    assert res["ok"]
+    wps = _wp_records(audit)
+    assert len(wps) == 2  # the v1 foreign record did NOT suppress our v2 binding
+    assert any(r.get("binding_version") == 2 and r.get("paths_digest") != "appendix-default"
+               for r in wps)

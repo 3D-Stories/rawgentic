@@ -317,13 +317,27 @@ def _validate_record(obj, lineno: int) -> None:
         raise ValueError(f"audit line {lineno}: {kind} missing fields {missing}")
     if kind in ("work_product", "expected_work_product") and "binding_version" in obj:
         # #767: v2 bindings also carry the promotion identity; legacy (no version) stays as-is.
+        # Strict types (8a R1-M5/R2-M3): a truthy non-string here would later crash
+        # reconcile's _binding_key set construction (unhashable) or admit a garbage identity.
         if obj["binding_version"] != 2:
             raise ValueError(
                 f"audit line {lineno}: {kind} unknown binding_version {obj['binding_version']!r}")
-        v2_missing = [k for k in _BINDING_V2_EXTRA if not obj.get(k)]
-        if v2_missing:
+        for k in _BINDING_V2_EXTRA:
+            v = obj.get(k)
+            if not isinstance(v, str) or not v:
+                raise ValueError(
+                    f"audit line {lineno}: {kind} binding_version=2 field {k} must be a "
+                    f"non-empty string (got {type(v).__name__})")
+        if not obj["target_ref"].startswith("refs/"):
             raise ValueError(
-                f"audit line {lineno}: {kind} binding_version=2 missing fields {v2_missing}")
+                f"audit line {lineno}: {kind} target_ref {obj['target_ref']!r} is not refs/-rooted")
+        pd = obj["paths_digest"]
+        if pd != "appendix-default" and not (
+                pd.startswith("sha256:") and len(pd) == 71
+                and all(c in "0123456789abcdef" for c in pd[7:])):
+            raise ValueError(
+                f"audit line {lineno}: {kind} paths_digest {pd!r} is neither 'appendix-default' "
+                f"nor a canonical sha256:<64-hex> digest")
     if kind == "receipt" and obj["verdict"] not in _VERDICTS:
         raise ValueError(f"audit line {lineno}: bad verdict {obj['verdict']!r}")
     if kind == "receipt" and "recovered_from" in obj and not (
@@ -429,7 +443,11 @@ class RoutingAuditLog:
         """#559 AC1 (design §2.6): bind a promoted work product to its build receipt. candidate_tree_sha
         + new_sha are recorded so the collect-work-product retry dedup can match on exactly these.
         #767: when target_ref + paths_digest are BOTH supplied, the record is written as
-        binding_version=2 (the promotion identity rides the binding); omitted → legacy v1 shape."""
+        binding_version=2 (the promotion identity rides the binding); BOTH omitted → legacy v1
+        shape; exactly one supplied → ValueError (a silent version downgrade, 8a R2-M3)."""
+        if (target_ref is None) != (paths_digest is None):
+            raise ValueError("append_work_product: partial binding identity — supply BOTH "
+                             "target_ref and paths_digest, or neither")
         rec = {"kind": "work_product", "receipt_nonce": receipt_nonce,
                "candidate_tree_sha": candidate_tree_sha, "new_sha": new_sha,
                "work_product": dict(work_product)}
@@ -447,7 +465,11 @@ class RoutingAuditLog:
         writes, not Observation.work_product). collect_work_product writes it just before the
         work_product record; idempotency (search-then-append) is the caller's responsibility.
         #767: target_ref + paths_digest (both supplied) → binding_version=2, matching
-        append_work_product — reconcile matches on the full binding key, never across versions."""
+        append_work_product — reconcile matches on the full binding key, never across versions;
+        exactly one supplied → ValueError (a silent version downgrade, 8a R2-M3)."""
+        if (target_ref is None) != (paths_digest is None):
+            raise ValueError("append_expected_work_product: partial binding identity — supply "
+                             "BOTH target_ref and paths_digest, or neither")
         rec = {"kind": "expected_work_product", "receipt_nonce": receipt_nonce,
                "candidate_tree_sha": candidate_tree_sha, "new_sha": new_sha}
         if target_ref and paths_digest:

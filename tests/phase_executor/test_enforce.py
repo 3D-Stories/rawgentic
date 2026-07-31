@@ -1172,14 +1172,14 @@ def test_733_s11_records_accepts_append_written_observation(tmp_path):
 # ---- #767 (rev-4 F3): versioned work-product binding — v2 requires identity fields, v1 legacy reads ----
 
 def _wp_rec_v2(nonce, tree="sha256:tree1", new="sha256:new1", target="refs/heads/feat",
-               digest="sha256:pd1"):
+               digest="sha256:" + "ab" * 32):
     r = _wp_rec(nonce, tree=tree, new=new)
     r.update({"binding_version": 2, "target_ref": target, "paths_digest": digest})
     return r
 
 
 def _expected_wp_rec_v2(nonce, tree="sha256:tree1", new="sha256:new1", target="refs/heads/feat",
-                        digest="sha256:pd1"):
+                        digest="sha256:" + "ab" * 32):
     r = _expected_wp_rec(nonce, tree=tree, new=new)
     r.update({"binding_version": 2, "target_ref": target, "paths_digest": digest})
     return r
@@ -1246,3 +1246,40 @@ def test_reconcile_v2_pair_target_mismatch_is_missing():
             _wp_rec_v2("n1", target="refs/heads/OTHER")]
     res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
     assert not res.ok and any("n1" in x for x in res.missing_work_product)
+
+
+# ---- #767 Step-8a fixes: v2 writer/reader strictness ----
+
+def test_append_work_product_rejects_partial_binding(tmp_path):
+    import pytest as _pytest
+    log = enforce.RoutingAuditLog(tmp_path / "runs", "runv")
+    with _pytest.raises(ValueError):
+        log.append_work_product(receipt_nonce="n1", candidate_tree_sha="t", new_sha="s",
+                                work_product=_valid_wp(), target_ref="refs/heads/x")
+    with _pytest.raises(ValueError):
+        log.append_expected_work_product(receipt_nonce="n1", candidate_tree_sha="t", new_sha="s",
+                                         paths_digest="sha256:" + "0" * 64)
+
+
+def test_validate_v2_rejects_nonstring_identity(tmp_path):
+    import pytest as _pytest
+    bad = _wp_rec_v2("n1")
+    bad["target_ref"] = ["refs/heads/x"]  # truthy non-string would crash _binding_key's set
+    with _pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path, bad)
+
+
+def test_validate_v2_rejects_malformed_digest_and_ref(tmp_path):
+    import pytest as _pytest
+    bad = _wp_rec_v2("n1", digest="not-a-digest")
+    with _pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path, bad)
+    bad2 = _wp_rec_v2("n2", target="heads/x")  # not refs/-rooted
+    with _pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path, bad2)
+
+
+def test_validate_v2_accepts_appendix_default_digest(tmp_path):
+    ok = _wp_rec_v2("n1", digest="appendix-default")
+    recs = _audit_roundtrip(tmp_path, ok)
+    assert recs and recs[0]["paths_digest"] == "appendix-default"

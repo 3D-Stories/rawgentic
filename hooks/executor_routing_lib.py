@@ -1637,7 +1637,10 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
         except (ValueError, TypeError) as e:
             return _err(EXIT_MALFORMED, "invalid_promote_paths", str(e), retryable=False,
                         correlation_id=ce)
-        paths_digest = "sha256:" + hashlib.sha256("\n".join(norm).encode("utf-8")).hexdigest()
+        # NUL-joined + deduped: git paths may legally contain newlines, so a "\n" join would
+        # collide ["a\nb","c"] with ["a","b\nc"] (8a R1-M3); NUL can never appear in a filename.
+        paths_digest = "sha256:" + hashlib.sha256(
+            "\x00".join(sorted(set(norm))).encode("utf-8")).hexdigest()
     recs = [r for r in registry.by_run(run_id) if r.session_name == session_name]
     if not recs:
         return _err(EXIT_MALFORMED, "unknown_job",
@@ -1701,30 +1704,69 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
         return _err(EXIT_INTERNAL, "content_evidence_failed", f"{type(e).__name__}: {e}",
                     retryable=False, correlation_id=ce)
     candidate_tree_sha = evidence["content_tree_sha"]
+    if promote_paths is not None and not evidence["changed_paths"]:
+        # 8a R1/R2-H2: an empty work product must never advance the branch — promote would
+        # happily create an empty commit, which then satisfies "branch actually advanced"
+        # while every diff-scoped gate passes vacuously.
+        return _err(EXIT_ENFORCEMENT, "empty_work_product",
+                    "collect-work-product: the worktree has no changed content — refusing a "
+                    "vacuous collection (an empty commit would advance the branch with nothing "
+                    "on it)", retryable=False, correlation_id=ce)
     Path(intent_dir).mkdir(parents=True, exist_ok=True)
     intent_path = Path(intent_dir) / f"collect-{record.receipt_nonce}.json"
     intent = None
     if intent_path.exists():
         try:
             intent = json.loads(intent_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            intent = None
-    matching3 = (isinstance(intent, dict)
-                 and intent.get("receipt_nonce") == record.receipt_nonce
-                 and intent.get("candidate_tree_sha") == candidate_tree_sha
-                 and intent.get("expected_target_sha") == expected_target_sha)
-    # #767 (pass-2 F3): a matching-nonce intent bound to a DIFFERENT target/policy refuses loud —
-    # already_recorded for a branch that was never advanced would silently strand it. A legacy
-    # intent (no identity fields) defaults to (this target, appendix-default): pre-#767 intents
-    # were appendix collects, so an appendix re-run stays compatible while a paths call conflicts.
-    if matching3 and (intent.get("target_ref", target_ref) != target_ref
-                      or intent.get("paths_digest", "appendix-default") != paths_digest):
-        return _err(EXIT_MALFORMED, "intent_conflict",
-                    f"collect-work-product: intent for receipt {record.receipt_nonce!r} is bound "
-                    f"to target {intent.get('target_ref')!r} / paths_digest "
-                    f"{intent.get('paths_digest')!r} — refusing a re-request with a different "
-                    f"target/policy", retryable=False, correlation_id=ce)
-    matching = matching3
+        except (OSError, ValueError) as e:
+            # 8a R2-H1: an unreadable intent must not silently degrade to "no intent" — a fresh
+            # phase 1 could double-spend a receipt whose promotion already landed.
+            return _err(EXIT_INTERNAL, "intent_corrupt",
+                        f"collect-work-product: intent file {intent_path.name!r} is unreadable "
+                        f"({type(e).__name__}) — refusing; inspect or remove it manually",
+                        retryable=False, correlation_id=ce)
+    # #767 intent-identity strictness (pass-2 F3 + 8a R1-H1/R2-H1). For a same-nonce intent:
+    # - LANDED (new_sha set): the binding is LOCKED — any mismatch (candidate, expected, target,
+    #   or policy) refuses loud. A legacy landed intent (pre-#767, no identity fields) succeeds
+    #   only when the REQUESTED target actually holds the landed sha — never by default.
+    # - UNLANDED (new_sha null): rebinding is allowed only for the SAME target+policy (the
+    #   legitimate retry-after-CAS-refusal re-cut); a different binding refuses, because the
+    #   F-l window means "unlanded-looking" may have landed on the ORIGINAL target unrecorded.
+    same_nonce = isinstance(intent, dict) and intent.get("receipt_nonce") == record.receipt_nonce
+    same3 = (same_nonce
+             and intent.get("candidate_tree_sha") == candidate_tree_sha
+             and intent.get("expected_target_sha") == expected_target_sha)
+    legacy_intent = same_nonce and ("target_ref" not in intent or "paths_digest" not in intent)
+    same_binding = (same_nonce and not legacy_intent
+                    and intent.get("target_ref") == target_ref
+                    and intent.get("paths_digest") == paths_digest)
+    landed = same_nonce and bool(intent.get("new_sha"))
+    legacy_verified = False
+    if same_nonce:
+        def _conflict(why: str):
+            return _err(EXIT_MALFORMED, "intent_conflict",
+                        f"collect-work-product: intent for receipt {record.receipt_nonce!r} "
+                        f"({why}) is bound to target {intent.get('target_ref')!r} / paths_digest "
+                        f"{intent.get('paths_digest')!r} / candidate "
+                        f"{intent.get('candidate_tree_sha')!r} / expected "
+                        f"{intent.get('expected_target_sha')!r} — refusing a re-request with a "
+                        f"different binding", retryable=False, correlation_id=ce)
+        if landed:
+            if legacy_intent:
+                try:
+                    _tip = manager.target_tip(handle, target_ref)
+                except Exception:  # noqa: BLE001 — an unreadable ref cannot verify the binding
+                    _tip = None
+                if same3 and _tip and _tip.get("sha") == intent.get("new_sha"):
+                    legacy_verified = True
+                else:
+                    return _conflict("legacy, landed — requested target does not hold the "
+                                     "landed sha")
+            elif not (same3 and same_binding):
+                return _conflict("landed")
+        elif not (same_binding or (legacy_intent and paths_digest == "appendix-default")):
+            return _conflict("unlanded, possibly-landed F-l window")
+    matching = same3 and (same_binding or legacy_verified)
     if matching and intent.get("consumed"):
         return {"ok": True, "exit": EXIT_OK, "action": "collect_work_product",
                 "status": "already_recorded", "receipt_nonce": record.receipt_nonce,
@@ -1800,10 +1842,19 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
     # derive failure on a landed promotion still leaves a marker reconcile can flag, closing the
     # fail-open missing-record path. Idempotent per (receipt_nonce, candidate_tree_sha, new_sha).
     existing = audit.records()
+    def _binding_matches(r) -> bool:
+        # Full-key dedup (8a R1-M4): a same-3-tuple record with a DIFFERENT binding must not
+        # suppress ours. A legacy (fieldless) record satisfies the key ONLY on a legacy-verified
+        # resume — else a pre-#767 crash resumed under new code would double-append.
+        if r.get("target_ref") == target_ref and r.get("paths_digest") == paths_digest:
+            return True
+        return legacy_verified and "target_ref" not in r
+
     already_expected = any(r.get("kind") == "expected_work_product"
                            and r.get("receipt_nonce") == record.receipt_nonce
                            and r.get("candidate_tree_sha") == candidate_tree_sha
                            and r.get("new_sha") == new_sha
+                           and _binding_matches(r)
                            for r in existing)
     if not already_expected:
         audit.append_expected_work_product(receipt_nonce=record.receipt_nonce,
@@ -1819,6 +1870,7 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
                   and r.get("receipt_nonce") == record.receipt_nonce
                   and r.get("candidate_tree_sha") == candidate_tree_sha
                   and r.get("new_sha") == new_sha
+                  and _binding_matches(r)
                   for r in existing)
     if not already:
         audit.append_work_product(receipt_nonce=record.receipt_nonce,

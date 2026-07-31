@@ -231,6 +231,10 @@ def test_wf2_step8_documents_executor_collection():
     assert "bare `update-ref` on the checked-out feature branch is forbidden" in section
     # the legacy (agent-commit) path stays documented alongside, explicitly scoped
     assert "cherry-pick or fast-forward" in section
+    # 8a fixes: the pre-dispatch capture names the symbolic ref (detached HEAD refuses), and
+    # branch advancement must carry content (an empty commit passes the SHA check vacuously)
+    assert "a detached head refuses this mode" in section
+    assert "the advance carries content" in section
 
 
 def test_wf2_whole_issue_executor_falls_back():
@@ -240,7 +244,10 @@ def test_wf2_whole_issue_executor_falls_back():
     section = _steps_section(
         SKILLS_DIR / "implement-feature" / "references" / "steps.md", "## Step 8: Implementation")
     assert "falls back to the normal per-task step 8" in section
+    # the gate is the FIRST numbered item and the procedure below it is legacy-scoped (8a R1-H6)
+    assert "every numbered item below is legacy-architecture-only" in section
     ref = (SKILLS_DIR / "implement-feature" / "references" / "whole-issue-delegation.md").read_text(
         encoding="utf-8")
     assert "LEGACY architecture" in ref
     assert "#762" in ref
+    assert "cannot commit at all" in ref
