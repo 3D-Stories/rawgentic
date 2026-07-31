@@ -87,8 +87,18 @@ Two hard rules about the prompt, both of which the command enforces by refusing:
    would also match unrelated content in the successor's transcript and pass the check before the
    prompt had submitted at all.
 
-**The goal condition.** What the successor still owes, in its own words. If the user has a `/goal`
-already, reuse its text verbatim. Multiline is fine — put it in a file and pass the path.
+**The goal condition.** The goal is OWNER-AUTHORED text and it carries VERBATIM (#758). Read this
+session's live goal with `read-goal-condition` and pass that text byte-for-byte — never retype,
+summarize, or extend it. Model state (STATE/MODE lines, progress, queue position) travels in the
+handoff FILE, never inside the goal — the measured failure is accretion: owner goals run
+1,200–2,000 chars, model-drafted successor goals ballooned to 4,000–5,400, and the #720 override
+rode inside one. The command enforces this on the retirement path: it reads your own transcript
+(refusing if it cannot — `--no-teardown` is the escape for additive work) and refuses a successor
+goal that differs from your live goal. Changing the goal at all requires the owner's explicit
+yes/no FIRST — an AskUserQuestion naming the instruction being changed, or `/ask-owner` when the
+owner is away, never a change embedded inside a >500-character paste — and only then
+`--goal-rewrite-approved '<the owner's verbatim answer>'`, which rides the output JSON as the
+audit record. Multiline is fine — put it in a file and pass the path.
 
 **Where it runs.** Read your own binding rather than guessing:
 
@@ -180,6 +190,7 @@ The JSON on stdout carries `results` and `failed_step`. Report what it says, not
 | `goal_armed` | the guard never armed | the successor is working but unguarded |
 | `send_resume_nudge` | a herdr call failed outright | herdr-side problem, not a timing one |
 | `predecessor_goal_clear` | the handoff worked; clearing YOUR goal did not | your pane is left **open** on purpose — run `/goal clear` in it yourself |
+| `predecessor_goal_binding` | the goal state changed between validation and teardown (#758) | the successor runs with the VALIDATED goal; your pane is left **open** and untouched — read its goal before clearing or closing anything |
 
 If you had **already** cleared your goal before handing off — which is what `clear-prep` tells you to
 do — that is not a failure and never reports one: `results.predecessor_goal_clear` reads
