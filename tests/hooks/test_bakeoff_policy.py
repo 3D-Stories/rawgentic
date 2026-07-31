@@ -554,3 +554,56 @@ def test_cli_design_round_judge_failure_interactive_exits_3(tmp_path):
         "--sink", str(tmp_path / "s.jsonl"),
     ], complete_fn=lambda prompt: (None, "glm down"), dispatch=_sleeping_dispatch(0.0))
     assert rc == 3
+
+
+# ---- #765 AC2: the committed live-round evidence artifact (fail-closed guard) ------------------
+
+EVIDENCE_PATH = REPO / "docs" / "measurements" / "bakeoff-765-design-round-evidence.json"
+_ABS_PATH_RE = r"^(/|[A-Za-z]:\\|\\\\)"
+
+
+def _all_strings(node):
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for k, v in node.items():
+            yield k
+            yield from _all_strings(v)
+    elif isinstance(node, (list, tuple)):
+        for v in node:
+            yield from _all_strings(v)
+
+
+def test_765_evidence_artifact_exists_and_is_sanitized():
+    """#765 AC2, fail-CLOSED: the committed evidence must exist (its absence FAILS — a
+    skip path would let the required evidence vanish behind a green suite) and must
+    prove a REAL judged competitive round: never degraded, both expected models, ok
+    candidates, a valid winner, and prompt/rubric binding hashes."""
+    import re
+    assert EVIDENCE_PATH.exists(), (
+        "committed #765 AC2 evidence artifact is missing: docs/measurements/"
+        "bakeoff-765-design-round-evidence.json")
+    data = json.loads(EVIDENCE_PATH.read_text(encoding="utf-8"))
+    # a genuinely judged competitive round — a degraded incumbent fallback is NOT evidence
+    assert data["judge_degraded"] is False
+    assert data["n_candidates"] == 2
+    cands = data["candidates"]
+    assert len(cands) == 2
+    assert {c["requested_model"] for c in cands} == set(bp.DESIGN_MODELS)
+    assert all(c["parse_status"] == "ok" for c in cands)
+    assert all(c["actual_model"] for c in cands)
+    assert isinstance(data["winner_index"], int) and 0 <= data["winner_index"] < 2
+    assert data["scores"], "a judged round carries scores"
+    # workflow identity — the wired path, not a random mint
+    assert data["run_id"].startswith("wf2-765-")
+    assert data["correlation_id"]
+    # prompt/rubric binding
+    for key in ("prompt_sha256", "rubric_sha256"):
+        assert re.fullmatch(r"[0-9a-f]{64}", data[key]), key
+    # sanitization: no payloads, no capture paths, no absolute paths anywhere
+    text = EVIDENCE_PATH.read_text(encoding="utf-8")
+    for forbidden_key in ("parsed_payload", "raw_capture_path", '"prompt"'):
+        assert forbidden_key not in text, forbidden_key
+    for s in _all_strings(data):
+        assert not re.match(_ABS_PATH_RE, s), f"absolute path in evidence: {s!r}"
+        assert "/home/" not in s, f"sensitive path fragment in evidence: {s!r}"
