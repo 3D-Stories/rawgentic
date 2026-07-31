@@ -186,17 +186,20 @@ def test_step3_row_states_wired_truth():
 
 def test_run_records_reconciliation_states_wired_join_truth():
     """#765: the run-records reconciliation section must not defer to the CLOSED #472,
-    and must state the honest per-stream join truth (design rounds carry workflow
-    identity; the build stream's wiring is #762's)."""
+    and must state #762's shipped landing-audit join while retaining the uncalled,
+    prospective build-bake-off follow-up (#779)."""
     text = (REPO / "docs" / "run-records.md").read_text(encoding="utf-8")
     start = text.index("### Audit-stream reconciliation")
     end = text.index("### Capture", start)
     section = _norm(text[start:end])
     assert "#472" not in section, \
         "run-records reconciliation must not defer to the closed #472 (#765)"
-    assert "#762" in section, \
-        "the build bake-off stream's wiring/reconciliation must point at the OPEN #762"
-    assert "correlation_id" in section
+    assert "landed_work_product" in section
+    assert "receipt_nonce" in section
+    assert "pre_cutover_unverifiable" in section
+    assert "#779" in section, \
+        "the uncalled build bake-off follow-up must point at #779, not #762"
+    assert "no current reconciliation join is performed on `correlation_id`" in section
 
 
 # --- #735: Step-8 executor-primary sentence + legacy-conditioned delegation --

@@ -79,6 +79,29 @@ floor-based picks must be **re-derived** every bench, not persist by inertia).
 
 Provenance: owner retune 2026-07-31 (#762).
 
+## Project-specific table override
+
+To use a project-owned table, add this to that project's committed `.rawgentic.json`:
+
+```json
+"phaseExecutorTable": {
+  "version": 1,
+  "file": "claude_docs/routing/phase-executor-table.json"
+}
+```
+
+`executor_routing_lib.resolve_table` loads that complete replacement table. If the override is
+absent, it uses the package default; if the declared override is broken (including an invalid
+descriptor, missing file, escaping path, or invalid table), resolution fails closed rather than
+falling back to the package default.
+
+## Architecture selection and `executorRouting`
+
+Workspace-entry `executorRouting` blocks are **validated but non-selecting** after #474.
+Architecture selection comes only from the workspace-level `defaultArchitecture` key: absent
+means `executor`. An explicit `executorRouting` block documents intended seat modes and refuses
+a contradiction with that architecture; it does not route a seat or select the architecture.
+
 ## Competitive rounds & build bake-off (#428)
 
 Where routing above picks ONE model per seat from prior bench evidence, competitive rounds settle a
@@ -90,7 +113,7 @@ failure semantics):
   workflow-callable `bakeoff_policy.py design-round` CLI carries the run's `run_id`/
   `correlation_id` into the record); **build bake-off** — gate-flagged (the #429
   `needs_bakeoff` verdict) `{sonnet, opus, terra}`, no workflow caller yet (that wiring is
-  #762's). Authors run concurrently across quota pools
+  #779's follow-up work). Authors run concurrently across quota pools
   (sol/terra on codex, sonnet/opus on the claude pool at its ceiling 2); wall-clock ≈ the slowest
   candidate, not the sum.
 - **Judge** — glm-5.2 (`make_glm_judge`), the vendored **bench-#14 rubric**
