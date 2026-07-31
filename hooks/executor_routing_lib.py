@@ -1592,10 +1592,41 @@ def _atomic_write_json(path: Path, obj) -> None:
         raise
 
 
+def _intent_semantic_error(intent, receipt_nonce: str) -> Optional[str]:
+    """Step-11 adv F4 + lane R1-F4: strict shape validation for an EXISTING nonce-named intent.
+    Returns a reason string when the intent is semantically corrupt, else None. Legacy (pre-#767)
+    intents legitimately lack target_ref/paths_digest — but if EITHER is present, both must be
+    non-empty strings (a half-bound identity is corruption, mirroring the audit writers)."""
+    if not isinstance(intent, dict):
+        return f"not a JSON object (got {type(intent).__name__})"
+    if intent.get("receipt_nonce") != receipt_nonce:
+        return (f"receipt_nonce {intent.get('receipt_nonce')!r} does not match the nonce-named "
+                f"file ({receipt_nonce!r})")
+    for k in ("candidate_tree_sha", "expected_target_sha"):
+        v = intent.get(k)
+        if not isinstance(v, str) or not v:
+            return f"{k} must be a non-empty string (got {v!r})"
+    new_sha = intent.get("new_sha")
+    if new_sha is not None and (not isinstance(new_sha, str) or not new_sha):
+        return f"new_sha must be null or a non-empty string (got {new_sha!r})"
+    if not isinstance(intent.get("consumed"), bool):
+        return f"consumed must be a boolean (got {intent.get('consumed')!r})"
+    has_ref, has_digest = "target_ref" in intent, "paths_digest" in intent
+    if has_ref != has_digest:
+        return "half-bound identity: target_ref and paths_digest must appear together"
+    if has_ref:
+        for k in ("target_ref", "paths_digest"):
+            v = intent.get(k)
+            if not isinstance(v, str) or not v:
+                return f"{k} must be a non-empty string (got {v!r})"
+    return None
+
+
 def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
                          expected_target_sha: str, kind: str,
                          registry, manager, audit, intent_dir: str,
-                         correlation_id: Optional[str] = None) -> dict:
+                         correlation_id: Optional[str] = None,
+                         promote_paths: Optional[list] = None) -> dict:
     """#559 AC1 (design §2.6) — promote a completed build's appendix work product onto
     ``target_ref`` and record an audited ``work_product`` binding. TWO-PHASE, crash-recoverable,
     audit-idempotent:
@@ -1610,13 +1641,43 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
 
     Idempotent re-run: a consumed matching intent → no-op; an unconsumed matching intent whose
     new_sha is already recorded (promote succeeded, finalize crashed) → resume phase 2 only; an
-    absent/non-matching intent with a moved ref refuses loud via promote's CAS. The verb HARD-CODES
-    its sole promotable prefix (docs/planning/appendix/) — the factory's generality is for other
-    callers. Git/registry seams are injected; the live path is CELL-1."""
+    absent/non-matching intent with a moved ref refuses loud via promote's CAS.
+
+    #767: ``promote_paths`` scopes the promotion. ``None`` → the historical appendix-prefix
+    policy, byte-identical. A non-empty list → EXACT-path policy (``promote_paths_only`` —
+    never prefix matching, Step-4 pass-2 F2). The durable intent + the audited bindings carry
+    the promotion identity (``target_ref`` + ``paths_digest``, binding_version=2): a re-request
+    for the same receipt against a DIFFERENT target/policy refuses loud (``intent_conflict``),
+    never ``already_recorded`` (pass-2 F3). Git/registry seams are injected; the live path is
+    CELL-1."""
     from phase_executor.registry import handle_from_record  # noqa: PLC0415
     from phase_executor.contract import derive_work_product  # noqa: PLC0415
-    from phase_executor.worktree import promote_appendix_only, PromotionResult, WorktreeError  # noqa: PLC0415
+    from phase_executor.worktree import (  # noqa: PLC0415
+        promote_appendix_only, promote_paths_only, PromotionResult, WorktreeError,
+        _norm_rel_components)
     ce = correlation_id
+    if promote_paths is None:
+        if kind == "code":
+            # Step-11 R1-F1 (flag half): code collection must never silently downgrade to the
+            # appendix policy — the exact-path staging backstop is the contract, not a flag.
+            return _err(EXIT_MALFORMED, "invalid_promote_paths",
+                        "collect-work-product: --kind code requires at least one --promote-path "
+                        "(exact-path collection; the appendix default is for docs/review/design)",
+                        retryable=False, correlation_id=ce)
+        path_policy = promote_appendix_only((_APPENDIX_PREFIX,))
+        paths_digest = "appendix-default"
+    else:
+        try:
+            path_policy = promote_paths_only(tuple(promote_paths))
+            norm = sorted("/".join(_norm_rel_components(p, what="declared path"))
+                          for p in promote_paths)
+        except (ValueError, TypeError) as e:
+            return _err(EXIT_MALFORMED, "invalid_promote_paths", str(e), retryable=False,
+                        correlation_id=ce)
+        # NUL-joined + deduped: git paths may legally contain newlines, so a "\n" join would
+        # collide ["a\nb","c"] with ["a","b\nc"] (8a R1-M3); NUL can never appear in a filename.
+        paths_digest = "sha256:" + hashlib.sha256(
+            "\x00".join(sorted(set(norm))).encode("utf-8")).hexdigest()
     recs = [r for r in registry.by_run(run_id) if r.session_name == session_name]
     if not recs:
         return _err(EXIT_MALFORMED, "unknown_job",
@@ -1632,6 +1693,19 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
         return _err(EXIT_MALFORMED, "no_build_receipt",
                     f"collect-work-product: job {session_name!r} has no receipt_nonce to bind",
                     retryable=False, correlation_id=ce)
+    if promote_paths is not None:
+        # Step-11 adv F2 + lane R1-F1 (ref half): exact-path collection is confined to the
+        # per-receipt temp-ref namespace with CREATE semantics — a caller-controlled target
+        # otherwise reaches update-ref and can advance a checked-out refs/heads/* branch while
+        # its index/files stay stale, bypassing the guarded landing entirely.
+        _canonical = f"refs/rawgentic/collect/{record.receipt_nonce}"
+        if target_ref != _canonical or expected_target_sha != "0" * 40:
+            return _err(EXIT_ENFORCEMENT, "invalid_collect_ref",
+                        f"collect-work-product: exact-path collection must target "
+                        f"{_canonical!r} with the all-zero expected SHA (create semantics) — "
+                        f"got target {target_ref!r}, expected {expected_target_sha!r}; landing "
+                        f"on the feature branch is land-work-product's job",
+                        retryable=False, correlation_id=ce)
     # F7 (#571): a promotion must be AUTHORIZED, not merely terminal — another seat's output or a
     # stale/forged registry binding must never be promoted. Require exactly ONE audit receipt for
     # this nonce with verdict==pass AND role=="build" (a gated mutating build seat), plus at least
@@ -1680,18 +1754,106 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
         return _err(EXIT_INTERNAL, "content_evidence_failed", f"{type(e).__name__}: {e}",
                     retryable=False, correlation_id=ce)
     candidate_tree_sha = evidence["content_tree_sha"]
+    if not evidence["changed_paths"]:
+        # 8a R1/R2-H2 + Step-11 adv F1 (unconditional — the appendix default included): an empty
+        # work product must never advance the branch — promote would happily create an empty
+        # commit, which then satisfies "branch actually advanced" while every diff-scoped gate
+        # passes vacuously.
+        return _err(EXIT_ENFORCEMENT, "empty_work_product",
+                    "collect-work-product: the worktree has no changed content — refusing a "
+                    "vacuous collection (an empty commit would advance the branch with nothing "
+                    "on it)", retryable=False, correlation_id=ce)
     Path(intent_dir).mkdir(parents=True, exist_ok=True)
     intent_path = Path(intent_dir) / f"collect-{record.receipt_nonce}.json"
     intent = None
     if intent_path.exists():
         try:
             intent = json.loads(intent_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            intent = None
-    matching = (isinstance(intent, dict)
-                and intent.get("receipt_nonce") == record.receipt_nonce
-                and intent.get("candidate_tree_sha") == candidate_tree_sha
-                and intent.get("expected_target_sha") == expected_target_sha)
+        except (OSError, ValueError) as e:
+            # 8a R2-H1: an unreadable intent must not silently degrade to "no intent" — a fresh
+            # phase 1 could double-spend a receipt whose promotion already landed.
+            return _err(EXIT_INTERNAL, "intent_corrupt",
+                        f"collect-work-product: intent file {intent_path.name!r} is unreadable "
+                        f"({type(e).__name__}) — refusing; inspect or remove it manually",
+                        retryable=False, correlation_id=ce)
+        # Step-11 adv F4 + lane R1-F4: a PARSEABLE-but-wrong intent is corruption too, never
+        # absence — degrading to the absent-intent path overwrites the receipt's only recovery
+        # identity. The file is nonce-NAMED, so a wrong nonce is corruption, not a foreign intent.
+        why = _intent_semantic_error(intent, record.receipt_nonce)
+        if why:
+            return _err(EXIT_INTERNAL, "intent_corrupt",
+                        f"collect-work-product: intent file {intent_path.name!r} is semantically "
+                        f"corrupt ({why}) — refusing; inspect or remove it manually",
+                        retryable=False, correlation_id=ce)
+    # #767 intent-identity strictness (pass-2 F3 + 8a R1-H1/R2-H1). For a same-nonce intent:
+    # - LANDED (new_sha set): the binding is LOCKED — any mismatch (candidate, expected, target,
+    #   or policy) refuses loud. A legacy landed intent (pre-#767, no identity fields) succeeds
+    #   only when the REQUESTED target actually holds the landed sha — never by default.
+    # - UNLANDED (new_sha null): a LEGACY unlanded intent always refuses (Step-11 adv F3 — its
+    #   original target is unprovable in the F-l window); a v2 one may rebind only for the SAME
+    #   target+policy (the legitimate retry-after-CAS-refusal re-cut), and only after the live
+    #   target proves the ORIGINAL promotion did not land (lane R1-F4).
+    same_nonce = isinstance(intent, dict) and intent.get("receipt_nonce") == record.receipt_nonce
+    same3 = (same_nonce
+             and intent.get("candidate_tree_sha") == candidate_tree_sha
+             and intent.get("expected_target_sha") == expected_target_sha)
+    legacy_intent = same_nonce and ("target_ref" not in intent or "paths_digest" not in intent)
+    same_binding = (same_nonce and not legacy_intent
+                    and intent.get("target_ref") == target_ref
+                    and intent.get("paths_digest") == paths_digest)
+    landed = same_nonce and bool(intent.get("new_sha"))
+    legacy_verified = False
+    if same_nonce:
+        def _conflict(why: str):
+            return _err(EXIT_MALFORMED, "intent_conflict",
+                        f"collect-work-product: intent for receipt {record.receipt_nonce!r} "
+                        f"({why}) is bound to target {intent.get('target_ref')!r} / paths_digest "
+                        f"{intent.get('paths_digest')!r} / candidate "
+                        f"{intent.get('candidate_tree_sha')!r} / expected "
+                        f"{intent.get('expected_target_sha')!r} — refusing a re-request with a "
+                        f"different binding", retryable=False, correlation_id=ce)
+        if landed:
+            if legacy_intent:
+                try:
+                    _tip = manager.target_tip(handle, target_ref)
+                except Exception:  # noqa: BLE001 — an unreadable ref cannot verify the binding
+                    _tip = None
+                if same3 and _tip and _tip.get("sha") == intent.get("new_sha"):
+                    legacy_verified = True
+                else:
+                    return _conflict("legacy, landed — requested target does not hold the "
+                                     "landed sha")
+            elif not (same3 and same_binding):
+                return _conflict("landed")
+        elif legacy_intent:
+            # Step-11 adv F3: an unlanded LEGACY intent has no target identity — in the F-l
+            # window its promotion may have landed on an unknown ORIGINAL target, so accepting
+            # it for ANY requested target can spend the receipt twice. Manual recovery only.
+            return _conflict("unlanded legacy — original target unprovable (F-l window); "
+                             "manual recovery required")
+        elif not same_binding:
+            return _conflict("unlanded, possibly-landed F-l window")
+        elif not same3:
+            # Step-11 lane R1-F4 (F-l half): an identity-changed retry over an unlanded
+            # same-binding intent is legitimate ONLY if the OLD promotion provably did not land.
+            # Probe the live target with the OLD intent's identity (the same structural
+            # fingerprint the landed-detection below uses): tip tree == its candidate, parented
+            # on its expected (or a pure tree match for the all-zero create case). A hit means
+            # the receipt is SPENT — rebinding would erase its only recovery identity.
+            try:
+                _old_tip = manager.target_tip(handle, target_ref)
+            except Exception:  # noqa: BLE001 — an unreadable ref cannot prove non-landing
+                _old_tip = None
+            _old_cand = intent.get("candidate_tree_sha")
+            _old_exp = intent.get("expected_target_sha")
+            if (_old_tip and _old_tip.get("sha") and _old_tip["sha"] != _old_exp
+                    and _old_tip.get("tree") == _old_cand
+                    and (_old_exp == "0" * 40
+                         or _old_exp in (_old_tip.get("parents") or ()))):
+                return _conflict("unlanded intent whose promotion actually LANDED (live tip "
+                                 "matches its candidate tree) — the receipt is spent; manual "
+                                 "reconciliation required")
+    matching = same3 and (same_binding or legacy_verified)
     if matching and intent.get("consumed"):
         return {"ok": True, "exit": EXIT_OK, "action": "collect_work_product",
                 "status": "already_recorded", "receipt_nonce": record.receipt_nonce,
@@ -1702,7 +1864,8 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
         new_sha = intent["new_sha"]
         promotion = PromotionResult(
             promoted=True, new_target_sha=new_sha, base_sha=evidence["base_sha"],
-            head_sha=evidence["head_sha"], changed_paths=tuple(evidence["changed_paths"]))
+            head_sha=evidence["head_sha"], changed_paths=tuple(evidence["changed_paths"]),
+            content_tree_sha=candidate_tree_sha)
     else:
         # #570 L1 (design F-l): a MATCHING intent whose new_sha is still unknown may mean promote's
         # update-ref LANDED but the finalize crashed before new_sha was recorded. Re-promoting would
@@ -1735,20 +1898,23 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
             new_sha = landed_sha
             promotion = PromotionResult(
                 promoted=True, new_target_sha=new_sha, base_sha=evidence["base_sha"],
-                head_sha=evidence["head_sha"], changed_paths=tuple(evidence["changed_paths"]))
+                head_sha=evidence["head_sha"], changed_paths=tuple(evidence["changed_paths"]),
+                content_tree_sha=candidate_tree_sha)  # tip.tree == candidate, just verified
             intent = {"receipt_nonce": record.receipt_nonce, "candidate_tree_sha": candidate_tree_sha,
-                      "expected_target_sha": expected_target_sha, "new_sha": new_sha, "consumed": False}
+                      "expected_target_sha": expected_target_sha, "new_sha": new_sha,
+                      "target_ref": target_ref, "paths_digest": paths_digest, "consumed": False}
             _atomic_write_json(intent_path, intent)
         else:
             # PHASE 1 — durable intent BEFORE the irreversible CAS (new_sha unknown yet, F-b)
             intent = {"receipt_nonce": record.receipt_nonce, "candidate_tree_sha": candidate_tree_sha,
-                      "expected_target_sha": expected_target_sha, "new_sha": None, "consumed": False}
+                      "expected_target_sha": expected_target_sha, "new_sha": None,
+                      "target_ref": target_ref, "paths_digest": paths_digest, "consumed": False}
             _atomic_write_json(intent_path, intent)
             try:
                 promotion = manager.promote(
                     handle, target_ref=target_ref, expected_target_sha=expected_target_sha,
                     message=f"collect work product ({kind}) for {record.receipt_nonce}",
-                    path_policy=promote_appendix_only((_APPENDIX_PREFIX,)))
+                    path_policy=path_policy)
             except WorktreeError as e:
                 return _err(EXIT_ENFORCEMENT, "promote_refused", str(e), retryable=False,
                             correlation_id=ce)
@@ -1757,6 +1923,19 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
                 return _err(EXIT_ENFORCEMENT, "promote_not_applied",
                             f"collect-work-product: promotion not applied ({promotion.reason}) — "
                             f"no work_product recorded", retryable=False, correlation_id=ce)
+            _ptree = getattr(promotion, "content_tree_sha", None)
+            if _ptree is not None and _ptree != candidate_tree_sha:
+                # Step-11 lane R1-F3 (TOCTOU): promote's COMMITTED tree must be the candidate
+                # tree the empty-check/intent captured (snapshot A == snapshot B) — a worktree
+                # that drifted in between must refuse LOUD, never record. The temp-ref commit is
+                # deliberately left in place as forensic evidence (fail-closed, manual recovery);
+                # new_sha stays unrecorded so nothing downstream can consume it.
+                return _err(EXIT_ENFORCEMENT, "promoted_tree_mismatch",
+                            f"collect-work-product: promoted tree {_ptree!r} does not match the "
+                            f"evidence candidate tree {candidate_tree_sha!r} — the worktree "
+                            f"changed between evidence capture and promotion; refusing to record "
+                            f"(manual reconciliation required)", retryable=False,
+                            correlation_id=ce)
             new_sha = promotion.new_target_sha
             intent["new_sha"] = new_sha
             _atomic_write_json(intent_path, intent)  # F-b: record new_sha only AFTER promote returned
@@ -1765,14 +1944,24 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
     # derive failure on a landed promotion still leaves a marker reconcile can flag, closing the
     # fail-open missing-record path. Idempotent per (receipt_nonce, candidate_tree_sha, new_sha).
     existing = audit.records()
+    def _binding_matches(r) -> bool:
+        # Full-key dedup (8a R1-M4): a same-3-tuple record with a DIFFERENT binding must not
+        # suppress ours. A legacy (fieldless) record satisfies the key ONLY on a legacy-verified
+        # resume — else a pre-#767 crash resumed under new code would double-append.
+        if r.get("target_ref") == target_ref and r.get("paths_digest") == paths_digest:
+            return True
+        return legacy_verified and "target_ref" not in r
+
     already_expected = any(r.get("kind") == "expected_work_product"
                            and r.get("receipt_nonce") == record.receipt_nonce
                            and r.get("candidate_tree_sha") == candidate_tree_sha
                            and r.get("new_sha") == new_sha
+                           and _binding_matches(r)
                            for r in existing)
     if not already_expected:
         audit.append_expected_work_product(receipt_nonce=record.receipt_nonce,
-                                           candidate_tree_sha=candidate_tree_sha, new_sha=new_sha)
+                                           candidate_tree_sha=candidate_tree_sha, new_sha=new_sha,
+                                           target_ref=target_ref, paths_digest=paths_digest)
     # PHASE 2 — derive → audit-search-then-append (idempotent) → mark consumed
     try:
         wp = derive_work_product(manager, handle, kind=kind, promotion=promotion)
@@ -1783,17 +1972,111 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
                   and r.get("receipt_nonce") == record.receipt_nonce
                   and r.get("candidate_tree_sha") == candidate_tree_sha
                   and r.get("new_sha") == new_sha
+                  and _binding_matches(r)
                   for r in existing)
     if not already:
         audit.append_work_product(receipt_nonce=record.receipt_nonce,
                                   candidate_tree_sha=candidate_tree_sha, new_sha=new_sha,
-                                  work_product=wp)
+                                  work_product=wp, target_ref=target_ref,
+                                  paths_digest=paths_digest)
     intent["consumed"] = True
     _atomic_write_json(intent_path, intent)
     return {"ok": True, "exit": EXIT_OK, "action": "collect_work_product",
             "status": "already_recorded" if already else "recorded",
             "receipt_nonce": record.receipt_nonce, "new_sha": new_sha,
             "candidate_tree_sha": candidate_tree_sha, "correlation_id": ce}
+
+
+_SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def land_work_product(*, repo: str, expected_ref: str, pre_sha: str, new_sha: str,
+                      temp_ref: str, correlation_id: Optional[str] = None,
+                      git_runner=None) -> dict:
+    """#767 Step-11 (lane R1-F2): the PRODUCTION landing half of the two-step collection —
+    fast-forward the checked-out feature branch onto the collected temp-ref commit, guarded
+    exactly as Step 8 (b) documents. Fail-closed throughout:
+
+      1. clean tree — ``git status --porcelain`` must be empty (the landing materializes the
+         checkout over the operator's files);
+      2. exact symbolic ref — ``git symbolic-ref -q HEAD`` must equal ``expected_ref`` (a
+         detached HEAD or a different branch at the same SHA refuses);
+      3. tri-state on the ref's SHA — already exactly ``new_sha`` → ``already_landed`` (crash
+         recovery: cleanup only); at ``pre_sha`` → ``git merge --ff-only new_sha``; anything
+         else refuses;
+      4. postconditions — HEAD and ``expected_ref`` both resolve to exactly ``new_sha``;
+      5. CAS temp-ref delete — ``git update-ref -d temp_ref new_sha`` (old-value-guarded); a
+         delete failure never un-lands: the result carries ``temp_ref_deleted`` honestly.
+
+    A bare ``update-ref`` on the checked-out branch is exactly what this exists to replace —
+    it would move the ref while index/files stay at the pre-task state, so the scoped suite
+    would test stale code. ``git_runner`` is injected for tests; the audit-side feature-ref
+    binding is a tracked follow-up (#762 wires the full path)."""
+    ce = correlation_id
+    run = git_runner or _git_runner
+    if (not isinstance(expected_ref, str) or not expected_ref.startswith("refs/heads/")
+            or not isinstance(temp_ref, str)
+            or not temp_ref.startswith("refs/rawgentic/collect/")):
+        return _err(EXIT_MALFORMED, "landing_invalid_input",
+                    f"land-work-product: expected_ref must be refs/heads/-rooted and temp_ref "
+                    f"must live under refs/rawgentic/collect/ (got {expected_ref!r}, "
+                    f"{temp_ref!r})", retryable=False, correlation_id=ce)
+    if not all(isinstance(s, str) and _SHA40_RE.match(s) for s in (pre_sha, new_sha)):
+        return _err(EXIT_MALFORMED, "landing_invalid_input",
+                    f"land-work-product: pre_sha and new_sha must be 40-hex commit SHAs "
+                    f"(got {pre_sha!r}, {new_sha!r})", retryable=False, correlation_id=ce)
+
+    def _git(*args):
+        return run(["git", "-C", repo, *args])
+
+    rc, out, err = _git("status", "--porcelain")
+    if rc != 0:
+        return _err(EXIT_INTERNAL, "landing_git_failed",
+                    f"land-work-product: git status failed: {err.strip()}", retryable=False,
+                    correlation_id=ce)
+    if out.strip():
+        return _err(EXIT_ENFORCEMENT, "landing_dirty_tree",
+                    "land-work-product: the checkout has uncommitted changes — landing "
+                    "materializes files over the working tree; commit/stash first",
+                    retryable=False, correlation_id=ce)
+    rc, ref, _e = _git("symbolic-ref", "-q", "HEAD")
+    if rc != 0 or ref.strip() != expected_ref:
+        return _err(EXIT_ENFORCEMENT, "landing_wrong_ref",
+                    f"land-work-product: HEAD is {'detached' if rc != 0 else ref.strip()!r}, "
+                    f"not the recorded feature ref {expected_ref!r} — refusing",
+                    retryable=False, correlation_id=ce)
+    rc, head, err = _git("rev-parse", "HEAD")
+    if rc != 0:
+        return _err(EXIT_INTERNAL, "landing_git_failed",
+                    f"land-work-product: rev-parse HEAD failed: {err.strip()}", retryable=False,
+                    correlation_id=ce)
+    head = head.strip()
+    if head == new_sha:
+        # already landed (crash-after-merge recovery): cleanup only, never a refusal
+        del_rc, _o, _e = _git("update-ref", "-d", temp_ref, new_sha)
+        return {"ok": True, "exit": EXIT_OK, "action": "land_work_product",
+                "status": "already_landed", "new_sha": new_sha,
+                "temp_ref_deleted": del_rc == 0, "correlation_id": ce}
+    if head != pre_sha:
+        return _err(EXIT_ENFORCEMENT, "landing_unexpected_sha",
+                    f"land-work-product: {expected_ref!r} is at {head!r} — neither the recorded "
+                    f"pre-task SHA {pre_sha!r} nor the landed SHA {new_sha!r}; the branch moved "
+                    f"underneath — refusing", retryable=False, correlation_id=ce)
+    rc, _o, err = _git("merge", "--ff-only", new_sha)
+    if rc != 0:
+        return _err(EXIT_ENFORCEMENT, "landing_ff_refused",
+                    f"land-work-product: fast-forward to {new_sha!r} refused: "
+                    f"{err.strip()[:200]}", retryable=False, correlation_id=ce)
+    rc1, head2, _e1 = _git("rev-parse", "HEAD")
+    rc2, ref2, _e2 = _git("rev-parse", expected_ref)
+    if rc1 != 0 or rc2 != 0 or head2.strip() != new_sha or ref2.strip() != new_sha:
+        return _err(EXIT_ENFORCEMENT, "landing_postcondition_failed",
+                    f"land-work-product: post-merge state is not exactly {new_sha!r} "
+                    f"(HEAD {head2.strip()!r}, {expected_ref} {ref2.strip()!r}) — inspect "
+                    f"manually", retryable=False, correlation_id=ce)
+    del_rc, _o, _e = _git("update-ref", "-d", temp_ref, new_sha)
+    return {"ok": True, "exit": EXIT_OK, "action": "land_work_product", "status": "landed",
+            "new_sha": new_sha, "temp_ref_deleted": del_rc == 0, "correlation_id": ce}
 
 
 def recover_run(*, run_id: str, supervisor, snapshot, audit, routing, enforce,
@@ -2818,7 +3101,16 @@ def _do_collect_work_product(args) -> int:
         run_id=args.run_id, session_name=args.session_name, target_ref=args.target_ref,
         expected_target_sha=args.expected_target_sha, kind=args.kind,
         registry=registry, manager=manager, audit=audit, intent_dir=str(intent_dir),
-        correlation_id=args.correlation_id))
+        correlation_id=args.correlation_id, promote_paths=args.promote_paths))
+
+
+def _do_land_work_product(args) -> int:
+    """#767 Step-11 R1-F2: CLI wrapper for the production guarded landing — pure git against the
+    orchestrator's checkout, no registry/audit context needed (the audit-side feature-ref binding
+    is #762's follow-up)."""
+    return _emit(land_work_product(
+        repo=args.repo, expected_ref=args.expected_ref, pre_sha=args.pre_sha,
+        new_sha=args.new_sha, temp_ref=args.temp_ref, correlation_id=args.correlation_id))
 
 
 def _status_tail(path: Path, limit: int = 200) -> str:
@@ -3201,16 +3493,41 @@ def main(argv: Optional[list] = None) -> int:
     rr.set_defaults(fn=_do_recover_run)
 
     cw = sub.add_parser("collect-work-product",
-                        help="#559 AC1: promote a completed build's appendix work product + record an audited binding")
+                        help="#559 AC1 / #767: promote a completed build's work product + record an "
+                             "audited binding (default: appendix prefix; --promote-path: exact "
+                             "per-task paths, ENFORCED to target "
+                             "refs/rawgentic/collect/<receipt-nonce> with the all-zero expected "
+                             "SHA)")
     cw.add_argument("--run-id", required=True, dest="run_id")
     cw.add_argument("--session-name", required=True, dest="session_name")
     cw.add_argument("--target-ref", required=True, dest="target_ref")
     cw.add_argument("--expected-target-sha", required=True, dest="expected_target_sha")
     cw.add_argument("--kind", default="docs", choices=["code", "review", "design", "docs"])
+    cw.add_argument("--promote-path", action="append", dest="promote_paths", metavar="REL_FILE",
+                    help="#767: exact relative file promotable by this collect (repeatable; one "
+                         "per declared task file; REQUIRED for --kind code); absent -> the "
+                         "appendix-prefix default")
     cw.add_argument("--correlation-id", dest="correlation_id")
     cw.add_argument("--workspace", required=True)
     cw.add_argument("--project", required=True)
     cw.set_defaults(fn=_do_collect_work_product)
+
+    lw = sub.add_parser("land-work-product",
+                        help="#767 Step-11: guarded tri-state landing — fast-forward the "
+                             "checked-out feature branch onto a collected temp-ref commit "
+                             "(clean tree, exact symbolic ref, ff-only, postconditions, CAS "
+                             "temp-ref delete)")
+    lw.add_argument("--repo", default=".", help="path to the orchestrator checkout (default: .)")
+    lw.add_argument("--expected-ref", required=True, dest="expected_ref",
+                    help="the feature ref recorded before dispatch (refs/heads/...)")
+    lw.add_argument("--pre-sha", required=True, dest="pre_sha",
+                    help="the recorded pre-task HEAD SHA")
+    lw.add_argument("--new-sha", required=True, dest="new_sha",
+                    help="the collected commit SHA (collect-work-product's new_sha)")
+    lw.add_argument("--temp-ref", required=True, dest="temp_ref",
+                    help="the per-receipt collect ref (refs/rawgentic/collect/<nonce>)")
+    lw.add_argument("--correlation-id", dest="correlation_id")
+    lw.set_defaults(fn=_do_land_work_product)
 
     su = sub.add_parser("status", help="#471: read-only per-run seat status (registry + capture) as JSON")
     su.add_argument("--workspace", required=True)

@@ -4,6 +4,17 @@ This is the detail behind the thin `wholeIssueDelegation` block in `SKILL.md`
 Step 8. Read it in full before using the mode. The mode is **opt-in and
 default-off**; when it is not enabled Step 8 behaves exactly as it does today.
 
+**Architecture scope (#767).** This contract's `task_shas` trust boundary requires
+agent-authored commits, which only the LEGACY architecture's Agent-tool worktree
+dispatch can produce — a contained executor build agent cannot commit (its linked
+worktree's gitdir is read-only under containment). Under the EXECUTOR architecture
+(the default) this mode is unsupported pending #762: an enabled `wholeIssueDelegation`
+falls back loudly to per-task Step 8, whose executor collection path
+(`collect-work-product --promote-path …` + the guarded fast-forward landing) is the
+supported mutating route today. When #762 wires this mode for the executor tier, the
+commits will be orchestrator-created from per-task diff evidence with provenance,
+`task_shas` still binding each task to its commit.
+
 ## Why this exists
 
 Per-task delegation (#132) still runs the whole per-task ceremony — dispatch,
@@ -72,13 +83,14 @@ orchestrator owns everything after the build.
 - `promotions` — mid-flight risk promotions the builder flagged; the
   orchestrator dispatches Step 8a for each.
 
-## Collect before validation (worktree-isolated builds, #164)
+## Collect before validation (worktree-isolated builds, #164 — LEGACY architecture)
 
-Under the declared LEGACY architecture the build-subagent
-(`rawgentic:rawgentic-implementer`) runs `isolation: worktree`; under the
-executor architecture (the default) the whole-issue build dispatches the
-executor `build` seat, which isolates the same way (per-dispatch git
-worktree, #735). Either way the produced commits land in the shared object
+This whole section is LEGACY-architecture mechanics (#767): only the LEGACY
+build-subagent (`rawgentic:rawgentic-implementer`, `isolation: worktree`) can
+produce the agent-authored commits this contract collects — a contained
+executor build agent cannot commit at all, which is why the executor
+architecture falls back to per-task Step 8 (see the Architecture-scope note
+above). Under LEGACY, the produced commits land in the shared object
 store, NOT on the feature branch. Validation Rule 4 diffs `base..HEAD` on the ORCHESTRATOR's checkout,
 so an un-collected worktree build always fails Rule 4 (empty diff) and would
 be discarded on every run. Therefore, before invoking

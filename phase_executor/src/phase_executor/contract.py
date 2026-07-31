@@ -494,7 +494,9 @@ def _reconcile_promotion(promotion, evidence: dict) -> str:
     object never represents it). Duck-typed (no ``worktree`` import -> no import cycle)."""
     if promotion is None:
         return "not_attempted"
-    for attr in ("base_sha", "head_sha"):
+    for attr in ("base_sha", "head_sha", "content_tree_sha"):
+        # #767 Step-11 (lane R1-F3): content_tree_sha joins the reconcile — base/head + the
+        # changed-path SET alone let same-paths-different-content promotions reconcile clean.
         claimed = getattr(promotion, attr, None)
         if claimed is not None and claimed != evidence[attr]:
             raise ValueError(

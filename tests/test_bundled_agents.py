@@ -216,3 +216,40 @@ def test_wf2_notes_85_config_gated_follow_up():
     corpus = skill_corpus("implement-feature")
     assert "#85" in corpus
     assert "config-gated" in corpus
+
+
+def test_wf2_step8_documents_executor_collection():
+    """#767: a contained executor build agent structurally cannot commit (the linked worktree's
+    gitdir is read-only under containment) — Step 8 must document uncommitted delivery, the exact
+    collection entry point, and the guarded landing that materializes the checkout."""
+    section = _steps_section(
+        SKILLS_DIR / "implement-feature" / "references" / "steps.md", "## Step 8: Implementation")
+    assert "delivers uncommitted worktree work" in section
+    assert "gitdir is read-only under containment" in section
+    assert "collect-work-product" in section
+    assert "--promote-path" in section
+    # Step-11 lane R1-F2: the landing is a named PRODUCTION verb, not a prose git recipe
+    assert "land-work-product" in section
+    assert "bare `update-ref` on the checked-out feature branch is forbidden" in section
+    # the legacy (agent-commit) path stays documented alongside, explicitly scoped
+    assert "cherry-pick or fast-forward" in section
+    # 8a fixes: the pre-dispatch capture names the symbolic ref (detached HEAD refuses), and
+    # branch advancement must carry content (an empty commit passes the SHA check vacuously)
+    assert "a detached head refuses this mode" in section
+    assert "the advance carries content" in section
+
+
+def test_wf2_whole_issue_executor_falls_back():
+    """#767 (pass-1 F3): the whole-issue receipt contract requires agent-authored commits a
+    contained executor build agent cannot produce — under the executor architecture an enabled
+    wholeIssueDelegation must fall back fail-closed to per-task Step 8 until #762."""
+    section = _steps_section(
+        SKILLS_DIR / "implement-feature" / "references" / "steps.md", "## Step 8: Implementation")
+    assert "falls back to the normal per-task step 8" in section
+    # the gate is the FIRST numbered item and the procedure below it is legacy-scoped (8a R1-H6)
+    assert "every numbered item below is legacy-architecture-only" in section
+    ref = (SKILLS_DIR / "implement-feature" / "references" / "whole-issue-delegation.md").read_text(
+        encoding="utf-8")
+    assert "LEGACY architecture" in ref
+    assert "#762" in ref
+    assert "cannot commit at all" in ref

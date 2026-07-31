@@ -224,3 +224,54 @@ def test_child_dispatch_surface_never_references_promote():
     adapters = pathlib.Path(__file__).resolve().parents[2] / "phase_executor" / "src" / "phase_executor" / "adapters"
     for py in adapters.glob("*.py"):
         assert "promote" not in py.read_text(), f"{py.name} references promote (child boundary leak)"
+
+
+# --- #767: promote_paths_only — exact-path policy factory (per-task code collection) ---
+
+def test_promote_paths_only_admits_exact_match():
+    pol = wt.promote_paths_only(("src/a.py", "docs/x.md"))
+    assert pol("src/a.py") is True
+    assert pol("docs/x.md") is True
+
+
+def test_promote_paths_only_refuses_descendant_of_declared_file():
+    # file→directory type replacement: a child deletes declared FILE a/b.py, creates DIR a/b.py/,
+    # and adds descendants — prefix semantics would admit them; exact equality must refuse.
+    pol = wt.promote_paths_only(("a/b.py",))
+    assert pol("a/b.py") is True
+    assert pol("a/b.py/evil.txt") is False
+    assert pol("a/b.py/nested/deep.txt") is False
+
+
+def test_promote_paths_only_refuses_unrelated_and_parent():
+    pol = wt.promote_paths_only(("src/a.py",))
+    assert pol("src/other.py") is False
+    assert pol("src") is False
+    assert pol("src/a.py.bak") is False
+
+
+def test_promote_paths_only_rejects_malicious_candidate_paths():
+    pol = wt.promote_paths_only(("src/a.py",))
+    for bad in ("/src/a.py", "../src/a.py", "src/../src/a.py", "", "src\\a.py"):
+        assert pol(bad) is False, bad
+
+
+@pytest.mark.parametrize("bad", ["/abs/p.py", "a/../b.py", "", "  ", "a\\b.py"])
+def test_promote_paths_only_factory_rejects_bad_paths(bad):
+    with pytest.raises(ValueError):
+        wt.promote_paths_only((bad,))
+
+
+def test_promote_paths_only_requires_at_least_one_path():
+    with pytest.raises(ValueError):
+        wt.promote_paths_only(())
+
+
+def test_promote_paths_only_wires_into_promote_refusal(repo, mgr, tmp_path):
+    base = _base(repo)
+    h = mgr.create(str(repo), _ident("0-pppp2222"), base, root=str(tmp_path / "wtroot"))
+    (open(os.path.join(h.path, "a.txt"), "w")).write("CHANGED\n")      # declared
+    (open(os.path.join(h.path, "smuggle.txt"), "w")).write("nope\n")   # NOT declared
+    with pytest.raises(wt.WorktreeError):
+        mgr.promote(h, target_ref="refs/heads/task-x", expected_target_sha="0" * 40,
+                    message="scoped", path_policy=wt.promote_paths_only(("a.txt",)))
