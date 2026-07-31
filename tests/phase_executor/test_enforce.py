@@ -1480,3 +1480,137 @@ def test_append_work_product_expected_feature_ref_roundtrip(tmp_path):
                             expected_feature_ref="refs/heads/feat")
     recs = log.records()
     assert [r["expected_feature_ref"] for r in recs] == ["refs/heads/feat", "refs/heads/feat"]
+
+
+# ---- #762 Task 2: landing reconcile arms (D1 reader + R3-B A4 + R5-D + rev-2 adoption 4) ----
+
+def _landing_for(nonce, *, new="sha256:new1", feature_ref="refs/heads/feat", run_id="runL",
+                 pre=_SHA_A, temp=None, status="landed", ts=1000):
+    return {"kind": "landed_work_product", "landing_version": 1, "receipt_nonce": nonce,
+            "feature_ref": feature_ref, "pre_sha": pre,
+            "new_sha": new, "temp_ref": temp or f"refs/rawgentic/collect/{nonce}",
+            "landing_status": status, "run_id": run_id, "ts": ts}
+
+
+def _code_wp_rec(nonce, *, new="sha256:new1", target=None, feature="refs/heads/feat"):
+    r = _wp_rec(nonce, new=new)
+    r["work_product"] = dict(r["work_product"], kind="code")
+    r.update({"binding_version": 2,
+              "target_ref": target or f"refs/rawgentic/collect/{nonce}",
+              "paths_digest": "sha256:" + "ab" * 32,
+              "expected_feature_ref": feature})
+    return r
+
+
+def _base_pair(nonce="n1"):
+    return [_receipt_rec(nonce), _obs_rec(nonce)]
+
+
+def test_reconcile_landed_pair_clean():
+    recs = _base_pair() + [_code_wp_rec("n1"), _landing_for("n1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+    assert res.unlanded_work_product == () and res.orphan_landing == ()
+    assert res.landing_mismatch == () and res.landing_conflict == ()
+    assert res.pre_cutover_unverifiable == ()
+
+
+def test_reconcile_unlanded_work_product_flips_ok():
+    # a code work_product POSITIONED AFTER the run's first landing with no landing of its
+    # own = delivered-but-lost work (D1); flips ok.
+    recs = (_base_pair() + [_code_wp_rec("n1"), _landing_for("n1")]
+            + [_receipt_rec("n2", cid="c2"), _obs_rec("n2", cid="c2"),
+               _code_wp_rec("n2", new="sha256:new2")])
+    res = enforce.reconcile_run([_EC(), _EC(cid="c2")], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("n2" in x for x in res.unlanded_work_product)
+
+
+def test_reconcile_pre_cutover_is_reported_never_ok_flip():
+    # R5-D: a code work_product positioned BEFORE the run's first landing record classifies
+    # pre_cutover_unverifiable — a NAMED report bucket that does not flip ok.
+    recs = (_base_pair() + [_code_wp_rec("n1", new="sha256:new0")]
+            + [_receipt_rec("n2", cid="c2"), _obs_rec("n2", cid="c2"),
+               _code_wp_rec("n2", new="sha256:new2"), _landing_for("n2", new="sha256:new2")])
+    res = enforce.reconcile_run([_EC(), _EC(cid="c2")], recs, initial_digest="sha256:d")
+    assert res.ok, res
+    assert any("n1" in x for x in res.pre_cutover_unverifiable)
+    assert res.unlanded_work_product == ()
+
+
+def test_reconcile_no_landings_at_all_is_all_pre_cutover():
+    # zero landing records in the run = the pre-#762 world; every unmatched code wp is
+    # pre_cutover (reported), never a hard unlanded failure — historical runs stay readable.
+    recs = _base_pair() + [_code_wp_rec("n1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+    assert any("n1" in x for x in res.pre_cutover_unverifiable)
+
+
+def test_reconcile_orphan_landing_flips_ok():
+    recs = _base_pair() + [_code_wp_rec("n1"), _landing_for("n1"),
+                           _landing_for("nX", new="sha256:other")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("nX" in x for x in res.orphan_landing)
+
+
+def test_reconcile_landing_mismatch_new_sha_flips_ok():
+    recs = _base_pair() + [_code_wp_rec("n1", new="sha256:new1"),
+                           _landing_for("n1", new="sha256:FORGED")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("n1" in x for x in res.landing_mismatch)
+
+
+def test_reconcile_landing_mismatch_noncanonical_temp_ref(tmp_path):
+    # R3-B A4: temp_ref must be the canonical nonce ref — a schema-valid but mis-bound
+    # record fails reconcile and never suppresses the unlanded flag.
+    recs = _base_pair() + [_code_wp_rec("n1"),
+                           _landing_for("n1", temp="refs/rawgentic/collect/OTHER")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("n1" in x for x in res.landing_mismatch)
+    assert any("n1" in x for x in res.unlanded_work_product)  # the mis-bound landing heals nothing
+
+
+def test_reconcile_landing_mismatch_target_ref_disagrees():
+    # R3-B A4: the paired code work_product's target_ref must equal the landing's temp_ref
+    recs = _base_pair() + [_code_wp_rec("n1", target="refs/rawgentic/collect/n1"),
+                           _landing_for("n1", temp="refs/rawgentic/collect/n1x")]
+    # the landing's temp ref is canonical for nonce "n1x", not "n1" — mis-bound either way
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("n1" in x for x in res.landing_mismatch)
+
+
+def test_reconcile_landing_run_id_mismatch_flags():
+    recs = _base_pair() + [_code_wp_rec("n1"), _landing_for("n1", run_id="runFOREIGN")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d", run_id="runL")
+    assert not res.ok
+    assert any("n1" in x for x in res.landing_mismatch)
+
+
+def test_reconcile_landing_run_id_unchecked_when_unknown():
+    # reconcile_run without a run_id (legacy callers/tests) skips the run-identity arm
+    recs = _base_pair() + [_code_wp_rec("n1"), _landing_for("n1", run_id="runFOREIGN")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+
+
+def test_reconcile_landing_conflict_differing_content_flips_ok():
+    # rev-2 adoption 4 + R3-B: same nonce, two landings with DIFFERING immutable identity
+    recs = _base_pair() + [_code_wp_rec("n1"), _landing_for("n1"),
+                           _landing_for("n1", feature_ref="refs/heads/OTHER")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("n1" in x for x in res.landing_conflict)
+
+
+def test_reconcile_landing_byte_identical_duplicates_collapse():
+    # byte-identical duplicates (retry metadata aside) collapse — no conflict
+    recs = _base_pair() + [_code_wp_rec("n1"), _landing_for("n1"),
+                           _landing_for("n1", status="already_landed", ts=2000)]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+    assert res.landing_conflict == ()

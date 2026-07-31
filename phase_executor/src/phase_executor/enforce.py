@@ -305,6 +305,11 @@ _BINDING_V2_OPTIONAL = ("expected_feature_ref",)
 _LANDING_REQUIRED = ("kind", "landing_version", "receipt_nonce", "feature_ref", "pre_sha",
                      "new_sha", "temp_ref", "landing_status", "run_id", "ts")
 _LANDING_STATUSES = ("landed", "already_landed")
+# R3-B: the landing identity — every landing field except ts and landing_status (retry
+# metadata). PUBLIC because the hooks-side writer (land_work_product) dedups on the same
+# tuple; a drift-guard test asserts the two stay equal.
+LANDING_IDENTITY_FIELDS = ("receipt_nonce", "feature_ref", "pre_sha", "new_sha", "temp_ref",
+                           "run_id", "landing_version")
 _HEX40 = frozenset("0123456789abcdef")
 
 
@@ -733,9 +738,18 @@ class Reconcile:
     orphan_work_product: tuple = ()
     duplicate_work_product: tuple = ()
     missing_work_product: tuple = ()
+    # #762 D1/R3-B(A4)/rev-2 adoption 4: landing binding anomalies (all four flip ok)
+    unlanded_work_product: tuple = ()
+    orphan_landing: tuple = ()
+    landing_mismatch: tuple = ()
+    landing_conflict: tuple = ()
+    # #762 R5-D: REPORT-ONLY — a code work_product written before the run's first landing
+    # record (the schema did not exist yet). Named and visible, never in the ok aggregation.
+    pre_cutover_unverifiable: tuple = ()
 
 
-def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: bool = True) -> "Reconcile":
+def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: bool = True,
+                  run_id: Optional[str] = None) -> "Reconcile":
     """Run-end audit: bind every expected seat call to a PASSED receipt + a VERIFIED observation,
     with the observation's OWN ``dispatched_lane``/digest matching the receipt (independent binding).
     Refuses ship (``ok=False``) on any anomaly. ``known_digests`` is derived INTERNALLY via
@@ -909,9 +923,71 @@ def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: b
         if wp.get("promotion_status") == "promoted" and o.get("receipt_nonce") not in wp_by_nonce:
             missing_work_product.append(f"{o.get('receipt_nonce')}:promoted-but-unrecorded")
 
+    # #762 D1/R3-B(A4)/R5-D + rev-2 adoption 4: bind every landing to its collect-time code
+    # work_product, both ways, and classify unlanded code work products by the cutover rule.
+    landings = [r for r in records if r.get("kind") == "landed_work_product"]
+    code_wps = [w for w in work_products if (w.get("work_product") or {}).get("kind") == "code"]
+    unlanded_work_product, orphan_landing = [], []
+    landing_mismatch, landing_conflict, pre_cutover = [], [], []
+    landings_by_nonce = {}
+    for rec_l in landings:
+        landings_by_nonce.setdefault(rec_l["receipt_nonce"], []).append(rec_l)
+    for n, group in landings_by_nonce.items():
+        # conflict = >1 DISTINCT immutable identity per nonce; byte-identical duplicates
+        # (differing only in the ts/landing_status retry metadata) collapse (R3-B).
+        idents = {tuple(rec_l.get(k) for k in LANDING_IDENTITY_FIELDS) for rec_l in group}
+        if len(idents) > 1:
+            landing_conflict.append(n)
+    for rec_l in landings:
+        n = rec_l["receipt_nonce"]
+        if rec_l["temp_ref"] != f"refs/rawgentic/collect/{n}":
+            # A4: the temp ref is canonical per nonce — a schema-valid but mis-bound record
+            # fails reconcile and never suppresses the unlanded flag below.
+            landing_mismatch.append(f"{n}:temp-ref-noncanonical")
+        if run_id is not None and rec_l.get("run_id") != run_id:
+            landing_mismatch.append(f"{n}:run-id")
+        paired = [w for w in code_wps if w.get("receipt_nonce") == n]
+        if not paired:
+            orphan_landing.append(f"landing:{n}:no-code-work-product")
+            continue
+        if not any(w.get("target_ref") == rec_l["temp_ref"] for w in paired):
+            landing_mismatch.append(f"{n}:target-ref")
+        if not any(w.get("new_sha") == rec_l["new_sha"] for w in paired):
+            landing_mismatch.append(f"{n}:new-sha")
+
+    def _landed(w) -> bool:
+        # only a FULLY-bound landing satisfies a work product — canonical temp ref, matching
+        # target/new_sha, and (when the caller knows the run) the run identity.
+        n = w.get("receipt_nonce")
+        return any(rec_l["receipt_nonce"] == n
+                   and rec_l["temp_ref"] == f"refs/rawgentic/collect/{n}"
+                   and w.get("target_ref") == rec_l["temp_ref"]
+                   and w.get("new_sha") == rec_l["new_sha"]
+                   and (run_id is None or rec_l.get("run_id") == run_id)
+                   for rec_l in landings)
+
+    first_landing_idx = next((i for i, r in enumerate(records)
+                              if r.get("kind") == "landed_work_product"), None)
+    for i, r in enumerate(records):
+        if r.get("kind") != "work_product" or (r.get("work_product") or {}).get("kind") != "code":
+            continue
+        if _landed(r):
+            continue
+        n = r.get("receipt_nonce")
+        if n in landings_by_nonce:
+            # landing evidence exists for this nonce but is mis-bound — never excused
+            unlanded_work_product.append(f"{n}:delivered-but-not-landed")
+        elif first_landing_idx is None or i < first_landing_idx:
+            # R5-D: positioned before the run's FIRST landing record (or the run has none) —
+            # the landing schema had no record yet; honest report, never an ok-flip.
+            pre_cutover.append(f"{n}:pre-cutover-unverifiable")
+        else:
+            unlanded_work_product.append(f"{n}:delivered-but-not-landed")
+
     ok = not any([missing_receipt, failed_precheck, missing_obs, binding_mismatch,
                   duplicate_nonce, duplicate, unverified, unaudited_digest, orphan,
-                  orphan_work_product, duplicate_work_product, missing_work_product])
+                  orphan_work_product, duplicate_work_product, missing_work_product,
+                  unlanded_work_product, orphan_landing, landing_mismatch, landing_conflict])
     return Reconcile(
         ok=ok, missing_receipt=tuple(missing_receipt), failed_precheck=tuple(failed_precheck),
         missing_obs=tuple(missing_obs), binding_mismatch=tuple(binding_mismatch),
@@ -920,4 +996,9 @@ def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: b
         orphan_work_product=tuple(orphan_work_product),
         duplicate_work_product=tuple(duplicate_work_product),
         missing_work_product=tuple(missing_work_product),
+        unlanded_work_product=tuple(unlanded_work_product),
+        orphan_landing=tuple(orphan_landing),
+        landing_mismatch=tuple(landing_mismatch),
+        landing_conflict=tuple(landing_conflict),
+        pre_cutover_unverifiable=tuple(pre_cutover),
     )

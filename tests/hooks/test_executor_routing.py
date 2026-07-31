@@ -4342,3 +4342,139 @@ def test_collect_appendix_different_target_intent_conflict(tmp_path):
     r2, _ = _collect(tmp_path, reg, mgr, target="refs/heads/other-branch")
     assert r2["ok"] is False
     assert r2["error"]["code"] == "intent_conflict"
+
+
+# ---------------------------------------------------------------------------
+# #762 Task 2 (R5-C): the reconcile CLI enumerates the landing buckets — one test per
+# surfaced bucket, hard in provisional mode; pre_cutover is a REPORT, never an ok-flip.
+# ---------------------------------------------------------------------------
+
+_LANE762 = {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth",
+            "pool": "claude", "credential_ref": None}
+
+
+def _r762_receipt(nonce, cid):
+    tid = list(enforce.target_identity({"model": "claude-sonnet-5", "lane": _LANE762}))
+    return {"kind": "receipt", "nonce": nonce, "seat": "analysis", "correlation_id": cid,
+            "attempt_id": "0", "target_identity": tid, "config_digest": "sha256:cfg",
+            "verdict": "pass"}
+
+
+def _r762_obs(nonce, cid):
+    inner = {"schema_version": "1", "run_id": "run1", "attempt_id": "0", "seat": "analysis",
+             "correlation_id": cid,
+             "engine": "claude", "transport": "native", "requested_model": "claude-sonnet-5",
+             "actual_model": "claude-sonnet-5", "prompt_hash": "sha256:x", "context_hashes": [],
+             "usage": {"input": 1, "output": 1}, "timing_ms": 1, "queued_ms": 0,
+             "process": {"exit_code": 0, "timed_out": False}, "parse_status": "ok",
+             "parsed_payload": None, "raw_capture_path": None, "fallback_reason": None,
+             "routing_config_digest": "sha256:cfg", "dispatched_lane": _LANE762}
+    return {"kind": "observation", "receipt_nonce": nonce, "observation": inner}
+
+
+def _r762_code_wp(nonce, *, new="b" * 40):
+    return {"kind": "work_product", "receipt_nonce": nonce, "candidate_tree_sha": "t",
+            "new_sha": new,
+            "work_product": {"kind": "code", "worktree_path": "/wt", "base_sha": "a" * 40,
+                             "head_sha": "h", "content_tree_sha": "t",
+                             "changed_paths": ["x.py"], "documents": [], "tests": [],
+                             "promotion_status": "promoted"},
+            "binding_version": 2, "target_ref": f"refs/rawgentic/collect/{nonce}",
+            "paths_digest": "sha256:" + "ab" * 32, "expected_feature_ref": "refs/heads/feat"}
+
+
+def _r762_landing(nonce, *, new="b" * 40, feature="refs/heads/feat", run_id="run1",
+                  temp=None):
+    return {"kind": "landed_work_product", "landing_version": 1, "receipt_nonce": nonce,
+            "feature_ref": feature, "pre_sha": "a" * 40, "new_sha": new,
+            "temp_ref": temp or f"refs/rawgentic/collect/{nonce}",
+            "landing_status": "landed", "run_id": run_id, "ts": 1000}
+
+
+def _r762_run(tmp_path, records, *, expected=("c1",), mode="final", closed=True):
+    ws, repo = _analysis_project(tmp_path)
+    rd = _run_dir(repo)
+    lg = ledger.ExpectedCallLedger(rd, "run1")
+    lg.append_initial("sha256:cfg", architecture="executor")
+    for cid in expected:
+        lg.append_expected("analysis", cid)
+    if closed:
+        lg.append_run_closed()
+    (rd / "routing-audit.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    return er.main(["reconcile", "--run-id", "run1", "--mode", mode,
+                    "--workspace", ws, "--project", "rawgentic"])
+
+
+def test_cli_reconcile_flags_unlanded_work_product(tmp_path, capsys):
+    recs = [_r762_receipt("n1", "c1"), _r762_obs("n1", "c1"),
+            _r762_code_wp("n1"), _r762_landing("n1"),
+            _r762_receipt("n2", "c2"), _r762_obs("n2", "c2"),
+            _r762_code_wp("n2", new="c" * 40)]
+    rc = _r762_run(tmp_path, recs, expected=("c1", "c2"))
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ANOMALY and out["reconciled"] is False
+    assert any("n2" in x for x in out["anomalies"]["unlanded_work_product"])
+
+
+def test_cli_reconcile_flags_orphan_landing(tmp_path, capsys):
+    recs = [_r762_receipt("n1", "c1"), _r762_obs("n1", "c1"),
+            _r762_code_wp("n1"), _r762_landing("n1"), _r762_landing("nX", new="d" * 40)]
+    rc = _r762_run(tmp_path, recs)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ANOMALY
+    assert any("nX" in x for x in out["anomalies"]["orphan_landing"])
+
+
+def test_cli_reconcile_flags_landing_mismatch(tmp_path, capsys):
+    recs = [_r762_receipt("n1", "c1"), _r762_obs("n1", "c1"),
+            _r762_code_wp("n1"), _r762_landing("n1", new="d" * 40)]
+    rc = _r762_run(tmp_path, recs)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ANOMALY
+    assert any("n1" in x for x in out["anomalies"]["landing_mismatch"])
+
+
+def test_cli_reconcile_flags_landing_conflict(tmp_path, capsys):
+    recs = [_r762_receipt("n1", "c1"), _r762_obs("n1", "c1"),
+            _r762_code_wp("n1"), _r762_landing("n1"),
+            _r762_landing("n1", feature="refs/heads/OTHER")]
+    rc = _r762_run(tmp_path, recs)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ANOMALY
+    assert any("n1" in x for x in out["anomalies"]["landing_conflict"])
+
+
+def test_cli_reconcile_flags_foreign_run_landing(tmp_path, capsys):
+    # the CLI passes its own --run-id into the run-identity arm
+    recs = [_r762_receipt("n1", "c1"), _r762_obs("n1", "c1"),
+            _r762_code_wp("n1"), _r762_landing("n1", run_id="runFOREIGN")]
+    rc = _r762_run(tmp_path, recs)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ANOMALY
+    assert any("n1" in x for x in out["anomalies"]["landing_mismatch"])
+
+
+def test_cli_reconcile_reports_pre_cutover_without_failing(tmp_path, capsys):
+    # R5-D: a pre-cutover code work_product (no landing records in the run) is REPORTED,
+    # named, and never flips the verdict — the honest legacy bucket.
+    recs = [_r762_receipt("n1", "c1"), _r762_obs("n1", "c1"), _r762_code_wp("n1")]
+    rc = _r762_run(tmp_path, recs)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_OK and out["reconciled"] is True
+    assert any("n1" in x for x in out["report"]["pre_cutover_unverifiable"])
+
+
+def test_cli_reconcile_landing_buckets_hard_in_provisional(tmp_path, capsys):
+    # R5-C: the landing buckets are HARD failures in provisional mode (never in-flight tolerance)
+    recs = [_r762_receipt("n1", "c1"), _r762_obs("n1", "c1"),
+            _r762_code_wp("n1"), _r762_landing("n1"), _r762_landing("nX", new="d" * 40)]
+    rc = _r762_run(tmp_path, recs, mode="provisional", closed=False)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ANOMALY and out["reconciled"] is False
+
+
+def test_landing_identity_fields_mirror_enforce():
+    # mirrored constants get drift guards (repo convention): the hooks-side writer dedup and
+    # the enforce-side reconcile conflict detection must key on the SAME immutable identity.
+    assert er._LANDING_IDENTITY_FIELDS == enforce.LANDING_IDENTITY_FIELDS

@@ -3675,24 +3675,36 @@ def _do_reconcile(args) -> int:
     expected = [e.as_expected_call() for e in state.expected]
     try:
         rec = pe.enforce.reconcile_run(expected, records, initial_digest=state.initial_digest,
-                                       require_nonempty=final)
+                                       require_nonempty=final, run_id=args.run_id)
     except ValueError as e:  # duplicate expected tuples / broken epoch chain — fail-closed anomaly
         return _emit({"run_id": args.run_id, "mode": args.mode, "reconciled": False,
                       "reason": f"reconcile_run: {e}", "exit": EXIT_ANOMALY})
+    # #762 R5-C: every landing bucket enumerated explicitly — a new Reconcile field that never
+    # reaches this dict would be a silently-invisible anomaly class.
     buckets = {"missing_receipt": rec.missing_receipt, "failed_precheck": rec.failed_precheck,
                "missing_obs": rec.missing_obs, "binding_mismatch": rec.binding_mismatch,
                "duplicate_nonce": rec.duplicate_nonce, "duplicate": rec.duplicate,
                "unverified": rec.unverified, "unaudited_digest": rec.unaudited_digest,
-               "orphan": rec.orphan}
+               "orphan": rec.orphan, "orphan_work_product": rec.orphan_work_product,
+               "duplicate_work_product": rec.duplicate_work_product,
+               "missing_work_product": rec.missing_work_product,
+               "unlanded_work_product": rec.unlanded_work_product,
+               "orphan_landing": rec.orphan_landing,
+               "landing_mismatch": rec.landing_mismatch,
+               "landing_conflict": rec.landing_conflict}
     present = {k: list(v) for k, v in buckets.items() if v}
     if final:
         reconciled = rec.ok
     else:
         # provisional: fail only on a HARD breach; tolerate not-yet-observed in-flight calls
+        # (#762 R5-C: the landing buckets are hard — they are deliberately NOT tolerated)
         reconciled = not any(k not in _PROVISIONAL_TOLERATED for k in present)
     return _emit({"run_id": args.run_id, "mode": args.mode, "closed": state.closed,
                   "expected_calls": len(expected), "reconciled": reconciled,
-                  "anomalies": present, "exit": EXIT_OK if reconciled else EXIT_ANOMALY})
+                  "anomalies": present,
+                  # R5-D: report-only bucket — visible, named, never a verdict input
+                  "report": {"pre_cutover_unverifiable": list(rec.pre_cutover_unverifiable)},
+                  "exit": EXIT_OK if reconciled else EXIT_ANOMALY})
 
 
 def main(argv: Optional[list] = None) -> int:
