@@ -875,6 +875,135 @@ def last_unmet_goal_condition(transcript_text: str) -> str | None:
     return found
 
 
+def live_owner_goal(transcript_text: str, *, strict: bool = False) -> str | None:
+    """The predecessor's LIVE owner goal, from sentinel-bearing rows only (#758).
+
+    Trust boundary: `_find_goal_status` is deliberately recursive, so structured user or
+    tool content embedded in a transcript line can carry a forged `type: goal_status`
+    object. Only the harness's own attachments carry `sentinel: true`, so this reader
+    keys on the sentinel — a forged sentinel-less row can neither inject a phantom goal
+    nor spoof "already cleared" (a forged `met: true` carrying the genuine condition was
+    exactly the #758 pass-2 bypass through `goal_currently_unmet`, which scans without a
+    sentinel check).
+
+    Origin-bound, not merely sentinel-keyed (#758 Step-8a wave): `sentinel: true` is a
+    field any forged object can carry, so trust requires the row to sit at the REAL
+    harness attachment location — the record's TOP-LEVEL `attachment` object — never a
+    recursively discovered nested one (`_iter_goal_status`'s recursion exists for other,
+    non-destructive readers). And `met` must be a literal boolean: a row whose `met` is
+    missing or malformed is not trusted at all — a corrupt row must not read as "cleared".
+
+    Liveness is decided by the LAST trusted row with a non-blank condition:
+    `met` False → its condition is live (returned VERBATIM); `met` True → the guard was
+    cleared → None; no trusted rows → None. (`last_unmet_goal_condition` is historical —
+    it returns a met:false row even after a later clear — so it is deliberately not used.)
+
+    Strict mode (#758 Step-11 wave): with `strict=True`, ABSENCE of trustworthy evidence
+    is not the same verdict as a proven "no goal". A transcript is append-only, so only
+    the TAIL can be torn — when the newest goal-bearing evidence is an unparseable
+    goal_status line or a trusted-origin row that fails validation, and no newer VALID
+    trusted row supersedes it, strict mode raises `LauncherError` instead of silently
+    falling back to an older row (stale guard) or to None (phantom "already cleared").
+    Lenient mode (the default) keeps the historical skip-and-continue behavior for
+    non-destructive readers.
+    """
+    last: dict | None = None
+    suspicious: str | None = None
+    for line in transcript_text.splitlines():
+        if "goal_status" not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            suspicious = "an unparseable goal_status-bearing line (torn write?)"
+            continue
+        if not isinstance(rec, dict):
+            continue
+        row = rec.get("attachment")
+        if not isinstance(row, dict) or row.get("type") != "goal_status":
+            continue
+        cond = row.get("condition")
+        valid = (row.get("sentinel") is True and isinstance(row.get("met"), bool)
+                 and isinstance(cond, str) and bool(cond.strip()))
+        if valid:
+            last = row
+            suspicious = None
+        else:
+            suspicious = "a trusted-origin goal_status row that fails validation"
+    if strict and suspicious is not None:
+        raise LauncherError(
+            f"the newest goal evidence in the transcript is {suspicious} — refusing to "
+            "derive a live-goal verdict from ambiguous evidence on a destructive path "
+            "(#758): a torn or malformed newest row must not read as 'no goal' or fall "
+            "back to a stale one")
+    if last is None or last.get("met") is not False:
+        return None
+    return last["condition"]
+
+
+def validate_goal_carry(successor_goal: str, predecessor_live_goal: str | None, *,
+                        approved_answer: str | None = None) -> tuple[bool, str, bool]:
+    """#758 — the successor's goal must be the predecessor's owner-authored goal VERBATIM.
+
+    Comparison is on ARMED forms (`armed_condition`) after ONE documented normalization:
+    a single trailing newline is stripped from the successor text, because a
+    goal-condition FILE ends with a newline while the armed row never carries one. No
+    other normalization — `strip()` equality was rejected at the design gate (pass-1 F4):
+    byte-identical or refused keeps the rule legible.
+
+    `approved_answer` is the owner's verbatim yes/no answer approving a DIFFERENT goal
+    text (the `--goal-rewrite-approved` value). It is a caller assertion — no crypto root
+    of trust exists, so the enforceable layer is the skill prose gating it on an explicit
+    owner question plus the audit record the CLI writes (AC3 permits "rejects or flags":
+    unapproved difference → rejected; approved → flagged).
+
+    `predecessor_live_goal is None` means no live guard existed at validation — nothing
+    to carry, nothing to validate.
+
+    A mismatch reason carries ONLY lengths and the numeric first-divergence offset —
+    never goal content (an owner goal must not leak into error logs; pass-1 F8).
+
+    Returns `(ok, reason, used_override)` — `used_override` is True ONLY when the goals
+    actually differed and an affirmative owner answer authorized the rewrite (Step-11
+    wave: the audit field must mean "an override was consumed", never merely "the flag
+    was present"). An approval answer counts ONLY when it reads affirmative — the skill
+    asks a yes/no question, so the answer must start with "yes" or "approved"
+    (case-insensitive): an owner's "no, do not change it" passed through the flag must
+    never authorize the rewrite.
+    """
+    if predecessor_live_goal is None:
+        return (True, "no live predecessor goal — nothing to validate", False)
+    succ = successor_goal[:-1] if successor_goal.endswith("\n") else successor_goal
+    armed_succ, succ_trunc = armed_condition(succ)
+    armed_pred, pred_trunc = armed_condition(predecessor_live_goal)
+    if armed_succ == armed_pred and not (
+            (succ_trunc or pred_trunc) and succ != predecessor_live_goal):
+        # Truncation guard (Step-11 wave): two over-cap texts sharing the truncated
+        # armed prefix are NOT a verbatim carry — when either side truncates, the RAW
+        # texts must match too, else the armed prefix vouches for suffixes it never saw.
+        return (True, "verbatim carry confirmed (armed forms identical)", False)
+    answer = approved_answer.strip() if isinstance(approved_answer, str) else ""
+    if answer and answer.lower().startswith(("yes", "approved")):
+        return (True, f"goal rewrite approved by owner: {approved_answer!r} "
+                      "(flagged in the audit output)", True)
+    if answer:
+        return (False,
+                f"--goal-rewrite-approved was given a NON-AFFIRMATIVE answer "
+                f"({len(answer)} chars, does not start with yes/approved) — an owner "
+                f"answer that is not a yes never authorizes a goal rewrite (#758)", False)
+    offset = next((i for i, (a, b) in enumerate(zip(armed_succ, armed_pred)) if a != b),
+                  min(len(armed_succ), len(armed_pred)))
+    return (False,
+            f"successor goal differs from the predecessor's owner-authored goal "
+            f"(#758 verbatim-carry rule): successor {len(armed_succ)} chars, "
+            f"predecessor {len(armed_pred)} chars, first divergence at offset {offset}. "
+            f"Goals are owner-authored and carried verbatim — read the live goal with "
+            f"read-goal-condition, never retype or extend it. A genuine goal change "
+            f"needs an explicit owner yes/no first (then pass "
+            f"--goal-rewrite-approved '<the answer>'), or use --no-teardown for an "
+            f"additive helper handoff", False)
+
+
 def _iter_goal_status(transcript_text: str):
     """Yield every `goal_status` object in a JSONL transcript, in file order.
 
@@ -1071,6 +1200,12 @@ def _tail(text: str, baseline: tuple[int, str]) -> str | None:
     return text[offset:]
 
 
+# #758 Step-11 wave (F-F): the valid cleared-state snapshot is None, so omission needs its
+# own sentinel — strict binding must be able to tell "validated: no live goal" from "the
+# caller never validated anything".
+_UNSET_GOAL_SNAPSHOT = object()
+
+
 def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     goal_condition: str, resume_prompt: str, registry_path: str,
                     transcript_dir: str, launch_mode: str = "fresh",
@@ -1081,7 +1216,9 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     expected_project_path: str | None = None, steps=None,
                     on_successor=None, now=time.monotonic,
                     predecessor_session: str | None = None,
-                    predecessor_goal_condition: str | None = None) -> dict:
+                    predecessor_goal_condition: str | None = None,
+                    strict_goal_binding: bool = False,
+                    expected_predecessor_goal=_UNSET_GOAL_SNAPSHOT) -> dict:
     """Execute the ordered handoff. Effects are injected so tests drive the whole sequence.
 
     THE ORDER, and why each position is load-bearing:
@@ -1154,6 +1291,26 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         def read_text(path):  # pragma: no cover - trivial default
             with open(path, encoding="utf-8") as fh:
                 return fh.read()
+
+    # #758 Step-11 wave (F-F): strict binding must never silently provide no binding.
+    # The strict check lives on the teardown-clear path, which only runs with a
+    # predecessor session — so an uncoupled request is a caller bug, refused BEFORE any
+    # pane exists rather than granted as imaginary protection. The snapshot must be
+    # EXPLICIT because None is itself a valid state ("validated: no live goal").
+    if strict_goal_binding:
+        if not teardown or predecessor_session is None:
+            raise LauncherError(
+                "strict_goal_binding=True requires teardown AND a predecessor_session — "
+                "the binding guards the destructive clear, which only runs there; "
+                "without them the caller would be requesting protection that cannot "
+                "attach (#758)")
+        if expected_predecessor_goal is _UNSET_GOAL_SNAPSHOT:
+            raise LauncherError(
+                "strict_goal_binding=True requires an EXPLICIT expected_predecessor_goal "
+                "snapshot (pass None only to assert 'validated: no live goal') — an "
+                "omitted snapshot is indistinguishable from an unvalidated one (#758)")
+    expected_goal_snapshot = (None if expected_predecessor_goal is _UNSET_GOAL_SNAPSHOT
+                              else expected_predecessor_goal)
 
     out: dict = {"ok": False, "steps": [], "results": {}, "truncated": False,
                  "failed_step": None, "new_pane": None, "session_id": None,
@@ -1567,8 +1724,64 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     f"evidence that nothing is armed. Run {_CLEAR_COMMAND!r} in it by hand")
                 return out
 
-            live_condition = latest_goal_status_condition(pred_text)
-            armed = live_condition is not None and goal_currently_unmet(pred_text, live_condition)
+            # #758 strict goal binding (D18). The validated snapshot — the sentinel-only live
+            # goal the caller's verbatim-carry check ran against, INCLUDING the explicit
+            # "no live goal" state (None) — must still hold at the destructive step. ANY
+            # divergence refuses the clear and keeps the pane: a goal that changed, appeared,
+            # or disappeared mid-handoff means an instruction this close could destroy. The
+            # residual race between this read and the clear send is a platform ceiling
+            # (`/goal clear` has no compare-and-clear form); mitigation: a goal cannot arm
+            # mid-turn in a busy pane — arming requires a Stop evaluation.
+            if strict_goal_binding:
+                try:
+                    live_now = live_owner_goal(pred_text, strict=True)
+                except LauncherError as exc:
+                    # Ambiguous newest evidence (torn/malformed tail) — same refusal as a
+                    # divergence: never clear or close over evidence that cannot be read.
+                    out["failed_step"] = "predecessor_goal_binding"
+                    record("predecessor_goal_binding", [], None,
+                           note=f"strict binding REFUSED the clear (#758): {exc}")
+                    out["predecessor_guard"] = (
+                        f"the predecessor pane {anchor_pane} is LEFT OPEN and its guard "
+                        f"untouched — {exc}")
+                    return out
+                if live_now != expected_goal_snapshot:
+                    def _shape(v):
+                        return "none" if v is None else f"{len(v)} chars"
+                    detail = (f"validated snapshot {_shape(expected_goal_snapshot)}, "
+                              f"live now {_shape(live_now)}")
+                    if isinstance(live_now, str) and isinstance(expected_goal_snapshot, str):
+                        off = next((i for i, (a, b) in
+                                    enumerate(zip(live_now, expected_goal_snapshot))
+                                    if a != b),
+                                   min(len(live_now), len(expected_goal_snapshot)))
+                        detail += f", first divergence at offset {off}"
+                    out["failed_step"] = "predecessor_goal_binding"
+                    record("predecessor_goal_binding", [], None,
+                           note=f"strict binding REFUSED the clear (#758): {detail}")
+                    out["predecessor_guard"] = (
+                        f"the predecessor pane {anchor_pane} is LEFT OPEN and its guard "
+                        f"untouched — the goal state changed between validation and teardown "
+                        f"({detail}), and closing a pane over an instruction that changed "
+                        f"underneath the handoff is exactly what #758 forbids. The successor "
+                        f"is armed with the VALIDATED goal and keeps running. Inspect the "
+                        f"pane; clear and close it by hand only after reading its goal")
+                    return out
+
+            if strict_goal_binding:
+                # Step-8a wave Critical (#758): under strict binding the #707 three-state
+                # classification must derive from the SAME trusted verdict the binding just
+                # validated — the sentinel-insensitive helpers below would let a forged
+                # sentinel-less met:true row for the UNCHANGED condition read as
+                # already_clear, skipping `/goal clear` and closing a still-guarded pane.
+                # The validated snapshot IS the state: it equals `live_owner_goal(pred_text)`
+                # (the binding check above just proved it), so no second read is needed.
+                live_condition = expected_goal_snapshot
+                armed = expected_goal_snapshot is not None
+            else:
+                live_condition = latest_goal_status_condition(pred_text)
+                armed = (live_condition is not None
+                         and goal_currently_unmet(pred_text, live_condition))
             if not armed:
                 # Nothing to clear, so nothing to confirm. Recorded as its own result value rather
                 # than a silent skip: "already_clear" is a materially different fact from "cleared
@@ -3015,6 +3228,15 @@ def _cmd_ad_hoc_handoff(args) -> int:
     resume_prompt = _read_text_arg(args.resume_prompt, args.resume_prompt_file, "resume prompt")
     condition = _read_text_arg(args.goal_condition, args.goal_condition_file, "goal condition")
 
+    # #758 Step-11 wave: --no-teardown skips the verbatim-carry validation entirely, so an
+    # approval flag there could only ever mint a FALSE audit record ("override consumed"
+    # where nothing was validated). Refuse the combination outright.
+    if args.no_teardown and args.goal_rewrite_approved is not None:
+        raise LauncherError(
+            "--goal-rewrite-approved is meaningless with --no-teardown: an additive "
+            "helper handoff never validates the goal carry, so the flag would emit a "
+            "false audit record (#758). Drop one of the two")
+
     marker = args.prompt_marker
     # A literal newline is stored ESCAPED in the JSONL transcript, so a marker carrying one can
     # never match `transcript_has_marker`'s substring scan — `prompt_landed` would burn its whole
@@ -3071,6 +3293,42 @@ def _cmd_ad_hoc_handoff(args) -> int:
                 "refusing to retire it. Closing it could kill an unrelated session; "
                 "check $HERDR_PANE_ID")
 
+    # #758 — verbatim goal carry (retirement path only). The successor of a RETIREMENT handoff
+    # continues THIS session's work, so its goal must be this session's own live owner goal,
+    # byte-for-byte — model-drafted STATE/MODE text belongs in the handoff file, never in the
+    # goal. An additive helper (--no-teardown) legitimately gets different work, so it is
+    # exempt. Fail CLOSED on missing/unreadable provenance (pass-1 F3): this runs before any
+    # pane exists, so refusing strands nothing, and evidence denial must not become a bypass.
+    strict_binding = False
+    expected_goal: str | None = None
+    used_override = False
+    if teardown:
+        if not _SESSION_ID_RE.fullmatch(own):
+            raise LauncherError(
+                f"$CLAUDE_CODE_SESSION_ID {own!r} is not a valid session id — refusing to "
+                "build a transcript path from it (#758)")
+        own_transcript = os.path.join(args.transcript_dir, f"{own}.jsonl")
+        real_dir = os.path.realpath(args.transcript_dir)
+        if os.path.dirname(os.path.realpath(own_transcript)) != real_dir:
+            raise LauncherError(
+                f"transcript path {own_transcript!r} escapes {args.transcript_dir!r} — "
+                "refusing (#758)")
+        try:
+            with open(own_transcript, encoding="utf-8") as fh:
+                own_text = fh.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            raise LauncherError(
+                f"cannot read this session's own transcript {own_transcript!r} ({exc}) — "
+                "refusing the retirement handoff: without provenance the verbatim goal carry "
+                "cannot be validated (#758), and an unreadable transcript must not become a "
+                "bypass. Pass --no-teardown to hand off without retiring this pane") from exc
+        expected_goal = live_owner_goal(own_text, strict=True)
+        ok, reason, used_override = validate_goal_carry(
+            condition, expected_goal, approved_answer=args.goal_rewrite_approved)
+        if not ok:
+            raise LauncherError(reason)
+        strict_binding = True
+
     # `steps` is deliberately NOT passed: the canonical launch ladder is the only legal one for a
     # launch handoff (`evaluate_verifications` refuses anything else), and defaulting says so.
     out = perform_handoff(
@@ -3088,10 +3346,18 @@ def _cmd_ad_hoc_handoff(args) -> int:
         # CONFIRMED before the pane is closed. `own` is this session's own id, already required
         # above for the ownership proof.
         predecessor_session=(own if teardown else None),
-        predecessor_goal_condition=args.predecessor_goal_condition)
-    print(json.dumps({k: out[k] for k in
-                      ("ok", "results", "failed_step", "new_pane", "session_id",
-                       "truncated", "cleanup", "teardown_skipped", "predecessor_guard")}, indent=2))
+        predecessor_goal_condition=args.predecessor_goal_condition,
+        strict_goal_binding=strict_binding,
+        **({"expected_predecessor_goal": expected_goal} if strict_binding else {}))
+    payload = {k: out[k] for k in
+               ("ok", "results", "failed_step", "new_pane", "session_id",
+                "truncated", "cleanup", "teardown_skipped", "predecessor_guard")}
+    if used_override:
+        # #758 — the audit record rides the output ONLY when an override was actually
+        # consumed (goals differed AND an affirmative owner answer authorized it);
+        # emitting it for an identical-goal run would fake an override that never was.
+        payload["goal_rewrite_approved"] = args.goal_rewrite_approved
+    print(json.dumps(payload, indent=2))
     # On BOTH streams, and in plain words: the JSON is easy to skim past, and this is the sentence
     # whose absence let a stranded guarded pane loop its Stop hook four times unnoticed (#700).
     if out.get("predecessor_guard"):
@@ -3400,6 +3666,15 @@ def main(argv: list[str] | None = None) -> int:
                       help="your OWN currently-armed goal condition, used only with "
                            "the default retirement to bind the clear receipt to the guard actually "
                            "cleared. Read it with `read-goal-condition --transcript <own>.jsonl`")
+    # #758 — a caller ASSERTION that the owner explicitly approved a goal text differing from
+    # the predecessor's live goal (the verbatim-carry escape hatch). Takes the owner's verbatim
+    # yes/no answer, never a bare boolean: the answer is recorded in the output JSON so the
+    # audit trail carries the claimed approval text. No crypto root of trust exists — the
+    # enforceable layer is the skill prose gating this on an explicit owner question.
+    p_ah.add_argument("--goal-rewrite-approved", default=None, metavar="OWNER_ANSWER",
+                      help="the owner's verbatim answer approving a DIFFERENT successor goal "
+                           "(#758). Without it, a retirement handoff whose goal differs from "
+                           "this session's live goal is refused")
 
     # #665 — the mid-child pair. Two commands, run by two different sessions, because the
     # handover and the retirement have different owners: only the successor may retire.

@@ -14,7 +14,29 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
-## Epic #756 — silent failures: the executor instruction layer (#735 → #733 → #732) · v3.109.8
+## Epic #756 — silent failures: the executor instruction layer (#735 → #733 → #732 → #758) · v3.110.0
+
+Fourth slot (#758, session f6996e2f, v3.110.0, small-standard lane): owner-authored goals now
+carry VERBATIM across pane-handoffs, enforced at the handoff boundary — the measured failure was
+accretion (owner goals 1,200–2,000 chars; model-drafted successor goals 4,000–5,400; the #720
+override rode inside one). Shipped: `live_owner_goal` (trusted-origin rows only — top-level
+attachment + sentinel + boolean met — with strict tail-ambiguity refusal on destructive reads),
+`validate_goal_carry` (armed-form exact comparison, one documented trailing-newline
+normalization, affirmative-only owner override recorded in the audit output solely when
+consumed), fail-CLOSED provenance on the ad-hoc retirement path, and
+`strict_goal_binding`/`expected_predecessor_goal` on `perform_handoff` (the destructive clear
+re-reads and REFUSES on ANY divergence from the validated snapshot, including a goal appearing
+where none was; uncoupled params refused via an explicit-snapshot sentinel). Gate economics:
+three-pass design gate (11 unique findings, both design loop-backs consumed, owner closes D15
++ D18 in-session — the owner was ACTIVE this leg: goal-drift question answered with sha-identical
+hashes across all 5 sessions, epic body corrected to 20 children, #767/#765/#766 folded in and
+the executor block prioritized); Step-8a wave caught its own Critical (the #707 clear
+classification consulted sentinel-insensitive helpers AFTER strict binding passed) + the
+origin-binding gap (`sentinel: true` is forgeable — trust needs the attachment location); the
+Step-11 wave added affirmative-only approval (an owner "no" through the flag never authorizes),
+torn-tail ambiguity refusal, the truncation guard, and param coupling — pre-existing
+campaign/mid-child recursive-reader exposure filed as #772, never silently absorbed. All
+red-before-green. Suite 6292→6348. PR/merge/CI: filled by the next slot's pass.
 
 Third slot (#732, session b8905b86, v3.109.8, queue-front by owner decision D13): the trap that
 strands sessions at the advisory tier — the meter's own text sent them to `clear-prep`, the
@@ -34,7 +56,8 @@ executable fixture tests that RUN the gate command per case, plus full-canonical
 drift guards per branch. Adversarial diff High declined with a dispositions entry
 (attended-unconditional mirrors the #713 directive shape; AC4 conditions only the headless
 branch); freshness + standing run-contract authorization deferred to #760. Suite 6273→6292.
-PR/merge/CI: filled by the next slot's pass.
+PR #771, squash-merged `25ecb5c` 2026-07-31, CI green (test+lint hard lanes), issue
+auto-closed, epic box ticked.
 
 Second slot (#733, session cf8ac68a → 33b3f9ef across two pane-handoffs, v3.109.7): the defect
 class the epic is named for — a SIGKILLed executor seat returned `ok: true` / exit 0, so a

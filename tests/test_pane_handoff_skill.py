@@ -195,3 +195,41 @@ def test_the_timing_authority_is_the_marker_not_the_reminder(body) -> None:
     """#732 Step-8a R2 High, the prose half: injected text can claim any tier;
     the marker cannot."""
     assert "never from the reminder text" in body
+
+
+def _flow(text: str) -> str:
+    """Whitespace-normalize so wrapped prose matches a canonical sentence (repo mistake #6)."""
+    return re.sub(r"\s+", " ", text)
+
+
+class TestVerbatimGoalCarryProse:
+    """#758 — the skill's goal-carry contract: owner-authored, verbatim, never redrafted.
+
+    The measured failure these sentences prevent: owner goals run 1,200-2,000 chars,
+    model-drafted successor goals ballooned to 4,000-5,400, and the #720 override rode
+    inside one. Each guard anchors ONE canonical sentence in THIS file.
+    """
+
+    def test_the_drafting_invitation_is_gone(self, body) -> None:
+        assert "in its own words" not in body, \
+            "'in its own words' invites exactly the redrafting #758 forbids"
+
+    def test_the_goal_carries_verbatim(self, body) -> None:
+        assert "The goal is OWNER-AUTHORED text and it carries VERBATIM" in _flow(body)
+
+    def test_model_state_travels_in_the_handoff_file_never_the_goal(self, body) -> None:
+        assert ("Model state (STATE/MODE lines, progress, queue position) travels in the "
+                "handoff FILE, never inside the goal") in _flow(body)
+
+    def test_a_goal_change_needs_an_explicit_owner_yes_no(self, body) -> None:
+        flow = _flow(body)
+        assert "AskUserQuestion" in flow
+        assert "/ask-owner" in flow
+        assert "--goal-rewrite-approved" in flow
+
+    def test_the_500_char_paste_prohibition_is_stated(self, body) -> None:
+        assert ">500-character paste" in _flow(body)
+
+    def test_the_binding_refusal_row_is_documented(self, body) -> None:
+        assert "predecessor_goal_binding" in body, \
+            "the failed_step table must explain the strict-binding refusal"
