@@ -290,6 +290,10 @@ _WORK_PRODUCT_REQUIRED = ("kind", "receipt_nonce", "candidate_tree_sha", "new_sh
 # whose receipt_nonce has no matching work_product record. It keys off what the production collect
 # path actually writes, unlike Observation.work_product (which no production path ever sets).
 _EXPECTED_WORK_PRODUCT_REQUIRED = ("kind", "receipt_nonce", "candidate_tree_sha", "new_sha")
+# #767: versioned binding evolution. Legacy records (no binding_version) validate against the
+# tuples above unchanged — historical logs stay readable. binding_version == 2 records ALSO
+# require the identity fields below (an incomplete v2 record refuses); any other version refuses.
+_BINDING_V2_EXTRA = ("target_ref", "paths_digest")
 # #637 (epic #635 C4): a WF2/WF3 design-level loop-back's park_and_reset record.
 _PARK_REQUIRED = ("kind", "run_id", "task_id", "design_version", "stash_name",
                   "worktree_path", "parked")
@@ -311,6 +315,15 @@ def _validate_record(obj, lineno: int) -> None:
     missing = [k for k in req if k not in obj]
     if missing:
         raise ValueError(f"audit line {lineno}: {kind} missing fields {missing}")
+    if kind in ("work_product", "expected_work_product") and "binding_version" in obj:
+        # #767: v2 bindings also carry the promotion identity; legacy (no version) stays as-is.
+        if obj["binding_version"] != 2:
+            raise ValueError(
+                f"audit line {lineno}: {kind} unknown binding_version {obj['binding_version']!r}")
+        v2_missing = [k for k in _BINDING_V2_EXTRA if not obj.get(k)]
+        if v2_missing:
+            raise ValueError(
+                f"audit line {lineno}: {kind} binding_version=2 missing fields {v2_missing}")
     if kind == "receipt" and obj["verdict"] not in _VERDICTS:
         raise ValueError(f"audit line {lineno}: bad verdict {obj['verdict']!r}")
     if kind == "receipt" and "recovered_from" in obj and not (
@@ -411,25 +424,37 @@ class RoutingAuditLog:
             self._write_locked({"kind": "epoch", "seq": self._seq, "from": old_digest, "to": new_digest})
 
     def append_work_product(self, *, receipt_nonce: str, candidate_tree_sha: str,
-                            new_sha: str, work_product: dict) -> None:
+                            new_sha: str, work_product: dict,
+                            target_ref: str = None, paths_digest: str = None) -> None:
         """#559 AC1 (design §2.6): bind a promoted work product to its build receipt. candidate_tree_sha
-        + new_sha are recorded so the collect-work-product retry dedup can match on exactly these."""
+        + new_sha are recorded so the collect-work-product retry dedup can match on exactly these.
+        #767: when target_ref + paths_digest are BOTH supplied, the record is written as
+        binding_version=2 (the promotion identity rides the binding); omitted → legacy v1 shape."""
+        rec = {"kind": "work_product", "receipt_nonce": receipt_nonce,
+               "candidate_tree_sha": candidate_tree_sha, "new_sha": new_sha,
+               "work_product": dict(work_product)}
+        if target_ref and paths_digest:
+            rec.update({"binding_version": 2, "target_ref": target_ref,
+                        "paths_digest": paths_digest})
         with self._lock:
-            self._write_locked({
-                "kind": "work_product", "receipt_nonce": receipt_nonce,
-                "candidate_tree_sha": candidate_tree_sha, "new_sha": new_sha,
-                "work_product": dict(work_product)})
+            self._write_locked(rec)
 
     def append_expected_work_product(self, *, receipt_nonce: str, candidate_tree_sha: str,
-                                     new_sha: str) -> None:
+                                     new_sha: str,
+                                     target_ref: str = None, paths_digest: str = None) -> None:
         """#570 L2: record that a promotion LANDED for ``receipt_nonce`` so reconcile can flag a
         landed-but-unrecorded work product (the "no missing" half — keyed off what collect actually
         writes, not Observation.work_product). collect_work_product writes it just before the
-        work_product record; idempotency (search-then-append) is the caller's responsibility."""
+        work_product record; idempotency (search-then-append) is the caller's responsibility.
+        #767: target_ref + paths_digest (both supplied) → binding_version=2, matching
+        append_work_product — reconcile matches on the full binding key, never across versions."""
+        rec = {"kind": "expected_work_product", "receipt_nonce": receipt_nonce,
+               "candidate_tree_sha": candidate_tree_sha, "new_sha": new_sha}
+        if target_ref and paths_digest:
+            rec.update({"binding_version": 2, "target_ref": target_ref,
+                        "paths_digest": paths_digest})
         with self._lock:
-            self._write_locked({
-                "kind": "expected_work_product", "receipt_nonce": receipt_nonce,
-                "candidate_tree_sha": candidate_tree_sha, "new_sha": new_sha})
+            self._write_locked(rec)
 
     def append_park(self, *, run_id: str, task_id: str, design_version: str, stash_name: str,
                     worktree_path: str, parked: bool, stash_oid: Optional[str] = None) -> None:
@@ -707,12 +732,18 @@ def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: b
     # new_sha) tuple, not just the nonce (Step-11 finding): a stale/corrupt same-nonce record with
     # different hashes must NOT satisfy the expectation. Keys off what production writes; the
     # Observation-based check below is retained for back-compat.
-    wp_tuples = {(w["receipt_nonce"], w.get("candidate_tree_sha"), w.get("new_sha"))
-                 for w in work_products}
+    def _binding_key(r):
+        # #767: the match key carries the binding identity. Legacy (v1) records contribute
+        # (None, None, None) for the version half, so a v2 expectation can never be satisfied
+        # by a v1 record (or vice versa), and a v2 pair must agree on target_ref + paths_digest.
+        return (r.get("receipt_nonce"), r.get("candidate_tree_sha"), r.get("new_sha"),
+                r.get("binding_version"), r.get("target_ref"), r.get("paths_digest"))
+
+    wp_tuples = {_binding_key(w) for w in work_products}
     for e in records:
         if e.get("kind") != "expected_work_product":
             continue
-        if (e.get("receipt_nonce"), e.get("candidate_tree_sha"), e.get("new_sha")) not in wp_tuples:
+        if _binding_key(e) not in wp_tuples:
             missing_work_product.append(f"{e.get('receipt_nonce')}:expected-but-unrecorded")
     for o in observations:
         inner = o.get("observation") or {}

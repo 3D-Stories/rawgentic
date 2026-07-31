@@ -2247,14 +2247,14 @@ def _seed_authorized_audit(audit, *, nonce="rn1", cid="c1", seat="build", run_id
 
 def _collect(tmp_path, reg, mgr, *, run_id="run1", session="sess1",
              target="refs/heads/integration", expected="0" * 40, kind="docs", audit=None, seed=True,
-             obs_status="ok"):
+             obs_status="ok", **collect_kw):
     audit = audit or enforce.RoutingAuditLog(tmp_path / "runs", run_id)
     if seed:  # F7 (#571): a promotion needs an authorized build receipt + verified obs
         _seed_authorized_audit(audit, run_id=run_id, obs_status=obs_status)
     res = er.collect_work_product(
         run_id=run_id, session_name=session, target_ref=target, expected_target_sha=expected,
         kind=kind, registry=reg, manager=mgr, audit=audit,
-        intent_dir=str(tmp_path / "intents"), correlation_id="c1")
+        intent_dir=str(tmp_path / "intents"), correlation_id="c1", **collect_kw)
     return res, audit
 
 
@@ -3957,3 +3957,100 @@ def test_733_s11_collect_refuses_foreign_seat_observation(tmp_path):
     res, _audit = _collect(tmp_path, reg, mgr, seed=False, audit=audit)
     assert res["ok"] is False
     assert res["error"]["code"] == "unauthorized_work_product"
+
+
+# ---------------------------------------------------------------------------
+# #767: per-task exact-path collection — promote_paths param + intent identity v2
+# ---------------------------------------------------------------------------
+
+def test_collect_promote_paths_admits_declared_only(tmp_path):
+    mgr = _FakeMgr(changed=["src/a.py"])
+    res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr,
+                      kind="code", promote_paths=["src/a.py"])
+    assert res["ok"] and res["status"] == "recorded"
+
+
+def test_collect_promote_paths_refuses_outside_path(tmp_path):
+    mgr = _FakeMgr(changed=["src/a.py", "src/evil.py"])
+    res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr,
+                      kind="code", promote_paths=["src/a.py"])
+    assert res["ok"] is False
+    assert res["error"]["code"] == "promote_refused"
+
+
+def test_collect_promote_paths_empty_is_malformed(tmp_path):
+    res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), _FakeMgr(),
+                      kind="code", promote_paths=[])
+    assert res["ok"] is False
+    assert res["exit"] == er.EXIT_MALFORMED
+
+
+def test_collect_default_policy_stays_appendix(tmp_path):
+    # back-compat pin: no promote_paths → the appendix prefix policy, byte-identical behavior
+    res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), _FakeMgr())
+    assert res["ok"] and res["status"] == "recorded"
+    mgr2 = _FakeMgr(changed=["src/a.py"])  # non-appendix change under the DEFAULT policy
+    second = tmp_path / "second"
+    second.mkdir()
+    res2, _ = _collect(second, _FakeReg(_completed_record(tmp_path)), mgr2)
+    assert res2["ok"] is False and res2["error"]["code"] == "promote_refused"
+
+
+def test_collect_intent_conflict_on_different_target(tmp_path):
+    # #767 (pass-2 F3): a consumed intent re-requested against a DIFFERENT target must refuse
+    # loudly, never report already_recorded for a branch that was never advanced.
+    rec = _completed_record(tmp_path)
+    reg = _FakeReg(rec)
+    mgr = _FakeMgr(changed=["src/a.py"])
+    r1, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"])
+    assert r1["ok"] and r1["status"] == "recorded"
+    r2, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"],
+                     target="refs/heads/other-branch")
+    assert r2["ok"] is False
+    assert r2["error"]["code"] == "intent_conflict"
+
+
+def test_collect_intent_conflict_on_different_paths(tmp_path):
+    rec = _completed_record(tmp_path)
+    reg = _FakeReg(rec)
+    mgr = _FakeMgr(changed=["src/a.py"])
+    r1, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"])
+    assert r1["ok"] and r1["status"] == "recorded"
+    r2, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py", "src/b.py"])
+    assert r2["ok"] is False
+    assert r2["error"]["code"] == "intent_conflict"
+
+
+def test_collect_identical_rerun_still_already_recorded(tmp_path):
+    rec = _completed_record(tmp_path)
+    reg = _FakeReg(rec)
+    mgr = _FakeMgr(changed=["src/a.py"])
+    r1, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"])
+    assert r1["ok"] and r1["status"] == "recorded"
+    r2, _ = _collect(tmp_path, reg, mgr, kind="code", promote_paths=["src/a.py"])
+    assert r2["ok"] and r2["status"] == "already_recorded"
+
+
+def test_collect_v2_binding_fields_on_audited_records(tmp_path):
+    # rev-4 F3: new records carry binding_version=2 + target_ref + paths_digest
+    mgr = _FakeMgr(changed=["src/a.py"])
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr,
+                          kind="code", promote_paths=["src/a.py"])
+    assert res["ok"]
+    wps = [r for r in audit.records() if r.get("kind") == "work_product"]
+    exps = [r for r in audit.records() if r.get("kind") == "expected_work_product"]
+    for r in wps + exps:
+        assert r.get("binding_version") == 2
+        assert r.get("target_ref") == "refs/heads/integration"
+        assert r.get("paths_digest") and r["paths_digest"] != "appendix-default"
+
+
+def test_collect_cli_accepts_promote_path_flag(tmp_path):
+    # argparse-level pin: the flag exists and repeats (a SystemExit(2) means it does not parse).
+    ws = tmp_path / "ws.json"
+    ws.write_text(json.dumps({"version": 1, "projects": []}), encoding="utf-8")
+    rc = er.main(["collect-work-product", "--run-id", "r1", "--session-name", "s1",
+                  "--target-ref", "refs/heads/x", "--expected-target-sha", "0" * 40,
+                  "--kind", "code", "--promote-path", "src/a.py", "--promote-path", "src/b.py",
+                  "--workspace", str(ws), "--project", "nope"])
+    assert isinstance(rc, int)  # parses; downstream config failure is fine here

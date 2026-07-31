@@ -1595,7 +1595,8 @@ def _atomic_write_json(path: Path, obj) -> None:
 def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
                          expected_target_sha: str, kind: str,
                          registry, manager, audit, intent_dir: str,
-                         correlation_id: Optional[str] = None) -> dict:
+                         correlation_id: Optional[str] = None,
+                         promote_paths: Optional[list] = None) -> dict:
     """#559 AC1 (design §2.6) — promote a completed build's appendix work product onto
     ``target_ref`` and record an audited ``work_product`` binding. TWO-PHASE, crash-recoverable,
     audit-idempotent:
@@ -1610,13 +1611,33 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
 
     Idempotent re-run: a consumed matching intent → no-op; an unconsumed matching intent whose
     new_sha is already recorded (promote succeeded, finalize crashed) → resume phase 2 only; an
-    absent/non-matching intent with a moved ref refuses loud via promote's CAS. The verb HARD-CODES
-    its sole promotable prefix (docs/planning/appendix/) — the factory's generality is for other
-    callers. Git/registry seams are injected; the live path is CELL-1."""
+    absent/non-matching intent with a moved ref refuses loud via promote's CAS.
+
+    #767: ``promote_paths`` scopes the promotion. ``None`` → the historical appendix-prefix
+    policy, byte-identical. A non-empty list → EXACT-path policy (``promote_paths_only`` —
+    never prefix matching, Step-4 pass-2 F2). The durable intent + the audited bindings carry
+    the promotion identity (``target_ref`` + ``paths_digest``, binding_version=2): a re-request
+    for the same receipt against a DIFFERENT target/policy refuses loud (``intent_conflict``),
+    never ``already_recorded`` (pass-2 F3). Git/registry seams are injected; the live path is
+    CELL-1."""
     from phase_executor.registry import handle_from_record  # noqa: PLC0415
     from phase_executor.contract import derive_work_product  # noqa: PLC0415
-    from phase_executor.worktree import promote_appendix_only, PromotionResult, WorktreeError  # noqa: PLC0415
+    from phase_executor.worktree import (  # noqa: PLC0415
+        promote_appendix_only, promote_paths_only, PromotionResult, WorktreeError,
+        _norm_rel_components)
     ce = correlation_id
+    if promote_paths is None:
+        path_policy = promote_appendix_only((_APPENDIX_PREFIX,))
+        paths_digest = "appendix-default"
+    else:
+        try:
+            path_policy = promote_paths_only(tuple(promote_paths))
+            norm = sorted("/".join(_norm_rel_components(p, what="declared path"))
+                          for p in promote_paths)
+        except (ValueError, TypeError) as e:
+            return _err(EXIT_MALFORMED, "invalid_promote_paths", str(e), retryable=False,
+                        correlation_id=ce)
+        paths_digest = "sha256:" + hashlib.sha256("\n".join(norm).encode("utf-8")).hexdigest()
     recs = [r for r in registry.by_run(run_id) if r.session_name == session_name]
     if not recs:
         return _err(EXIT_MALFORMED, "unknown_job",
@@ -1688,10 +1709,22 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
             intent = json.loads(intent_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             intent = None
-    matching = (isinstance(intent, dict)
-                and intent.get("receipt_nonce") == record.receipt_nonce
-                and intent.get("candidate_tree_sha") == candidate_tree_sha
-                and intent.get("expected_target_sha") == expected_target_sha)
+    matching3 = (isinstance(intent, dict)
+                 and intent.get("receipt_nonce") == record.receipt_nonce
+                 and intent.get("candidate_tree_sha") == candidate_tree_sha
+                 and intent.get("expected_target_sha") == expected_target_sha)
+    # #767 (pass-2 F3): a matching-nonce intent bound to a DIFFERENT target/policy refuses loud —
+    # already_recorded for a branch that was never advanced would silently strand it. A legacy
+    # intent (no identity fields) defaults to (this target, appendix-default): pre-#767 intents
+    # were appendix collects, so an appendix re-run stays compatible while a paths call conflicts.
+    if matching3 and (intent.get("target_ref", target_ref) != target_ref
+                      or intent.get("paths_digest", "appendix-default") != paths_digest):
+        return _err(EXIT_MALFORMED, "intent_conflict",
+                    f"collect-work-product: intent for receipt {record.receipt_nonce!r} is bound "
+                    f"to target {intent.get('target_ref')!r} / paths_digest "
+                    f"{intent.get('paths_digest')!r} — refusing a re-request with a different "
+                    f"target/policy", retryable=False, correlation_id=ce)
+    matching = matching3
     if matching and intent.get("consumed"):
         return {"ok": True, "exit": EXIT_OK, "action": "collect_work_product",
                 "status": "already_recorded", "receipt_nonce": record.receipt_nonce,
@@ -1737,18 +1770,20 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
                 promoted=True, new_target_sha=new_sha, base_sha=evidence["base_sha"],
                 head_sha=evidence["head_sha"], changed_paths=tuple(evidence["changed_paths"]))
             intent = {"receipt_nonce": record.receipt_nonce, "candidate_tree_sha": candidate_tree_sha,
-                      "expected_target_sha": expected_target_sha, "new_sha": new_sha, "consumed": False}
+                      "expected_target_sha": expected_target_sha, "new_sha": new_sha,
+                      "target_ref": target_ref, "paths_digest": paths_digest, "consumed": False}
             _atomic_write_json(intent_path, intent)
         else:
             # PHASE 1 — durable intent BEFORE the irreversible CAS (new_sha unknown yet, F-b)
             intent = {"receipt_nonce": record.receipt_nonce, "candidate_tree_sha": candidate_tree_sha,
-                      "expected_target_sha": expected_target_sha, "new_sha": None, "consumed": False}
+                      "expected_target_sha": expected_target_sha, "new_sha": None,
+                      "target_ref": target_ref, "paths_digest": paths_digest, "consumed": False}
             _atomic_write_json(intent_path, intent)
             try:
                 promotion = manager.promote(
                     handle, target_ref=target_ref, expected_target_sha=expected_target_sha,
                     message=f"collect work product ({kind}) for {record.receipt_nonce}",
-                    path_policy=promote_appendix_only((_APPENDIX_PREFIX,)))
+                    path_policy=path_policy)
             except WorktreeError as e:
                 return _err(EXIT_ENFORCEMENT, "promote_refused", str(e), retryable=False,
                             correlation_id=ce)
@@ -1772,7 +1807,8 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
                            for r in existing)
     if not already_expected:
         audit.append_expected_work_product(receipt_nonce=record.receipt_nonce,
-                                           candidate_tree_sha=candidate_tree_sha, new_sha=new_sha)
+                                           candidate_tree_sha=candidate_tree_sha, new_sha=new_sha,
+                                           target_ref=target_ref, paths_digest=paths_digest)
     # PHASE 2 — derive → audit-search-then-append (idempotent) → mark consumed
     try:
         wp = derive_work_product(manager, handle, kind=kind, promotion=promotion)
@@ -1787,7 +1823,8 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
     if not already:
         audit.append_work_product(receipt_nonce=record.receipt_nonce,
                                   candidate_tree_sha=candidate_tree_sha, new_sha=new_sha,
-                                  work_product=wp)
+                                  work_product=wp, target_ref=target_ref,
+                                  paths_digest=paths_digest)
     intent["consumed"] = True
     _atomic_write_json(intent_path, intent)
     return {"ok": True, "exit": EXIT_OK, "action": "collect_work_product",
@@ -2818,7 +2855,7 @@ def _do_collect_work_product(args) -> int:
         run_id=args.run_id, session_name=args.session_name, target_ref=args.target_ref,
         expected_target_sha=args.expected_target_sha, kind=args.kind,
         registry=registry, manager=manager, audit=audit, intent_dir=str(intent_dir),
-        correlation_id=args.correlation_id))
+        correlation_id=args.correlation_id, promote_paths=args.promote_paths))
 
 
 def _status_tail(path: Path, limit: int = 200) -> str:
@@ -3201,12 +3238,17 @@ def main(argv: Optional[list] = None) -> int:
     rr.set_defaults(fn=_do_recover_run)
 
     cw = sub.add_parser("collect-work-product",
-                        help="#559 AC1: promote a completed build's appendix work product + record an audited binding")
+                        help="#559 AC1 / #767: promote a completed build's work product + record an "
+                             "audited binding (default: appendix prefix; --promote-path: exact "
+                             "per-task paths)")
     cw.add_argument("--run-id", required=True, dest="run_id")
     cw.add_argument("--session-name", required=True, dest="session_name")
     cw.add_argument("--target-ref", required=True, dest="target_ref")
     cw.add_argument("--expected-target-sha", required=True, dest="expected_target_sha")
     cw.add_argument("--kind", default="docs", choices=["code", "review", "design", "docs"])
+    cw.add_argument("--promote-path", action="append", dest="promote_paths", metavar="REL_FILE",
+                    help="#767: exact relative file promotable by this collect (repeatable; one "
+                         "per declared task file); absent -> the appendix-prefix default")
     cw.add_argument("--correlation-id", dest="correlation_id")
     cw.add_argument("--workspace", required=True)
     cw.add_argument("--project", required=True)

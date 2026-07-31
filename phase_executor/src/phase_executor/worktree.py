@@ -187,6 +187,26 @@ def promote_appendix_only(prefixes) -> Callable[[str], bool]:
     return policy
 
 
+def promote_paths_only(paths) -> Callable[[str], bool]:
+    """#767: exact-path counterpart to ``promote_appendix_only`` for per-task code collection —
+    admits a changed path ONLY on full component-tuple EQUALITY with a declared path, never
+    prefix matching: a child that deletes declared FILE ``a/b.py`` and creates DIRECTORY
+    ``a/b.py/`` must not smuggle descendants through a prefix policy (Step-4 pass-2 F2). Same
+    fail-closed normalization on both ends: a malformed declared path is a factory-time
+    ``ValueError``; a malformed candidate at call time is simply not promotable."""
+    path_tuples = {_norm_rel_components(p, what="declared path") for p in paths}
+    if not path_tuples:
+        raise ValueError("promote_paths_only: at least one path is required")
+
+    def policy(path: str) -> bool:
+        try:
+            parts = _norm_rel_components(path, what="path")
+        except ValueError:
+            return False  # fail-closed
+        return parts in path_tuples
+    return policy
+
+
 # ---------------------------------------------------------------------------
 # B.1 — pure planning functions (no I/O)
 # ---------------------------------------------------------------------------

@@ -1167,3 +1167,82 @@ def test_733_s11_records_accepts_append_written_observation(tmp_path):
                        "observation": obs})
     recs = log.records()
     assert len(recs) == 1 and recs[0]["observation"]["parse_status"] == obs["parse_status"]
+
+
+# ---- #767 (rev-4 F3): versioned work-product binding — v2 requires identity fields, v1 legacy reads ----
+
+def _wp_rec_v2(nonce, tree="sha256:tree1", new="sha256:new1", target="refs/heads/feat",
+               digest="sha256:pd1"):
+    r = _wp_rec(nonce, tree=tree, new=new)
+    r.update({"binding_version": 2, "target_ref": target, "paths_digest": digest})
+    return r
+
+
+def _expected_wp_rec_v2(nonce, tree="sha256:tree1", new="sha256:new1", target="refs/heads/feat",
+                        digest="sha256:pd1"):
+    r = _expected_wp_rec(nonce, tree=tree, new=new)
+    r.update({"binding_version": 2, "target_ref": target, "paths_digest": digest})
+    return r
+
+
+def _audit_roundtrip(tmp_path, rec):
+    log = enforce.RoutingAuditLog(tmp_path / "runs", "runv")
+    log._write_locked(rec)  # pylint: disable=protected-access
+    return log.records()
+
+
+def test_validate_work_product_v1_legacy_still_reads(tmp_path):
+    # historical logs (no binding_version) must stay readable — fail-closed only on NEW shapes
+    recs = _audit_roundtrip(tmp_path, _wp_rec("n1"))
+    assert recs and recs[0]["kind"] == "work_product"
+
+
+def test_validate_work_product_v2_missing_identity_fields_refuses(tmp_path):
+    bad = _wp_rec("n1")
+    bad["binding_version"] = 2  # v2 without target_ref/paths_digest must refuse
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path, bad)
+
+
+def test_validate_expected_work_product_v2_missing_identity_fields_refuses(tmp_path):
+    bad = _expected_wp_rec("n1")
+    bad["binding_version"] = 2
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path, bad)
+
+
+def test_validate_work_product_unknown_binding_version_refuses(tmp_path):
+    bad = _wp_rec_v2("n1")
+    bad["binding_version"] = 3
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path, bad)
+
+
+def test_validate_work_product_v2_complete_reads(tmp_path):
+    recs = _audit_roundtrip(tmp_path, _wp_rec_v2("n1"))
+    assert recs and recs[0]["binding_version"] == 2
+
+
+def test_reconcile_v2_expectation_never_matches_v1_record():
+    # a v2 expected_work_product must NOT be satisfied by a legacy v1 work_product sharing the
+    # 3-tuple — cross-version matching would let an unidentified binding satisfy a v2 expectation
+    recs = [_receipt_rec("n1"), _obs_rec("n1"), _expected_wp_rec_v2("n1"), _wp_rec("n1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and any("n1" in x for x in res.missing_work_product)
+
+
+def test_reconcile_v2_pair_matches_on_extended_tuple():
+    recs = [_receipt_rec("n1"), _obs_rec("n1"), _expected_wp_rec_v2("n1"), _wp_rec_v2("n1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+    assert res.missing_work_product == ()
+
+
+def test_reconcile_v2_pair_target_mismatch_is_missing():
+    recs = [_receipt_rec("n1"), _obs_rec("n1"), _expected_wp_rec_v2("n1"),
+            _wp_rec_v2("n1", target="refs/heads/OTHER")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and any("n1" in x for x in res.missing_work_product)
