@@ -361,6 +361,9 @@ class TestAdHocSubcommand:
         goal on the first real handoff. Retirement stays gated on every verification AND on the goal
         being provably cleared, so the expected path is also the guarded one."""
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "my-own-session")
+        # #758: a retirement handoff reads this session's own transcript for the verbatim
+        # goal-carry check — a goal-less transcript validates trivially (nothing to carry).
+        (tmp_path / "my-own-session.jsonl").write_text("{}\n", encoding="utf-8")
         monkeypatch.setattr(ll, "_default_runner", lambda argv, timeout=180: FakeProc(0, json.dumps(
             {"result": {"pane": {"pane_id": "w1:p1", "agent_session": {
                 "agent": "claude", "kind": "id", "source": "herdr:claude",
@@ -530,6 +533,7 @@ class TestTeardownOwnership:
     def test_teardown_proceeds_when_the_pane_is_provably_ours(self, tmp_path,
                                                              monkeypatch) -> None:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "my-own-session")
+        (tmp_path / "my-own-session.jsonl").write_text("{}\n", encoding="utf-8")  # #758
         monkeypatch.setattr(ll, "_default_runner",
                             lambda argv, timeout=180: FakeProc(0, self._own("my-own-session")))
         seen = {}
@@ -761,3 +765,100 @@ class TestStrictGoalBinding:
         out = ll.perform_handoff(**kw)
         assert out["failed_step"] != "predecessor_goal_binding", \
             "no binding check without strict_goal_binding=True"
+
+
+class TestAdHocVerbatimCarry:
+    """#758 AC1/AC3 at the CLI boundary: a retirement handoff validates the successor's goal
+    against THIS session's own live goal before anything launches. Fail closed on missing
+    evidence (pass-1 F3); session id validated before the path is built (pass-1 F7)."""
+
+    OWN = "my-own-session"
+
+    def _own_pane(self):
+        return json.dumps({"result": {"pane": {"pane_id": "w1:p1", "agent_status": "idle",
+                                               "agent_session": {"agent": "claude", "kind": "id",
+                                                                 "source": "herdr:claude",
+                                                                 "value": self.OWN}}}})
+
+    def _setup(self, tmp_path, monkeypatch, transcript_text):
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", self.OWN)
+        monkeypatch.setattr(ll, "_default_runner",
+                            lambda argv, timeout=180: FakeProc(0, self._own_pane()))
+        if transcript_text is not None:
+            (tmp_path / f"{self.OWN}.jsonl").write_text(transcript_text, encoding="utf-8")
+        seen = {}
+
+        def fake(**kw):
+            seen.update(kw)
+            return {"ok": True, "results": {}, "steps": [], "new_pane": "w1:pZZ",
+                    "session_id": "s", "cleanup": None, "truncated": False,
+                    "failed_step": None, "teardown_skipped": None, "predecessor_guard": None}
+
+        monkeypatch.setattr(ll, "perform_handoff", fake)
+        return seen
+
+    def _teardown_argv(self, tmp_path, **over):
+        return [a for a in _argv(tmp_path, **over) if a != "--no-teardown"]
+
+    def test_a_differing_goal_is_refused_before_anything_launches(self, tmp_path,
+                                                                  monkeypatch, capsys) -> None:
+        seen = self._setup(tmp_path, monkeypatch, _goal_row(False, "the owner goal"))
+        rc = ll.main(self._teardown_argv(tmp_path))
+        assert rc == 2
+        assert not seen, "perform_handoff must never be called on a refused carry"
+        err = capsys.readouterr().err
+        assert "758" in err or "verbatim" in err
+        assert "the owner goal" not in err, "no goal content in the refusal"
+
+    def test_an_identical_goal_proceeds_with_strict_binding_armed(self, tmp_path,
+                                                                  monkeypatch) -> None:
+        seen = self._setup(tmp_path, monkeypatch, _goal_row(False, GOAL_CONDITION))
+        rc = ll.main(self._teardown_argv(tmp_path))
+        assert rc == 0
+        assert seen["strict_goal_binding"] is True
+        assert seen["expected_predecessor_goal"] == GOAL_CONDITION
+
+    def test_no_live_goal_proceeds_with_a_none_snapshot(self, tmp_path, monkeypatch) -> None:
+        cleared = "\n".join([_goal_row(False, "old goal"), _goal_row(True, "old goal")])
+        seen = self._setup(tmp_path, monkeypatch, cleared)
+        rc = ll.main(self._teardown_argv(tmp_path))
+        assert rc == 0
+        assert seen["strict_goal_binding"] is True
+        assert seen["expected_predecessor_goal"] is None
+
+    def test_a_missing_transcript_fails_closed_on_the_teardown_path(self, tmp_path,
+                                                                    monkeypatch, capsys) -> None:
+        seen = self._setup(tmp_path, monkeypatch, None)
+        rc = ll.main(self._teardown_argv(tmp_path))
+        assert rc == 2
+        assert not seen
+        assert "no-teardown" in capsys.readouterr().err, "the escape hatch is named"
+
+    def test_an_approved_rewrite_proceeds_and_lands_in_the_output(self, tmp_path,
+                                                                  monkeypatch, capsys) -> None:
+        seen = self._setup(tmp_path, monkeypatch, _goal_row(False, "the owner goal"))
+        rc = ll.main(self._teardown_argv(tmp_path) +
+                     ["--goal-rewrite-approved", "yes, switch to the release goal"])
+        assert rc == 0
+        assert seen["strict_goal_binding"] is True
+        out = capsys.readouterr().out
+        assert "yes, switch to the release goal" in out, "the owner answer is in the audit JSON"
+
+    def test_a_malformed_session_id_is_refused_before_the_path_is_built(self, tmp_path,
+                                                                        monkeypatch,
+                                                                        capsys) -> None:
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "../escape")
+        monkeypatch.setattr(ll, "_default_runner",
+                            lambda argv, timeout=180: FakeProc(0, self._own_pane()))
+        called = []
+        monkeypatch.setattr(ll, "perform_handoff", lambda **kw: called.append(kw))
+        rc = ll.main(self._teardown_argv(tmp_path))
+        assert rc == 2
+        assert not called
+
+    def test_no_teardown_skips_the_validation_entirely(self, tmp_path, monkeypatch) -> None:
+        """An additive helper legitimately gets different work — no goal comparison."""
+        seen = self._setup(tmp_path, monkeypatch, _goal_row(False, "the owner goal"))
+        rc = ll.main(_argv(tmp_path))
+        assert rc == 0
+        assert seen.get("strict_goal_binding") in (None, False)

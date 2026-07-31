@@ -3179,6 +3179,41 @@ def _cmd_ad_hoc_handoff(args) -> int:
                 "refusing to retire it. Closing it could kill an unrelated session; "
                 "check $HERDR_PANE_ID")
 
+    # #758 — verbatim goal carry (retirement path only). The successor of a RETIREMENT handoff
+    # continues THIS session's work, so its goal must be this session's own live owner goal,
+    # byte-for-byte — model-drafted STATE/MODE text belongs in the handoff file, never in the
+    # goal. An additive helper (--no-teardown) legitimately gets different work, so it is
+    # exempt. Fail CLOSED on missing/unreadable provenance (pass-1 F3): this runs before any
+    # pane exists, so refusing strands nothing, and evidence denial must not become a bypass.
+    strict_binding = False
+    expected_goal: str | None = None
+    if teardown:
+        if not _SESSION_ID_RE.fullmatch(own):
+            raise LauncherError(
+                f"$CLAUDE_CODE_SESSION_ID {own!r} is not a valid session id — refusing to "
+                "build a transcript path from it (#758)")
+        own_transcript = os.path.join(args.transcript_dir, f"{own}.jsonl")
+        real_dir = os.path.realpath(args.transcript_dir)
+        if os.path.dirname(os.path.realpath(own_transcript)) != real_dir:
+            raise LauncherError(
+                f"transcript path {own_transcript!r} escapes {args.transcript_dir!r} — "
+                "refusing (#758)")
+        try:
+            with open(own_transcript, encoding="utf-8") as fh:
+                own_text = fh.read()
+        except OSError as exc:
+            raise LauncherError(
+                f"cannot read this session's own transcript {own_transcript!r} ({exc}) — "
+                "refusing the retirement handoff: without provenance the verbatim goal carry "
+                "cannot be validated (#758), and an unreadable transcript must not become a "
+                "bypass. Pass --no-teardown to hand off without retiring this pane") from exc
+        expected_goal = live_owner_goal(own_text)
+        ok, reason = validate_goal_carry(condition, expected_goal,
+                                         approved_answer=args.goal_rewrite_approved)
+        if not ok:
+            raise LauncherError(reason)
+        strict_binding = True
+
     # `steps` is deliberately NOT passed: the canonical launch ladder is the only legal one for a
     # launch handoff (`evaluate_verifications` refuses anything else), and defaulting says so.
     out = perform_handoff(
@@ -3196,10 +3231,16 @@ def _cmd_ad_hoc_handoff(args) -> int:
         # CONFIRMED before the pane is closed. `own` is this session's own id, already required
         # above for the ownership proof.
         predecessor_session=(own if teardown else None),
-        predecessor_goal_condition=args.predecessor_goal_condition)
-    print(json.dumps({k: out[k] for k in
-                      ("ok", "results", "failed_step", "new_pane", "session_id",
-                       "truncated", "cleanup", "teardown_skipped", "predecessor_guard")}, indent=2))
+        predecessor_goal_condition=args.predecessor_goal_condition,
+        strict_goal_binding=strict_binding,
+        expected_predecessor_goal=expected_goal)
+    payload = {k: out[k] for k in
+               ("ok", "results", "failed_step", "new_pane", "session_id",
+                "truncated", "cleanup", "teardown_skipped", "predecessor_guard")}
+    if args.goal_rewrite_approved is not None:
+        # #758 — the audit record of a claimed owner approval rides the output verbatim.
+        payload["goal_rewrite_approved"] = args.goal_rewrite_approved
+    print(json.dumps(payload, indent=2))
     # On BOTH streams, and in plain words: the JSON is easy to skim past, and this is the sentence
     # whose absence let a stranded guarded pane loop its Stop hook four times unnoticed (#700).
     if out.get("predecessor_guard"):
@@ -3508,6 +3549,15 @@ def main(argv: list[str] | None = None) -> int:
                       help="your OWN currently-armed goal condition, used only with "
                            "the default retirement to bind the clear receipt to the guard actually "
                            "cleared. Read it with `read-goal-condition --transcript <own>.jsonl`")
+    # #758 — a caller ASSERTION that the owner explicitly approved a goal text differing from
+    # the predecessor's live goal (the verbatim-carry escape hatch). Takes the owner's verbatim
+    # yes/no answer, never a bare boolean: the answer is recorded in the output JSON so the
+    # audit trail carries the claimed approval text. No crypto root of trust exists — the
+    # enforceable layer is the skill prose gating this on an explicit owner question.
+    p_ah.add_argument("--goal-rewrite-approved", default=None, metavar="OWNER_ANSWER",
+                      help="the owner's verbatim answer approving a DIFFERENT successor goal "
+                           "(#758). Without it, a retirement handoff whose goal differs from "
+                           "this session's live goal is refused")
 
     # #665 — the mid-child pair. Two commands, run by two different sessions, because the
     # handover and the retirement have different owners: only the successor may retire.
