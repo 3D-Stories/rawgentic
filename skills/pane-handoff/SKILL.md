@@ -42,8 +42,9 @@ file — one per tier, `advisory` or `directive`, and either authorizes (#732: t
 to hand off, never WHETHER) — so the check is one command:
 
 ```bash
-compgen -G "$HOME/.rawgentic/context-meter/${CLAUDE_CODE_SESSION_ID}.*.directive.emitted" \
-  || compgen -G "$HOME/.rawgentic/context-meter/${CLAUDE_CODE_SESSION_ID}.*.advisory.emitted"
+[ -n "$CLAUDE_CODE_SESSION_ID" ] \
+  && { compgen -G "$HOME/.rawgentic/context-meter/${CLAUDE_CODE_SESSION_ID}.*.directive.emitted" \
+       || compgen -G "$HOME/.rawgentic/context-meter/${CLAUDE_CODE_SESSION_ID}.*.advisory.emitted"; }
 ```
 
 (An explicit two-tier disjunction, deliberately: a bare `.*.emitted` would admit future marker

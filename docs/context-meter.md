@@ -184,17 +184,20 @@ in better clothes.
 
 ## Attended vs unattended
 
-Two independent facts, because conflating them sends a session at a command that will refuse it:
+Three independent facts, because conflating them sends a session at a command that will refuse it:
 
 | Value | True when | Effect on the message |
 |---|---|---|
 | `headless` | `RAWGENTIC_HEADLESS=1` | no human to ask, so it says "checkpoint and write the handoff" |
 | `fresh_handoff_capable` | **both** `RAWGENTIC_LAUNCHER_ARMED=1` **and** `RAWGENTIC_FRESH_LAUNCH_SUPPORTED=1` | and only then does it name `launcher_lib.py handoff` as the route |
+| `herdr_available` | `HERDR_ENV=1` | a sibling pane can be spawned, so an unattended session without a launcher is routed to `/rawgentic:pane-handoff` instead of stop-and-wait (#732) |
 
 Nothing is inferred. The only armed-launcher signal in the tree is a caller assertion
 (`hooks/launcher_lib.py:2440`), and `launcher_lib.py:2156` is explicit that absence must not read as
-support. A launcher that can relaunch says so. Headless-but-incapable — the common case — is routed to
-`clear-prep` plus a manual-resume instruction.
+support. A launcher that can relaunch says so. Routing precedence for the unattended case: an armed,
+fresh-launch-capable launcher first (`launcher_lib.py handoff`); otherwise `pane-handoff` when
+`HERDR_ENV=1`; otherwise — genuinely nothing to spawn into — `clear-prep` plus a manual-resume
+instruction.
 
 ## What the handover reuses, and the one gap
 
