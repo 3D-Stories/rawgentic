@@ -551,3 +551,66 @@ def test_claude_budget_composition_boundary():
         with pytest.raises(contract.CompositionError):
             claude_cli.build_command("claude-sonnet-5",
                                      profile=contract.LaunchProfile(max_budget_usd=bad))
+
+
+# ---- run identity plumbing (#765) -------------------------------------------
+
+def test_run_competitive_record_carries_caller_run_identity(tmp_path):
+    """#765: a workflow caller's run_id + correlation_id land in the record —
+    never a random mint when supplied."""
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4, "zhipu": 2})
+    _, _, _, record = run_competitive(
+        _candidates_cross_pool(), judge=_judge_first, snapshot=_snapshot(), quota=qc,
+        capture_root=tmp_path, run_id="wf2-765-testsession", correlation_id="765-s3-design",
+        dispatch=_stub(),
+    )
+    assert record["run_id"] == "wf2-765-testsession"
+    assert record["correlation_id"] == "765-s3-design"
+
+
+def test_run_competitive_omitted_identity_keeps_prior_shape(tmp_path):
+    """#765 compat: no identity supplied -> random-minted run_id (16 hex) and an
+    explicit correlation_id None in the record."""
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4, "zhipu": 2})
+    _, _, _, record = run_competitive(
+        _candidates_cross_pool(), judge=_judge_first, snapshot=_snapshot(), quota=qc,
+        capture_root=tmp_path, dispatch=_stub(),
+    )
+    assert len(record["run_id"]) == 16 and all(c in "0123456789abcdef" for c in record["run_id"])
+    assert record["correlation_id"] is None
+
+
+def test_candidate_correlation_reaches_adapter_request_and_observation(tmp_path):
+    """#765: Candidate.correlation_id is threaded into the AdapterRequest, so the
+    per-candidate Observation (built from the request) carries it into the record."""
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4, "zhipu": 2})
+    cands = [
+        Candidate(seat="design", model="claude-opus-4-8", prompt="p", provider="anthropic",
+                  pool="claude", correlation_id="765-s3-design"),
+        Candidate(seat="design", model="gpt-5.6-sol", prompt="p", provider="openai",
+                  pool="codex", correlation_id="765-s3-design"),
+    ]
+    _, _, _, record = run_competitive(
+        cands, judge=_judge_first, snapshot=_snapshot(), quota=qc,
+        capture_root=tmp_path, dispatch=_stub(),
+    )
+    assert [c["correlation_id"] for c in record["candidates"]] == ["765-s3-design"] * 2
+
+
+def test_harness_observation_carries_candidate_correlation(tmp_path):
+    """#765: a candidate that raises inside dispatch still yields an Observation
+    attributable to the workflow dispatch (correlation preserved, not None)."""
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4, "zhipu": 2})
+    cands = [
+        Candidate(seat="design", model="claude-opus-4-8", prompt="p", provider="anthropic",
+                  pool="claude", correlation_id="765-s3-design"),
+        Candidate(seat="design", model="gpt-5.6-sol", prompt="p", provider="openai",
+                  pool="codex", correlation_id="765-s3-design"),
+    ]
+    _, _, _, record = run_competitive(
+        cands, judge=lambda results, rubric: {"winner_index": 1}, snapshot=_snapshot(),
+        quota=qc, capture_root=tmp_path, dispatch=_stub(raise_engines=("claude",)),
+    )
+    harness = [c for c in record["candidates"] if c["parse_status"] == "harness_error"]
+    assert len(harness) == 1
+    assert harness[0]["correlation_id"] == "765-s3-design"

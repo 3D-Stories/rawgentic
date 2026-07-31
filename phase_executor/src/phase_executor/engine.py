@@ -182,6 +182,9 @@ class Candidate:
     auth_mode: str = "subscription_oauth"
     credential_ref: Optional[str] = None
     context: Sequence[str] = ()
+    # #765: the workflow dispatch's correlation id — threaded into the AdapterRequest and the
+    # harness Observation so every candidate stays attributable to its workflow dispatch.
+    correlation_id: Optional[str] = None
 
     @property
     def engine(self) -> str:
@@ -205,7 +208,7 @@ def _harness_observation(c: "Candidate", *, run_id: str, digest: str, reason: st
     """A non-ok Observation standing in for a candidate that could not run (raised, or forbidden)."""
     from .capture import hash_text  # noqa: PLC0415
     obs = contract.Observation(
-        run_id=run_id, attempt_id="harness", correlation_id=None, seat=c.seat, engine=c.engine,
+        run_id=run_id, attempt_id="harness", correlation_id=c.correlation_id, seat=c.seat, engine=c.engine,
         transport=c.transport, requested_model=c.model, actual_model=None, prompt_hash=hash_text(c.prompt),
         context_hashes=[], usage=None, timing_ms=0, queued_ms=0,
         process={"exit_code": None, "timed_out": False}, parse_status=contract.HARNESS_ERROR,
@@ -240,7 +243,7 @@ def _run_candidate(c: Candidate, *, snapshot, quota, capture_root, run_id, dispa
     req_kw = {} if profile is None else {"profile": profile}
     req = AdapterRequest(
         seat=c.seat, requested_model=c.model, prompt=c.prompt, transport=c.transport,
-        context=tuple(c.context), credential_ref=c.credential_ref,
+        context=tuple(c.context), correlation_id=c.correlation_id, credential_ref=c.credential_ref,
         timeout=_effective_timeout(manifest, 300.0), **req_kw,
     )
     attempt_id = uuid.uuid4().hex[:8]
@@ -266,6 +269,7 @@ def run_competitive(
     quota: QuotaCoordinator,
     capture_root,
     run_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
     author_provider: Optional[str] = None,
     require_parallel: bool = False,
     max_workers: Optional[int] = None,
@@ -358,6 +362,7 @@ def run_competitive(
     losers = [r for i, r in enumerate(results) if i != winner_index]
     record = {
         "run_id": run_id,
+        "correlation_id": correlation_id,
         "winner_index": winner_index,
         "n_candidates": len(results),
         "judge_degraded": degraded,
