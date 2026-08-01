@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#786 Ten doc types, one component set</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-31 23:51 MDT</div>
+<h1>#786 Ten doc types, one component set</h1>
+
+</header>
+<main>
+<h1>Ten doc types, one component set</h1>
+<p>Template specifications for the hosted-doc publish pipeline. Extends the design of record <code>docs/planning/2026-07-31-publish-pipeline-vdl-design.md</code> (merged in #780) with the part that document left open: what each template actually contains. Owner-directed 2026-08-01, from sixteen hosted pages the owner named as the standard to hit.</p>
+<p><strong>This document uses no numbered lists, no inline links and no italics.</strong> Not a style choice. The renderer silently corrupts all three, so a document that used them would render wrong on the very page arguing they should render right. Section 2 is the measurement.</p>
+<h2>0. The verdict, before anything else</h2>
+<p><strong>Fourteen of the owner&#x27;s sixteen favourite pages were hand-authored. The renderer produced two of them, and one of those two is the page this work exists to fix.</strong> The template system is not underpowered at the margin. It has never produced a page the owner liked.</p>
+<p>Worse, and not previously recorded anywhere: <strong>the renderer does not just look thin, it silently drops document content.</strong> Ordered lists, links, italics, images, nested lists and horizontal rules are all emitted as raw markdown into the body text. This is measured, not inferred, and it is visible on the epic&#x27;s own hosted design doc today.</p>
+<p>Three things follow, in priority order.</p>
+<ul>
+<li><strong>A new issue is needed for the markdown parser</strong> — ahead of #784. Better template bodies</li>
+</ul>
+<p>  wrapped around a parser that eats numbered lists is polish on a broken floor.</p>
+<ul>
+<li><strong>#784 gets the component specifications in section 4</strong> rather than the single line</li>
+</ul>
+<p>  &quot;give the thin templates real bodies&quot;.</p>
+<ul>
+<li><strong>The template roster grows from seven to ten.</strong> The owner named <code>analysis</code>, <code>uat</code> and</li>
+</ul>
+<p>  <code>workflow</code> as needed types. This supersedes decision 4 of #786 (&quot;no new <code>--style</code> names&quot;).</p>
+<h2>1. Why <code>hooks/render_artifact.py</code> is still in rawgentic</h2>
+<p><strong>Because it belongs there, and the extraction was correct.</strong> It is a plugin hook, not a skill. The claude-skills manual is explicit that plugin-shipped skills and their engines stay in the plugin repo, and seven rawgentic plugin skills call this one:</p>
+<table>
+<thead><tr><th>Caller in rawgentic</th><th>Kind</th></tr></thead>
+<tbody>
+<tr><td><code>skills/create-issue/SKILL.md</code></td><td>plugin skill</td></tr>
+<tr><td><code>skills/epic-post-mortem/SKILL.md</code></td><td>plugin skill</td></tr>
+<tr><td><code>skills/run-feedback/SKILL.md</code></td><td>plugin skill</td></tr>
+<tr><td><code>skills/session-mining/SKILL.md</code></td><td>plugin skill</td></tr>
+<tr><td><code>skills/implement-feature/references/steps.md</code></td><td>WF2 step definitions</td></tr>
+<tr><td><code>skills/fix-bug/references/steps.md</code></td><td>WF3 step definitions</td></tr>
+<tr><td><code>skills/setup/references/integrations.md</code></td><td>setup reference</td></tr>
+<tr><td><code>hooks/adversarial_review_lib.py</code></td><td>hook library</td></tr>
+<tr><td><code>tests/hooks/test_render_artifact.py</code>, <code>tests/hooks/test_artifact_lifecycle.py</code></td><td>its tests</td></tr>
+</tbody>
+</table>
+<p>Moving it would break all of them. It stays.</p>
+<h3>The real defect: bare relative paths in machine-wide skills</h3>
+<p>The extracted <code>design-doc-publish</code> skill invokes it as <code>python3 hooks/render_artifact.py</code>. That path resolves only when the shell&#x27;s working directory is <code>projects/rawgentic</code>. The skill is user-tier and its own description claims scope over &quot;any project in this workspace&quot;, so the command it prescribes is unrunnable in eight of the nine projects it claims to serve.</p>
+<p>The same audit across every extracted skill found six more instances. Every one is a bare <code>hooks/&lt;file&gt;.py</code> that assumes a cwd the skill never sets:</p>
+<table>
+<thead><tr><th>Skill</th><th>Tier</th><th>Bare path</th><th>Verdict</th></tr></thead>
+<tbody>
+<tr><td><code>design-doc-publish</code></td><td>user</td><td><code>hooks/render_artifact.py</code> (lines 111, 196)</td><td><strong>Broken.</strong> Claims workspace-wide scope.</td></tr>
+<tr><td><code>epic-run-analysis</code></td><td>workspace</td><td><code>hooks/render_artifact.py</code> (line 55), <code>hooks/step_state.py</code> (line 29)</td><td><strong>Broken.</strong> Workspace-tier, runs from any project.</td></tr>
+<tr><td><code>ask-owner</code></td><td>workspace</td><td><code>hooks/hermes_bridge.py</code> (lines 22, 34, 91)</td><td><strong>Broken, and self-contradicting.</strong> Line 10 gives the correct qualified path <code>projects/rawgentic/hooks/hermes_bridge.py</code>, then the three runnable commands drop the prefix.</td></tr>
+<tr><td><code>clear-prep</code></td><td>user</td><td><code>hooks/work_summary.py</code> (line 28), <code>hooks/launcher_lib.py</code> (lines 121, 129)</td><td><strong>Broken.</strong> User-tier, fires at any seam in any project.</td></tr>
+<tr><td><code>quality-bar</code></td><td>workspace</td><td><code>hooks/security_scan.py</code> (line 21)</td><td><strong>Borderline.</strong> Workspace-tier but the checklist item is rawgentic-shaped.</td></tr>
+<tr><td><code>pr-preflight</code></td><td>user</td><td><code>hooks/security_scan.py</code> (line 58)</td><td><strong>Acceptable.</strong> The surrounding section is explicitly the rawgentic lane.</td></tr>
+<tr><td><code>add-skill</code></td><td>user</td><td><code>hooks/skill_registration_check.py</code> (line 88)</td><td><strong>Acceptable.</strong> The skill is entirely about the rawgentic plugin repo.</td></tr>
+<tr><td><code>notify-owner</code></td><td>workspace</td><td><code>hooks/hermes_bridge.py</code> (line 13)</td><td><strong>Acceptable.</strong> Prose reference, not a command.</td></tr>
+</tbody>
+</table>
+<p>Four are genuinely broken, one is borderline, three are fine. The fix is uniform and cheap: resolve against the workspace root, not the cwd.</p>
+<pre><code>python3 ~/rawgentic/projects/rawgentic/hooks/&lt;file&gt;.py ...</code></pre>
+<p>This is a claude-skills PR, independent of everything else here, and it should not wait on the pipeline work. Note that <code>#783</code> removes the need for the <code>design-doc-publish</code> instance specifically, by putting <code>publish_doc.py</code> in front of the renderer — but the other three survive #783 untouched.</p>
+<h2>2. What the renderer does to a document — measured 2026-08-01</h2>
+<p>A probe document containing one of each common markdown construct was rendered with <code>--style design</code>. Counting tags in the output:</p>
+<table>
+<thead><tr><th>Construct</th><th>Written</th><th>Rendered as</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>Heading</td><td><code>## Section</code></td><td><code>&lt;h2&gt;</code></td><td>works</td></tr>
+<tr><td>Bullet list</td><td><code>- item</code></td><td><code>&lt;ul&gt;&lt;li&gt;</code></td><td>works, flat only</td></tr>
+<tr><td>Nested bullet</td><td>two-space indent</td><td>flattened to the parent level</td><td><strong>broken</strong></td></tr>
+<tr><td>Table</td><td>GFM pipes</td><td><code>&lt;table&gt;</code></td><td>works</td></tr>
+<tr><td>Blockquote</td><td><code>&gt; line</code></td><td><code>&lt;blockquote&gt;</code></td><td>works, single line</td></tr>
+<tr><td>Fenced code</td><td>triple backtick</td><td><code>&lt;pre&gt;&lt;code&gt;</code></td><td>works</td></tr>
+<tr><td>Bold</td><td>double asterisk</td><td><code>&lt;strong&gt;</code></td><td>works</td></tr>
+<tr><td>Inline code</td><td>backticks</td><td><code>&lt;code&gt;</code></td><td>works</td></tr>
+<tr><td><strong>Ordered list</strong></td><td><code>1.</code> <code>2.</code> <code>3.</code></td><td><strong>one run-on paragraph, zero <code>&lt;ol&gt;</code></strong></td><td><strong>broken</strong></td></tr>
+<tr><td><strong>Link</strong></td><td>bracket-paren</td><td><strong>literal <code>[text](url)</code> in body text, zero <code>&lt;a&gt;</code></strong></td><td><strong>broken</strong></td></tr>
+<tr><td><strong>Italic</strong></td><td>single asterisk or underscore</td><td><strong>literal asterisks and underscores</strong></td><td><strong>broken</strong></td></tr>
+<tr><td><strong>Image</strong></td><td>bang-bracket-paren</td><td><strong>literal, zero <code>&lt;img&gt;</code></strong></td><td><strong>broken</strong></td></tr>
+<tr><td><strong>Horizontal rule</strong></td><td>three dashes</td><td><strong>literal <code>---</code> as text</strong></td><td><strong>broken</strong></td></tr>
+<tr><td><strong>Document title</strong></td><td><code>--title</code> plus the doc&#x27;s own <code># H1</code></td><td><strong>two <code>&lt;h1&gt;</code> with identical text</strong></td><td><strong>broken</strong></td></tr>
+</tbody>
+</table>
+<p>Root cause, both in <code>hooks/render_artifact.py</code>:</p>
+<ul>
+<li><code>_inline</code> at line 55 applies exactly two transforms, backtick-code and double-asterisk bold.</li>
+</ul>
+<p>  Nothing else. Links, emphasis and images were never implemented.</p>
+<ul>
+<li>The block loop at line 178 matches <code>[-*]\s+</code> only. There is no branch for <code>\d+\.</code>, so an</li>
+</ul>
+<p>  ordered list falls through to the paragraph accumulator and is glued into prose.</p>
+<h3>This is live, not hypothetical</h3>
+<p>The epic&#x27;s own design doc, hosted at <code>rawgentic-design-publish-pipeline.vercel.app</code>, shows all three of the worst cases right now. Its section 1 is written as a four-item numbered list of evidence and renders as a single wall-of-text paragraph. Its thesis paragraph links to the docs-index and renders the raw markdown, brackets and parentheses included. Its title appears twice, once from the header block and once from the markdown&#x27;s own <code># </code>.</p>
+<p>Any design doc in this workspace that used a numbered list has been shipping corrupted since the renderer was written. Nobody noticed because nobody compares the rendered page to the source.</p>
+<p><strong>This page shows the duplicate-title bug too</strong>, and deliberately so. The heading appears twice above, once from <code>--title</code> and once from the markdown&#x27;s own <code># </code>. Avoiding it would mean either editing the renderer inside a design PR or shipping a markdown file with no heading, and neither is worth doing to make one page look tidier than the tool it documents. The other five defects are absent only because this document was written around them.</p>
+<p>Which is the honest summary of the whole situation: <strong>the page you are reading is what the mandated helper produces when an author actively avoids everything it breaks.</strong> Its plainness against the sixteen pages in section 3 is the argument, not a shortfall in the writing.</p>
+<h3>Cost of the fix</h3>
+<p>Small. An <code>&lt;ol&gt;</code> branch mirrors the existing <code>&lt;ul&gt;</code> branch. Links and emphasis are two more regexes in <code>_inline</code>, applied after escaping, so the escape-first safety property holds. The <code>plain</code> byte-identity test is the real constraint and it is satisfiable: gate the new inline transforms behind the same <code>inline_fn</code> seam the templates already use, and leave <code>plain</code> pointing at today&#x27;s <code>_inline</code>.</p>
+<h2>3. What the sixteen favourites have in common</h2>
+<p>Read as a set, the owner&#x27;s picks are one design language already. Twelve components recur across pages that were written months apart by different sessions, which is strong evidence they are the real vocabulary rather than one author&#x27;s habit.</p>
+<ul>
+<li><strong>Eyebrow.</strong> Monospace, uppercase, letter-spaced, above the title. Carries project, doc</li>
+</ul>
+<p>  type, ref and date. Present on fifteen of sixteen.</p>
+<ul>
+<li><strong>Verdict headline.</strong> The finding stated as a sentence, not a topic. Two lines, with one</li>
+</ul>
+<p>  phrase in the accent colour. &quot;The failures are real. The story was wrong.&quot; — &quot;It flew. It   did not work.&quot; — &quot;5,702 tests. Delete none.&quot; — &quot;One install session. Five blockers closed.&quot;   This single component is most of what &quot;draws my eye to where it needs to be drawn&quot; means.</p>
+<ul>
+<li><strong>Lede.</strong> Two to four sentences at larger-than-body size, stating what the reader gets.</li>
+<li><strong>Meta chip row.</strong> Monospace facts: branch at commit, model, cost, run id, counts.</li>
+<li><strong>Stat strip.</strong> Three to six cells, big numeral over a small monospace label. Present on</li>
+</ul>
+<p>  nine of sixteen. The number that matters is coloured; the rest are not.</p>
+<ul>
+<li><strong>Status chip.</strong> Colour-coded pill for a state. Every page has these; the palettes agree</li>
+</ul>
+<p>  more than they disagree, which is why a shared token set is viable.</p>
+<ul>
+<li><strong>Severity callout.</strong> Left accent rule, tinted background, bold claim then explanation.</li>
+<li><strong>Legend.</strong> States what the colours and glyphs mean before the reader meets them. On every</li>
+</ul>
+<p>  page that colour-codes anything non-obvious.</p>
+<ul>
+<li><strong>Segmented meter.</strong> A bar split by state, used for epic and milestone progress.</li>
+<li><strong>Labelled gutter row.</strong> A monospace label in a left gutter beside a claim. Used for</li>
+</ul>
+<p>  finding lists and change lists.</p>
+<ul>
+<li><strong>Provenance tail.</strong> A dim trailing clause naming the evidence for the claim just made:</li>
+</ul>
+<p>  &quot;confirmed: gh api — PR #15 merge date&quot;.</p>
+<ul>
+<li><strong>Provenance section.</strong> A closing block titled some variant of &quot;How this was built and what</li>
+</ul>
+<p>  to distrust&quot;, separating what was verified from what was assumed, and naming the claim most   likely to be wrong.</p>
+<p><strong>Those last two deserve to be mandatory in every template.</strong> They appear across the favourites more consistently than any visual flourish, and they are the operating instructions&#x27; confirmed-versus-inferred rule made visible. A template that has no slot for provenance quietly encourages leaving it out.</p>
+<h2>4. The ten templates</h2>
+<h3>4a. How a markdown-only author reaches these components</h3>
+<p>The pipeline&#x27;s contract is that the model writes markdown and the renderer owns presentation. That leaves an unanswered question the design of record only gestures at: how does an author express a stat strip in markdown?</p>
+<p><strong>Proposal: typed fenced blocks.</strong> A fence whose info string names a block type the renderer recognises. Opening a fence with <code>stats</code> instead of <code>python</code>, the body reads:</p>
+<pre><code>82 | sessions read
+155 | findings mined
+28/44 | highs confirmed | accent</code></pre>
+<p>This is the lazy answer and it is the right one. Fences already parse. Any other markdown viewer degrades it to a code block rather than mangling it. The block set is closed and per-type, so an unknown tag can warn instead of failing. And the author never writes a colour, which is the property that keeps the VDL enforceable.</p>
+<p>Block tags proposed: <code>stats</code>, <code>verdict</code>, <code>chips</code>, <code>callout</code>, <code>legend</code>, <code>meter</code>, <code>findings</code>, <code>steps</code>, <code>nodes</code>, <code>provenance</code>. Which types accept which tags is the per-template contract in the table below.</p>
+<h3>4b. The spine every template shares</h3>
+<p>Eyebrow, verdict headline, lede, meta chips, Edmonton timestamp, closing provenance section, light and dark themes, AA contrast in both. A template customises what sits between the lede and the provenance section; it does not get to skip the spine.</p>
+<h3>4c. The roster</h3>
+<p><code>plain</code> stays frozen and byte-identical. The other nine are specified below. Owner-nominated exemplars are marked; unmarked exemplars are this analysis&#x27;s proposal and are the thing most worth correcting.</p>
+<table>
+<thead><tr><th>Type</th><th>Status</th><th>Primary exemplar</th><th>First-read element</th></tr></thead>
+<tbody>
+<tr><td><code>plain</code></td><td>frozen</td><td>none — no change</td><td>existing h1</td></tr>
+<tr><td><code>analysis</code></td><td>NEW</td><td><code>rawgentic-analysis-owner-notes</code> (owner: plain candidate)</td><td>headline answer block above the question index</td></tr>
+<tr><td><code>roadmap</code></td><td>rework</td><td><code>saystory-epic-state-map</code> (owner: epic progress)</td><td>stat strip plus a READ THIS FIRST callout stack</td></tr>
+<tr><td><code>report</code></td><td>rework</td><td><code>3dstories-bench-report-phases</code>, <code>rawgentic-test-suite-review</code></td><td>verdict headline plus KPI strip</td></tr>
+<tr><td><code>design</code></td><td>rework</td><td><code>sysop-design-network-topology</code> (owner: diagrams)</td><td>the single change that makes it work, as a callout</td></tr>
+<tr><td><code>dashboard</code></td><td>rework</td><td><code>3dstories-bench-design-judge-v3</code> (owner: clear dashboard), <code>herdr-dashboard-issue-audit</code> (owner: layout)</td><td>sticky state bar plus TL;DR panel</td></tr>
+<tr><td><code>review</code></td><td>rework</td><td><code>workspace-audit-forensics-0730</code> (owner: leads with what matters)</td><td>verdict headline plus confirmed/refuted counts</td></tr>
+<tr><td><code>spec</code></td><td>rework</td><td><code>herdr-dashboard-plan</code></td><td>requirement count and gate state</td></tr>
+<tr><td><code>uat</code></td><td>NEW</td><td><code>saystory-uat-checklist</code> (owner: hands-down favourite)</td><td>progress meter, zero of N</td></tr>
+<tr><td><code>workflow</code></td><td>NEW</td><td><code>sysop-design-network-topology</code> (owner: workflow diagrams)</td><td>legend, then the before/after diagram pair</td></tr>
+</tbody>
+</table>
+<h3>4d. Per-template component sets</h3>
+<p><strong><code>analysis</code></strong> — a question answered at length. Blocks: <code>verdict</code>, <code>chips</code>, <code>callout</code>, <code>provenance</code>. Structure: a headline-answer block, then a jump index of the questions, then one numbered section per question where the first line is the answer and everything after it is the evidence. Each answer carries a confidence chip: measured, confirmed, or inferred. Marker: <code>.tpl-analysis</code>, with <code>.an-q</code>, <code>.an-answer</code>, <code>.an-conf</code>.</p>
+<p><strong><code>roadmap</code></strong> — what is planned and what is blocking. Blocks: <code>stats</code>, <code>callout</code>, <code>legend</code>, <code>meter</code>, <code>chips</code>, <code>provenance</code>. Structure: stat strip, a READ THIS FIRST stack of two to four severity callouts, a legend for the state colours, then epic cards each carrying a segmented meter and a wrapped grid of child chips, then a &quot;where to start&quot; table ordered by leverage rather than by epic. Markers: <code>.tpl-roadmap</code>, <code>.rm-epic</code>, <code>.rm-meter</code>, <code>.rm-child</code>.</p>
+<p><strong><code>report</code></strong> — what was measured. Blocks: <code>stats</code>, <code>verdict</code>, <code>callout</code>, <code>provenance</code>. Structure: verdict headline, KPI strip, then one section per measured thing where the heading is the finding and not the topic, data tables with inline bars, and caveat callouts inline where the caveat applies. The closing provenance section is titled &quot;How this was measured&quot;. Markers: <code>.tpl-report</code>, <code>.rp-kpi</code>, <code>.rp-bar</code>, <code>.rp-caveat</code>. Keeps the existing <code>_decorate_scores</code>.</p>
+<p><strong><code>design</code></strong> — a proposal to change something. Blocks: <code>verdict</code>, <code>callout</code>, <code>nodes</code>, <code>chips</code>, <code>provenance</code>. Structure: a lead block naming the single change that makes the proposal work, then today-versus-proposed side by side, then decision callouts, then an affected-components table with have/need/buy status badges, then risks and the corrections this design makes to a prior plan. Markers: <code>.tpl-design</code>, <code>.dz-lead</code>, <code>.dz-compare</code>, <code>.dz-decision</code>. Replaces the current one-rule heading underline.</p>
+<p><strong><code>dashboard</code></strong> — current state at a glance. Blocks: <code>stats</code>, <code>chips</code>, <code>callout</code>, <code>findings</code>, <code>provenance</code>. Structure: a sticky monospace state bar carrying branch at commit, tree state, open PR count and gate counts; a TL;DR panel with a left accent rule and three to five bolded lead findings; a verdict chip row; the KPI strip; then an ATTENTION panel of labelled gutter rows, each with a provenance tail. Markers: <code>.tpl-dashboard</code>, <code>.db-statebar</code>, <code>.db-tldr</code>, <code>.db-attention</code>, <code>.db-prov</code>.</p>
+<p><strong><code>review</code></strong> — findings, ranked. Blocks: <code>stats</code>, <code>findings</code>, <code>callout</code>, <code>chips</code>, <code>provenance</code>. Structure: verdict headline, a KPI strip whose cells are confirmed and refuted counts, a hypothesis card grid with outlined status badges, then one section per finding with a severity gutter, and a closing block titled &quot;The claim most likely to be wrong&quot;. Markers: <code>.tpl-review</code>, <code>.rv-hypo</code>, <code>.rv-sev</code>, <code>.rv-weakest</code>. Keeps <code>_decorate_severity</code>.</p>
+<p><strong><code>spec</code></strong> — what must be true. Blocks: <code>chips</code>, <code>callout</code>, <code>steps</code>, <code>provenance</code>. Structure: requirement rows with a stable ID and a MUST/SHOULD chip, an acceptance-criteria checklist, gate badges for each exit condition, and an explicit out-of-scope block. Markers: <code>.tpl-spec</code>, <code>.sp-req</code>, <code>.sp-ac</code>, <code>.sp-gate</code>. Keeps <code>_decorate_requirements</code>.</p>
+<p><strong><code>uat</code></strong> — a checklist a human executes. Blocks: <code>steps</code>, <code>callout</code>, <code>chips</code>, <code>meter</code>. Structure: a progress meter reading zero of N, then step cards each with a part badge and a time estimate, containing checkbox items, STOP callouts where proceeding would invalidate the run, and free-text feedback boxes. Closes with an export control that turns the filled-in state into a paste-back report. Markers: <code>.tpl-uat</code>, <code>.ut-step</code>, <code>.ut-item</code>, <code>.ut-stop</code>, <code>.ut-export</code>.</p>
+<p><strong><code>uat</code> is the only interactive template, and it carries the only genuinely new constraints.</strong> Checkbox and textarea state must survive a page reload, which means localStorage. The export control must build its report with <code>document.createElement</code> and <code>append</code>, never <code>innerHTML</code> — a Write hook in this workspace blocks <code>innerHTML</code> assignments, and the page must stay CSP-safe. This is enough extra surface that it deserves its own issue rather than riding inside #784.</p>
+<p><strong><code>workflow</code></strong> — how something flows, or how it is wired. Blocks: <code>nodes</code>, <code>legend</code>, <code>callout</code>, <code>chips</code>, <code>provenance</code>. Structure: a legend defining what box borders and line styles mean, then diagram frames of node boxes with labelled edges, laid out in CSS grid with no SVG library and no external dependency, then a &quot;what this means&quot; inset inside each frame, then the before/after pair. Markers: <code>.tpl-workflow</code>, <code>.wf-node</code>, <code>.wf-edge</code>, <code>.wf-legend</code>.</p>
+<p>The <code>nodes</code> block is the one piece of real invention here. A workable markdown shape, taken from how the topology page is structured — a fence tagged <code>nodes</code>, whose body reads:</p>
+<pre><code>[internet] --WAN--&gt; [router: TP-Link GE800 | 6GHz 5760 | ROLE: router+firewall]
+[router] --10G Cat6a--&gt; [charlie: 10.0.17.200 | 2x E5-2680 | 126G RAM]
+[router] -.25G DAC.-&gt; [beagle: 10.0.17.211 | no RJ45 port]</code></pre>
+<p>Solid arrows for existing, dashed for proposed. Pipe-separated spec lines inside a node. This is the smallest grammar that reproduces the page the owner singled out.</p>
+<h2>5. One decision the owner needs to make</h2>
+<p><strong>The page nominated as the <code>plain</code> exemplar is not plain.</strong> <code>rawgentic-analysis-owner-notes</code> was rendered with <code>--style dashboard</code>. So the look the owner identified as the right baseline is today&#x27;s dashboard template, while <code>plain</code> is frozen byte-identical by test and by two separate assertions in the source.</p>
+<p>Two ways forward, and this analysis recommends the first.</p>
+<ul>
+<li><strong>Leave <code>plain</code> frozen and make <code>analysis</code> the new default</strong> for anything without a</li>
+</ul>
+<p>  declared type. The owner&#x27;s actual preference is then honoured under the name that matches   what the page is, the byte-identity test stays green, and nothing that currently renders   <code>plain</code> changes.</p>
+<ul>
+<li><strong>Unfreeze <code>plain</code>.</strong> Cheaper conceptually, but it breaks a pinned test, contradicts a</li>
+</ul>
+<p>  recorded decision, and changes every existing plain page.</p>
+<h2>6. What changes in the epic</h2>
+<ul>
+<li><strong>New issue, ahead of #784: fix the markdown parser.</strong> Ordered lists, links, emphasis,</li>
+</ul>
+<p>  images, horizontal rules, nested lists, duplicate H1. Section 2 is the specification and the   probe is reproducible. Small, no dependencies, and it blocks the value of everything else.</p>
+<ul>
+<li><strong>New issue: the <code>uat</code> template.</strong> Split out of #784 because it is the only interactive</li>
+</ul>
+<p>  template and carries localStorage, export and CSP constraints the other nine do not.</p>
+<ul>
+<li><strong>#784 gains section 4 as its specification</strong> and grows from seven templates to ten. Its</li>
+</ul>
+<p>  acceptance criterion that <code>plain</code> stays byte-identical is unaffected.</p>
+<ul>
+<li><strong>#786 decision 4 is superseded.</strong> &quot;No new <code>--style</code> names&quot; is replaced by the ten-type</li>
+</ul>
+<p>  roster; the seven existing names all survive, so this is purely additive.</p>
+<ul>
+<li><strong>#783 and #785 are unchanged.</strong> The pipeline command and the VDL packs are orthogonal to</li>
+</ul>
+<p>  what the templates contain.</p>
+<h2>7. Confirmed, inferred, and what to distrust</h2>
+<p><strong>Confirmed by running it.</strong> Every row of the section 2 table came from rendering a probe document through <code>hooks/render_artifact.py</code> at commit 26f865e and counting tags in the output. The two root causes were then read at <code>render_artifact.py:55</code> and <code>render_artifact.py:178</code>. The fourteen-of-sixteen hand-authored count came from fetching all sixteen pages and grepping for the renderer&#x27;s own signature; the two renderer-made pages carry <code>tpl-dashboard</code> and <code>tpl-design</code> markers, the other fourteen carry none.</p>
+<p><strong>Confirmed by reading.</strong> The seven rawgentic callers in section 1 and the eight skill instances in the audit table are grep results with file and line numbers, taken from tracked files only.</p>
+<p><strong>Inferred, and worth checking.</strong> The component list in section 3 is this analysis&#x27;s reading of sixteen pages; the owner named reasons for eight of them and the rest are inference from structure. The exemplar assignments in 4c for <code>analysis</code>, <code>report</code>, <code>spec</code> and <code>review</code> are proposals, not owner statements.</p>
+<p><strong>The claim most likely to be wrong</strong> is that typed fenced blocks are the right authoring grammar. It is untested. It is clean on paper and degrades well, but no one has yet written a real document in it, and the <code>nodes</code> grammar in particular could turn out to be more awkward to write than the hand-authored HTML it replaces. The cheapest way to find out is to author one real page of each type in the grammar before implementing the renderer side.</p>
+
+</main>
+<footer>Last updated: 2026-07-31 23:51 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
