@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Epic #756 — Spike Evidence &amp; the Five Owner Decisions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* ─── cyanotype blueprint tokens ─────────────────────────────────────── */
+:root{
+  --ground:#071A2B; --surface:#0C2438; --raise:#103049;
+  --grid:#143A57; --rule:#1D4A6D;
+  --ink:#DCE9F2; --ink-2:#96B4CB; --ink-3:#7B9DB6;
+  --ochre:#E8A33D; --ochre-dim:#8A5E1C;
+  --teal:#3FB6A6; --teal-dim:#1D5C55;
+  --crimson:#E4708A; --crimson-dim:#7A2438;
+  --display:"Space Grotesk",ui-sans-serif,system-ui,sans-serif;
+  --body:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --s1:.35rem; --s2:.7rem; --s3:1.1rem; --s4:1.8rem; --s5:2.8rem; --s6:4.4rem;
+  --maxw:74rem;
+}
+:root[data-theme="light"]{
+  --ground:#EDF2F7; --surface:#FFFFFF; --raise:#F3F7FA;
+  --grid:#D3E0EA; --rule:#B9CDDD;
+  --ink:#08192A; --ink-2:#3B5670; --ink-3:#4E6B85;
+  --ochre:#8A5100; --ochre-dim:#C9A46A;
+  --teal:#0B6E63; --teal-dim:#8FC7BF;
+  --crimson:#9C0F37; --crimson-dim:#E0A2B5;
+}
+@media (prefers-color-scheme:light){
+  :root:not([data-theme="dark"]):not([data-theme="light"]){
+    --ground:#EDF2F7; --surface:#FFFFFF; --raise:#F3F7FA;
+    --grid:#D3E0EA; --rule:#B9CDDD;
+    --ink:#08192A; --ink-2:#3B5670; --ink-3:#4E6B85;
+    --ochre:#8A5100; --teal:#0B6E63; --crimson:#9C0F37;
+  }
+}
+*,*::before,*::after{box-sizing:border-box}
+html{overflow-x:hidden;scroll-behavior:smooth}
+body{
+  margin:0;background:var(--ground);color:var(--ink);
+  font-family:var(--body);font-size:16.5px;line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+  background-image:
+    linear-gradient(to right,var(--grid) 1px,transparent 1px),
+    linear-gradient(to bottom,var(--grid) 1px,transparent 1px);
+  background-size:34px 34px;
+  background-attachment:fixed;
+}
+:focus-visible{outline:2px solid var(--ochre);outline-offset:3px;border-radius:2px}
+.sheet{max-width:var(--maxw);margin:0 auto;padding:0 var(--s3)}
+
+/* ─── masthead ───────────────────────────────────────────────────────── */
+header.mast{border-bottom:1px solid var(--rule);background:var(--surface)}
+.mastbar{
+  max-width:var(--maxw);margin:0 auto;padding:var(--s2) var(--s3);
+  display:flex;flex-wrap:wrap;gap:var(--s2) var(--s3);align-items:baseline;
+  justify-content:space-between;
+  font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-3);
+}
+.mastbar b{color:var(--ochre);font-weight:600}
+.themebtn{
+  font:inherit;letter-spacing:.14em;text-transform:uppercase;
+  background:none;border:1px solid var(--rule);color:var(--ink-2);
+  padding:.25rem .6rem;cursor:pointer;border-radius:2px;
+}
+.themebtn:hover{border-color:var(--ochre);color:var(--ochre)}
+
+/* ─── hero ───────────────────────────────────────────────────────────── */
+.hero{padding:var(--s6) 0 var(--s5)}
+.kicker{
+  font-family:var(--mono);font-size:.75rem;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--ochre);margin:0 0 var(--s3);
+}
+h1{
+  font-family:var(--display);font-weight:700;
+  font-size:clamp(2.1rem,5vw,3.7rem);line-height:1.05;letter-spacing:-.022em;
+  margin:0 0 var(--s3);max-width:34ch;
+}
+h1 em{font-style:normal;color:var(--ochre)}
+.standfirst{font-size:clamp(1rem,1.5vw,1.16rem);color:var(--ink-2);max-width:64ch;margin:0 0 var(--s2)}
+
+/* the trace panel — signature element */
+.trace{
+  margin:var(--s5) 0 0;background:var(--surface);
+  border:1px solid var(--rule);border-left:3px solid var(--ochre);
+  padding:var(--s4) var(--s4) var(--s3);
+}
+.trace-h{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s3);align-items:baseline;
+  justify-content:space-between;margin-bottom:var(--s4)}
+.trace-h h2{font-family:var(--display);font-weight:500;font-size:1.1rem;margin:0;
+  letter-spacing:-.01em;max-width:none}
+.legend{display:flex;gap:var(--s3);font-family:var(--mono);font-size:.72rem;color:var(--ink-2)}
+.legend span{display:flex;align-items:center;gap:.4rem}
+.swatch{width:.75rem;height:.75rem;display:inline-block;border-radius:1px}
+.sw-w{background:var(--ochre)}
+.sw-r{background:transparent;border:1.5px solid var(--teal)}
+.bars{display:grid;grid-template-columns:repeat(5,1fr);gap:var(--s3);align-items:end;height:15rem}
+.col{display:flex;flex-direction:column;justify-content:flex-end;height:100%}
+.pair{display:flex;gap:4px;align-items:flex-end;height:100%}
+.bar{flex:1;transform-origin:bottom;animation:grow .62s cubic-bezier(.2,.8,.25,1) both}
+.bar.w{background:var(--ochre)}
+.bar.r{border:1.5px solid var(--teal);background:transparent}
+.col:nth-child(1) .bar{animation-delay:.05s}
+.col:nth-child(2) .bar{animation-delay:.13s}
+.col:nth-child(3) .bar{animation-delay:.21s}
+.col:nth-child(4) .bar{animation-delay:.29s}
+.col:nth-child(5) .bar{animation-delay:.37s}
+@keyframes grow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+@media (prefers-reduced-motion:reduce){.bar{animation:none}}
+.zero{border-top:2px dashed var(--ochre);height:0;flex:1;align-self:flex-end}
+.bl{border-top:1px solid var(--rule);margin-top:.55rem;padding-top:.45rem;
+  font-family:var(--mono);font-size:.72rem;color:var(--ink-3);text-align:center}
+.bl b{display:block;color:var(--ink);font-size:.82rem;font-weight:600}
+.col.hit .bl b{color:var(--ochre)}
+.callout{margin-top:var(--s4);padding-left:var(--s3);border-left:2px solid var(--ochre);
+  font-size:.93rem;color:var(--ink-2);max-width:72ch}
+.callout strong{color:var(--ink)}
+
+/* ─── decision rail + cards ──────────────────────────────────────────── */
+.split{display:grid;grid-template-columns:15rem 1fr;gap:var(--s5);padding:var(--s6) 0}
+@media (max-width:900px){.split{grid-template-columns:1fr;gap:var(--s4)}}
+.rail{position:sticky;top:var(--s3);align-self:start}
+@media (max-width:900px){.rail{position:static}}
+.rail h3{font-family:var(--mono);font-size:.7rem;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--ink-3);margin:0 0 var(--s3);font-weight:400}
+.rail ol{list-style:none;margin:0;padding:0;border-left:1px solid var(--rule)}
+.rail a{display:grid;grid-template-columns:auto 1fr;gap:.6rem;align-items:baseline;
+  padding:.55rem var(--s2);margin-left:-1px;border-left:2px solid transparent;
+  text-decoration:none;color:var(--ink-2);font-size:.85rem;line-height:1.35}
+.rail a:hover{color:var(--ink);background:var(--raise)}
+.rail a .n{font-family:var(--mono);font-size:.73rem;color:var(--ink-3)}
+.rail a.on{border-left-color:var(--ochre);color:var(--ink);background:var(--raise)}
+.rail a.on .n{color:var(--ochre)}
+
+.chip{display:inline-flex;align-items:center;gap:.45rem;
+  font-family:var(--mono);font-size:.7rem;letter-spacing:.13em;text-transform:uppercase;
+  padding:.28rem .6rem;border-radius:2px;border:1px solid;font-weight:600}
+.chip.rec{color:var(--teal);border-color:var(--teal)}
+.chip.stop{color:var(--crimson);border-color:var(--crimson)}
+.chip.warn{color:var(--ochre);border-color:var(--ochre)}
+
+.card{background:var(--surface);border:1px solid var(--rule);padding:var(--s4);
+  margin:0 0 var(--s3);display:grid;gap:var(--s2)}
+.card.lead{border-left:3px solid var(--ochre)}
+.card-top{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;justify-content:space-between}
+.card-id{font-family:var(--mono);font-size:.82rem;color:var(--ink-3)}
+.card-id b{color:var(--ink);font-weight:600}
+.card h3{font-family:var(--display);font-weight:500;font-size:1.13rem;margin:0;
+  letter-spacing:-.01em;line-height:1.34;max-width:52ch}
+.card .rec{font-size:.96rem;margin:0;max-width:70ch}
+.card .rec b{color:var(--teal)}
+.card .cons{font-size:.87rem;color:var(--ink-3);margin:0;padding-top:var(--s2);
+  border-top:1px dashed var(--rule);max-width:70ch}
+.card .cons i{font-style:normal;color:var(--crimson)}
+
+/* ─── long-form ──────────────────────────────────────────────────────── */
+section.det{padding:var(--s5) 0;border-top:1px solid var(--rule)}
+.sec-h{margin-bottom:var(--s4)}
+.sec-n{font-family:var(--mono);font-size:.74rem;letter-spacing:.16em;color:var(--ochre);
+  text-transform:uppercase}
+h2{font-family:var(--display);font-weight:700;font-size:clamp(1.45rem,2.6vw,2rem);
+  line-height:1.16;letter-spacing:-.018em;margin:var(--s2) 0 var(--s2);max-width:44ch}
+h4{font-family:var(--display);font-weight:500;font-size:1.04rem;margin:var(--s4) 0 var(--s2);
+  letter-spacing:-.005em}
+p{margin:0 0 var(--s3);max-width:76ch}
+strong{color:var(--ink);font-weight:600}
+em{font-style:italic;color:var(--ink-2)}
+a{color:var(--ochre);text-decoration:none;border-bottom:1px solid var(--ochre-dim)}
+a:hover{border-bottom-color:var(--ochre)}
+code{font-family:var(--mono);font-size:.86em;background:var(--raise);
+  border:1px solid var(--grid);padding:.08em .34em;border-radius:2px;color:var(--ink);
+  overflow-wrap:anywhere;word-break:break-word}
+ul,ol.body{margin:0 0 var(--s3);padding-left:1.3rem;max-width:76ch}
+li{margin-bottom:var(--s2)}
+blockquote{margin:var(--s3) 0;padding:var(--s2) 0 var(--s2) var(--s3);
+  border-left:2px solid var(--teal);color:var(--ink-2);font-style:italic;max-width:70ch}
+.tag{font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;font-weight:600;
+  padding:.1em .4em;border-radius:2px;text-transform:uppercase;white-space:nowrap}
+.tag.c{color:var(--teal);border:1px solid var(--teal-dim)}
+.tag.i{color:var(--ochre);border:1px solid var(--ochre-dim)}
+
+.tw{overflow-x:auto;margin:0 0 var(--s3);border:1px solid var(--rule);background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:.89rem;min-width:34rem}
+th,td{padding:.6rem var(--s2);text-align:left;border-bottom:1px solid var(--grid);vertical-align:top}
+thead th{font-family:var(--mono);font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:400;background:var(--raise);white-space:nowrap}
+tbody tr:last-child td{border-bottom:none}
+td.num,th.num{font-family:var(--mono);text-align:right;white-space:nowrap}
+tr.spot td{background:var(--raise)}
+tr.spot td.num{color:var(--ochre);font-weight:600}
+
+.pull{background:var(--raise);border:1px solid var(--rule);border-left:3px solid var(--crimson);
+  padding:var(--s3) var(--s4);margin:var(--s4) 0}
+.pull .pt{font-family:var(--mono);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--crimson);margin-bottom:var(--s2)}
+.pull p:last-child{margin-bottom:0}
+
+footer{border-top:1px solid var(--rule);background:var(--surface);
+  padding:var(--s4) 0;margin-top:var(--s5);color:var(--ink-3);font-size:.86rem}
+</style>
+</head>
+<body>
+
+<header class="mast">
+  <div class="mastbar">
+    <span>Rawgentic · Epic <b>#756</b> · Spike Evidence</span>
+    <span>Session <b>811192ca</b> · Updated 2026-08-01 10:52 MDT</span>
+    <button class="themebtn" id="tt" type="button">Light / Dark</button>
+  </div>
+</header>
+
+<div class="sheet">
+  <div class="hero">
+    <p class="kicker">Five rulings · one decides the architecture</p>
+    <h1>Four dispatches paid. One paid <em>nothing</em>. The experiment can't tell us why.</h1>
+    <p class="standfirst">Five children of epic #756 are blocked on decisions only you can make. Each rests on a spike or a design investigation whose evidence is scattered across a measurement doc, three unmerged branches and a dozen issue comments. This page puts the primary evidence in one place.</p>
+    <p class="standfirst">Every load-bearing claim is tagged <span class="tag c">confirmed</span> with its evidence named, or <span class="tag i">inferred</span> with what would confirm it. Where a spike produced a wrong answer before the right one, that sequence is recorded — twice it is the most important finding here.</p>
+
+    <div class="trace">
+      <div class="trace-h">
+        <h2>Spike S3 — five dispatches of one identical brief, seat <code>analysis</code></h2>
+        <div class="legend">
+          <span><i class="swatch sw-w"></i> cache write</span>
+          <span><i class="swatch sw-r"></i> cache read</span>
+        </div>
+      </div>
+      <div class="bars">
+        <div class="col"><div class="pair"><div class="bar w" style="height:96%"></div><div class="bar r" style="height:26%"></div></div><div class="bl"><b>49,106</b>D1 · cold</div></div>
+        <div class="col"><div class="pair"><div class="bar w" style="height:92%"></div><div class="bar r" style="height:32%"></div></div><div class="bl"><b>46,825</b>D2 · +7s</div></div>
+        <div class="col hit"><div class="pair"><div class="zero"></div><div class="bar r" style="height:100%"></div></div><div class="bl"><b>0</b>D3 · +46s</div></div>
+        <div class="col"><div class="pair"><div class="bar w" style="height:100%"></div><div class="bar r" style="height:26%"></div></div><div class="bl"><b>50,941</b>D4 · +8m31s</div></div>
+        <div class="col"><div class="pair"><div class="bar w" style="height:88%"></div><div class="bar r" style="height:32%"></div></div><div class="bl"><b>45,013</b>D5 · +10s</div></div>
+      </div>
+      <p class="callout">D3 is the only cache hit, and its read spikes to <strong>66,406</strong> — the mechanism demonstrably works. It did not repeat. Now look at the read column on D1 and D4: <strong>17,300 both times</strong>, and ~21,4xx on both D2 and D5. That stable alternation is Claude Code's own system prompt being read from the org cache, independent of the brief — and it is the tell that these dispatches were never byte-identical where it counts.</p>
+    </div>
+  </div>
+
+  <div class="split">
+    <nav class="rail" aria-label="The five decisions">
+      <h3>The five decisions</h3>
+      <ol>
+        <li><a href="#d794" class="on"><span class="n">01</span><span>#794 · keep or retire the executor</span></a></li>
+        <li><a href="#d792"><span class="n">02</span><span>#792 · quota-guard scope</span></a></li>
+        <li><a href="#d797"><span class="n">03</span><span>#797 · context thresholds</span></a></li>
+        <li><a href="#d777"><span class="n">04</span><span>#777 · token telemetry</span></a></li>
+        <li><a href="#d796"><span class="n">05</span><span>#796 · split the batch</span></a></li>
+      </ol>
+      <h3 style="margin-top:1.8rem">Also</h3>
+      <ol>
+        <li><a href="#d735x"><span class="n">→</span><span>#735 · the executor works</span></a></li>
+        <li><a href="#earlier"><span class="n">→</span><span>Earlier spikes</span></a></li>
+        <li><a href="#where"><span class="n">→</span><span>Where the evidence lives</span></a></li>
+        <li><a href="#p782"><span class="n">→</span><span>#782 · why panes stopped closing</span></a></li>
+      </ol>
+    </nav>
+
+    <div>
+      <div class="card lead">
+        <div class="card-top">
+          <span class="card-id">01 · <b>#794</b></span>
+          <span class="chip rec">Recommend · keep it</span>
+        </div>
+        <h3>Keep the executor architecture, or retire it for orchestrator-with-subagents?</h3>
+        <p class="rec"><b>Keep it.</b> Re-run the spike under control, then pursue per-run seat session reuse. The mechanism provably works once, and the failure has a named, testable cause.</p>
+        <p class="cons">If you say nothing: <i>#795 and #799 stay blocked indefinitely.</i> This is the highest-leverage ruling on the page — it alone unblocks two children and decides whether #735, #767, #765 and #762 have a future.</p>
+      </div>
+
+      <div class="card">
+        <div class="card-top">
+          <span class="card-id">02 · <b>#792</b></span>
+          <span class="chip rec">Recommend · amend, ship half</span>
+        </div>
+        <h3>Three scope amendments on the 5-hour-window quota guard</h3>
+        <p class="rec">Amend AC1 — a receipt cannot exist for a dispatch that never happened — and AC2, since codex is weekly-only now. Then <b>ship the Claude half</b> and file the codex pool as its own child.</p>
+        <p class="cons">If you say nothing: <i>a designed, thrice-reviewed guard stays unbuilt</i> — and its gates already caught four defects that would have shipped.</p>
+      </div>
+
+      <div class="card">
+        <div class="card-top">
+          <span class="card-id">03 · <b>#797</b></span>
+          <span class="chip warn">Careful · instruction backfires</span>
+        </div>
+        <h3>Context thresholds to 55/75, as you asked — even though the maths says they fire later?</h3>
+        <p class="rec"><b>Fix the meter's overshoot first, then retune.</b> On today's meter, 75 fires 5–24 points <em>later</em> than the current 50 — the opposite of keeping sessions out of the degradation band.</p>
+        <p class="cons">If you say nothing: <i>the meter keeps firing late at its current 50.</i></p>
+      </div>
+
+      <div class="card">
+        <div class="card-top">
+          <span class="card-id">04 · <b>#777</b></span>
+          <span class="chip stop">Recommend · park it</span>
+        </div>
+        <h3>Per-phase token telemetry cannot be built on today's data. Park, grow, or narrow?</h3>
+        <p class="rec"><b>Park it.</b> Half of AC1 already shipped in #506/#589 — per-phase wall time exists. Only token attribution is missing, and nothing in the system records tokens per phase.</p>
+        <p class="cons">If you say nothing: <i>an unbuildable issue sits in the queue looking live.</i></p>
+      </div>
+
+      <div class="card">
+        <div class="card-top">
+          <span class="card-id">05 · <b>#796</b></span>
+          <span class="chip rec">Recommend · split</span>
+        </div>
+        <h3>Eight mechanical verbs, three failed design passes. Split it?</h3>
+        <p class="rec"><b>Split.</b> Ship candidate 3 alone — it has converged — and re-file candidate 1 with its three-pass evidence. Six of the eight should not ship at all.</p>
+        <p class="cons">If you say nothing: <i>a converged, shippable sub-fix stays unshipped.</i></p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="sheet">
+
+<section class="det" id="d794">
+  <div class="sec-h">
+    <span class="sec-n">Decision 01 · issue #794</span>
+    <h2>Can byte-identical seat briefs hit the prompt cache?</h2>
+  </div>
+  <p><strong>This is the architecture gate.</strong> The epic's AUTO MODE contract says: <em>"#794 IS A HARD GATE. Its AC1 is spike S3 (~15 min): can byte-identical briefs hit cache? If NO — STOP, ask the owner, and do NOT start #799 or #795."</em> Your framing on the issue was blunter: <em>"if we cant get cache working, we may need to abandon executor path and go back to orchastrator with sub-agents."</em></p>
+
+  <h4>Purpose</h4>
+  <p>Every executor dispatch is a fresh CLI session (<code>session_policy: "fresh"</code>). Turn 1 writes the whole seat prompt to cache — <strong>observed 46k–132k tokens at 1.25–2× price</strong> — and every subsequent loop turn re-reads the conversation from cache (observed 1.5M–3.1M cumulative reads per dispatch). Reads are cheap in dollars, about 0.1×, but they count against the 5-hour throughput window. If a second dispatch of the same brief reused the first one's prefix, that write cost would disappear.</p>
+  <p><span class="tag c">confirmed</span> <strong>Why it could work at all:</strong> Anthropic's prompt cache is org-scoped and keyed on exact prompt-prefix <strong>bytes</strong> plus model — not on session identity. So cross-session reuse is possible in principle.</p>
+
+  <h4>Method</h4>
+  <p>Five dispatches of one identical brief, seat <code>analysis</code>, Claude lane, <code>claude-opus-5</code>, <code>session_policy: fresh</code>, run id <code>wf2-794-cf9ff806</code>. All five shared an identical <code>prompt_hash</code>, model, lane and <code>parse_status: ok</code>. Read <code>cache_creation_input_tokens</code> and <code>cache_read_input_tokens</code> per dispatch.</p>
+
+  <h4>Results <span class="tag c">confirmed</span> — <code>docs/measurements/2026-08-01-794-spike-s3-cache-reuse.md</code></h4>
+  <div class="tw"><table>
+    <thead><tr><th>Dispatch</th><th>Wall clock</th><th class="num">cache_write</th><th class="num">cache_read</th></tr></thead>
+    <tbody>
+      <tr><td>1 · cold</td><td>01:45:11</td><td class="num">49,106</td><td class="num">17,300</td></tr>
+      <tr><td>2</td><td>01:45:18</td><td class="num">46,825</td><td class="num">21,393</td></tr>
+      <tr class="spot"><td>3</td><td>01:45:57</td><td class="num">0</td><td class="num">66,406</td></tr>
+      <tr><td>4</td><td>01:54:28</td><td class="num">50,941</td><td class="num">17,300</td></tr>
+      <tr><td>5</td><td>01:54:38</td><td class="num">45,013</td><td class="num">21,416</td></tr>
+    </tbody>
+  </table></div>
+  <p><strong>Four of five paid a full ~45–51k prefix write. One paid zero, and it did not repeat.</strong></p>
+
+  <h4>Verdict: inconclusive — and that is a finding, not a dodge</h4>
+  <p>The spike <strong>cannot</strong> answer the gate question. Three defects in the experiment, all caught at review rather than by its author:</p>
+  <ol class="body">
+    <li><strong>The dispatches were not back-to-back.</strong> D1–D3 ran within 46 s; <strong>D4 came 8 m 31 s later</strong>. An earlier draft asserted "five dispatches back-to-back over ~40 s" — that was <strong>false</strong>. With the real timing this is two bursts: <code>write, write, HIT</code> then <code>write, write, (no third)</code>. That is consistent with a warmup hypothesis, not a refutation of one.</li>
+    <li><strong>The provider inputs were not identical, even though the brief was.</strong> <code>prompt_hash</code> covers only <code>req.prompt</code>; the cached prefix spans tools plus system plus messages. Total provider input varied — about 66.4k versus 68.2k on alternating dispatches. <strong>A byte-identical dispatch was never achieved at the layer that matters.</strong></li>
+    <li><strong>Every write landed on the 1-hour tier, not the 5-minute tier.</strong> Raw transport shows <code>ephemeral_1h_input_tokens</code> carrying the whole write on every dispatch and <code>ephemeral_5m_input_tokens: 0</code> throughout. An earlier draft, the adapter comment and <code>phase_executor/README.md</code> all reasoned from a 5-minute TTL. <strong>That reasoning was wrong</strong> — and with a 1-hour TTL an 8.5-minute gap should not have expired anything, so TTL does not explain D4's miss either.</li>
+  </ol>
+
+  <div class="pull">
+    <div class="pt">The process failure, recorded deliberately</div>
+    <p><strong>This spike produced four successive wrong answers before review stopped it.</strong> n=1 read as "cache works". n=2 as "cache fails". n=3 as "works after a two-dispatch warmup" — <strong>and that verdict reached a commit, and would have unblocked #795 and #799 on a single anomalous data point.</strong> n=5 read as "does not work", which was also over-claimed.</p>
+    <p>The root cause of the first three was mechanical: <code>adapters/claude_cli.py</code> mapped <code>cached</code> to <code>cache_read_input_tokens</code> and <strong>discarded <code>cache_creation_input_tokens</code></strong>, with the observation schema <code>additionalProperties: false</code> so nothing downstream could add it. <strong>#794's own AC2 — a measured before-and-after on <code>cache_creation_input_tokens</code> — was unmeasurable against shipped code.</strong> PR #811, merged as v3.115.0, landed that telemetry and deliberately shipped no verdict with it.</p>
+  </div>
+
+  <h4>What a controlled re-run needs</h4>
+  <ul>
+    <li>A fixed inter-dispatch interval, recorded, and varied deliberately — 10 s, 2 min, 10 min.</li>
+    <li>At least 3 dispatches per burst and at least 3 bursts, so a warmup pattern is distinguishable from noise.</li>
+    <li>The <strong>full provider input</strong> captured per dispatch, not just <code>prompt_hash</code> — the prefix that matters includes tools and system.</li>
+    <li>Tier-split writes recorded, <code>ephemeral_5m</code> against <code>ephemeral_1h</code>, now that they are known to differ.</li>
+    <li>A <code>session_policy: "resume"</code> arm, since lever 2 does not depend on a byte-exact match.</li>
+  </ul>
+
+  <h4>Recommendation — do not retire the executor</h4>
+  <p><span class="tag c">confirmed</span> The mechanism can hit: D3 achieved <code>cache_write: 0</code>. <span class="tag i">inferred</span> The misses come from Claude Code injecting per-session bytes early in the prompt — the scratchpad path carrying the session id, and volatile git status. <strong>The brief is the tail of the prompt, not the prefix</strong>, so making the brief byte-identical cannot rescue a mismatched prefix. The controlled re-run above, capturing full provider input, would confirm or refute that.</p>
+  <p>This argues for <strong>lever 2, per-run seat session reuse</strong> — resume rather than <code>fresh</code> for later dispatches of the same seat within a run — over lever 1, prefix stabilization, because lever 2 never needs to win a byte-exact match. Retiring the executor on this evidence would mean discarding working, gated, audited machinery because of an experiment too loose to indict it. The next section is that machinery.</p>
+</section>
+
+<section class="det" id="d735x">
+  <div class="sec-h">
+    <span class="sec-n">Supporting evidence · issue #735</span>
+    <h2>The build seat works. The zero meant "never called".</h2>
+  </div>
+  <p>Three questions with large blast radius: had the <code>build</code> seat ever run; what did the executor epics actually ship; and does the executor spawn a herdr pane per phase, as your mental model assumed. The concern, verbatim from the issue: <em>"if the shipped design never spawns panes, then several epics bought something other than what was asked for."</em> Method: dispatch the seat for real rather than reason about it, make the agent report its own <code>cwd</code>, then re-count receipts at engine level rather than from skill notes.</p>
+
+  <h4>1 · <code>executor:build</code> works end to end <span class="tag c">confirmed</span></h4>
+  <div class="tw"><table>
+    <thead><tr><th>Field</th><th>Observed</th></tr></thead>
+    <tbody>
+      <tr><td>state / resolution</td><td><code>completed</code> / <code>primary</code></td></tr>
+      <tr><td>canary verdict</td><td><code>pass</code> — policy <code>codex_mutating</code>, profile <code>mutating</code>; passed <code>codex_containment</code>, <code>codex_behavioral</code>, <code>bare_absent</code></td></tr>
+      <tr><td>requested / actual model</td><td><code>gpt-5.6-terra</code> / <code>gpt-5.6-terra</code></td></tr>
+      <tr><td>parse_status / exit</td><td><code>ok</code> / <code>0</code>, <code>timed_out: false</code></td></tr>
+      <tr><td>timing</td><td class="num">17,811 ms</td></tr>
+      <tr><td>usage</td><td class="num">input 36,615 (cached 27,136) / output 215</td></tr>
+    </tbody>
+  </table></div>
+  <p>It required, and correctly enforced, the full <code>#464 §E</code> gate chain — <code>--gate-file</code> carrying an authenticated <code>#429</code> GateDecision, <code>--plan-file</code>, and exact-key-set plan-context equality on <code>{complexity, file_count, lines, risk_level}</code>. Each precheck refused correctly before minting a receipt. <strong>The machinery is complete, gated, canary-checked and fast.</strong></p>
+
+  <h4>2 · It isolates by git worktree — it never splits a pane <span class="tag c">confirmed</span></h4>
+  <p>The agent reported its own working directory as <code>.rawgentic/runtime/worktrees/spike-735-build-ca5113e1/build-44575cf5/0-3a1fb27b-8d02e0a2</code>. So your mental model — the main pane driving, a herdr pane per phase — and the shipped design <strong>genuinely diverge</strong>. But the shipped design is not empty: it bought worktree-level isolation plus a receipt and observation audit trail, rather than pane-level visibility. Whether pane-per-phase is <em>also</em> wanted is a design question worth deciding explicitly, rather than rediscovering a third time.</p>
+
+  <h4>3 · The zero was a caller problem <span class="tag c">confirmed</span></h4>
+  <div class="tw"><table>
+    <thead><tr><th class="num">Runs</th><th>Carrying a <code>build</code> receipt</th></tr></thead>
+    <tbody>
+      <tr><td class="num">3 of 31</td><td><code>559-cell1</code> and <code>559-cell1b</code> — #559 development test cells — plus <code>spike-735-build</code>, this spike</td></tr>
+      <tr class="spot"><td class="num">0</td><td><strong>every real <code>wf2-*</code> or <code>wf3-*</code> run</strong></td></tr>
+      <tr><td class="num">22 of 31</td><td>carry a <code>review</code> receipt, for contrast</td></tr>
+    </tbody>
+  </table></div>
+  <p>The engine has executed a build seat three times in its recorded history, and every one was a developer proving the engine — never a workflow doing work. Root cause: the always-loaded manuals named <code>rawgentic-implementer</code>, <code>deep-reasoner</code> and Sonnet, and nothing resident in context ever named the <code>build</code> seat. <strong>That is entirely an instruction-layer problem</strong> — a materially easier problem than the issue as filed.</p>
+
+  <h4>4 · The timeout default was strangling every review <span class="tag c">confirmed</span></h4>
+  <p><code>--timeout</code> defaulted to a flat <strong>300 s</strong> while <code>engine.py:86-93</code> <code>_effective_timeout</code> is <code>min(caller, bound)</code> — so the flat default <em>was</em> the binding constraint. The <code>review</code> seat declares <code>bounds.timeout_s: 1800</code>; <code>build</code> declares <strong>3600</strong>. A caller who did not hand-tune the flag got a sixth of review's sanctioned budget, and a twelfth of build's.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Real Step-11 review</th><th class="num">Wall time</th><th>Would the 300 s default have killed it?</th></tr></thead>
+    <tbody>
+      <tr><td>#719</td><td class="num">788 s</td><td>Yes</td></tr>
+      <tr><td>#720</td><td class="num">399.7 s</td><td>Yes</td></tr>
+    </tbody>
+  </table></div>
+  <p>Two of two. Fixed in <code>646bd97</code>, PR #753, v3.109.3 — it now defaults to the seat's own declared bound.</p>
+</section>
+
+<section class="det" id="d792">
+  <div class="sec-h">
+    <span class="sec-n">Decision 02 · issue #792</span>
+    <h2>The quota guard needs three scope calls</h2>
+  </div>
+  <p>Nothing stops the executor dispatching Claude-lane work when the 5-hour window is nearly exhausted. In #762, budget-exhaust chains wasted whole attempts — <strong>about $12.6 on one Step-2</strong> — and two dispatches died on org-level 429s. Your directive, note 7: <em>"build something that looks at the 5-hour window usage and stop sending calls after a certain limit, say 90%."</em></p>
+  <p>Three design passes, each reviewed by two independent cross-model reviewers. The design loop-back budget is now <strong>exhausted</strong> (<code>{design: 2, total: 2}</code>), and two pass-3 findings are flagged ambiguous, which independently trips the circuit breaker.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Pass</th><th>Verdict</th><th>Findings</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Fail</td><td>17 merged — 1 Critical, 6 High</td></tr>
+      <tr><td>2</td><td>Fail</td><td>1 Critical + 6 High</td></tr>
+      <tr><td>3</td><td>Not shippable</td><td>3 High + 4 Medium</td></tr>
+    </tbody>
+  </table></div>
+
+  <h4>The gates earned their cost</h4>
+  <p>Four real defects caught that would otherwise have shipped:</p>
+  <ul>
+    <li>Rev 1's installer wrote a cache record its own reader would have rejected every time — the guard would have been <strong>permanently inactive while reading as shipped</strong>.</li>
+    <li>Rev 2's audit record used a new <code>kind</code>, but <code>enforce.py:_validate_record</code> raises on any unknown kind — it would have <strong>poisoned <code>records()</code> and reconciliation for the entire run</strong>.</li>
+    <li>Rev 2 promised ordered skip data on the Observation; <code>observation-2.json</code> is <code>additionalProperties: false</code> and its own description says such an addition bumps <code>schema_version</code>.</li>
+    <li>Rev 2 keyed accounts on a <code>"default"</code> sentinel for a null <code>credential_ref</code>, but <code>_claude_env</code> returns <code>None</code> there and the subprocess <strong>inherits the ambient <code>CLAUDE_CONFIG_DIR</code></strong> — distinct accounts would have collapsed into one.</li>
+  </ul>
+
+  <h4>The three decisions</h4>
+  <ol class="body">
+    <li><strong>AC1 says the refusal reason must be "in the receipt". No receipt can exist.</strong> <code>enforce.check_pre</code> runs only per-attempt (<code>executor_routing_lib.py:853</code>; <code>:808</code> confirms none is minted before it). A total quota wall means no attempt happens, so there is nothing to attach a receipt to. Rev 3 proposes a durable <code>quota_block</code> audit record instead, and does not pretend that is a receipt. <strong>Amend AC1 to say "durably attributable in the audit trail"?</strong></li>
+    <li><strong>AC2 says "Codex-lane dispatches unaffected" — your own comment makes that wrong.</strong> Codex moved to weekly-only and a free reset was burned. <strong>Confirm AC2 becomes "each pool guarded independently, and the refusal names which pool"?</strong></li>
+    <li><strong><code>codex_weekly</code> has no verified data source.</strong> The Anthropic endpoint is confirmed working by your own S1 spike, so Claude 5-hour and 7-day are implementable now. There is no equivalent verified codex usage read, and two attempts to reach credentials were denied by the permission classifier. Either <strong>(a)</strong> ship the Claude half now and file the codex pool as its own child — the pool table is generic, so codex becomes config plus one adapter, no redesign — or <strong>(b)</strong> hold #792 entirely until a codex source is spiked. <strong>Recommendation: (a).</strong> Shipping less than you asked for is your call, not the implementer's, which is why this is a blocker rather than a decision made quietly.</li>
+  </ol>
+
+  <h4>Still unresolved — pass-3 Highs, all verified at source</h4>
+  <ul>
+    <li><strong>F1</strong> — the wall is evaluated <em>after</em> <code>_do_dispatch</code> appends the expected call to the ledger (<code>:3186</code>). A walled dispatch leaves an expected call with no receipt; retrying the same correlation id is rejected as a duplicate (<code>ledger.py:237</code>), and a new id leaves the original permanently unreconciled (<code>enforce.py:843</code>). <strong>So the advertised "retryable, self-resolving" refusal cannot actually complete within the same run.</strong> Fix: evaluate before <code>append_expected</code>.</li>
+    <li><strong>F2</strong> — the per-dispatch <code>quota_guard</code> status has no durable sink. <code>quota_block</code> exists only when something <em>is</em> blocked, so an all-fail-open run looks identical to a fully-protected one. <strong>That is precisely the silent-failure class epic #756 exists to kill, inside the feature meant to prevent it.</strong></li>
+    <li><strong>F3</strong> — the effective-config-dir identity resolves relative to process cwd, but a mutating Claude subprocess changes cwd to its worktree (<code>claude_cli.py:158</code>), and a value handed to a subprocess gets no <code>~</code> expansion. Poller and gate can disagree about the same account.</li>
+  </ul>
+  <p>No branch was cut and no code was written. Design rev 3 is durable on branch <code>docs/792-design-artifacts</code> (<code>8db07f4</code>).</p>
+</section>
+
+<section class="det" id="d797">
+  <div class="sec-h">
+    <span class="sec-n">Decision 03 · issue #797</span>
+    <h2>Your threshold instruction and the maths disagree</h2>
+  </div>
+  <p>Your instruction, verbatim: <em>"if 60-80 is the degredation point lets change to 55 and 75"</em> — that is <code>hooks/context_meter.py:84-85</code>, <code>DEFAULT_CHECK_IN_PCT</code> from 35 to 55 and <code>DEFAULT_ACT_PCT</code> from 50 to 75.</p>
+  <p><strong>The problem found while implementing.</strong> The meter <em>already fires late</em> — it fired the directive tier at <strong>69%</strong> when the act line was 50. Raising the act line to 75 makes it fire later still, in every realistic case, even with a projection guard that fires before the crossing rather than after it:</p>
+  <div class="tw"><table>
+    <thead><tr><th>Steady per-turn growth</th><th class="num">Projected ACT fires at</th><th class="num">Versus today's 50</th></tr></thead>
+    <tbody>
+      <tr class="spot"><td>1 point</td><td class="num">74%</td><td class="num">24 points later</td></tr>
+      <tr><td>5 points</td><td class="num">70%</td><td class="num">20 points later</td></tr>
+      <tr><td>10 points</td><td class="num">65%</td><td class="num">15 points later</td></tr>
+      <tr><td>15 points</td><td class="num">60%</td><td class="num">10 points later</td></tr>
+      <tr><td>20 points</td><td class="num">55%</td><td class="num">5 points later</td></tr>
+    </tbody>
+  </table></div>
+  <p>The projection can never fire below 55, the check-in line, so <strong>55 is the floor</strong> no matter how large the jump.</p>
+  <p><strong>Why that is likely the opposite of what you want.</strong> Your aim is to keep sessions <em>out</em> of the degradation band. But the code's own recorded rationale (<code>context_meter.py:76-85</code>) says the binding constraint is something else:</p>
+  <blockquote>"At 35% of a 1M window a session has ~650k tokens in hand to finish its phase and hand over properly; at 70% it has 300k and is already choosing what to drop."</blockquote>
+  <p>That argument is about <strong>room left to write a good handoff</strong>, not about where quality degrades. The two pull in opposite directions. AC1 already anticipated exactly this: <em>"Thresholds are 55/75 (or the owner-approved alternative if the overshoot fix changes the calculus)."</em> The overshoot analysis changed the calculus. Step-4 review returned <strong>shippable: no</strong> — 4 High and 1 Medium — with this finding flagged ambiguous.</p>
+  <p><strong>Recommendation:</strong> fix the late-firing first — #729 and #734 are the meter-reliability children already in this epic — then retune on a meter that fires when it says it does. Setting 55/75 on today's overshooting meter would likely push real handoffs past 75%, inside the degradation band, with less room to hand over well.</p>
+</section>
+
+<section class="det" id="d777">
+  <div class="sec-h">
+    <span class="sec-n">Decision 04 · issue #777</span>
+    <h2>Per-phase token telemetry has no inputs to build on</h2>
+  </div>
+  <p>The ask: a per-phase input and output token breakdown, plus time, in WF2 and WF3 run-records — feeding owner notes 5, 9, 12 and 13, and every future cost comparison.</p>
+  <p>Two design revisions, each reviewed cross-model at the Step-4 gate. Pass 1 failed on volume, 7 High and 1 Medium; pass 2 returned <strong>shippable: no</strong> with 8 High. A loop-back remained in budget and was deliberately <em>not</em> spent: the second review did not find fixable design defects, it established that <strong>the inputs required for correct attribution are not produced anywhere.</strong></p>
+  <p><strong>The finding that matters most: half of AC1 already shipped, and was nearly rebuilt from scratch.</strong> Per-step and per-phase wall time exists today via #506 and #589 — <code>step_state.compute_timing</code> feeding <code>work_summary._auto_embed_timing:182</code>, with <code>timing_coverage_warning:231</code> already flagging gaps. The genuine gap is <strong>token attribution only</strong>, and nothing in the system records tokens per phase: <code>usage_capture</code> is session-wide.</p>
+  <p><strong>Recommendation:</strong> park it, with the finding written down, and untick it from the epic. A third revision could only narrow the feature to near-uselessness or grow it into a much larger one, and that is your scope call. If per-phase token attribution is genuinely wanted, it deserves its own groundwork project — record the data first, report on it second.</p>
+</section>
+
+<section class="det" id="d796">
+  <div class="sec-h">
+    <span class="sec-n">Decision 05 · issue #796</span>
+    <h2>One of eight should ship, one should be re-filed, six should not</h2>
+  </div>
+  <p>The ask: convert eight verbs the workflows re-derive as prose every run into scripts. Three design passes, two independent reviewers per pass. Design loop-back <strong>2 of 2 exhausted</strong>, global 2 of 3. The #798 budget-exhausted carve-out does not apply here — it requires the ambiguity breaker to return <code>clear</code>, and pass 3 carries two ambiguous findings.</p>
+
+  <div class="pull">
+    <div class="pt">Two author errors caught, both instructive</div>
+    <p><strong>1 · A fabricated verification claim shipped into the design.</strong> Rev 4 stated: <em>"Verified against the live corpus: all six entries at <code>README.md:730-746</code> satisfy both patterns."</em> It was never run. When it was run, the proposed boundary pattern <code>(?![\w.])</code> forbids a trailing period — and <strong>five of six live entries end with <code>no diagram REV.</code></strong> Per-entry matches: v3.115.1 <strong>0</strong>, v3.115.0 <strong>0</strong>, v3.114.1 <strong>0</strong>, v3.114.0 1, v3.113.4 0. <strong>The guard would have rejected almost every real release.</strong></p>
+    <p><strong>2 · An unprobed git invocation.</strong> <code>git show -- &lt;ref&gt;:&lt;path&gt;</code> reads nothing, because <code>--</code> separates revisions from <em>pathspecs</em>. Confirmed live in a throwaway repo: <code>git show HEAD~1:m.json</code> returns the blob, while <code>git show -- HEAD~1:m.json</code> returns <strong>empty</strong>. The correct form is <code>git show --end-of-options &lt;ref&gt;:&lt;path&gt;</code>.</p>
+  </div>
+
+  <h4>The re-triage — done, and it stands</h4>
+  <div class="tw"><table>
+    <thead><tr><th class="num">#</th><th>Candidate</th><th>Verdict</th><th>Reason</th></tr></thead>
+    <tbody>
+      <tr><td class="num">1</td><td>Version-bump ×4 + changelog</td><td>Defer to its own issue</td><td>Three failed design passes</td></tr>
+      <tr><td class="num">2</td><td>Pin-guard allowlist</td><td>Not shipped</td><td>A <em>partial</em> allowlist manufactures false confidence exactly where <code>sweep_hand_pins</code>' own exclusions already hide drift — <code>phase_executor/</code> sits outside <code>SWEEP_GLOBS</code>, the whole <code>docs/</code> tree is excluded, <strong>337 canonical-sentence prose pins</strong> are unswept, and the checker is not run in CI</td></tr>
+      <tr class="spot"><td class="num">3</td><td>Step-12 PR-body asserts</td><td><strong>Ship</strong></td><td>Converged — detail below</td></tr>
+      <tr><td class="num">4</td><td>Merge-verification bundle</td><td>Not shipped</td><td>Half already exists (<code>launcher_lib.classify_issue_state:2102</code> to <code>confirmed_merged</code>); the rest needs a squash-SHA check with no seam, plus the <strong>first issue-body write in the codebase</strong> — <code>grep 'gh issue edit' hooks/*.py</code> returns zero</td></tr>
+      <tr><td class="num">5</td><td>ci-wait verb</td><td>Not shipped</td><td>Working prior art already at the workspace tier, <code>.claude/skills/ci-wait/watch.sh</code></td></tr>
+      <tr><td class="num">6</td><td>usage-capture-legs</td><td>Not shipped</td><td><code>session_registry.jsonl</code>'s 419 entries carry no issue key, so it cannot correlate</td></tr>
+      <tr><td class="num">7</td><td>D6 sweep table</td><td>Not shipped</td><td><strong>No skill defines an executable grammar</strong> — the docs name the obligation, but no columns, row shape or output format exist</td></tr>
+      <tr><td class="num">8</td><td>Marker-writer</td><td>Not shipped</td><td>A grammar migration in disguise: 19 WF2 marker forms, about 24 test-side literal pins, and one structural parser with a tie rule</td></tr>
+    </tbody>
+  </table></div>
+
+  <h4>Recommendation: split it</h4>
+  <ol class="body">
+    <li><strong>Ship candidate 3 alone</strong> — <code>plan_lib assert-pr-body</code>. Both pure functions already exist (<code>plan_lib.py:301,345</code>) with <strong>no production caller</strong>: they run only inside the end-of-run completion gate, which is exactly why the #781 H1 slip fired after merge. Two review findings still apply and both have clean fixes — reject a zero-task plan with rc 2 instead of passing vacuously (<code>plan_lib.py:352-353</code> returns <code>(True, [])</code> on an empty list), and bind <code>--plan-file</code> to the Step-8 gate artifact's recorded plan digest rather than trusting prose.</li>
+    <li><strong>File candidate 1 as its own issue</strong>, carrying the three-pass evidence with it.</li>
+    <li>Two cheap correctness fixes can ride with either: <code>skills/epic-run/SKILL.md:67</code> says "version bump ×3 surfaces" when it has been <strong>four</strong> since #470; and <code>canary.py:36</code> plus <code>tests/phase_executor/test_canary_digest_pin.py:3</code> both say the registration digest is "re-pinned per release" when <code>compute_registration_digest:229-263</code> reads no version at all — <strong>prose inviting an action the code forbids.</strong></li>
+  </ol>
+  <p>Design rev 4, with both defects preserved as evidence rather than as a plan, is on branch <code>docs/796-design-artifacts</code>.</p>
+</section>
+
+<section class="det" id="earlier">
+  <div class="sec-h">
+    <span class="sec-n">For completeness</span>
+    <h2>Earlier spikes and their verdicts</h2>
+  </div>
+  <p>None of these block a decision here. They are included so the spike record is complete rather than selective; each has a full report under <code>docs/planning/</code>.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Spike</th><th>Question</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td><strong>#452</strong><br>codex containment</td><td>Does <code>codex exec -s workspace-write</code> confine a mutating child?</td><td><strong>Conditional.</strong> Enforced by an OS sandbox — Landlock plus seccomp — that blocks <code>$HOME</code> by default, <strong>but its default writable roots include all of <code>/tmp</code> and <code>$TMPDIR</code></strong>, which is where engine worktrees live. So naive <code>-s workspace-write</code> does <strong>not</strong> isolate a child from sibling worktrees. Worktree-only confinement is achievable and was live-verified, but it needs three explicit config overrides.</td></tr>
+      <tr><td><strong>#453</strong><br>tmux × -p</td><td>Do <code>claude --tmux</code> and <code>-p</code> compose for supervisor spawn?</td><td>Conclusive verdict reached; Linux-first, tmux 3.4. Report-only, no production changes.</td></tr>
+      <tr class="spot"><td><strong>#454</strong><br>guardrail canary</td><td>Do project hooks fire in <code>claude -p</code> children, including <code>CLAUDE_CONFIG_DIR</code> lanes?</td><td><strong>Critical: a fresh or unprovisioned <code>CLAUDE_CONFIG_DIR</code> lane child loads zero plugin hooks</strong> — the entire guard layer, wal-guard, security-guard and session-start, is <strong>silently absent</strong> (<code>"plugins":[]</code> and 0 <code>hook_started</code> events, versus 9 in a normal child). Multi-account lanes must provision the plugin layer per lane, and the canary must run per lane, or every guardrail vanishes inside the lane.</td></tr>
+      <tr><td><strong>#455</strong><br>resume mechanics</td><td>session_id capture, resume-from-cwd, worktree cell, abnormal-exit residue</td><td>Complete, report-only. All probes ran from throwaway scratch dirs; codex resume explicitly out of scope.</td></tr>
+      <tr><td><strong>#456</strong><br>effort vocabularies</td><td>The real accepted value sets for codex <code>model_reasoning_effort</code> and GLM <code>reasoning_effort</code></td><td>Complete; normalized-to-native mapping drafted. Docs-only, no config or code changed.</td></tr>
+      <tr><td><strong>#654</strong><br>test plan</td><td>The runnable test plan you asked for</td><td>Written 2026-07-27, pinned to Claude Code 2.1.220 and herdr 0.7.5. Investigation-only — each test names the question it settles, the exact commands, the pass criterion, the cost, <strong>and, deliberately, what it still cannot tell you.</strong></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="det" id="where">
+  <div class="sec-h">
+    <span class="sec-n">Provenance</span>
+    <h2>Where the raw evidence lives</h2>
+  </div>
+  <div class="tw"><table>
+    <thead><tr><th>Artifact</th><th>Path</th></tr></thead>
+    <tbody>
+      <tr><td>S3 cache measurement</td><td><code>docs/measurements/2026-08-01-794-spike-s3-cache-reuse.md</code></td></tr>
+      <tr><td>Owner-notes economics review</td><td><code>docs/measurements/2026-08-01-owner-notes-executor-economics.md</code></td></tr>
+      <tr><td>#762 retrospective</td><td><code>docs/measurements/2026-08-01-762-retrospective.md</code></td></tr>
+      <tr><td>Epic front-loaded path</td><td><code>docs/planning/2026-08-01-epic-756-front-loaded-path.md</code></td></tr>
+      <tr><td>#792 design rev 3</td><td>branch <code>docs/792-design-artifacts</code> (<code>8db07f4</code>)</td></tr>
+      <tr><td>#796 design rev 4</td><td>branch <code>docs/796-design-artifacts</code> (<code>6c9d7b47</code>)</td></tr>
+      <tr><td>#793 design artifacts</td><td>branch <code>docs/793-design-artifacts</code> (<code>335056cc</code>)</td></tr>
+      <tr><td>Epic decision log, D1 to D67</td><td><code>claude_docs/session_notes/epic-756-autorun-log.md</code> — not in git, <code>claude_docs/</code> is gitignored</td></tr>
+      <tr><td>Earlier spike reports</td><td><code>docs/planning/2026-07-17-spike-45*.md</code> and <code>docs/planning/2026-07-27-spike-654-test-plan.md</code></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="det" id="p782">
+  <div class="sec-h">
+    <span class="sec-n">Not a decision, but worth your attention</span>
+    <h2>Why old herdr panes stopped closing</h2>
+  </div>
+  <p><span class="tag c">confirmed</span> #758 merged 2026-07-31 at 01:13 (<code>158b6ee2</code>, PR #773) and made goal-reading trust only rows stamped <code>sentinel: true</code>. That was deliberate, and it is a prompt-injection boundary: without the stamp, structured content pasted into a transcript could forge a <code>goal_status</code> row and spoof "already cleared". That was a real bypass, found during #758's own review.</p>
+  <p><strong>The side effect nobody caught:</strong> Claude Code stamps <code>sentinel: true</code> when it <em>arms</em> a goal, but not when the Stop hook <em>evaluates</em> one. So after any evaluation the newest row is unstamped, the fail-closed validator refuses, and pane-handoff teardown exits before it closes anything. Measured 2026-08-01: <strong>53 of the 120 most recent transcripts are in the refusing state.</strong></p>
+  <p>#802 looked like the fix, but PR #803 (<code>26f865ef</code>) changed only the <em>wording</em> of the refusal — 4 files, mostly the skill doc and its test, with the behaviour untouched. <strong>#782 — open, zero comments, and not in this epic — is the real fix</strong>, and it is the best small follow-up candidate on the board.</p>
+</section>
+
+</div>
+
+<footer>
+  <div class="sheet">
+    <p><strong>Epic #756 — spike evidence and the five decisions waiting on the owner.</strong> Written 2026-08-01 by the epic #756 auto-run, session <code>811192ca</code>. Source of record: <code>docs/planning/2026-08-01-epic-756-spike-evidence.md</code>.</p>
+    <p>Nothing on this page has been smoothed for readability at the cost of a caveat. Two spikes are recorded together with the wrong answers they produced first, because in both cases that sequence is the finding.</p>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var root=document.documentElement, btn=document.getElementById('tt');
+  btn.addEventListener('click',function(){
+    root.setAttribute('data-theme', root.getAttribute('data-theme')==='light' ? 'dark' : 'light');
+  });
+  var links=Array.prototype.slice.call(document.querySelectorAll('.rail a'));
+  var byId={}; links.forEach(function(a){ byId[a.getAttribute('href').slice(1)]=a; });
+  var targets=links.map(function(a){ return document.getElementById(a.getAttribute('href').slice(1)); })
+                   .filter(function(el){ return el; });
+  if('IntersectionObserver' in window && targets.length){
+    var io=new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if(en.isIntersecting){
+          links.forEach(function(a){ a.classList.remove('on'); });
+          var a=byId[en.target.id]; if(a){ a.classList.add('on'); }
+        }
+      });
+    },{rootMargin:'-18% 0px -70% 0px'});
+    targets.forEach(function(t){ io.observe(t); });
+  }
+})();
+</script>
+</body>
+</html>
