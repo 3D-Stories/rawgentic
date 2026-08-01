@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The front-loaded path through epic #756</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#a16207;--defer-bg:#f8f2e2}
+@media(prefers-color-scheme:dark){:root{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}}
+:root[data-theme=dark]{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}
+:root[data-theme=light]{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#a16207;--defer-bg:#f8f2e2}
+.mstone{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:12px;padding:14px 16px;margin:14px 0}
+.mstone h3{margin:0 0 .4em;font-size:15px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.c-conf{color:var(--chip-c);background:var(--chip-c-bg)}
+.c-defer{color:var(--defer);background:var(--defer-bg)}
+.c-plan{color:var(--ink-2);background:var(--code)}
+</style>
+</head>
+<body class="tpl-roadmap">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-31 23:57 MDT</div>
+<h1>The front-loaded path through epic #756</h1>
+<p class="sub">Ten issues, in order, and exactly what you get after each one</p>
+</header>
+<main>
+<h1>The front-loaded path through epic #756</h1>
+<p><strong>Ten issues, in order, and exactly what you get after each one.</strong> Owner decision 2026-08-01: the nine issues from the executor-economics review are front-loaded ahead of the remaining original children, ranked most impactful to least, with #777 folded into the same ranking.</p>
+<p><strong>The principle in one sentence:</strong> fix what every remaining child pays for, before running fifteen more children through it.</p>
+<section class="mstone"><h3>Where we are standing <span class="chip c-conf">MERGED</span></h3><table>
+<thead><tr><th></th><th></th></tr></thead>
+<tbody>
+<tr><td>Children merged</td><td><strong>7 of 31</strong> (#735, #733, #732, #758, #767, #765, #762)</td></tr>
+<tr><td>Front-loaded block</td><td><strong>10</strong> — the nine review issues plus #777</td></tr>
+<tr><td>Original tail, unchanged</td><td><strong>14</strong> — #766 onward</td></tr>
+<tr><td>Status</td><td><strong>PAUSED</strong> by owner instruction. Nothing starts without a resume.</td></tr>
+</tbody>
+</table>
+<p>The tail is untouched on purpose. Re-ranking work we have not re-examined would be motion, not progress.</p></section>
+<section class="mstone"><h3>Read this table first <span class="chip c-plan">—</span></h3><p>Each row is one stage. <strong>Cost</strong> is build effort. <strong>Pays back</strong> is what it returns across the fifteen children still to come. <strong>Unlocks</strong> is what becomes possible that was not possible before.</p>
+<table>
+<thead><tr><th>#</th><th>Issue</th><th>Cost</th><th>Pays back</th><th>Unlocks</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><strong>#798</strong> Step-4 close</td><td>S</td><td>One design pass and one owner escalation, per child</td><td>Unattended runs stop stalling on a foregone answer</td></tr>
+<tr><td>2</td><td><strong>#791</strong> Rate card</td><td>XS</td><td>Every dollar figure becomes true</td><td>Any cost comparison at all</td></tr>
+<tr><td>3</td><td><strong>#794</strong> Cache reuse</td><td>M + <strong>GATE</strong></td><td>Fresh-session warmup on every dispatch</td><td>The answer to &quot;is the executor path viable&quot;</td></tr>
+<tr><td>4</td><td><strong>#792</strong> Quota guard</td><td>S</td><td>Whole attempts lost to a wall</td><td>Overnight runs that survive the window</td></tr>
+<tr><td>5</td><td><strong>#777</strong> Per-phase telemetry</td><td>M</td><td>Guesswork about where time and tokens go</td><td>Measuring every stage below this one</td></tr>
+<tr><td>6</td><td><strong>#799</strong> Claude build lane</td><td>S</td><td>Single-engine exposure</td><td>The terra-vs-Opus-5 bake-off</td></tr>
+<tr><td>7</td><td><strong>#797</strong> Thresholds + rolling summary</td><td>M</td><td>Roughly 90M input tokens per child</td><td>Longer, cheaper legs between handoffs</td></tr>
+<tr><td>8</td><td><strong>#796</strong> Prose to script</td><td>M</td><td>Per-child ceremony, eight ways</td><td>Mechanical steps that cannot be skipped</td></tr>
+<tr><td>9</td><td><strong>#793</strong> Diff-review economics</td><td>M</td><td>Eight to ten minutes per child, often for nothing</td><td>A review layer that finishes</td></tr>
+<tr><td>10</td><td><strong>#795</strong> Pane visibility</td><td>S</td><td>Blind dispatches</td><td>Watching a run happen</td></tr>
+</tbody>
+</table></section>
+<section class="mstone"><h3>Stage 1 — #798, codify the Step-4 close <span class="chip c-conf">DONE</span></h3><p><strong>Before.</strong> The design gate runs its passes, exhausts its budget, and asks the owner what to do. It has now done this on <strong>six consecutive children</strong>, and received <strong>seven identical answers</strong>.</p>
+<p><strong>After.</strong> Budget exhaustion after the maximum passes is a legitimate close, recorded loudly with its pass count and unresolved findings. Nobody is asked again.</p>
+<p><strong>You can now:</strong> leave a run unattended through the design gate. This is the only issue in the list that pays back on the very next child with no prerequisite whatsoever, which is why it is first despite being small.</p>
+<p><strong>Watch for:</strong> the close must stay loud. A silent close is a worse defect than the escalation it replaces.</p></section>
+<section class="mstone"><h3>Stage 2 — #791, fix the rate card <span class="chip c-plan">—</span></h3><p><strong>Before.</strong> Every row of <code>RATE_CARD</code> is wrong. Fable is billed at Sonnet rates in our own accounting; Opus 5 is billed at deprecated Opus 4.1 rates. Verified against live pricing 2026-08-01.</p>
+<table>
+<thead><tr><th>Model</th><th>Card said</th><th>Actually</th></tr></thead>
+<tbody>
+<tr><td>claude-fable-5</td><td>$3 / $15</td><td><strong>$10 / $50</strong></td></tr>
+<tr><td>claude-opus-5</td><td>$15 / $75</td><td><strong>$5 / $25</strong></td></tr>
+<tr><td>claude-opus-4-8</td><td>$15 / $75</td><td><strong>$5 / $25</strong></td></tr>
+<tr><td>claude-sonnet-5</td><td>$3 / $15</td><td><strong>$2 / $10</strong> (introductory, ends 2026-08-31)</td></tr>
+<tr><td>claude-haiku-4-5</td><td>$0.80 / $4</td><td><strong>$1 / $5</strong></td></tr>
+</tbody>
+</table>
+<p><strong>After.</strong> Every cost figure the system reports is true.</p>
+<p><strong>You can now:</strong> compare anything to anything. Until this lands, every stage below produces numbers that cannot be trusted, including the telemetry in stage 5 and the bake-off in stage 6. It is one dictionary. It is second only because stage 1 needs no prerequisite at all.</p>
+<p><strong>Watch for:</strong> the Sonnet introductory rate expires 2026-08-31, and models from 4.7 onward use a tokenizer producing roughly 30 percent more tokens for the same text. Cross-generation token counts are not comparable.</p></section>
+<section class="mstone"><h3>Stage 3 — #794, cache reuse, and the gate <span class="chip c-plan">—</span></h3><p><strong>This stage is different from every other one.</strong> It carries a fifteen-minute spike whose answer can invalidate the four stages after it.</p>
+<p><strong>Before.</strong> Every dispatch is a brand-new session. Turn one writes 46k to 132k tokens to cache at 1.25 to 2 times price; each turn after re-reads the whole conversation, observed at 1.5M to 3.1M cumulative reads per dispatch.</p>
+<p><strong>The spike, first, before any implementation.</strong> Dispatch two byte-identical briefs back to back and read <code>cache_read_input_tokens</code> on the second one&#x27;s first turn. Three outcomes:</p>
+<table>
+<thead><tr><th>Result</th><th>What it means</th><th>What happens next</th></tr></thead>
+<tbody>
+<tr><td>Cache hit</td><td>Prefix stabilisation works</td><td>Implement, keep the executor, continue down the list</td></tr>
+<tr><td>Miss, our own volatile bytes</td><td>Fixable at our end</td><td>Quantify the work, then decide</td></tr>
+<tr><td>Miss, volatility inside the harness</td><td>Not reachable from here</td><td><strong>Stop. Cost the orchestrator-with-subagents path and put the architecture choice to the owner</strong></td></tr>
+</tbody>
+</table>
+<p><strong>You can now:</strong> know whether the executor is worth further investment. That is the real deliverable of this stage, and it is why the stage sits third rather than seventh.</p>
+<p><strong>The dependency this creates:</strong> stages 6 (#799) and 10 (#795) both invest further in the executor. Neither should start until this spike returns.</p></section>
+<section class="mstone"><h3>Stage 4 — #792, the quota guard <span class="chip c-plan">—</span></h3><p><strong>Before.</strong> Nothing stops a dispatch when the window is nearly gone. On 2026-08-01 the codex weekly pool hit zero and recovering it cost a finite reset. The Claude seven-day window read 66 percent the same day.</p>
+<p><strong>After.</strong> A pre-dispatch check refuses at a threshold, per pool, with a retryable exit and the pool named — so the orchestrator can route to the other provider instead of stalling.</p>
+<p><strong>You can now:</strong> start a long run without checking a dial first. Confirmed available today: the usage endpoint returns <code>five_hour</code> and <code>seven_day</code> utilisation live. The dollar fields are null on this plan, so the guard keys on utilisation.</p>
+<p><strong>Scope correction already recorded:</strong> this must guard the <strong>codex weekly pool</strong> as well. The original framing assumed codex was effectively free. It is not.</p></section>
+<section class="mstone"><h3>Stage 5 — #777, per-phase telemetry <span class="chip c-plan">—</span></h3><p><strong>Before.</strong> Per-dispatch usage and timing are already recorded in every observation. Nothing aggregates them into run-records with per-phase attribution, so &quot;where did the time go&quot; is answered by hand, once, after the fact.</p>
+<p><strong>After.</strong> Every run reports its own phase breakdown.</p>
+<p><strong>You can now:</strong> measure the effect of stages 7 through 10 instead of believing them. This is the instrument the rest of the list is read with — and it is fifth rather than first because telemetry multiplied by a wrong rate card is a confident wrong answer.</p></section>
+<section class="mstone"><h3>Stage 6 — #799, open the Claude build lane <span class="chip c-plan">—</span></h3><p><strong>Gated by stage 3.</strong></p>
+<p><strong>Before.</strong> <code>MUTATING_FS_SANDBOXED = {codex}</code> refuses every mutating Claude composition before a process starts. Build work is always mutating, so every build in this epic has run on gpt-5.6-terra. That is one engine, with no fallback, on a pool that hit zero this week.</p>
+<p>The concern about that engine is evidence-backed, and it is narrower than it first looked. <strong>openai/codex#33816</strong> (open, <code>model-behavior</code>) documents terra &quot;fabricat[ing] process completion&quot; and launching duplicate commands, with the reporter noting it yields &quot;3-4 background terminals running the same build/test command.&quot; But the same issue reports <strong>sol behaves identically</strong>, and false completion is a class property of current agentic models rather than a terra defect.</p>
+<p><strong>After.</strong> Claude-lane builds run with writes confined to the dispatch&#x27;s own worktree, enforced outside the agent — the owner&#x27;s chosen option, accepted trade, reversible in one line.</p>
+<p><strong>You can now:</strong> run the bake-off. <code>BUILD_MODELS</code> <strong>already</strong> reads <code>(&quot;claude-sonnet-5&quot;, &quot;claude-opus-5&quot;, &quot;gpt-5.6-terra&quot;)</code> — the competitor set exists in code and has never been able to run, because two of its three entries are refused. External benchmarks will not settle this for us: one harness puts terra 23 points behind sol, another puts them 1.7 points apart. Our own tasks are the only tiebreaker.</p>
+<p><strong>Honest note:</strong> this does not buy immunity from fabricated completion. It buys engine choice, quota headroom, and measurability.</p></section>
+<section class="mstone"><h3>Stage 7 — #797, thresholds and the rolling summary <span class="chip c-plan">—</span></h3><p><strong>Before.</strong> Each mid-child handoff costs roughly <strong>90M input tokens</strong> of successor re-read, about $40 nominal, and #762 had four of them. The decision log grows monotonically and is re-read whole every leg.</p>
+<p><strong>Partly banked already:</strong> the thresholds moved to <strong>55/75</strong> on 2026-08-01 and are live now, verified against the running plugin. What remains here is the durable default, the rolling summary, and the meter overshoot — today&#x27;s meter fired its directive tier at 69 percent when the act line was 50.</p>
+<p><strong>You can now:</strong> run longer legs that cost less to hand over. The rolling summary is the piece that shrinks the tax regardless of where the threshold sits.</p>
+<p><strong>Watch for:</strong> raising the act line on a meter that already overshoots can push a real handoff past the degradation point. Fix the overshoot in the same change or say why not.</p></section>
+<section class="mstone"><h3>Stage 8 — #796, turn prose into scripts <span class="chip c-conf">MERGED</span></h3><p><strong>Before.</strong> Eight mechanical procedures live as prose the orchestrator re-derives every run. Ranked by pain actually observed this epic: version bump across four surfaces; pin-guard allowlist derivation (thirteen stale pins slipped two gates in #762); PR-body asserts at authoring time (the H1 slip fired after #781 had already merged); merge verification; CI wait; usage capture across legs; the sweep table; session markers.</p>
+<p><strong>After.</strong> Each is a verb with a test.</p>
+<p><strong>You can now:</strong> stop losing a full gate cycle to a surface someone forgot. Prose can be skipped under context pressure. A verb cannot.</p></section>
+<section class="mstone"><h3>Stage 9 — #793, make diff review finish <span class="chip c-plan">—</span></h3><p><strong>Before.</strong> The adversarial diff layer inlines the whole patch. On #762 it read 3,316 lines, ran eight to ten minutes, and then failed <code>truncated: true</code> — tokens spent, nothing returned.</p>
+<p><strong>After.</strong> Per-file patches on disk, generated files stripped, docs-only diffs skipped visibly, truncation triggering a bounded retry instead of a terminal failure.</p>
+<p><strong>You can now:</strong> count the review layer as a gate that reports, rather than one that sometimes costs ten minutes and returns nothing.</p>
+<p><strong>Sequenced by its own spike:</strong> strip the generated files from #762&#x27;s patch and measure what is left. If the residual is small, noise-stripping alone may be the whole fix.</p></section>
+<section class="mstone"><h3>Stage 10 — #795, see the run happen <span class="chip c-plan">—</span></h3><p><strong>Before.</strong> Build dispatches already open herdr panes — four #762 jobs carry <code>terminal_backend: herdr</code> in the registry. Nobody has seen one, because the backend splits the caller&#x27;s own pane and closes it on completion. An eighteen-second split in a tab you are not watching looks exactly like nothing happening. Analysis and review dispatches are headless entirely.</p>
+<p><strong>After.</strong> Durable pane labels, keep-open on completion, coverage beyond the build seat, and a live token ticker fed from the two sources that already exist.</p>
+<p><strong>You can now:</strong> watch a workflow run. Last by throughput impact, and the one that changes the day-to-day experience most.</p>
+<p><strong>Gated by stage 3</strong>, like stage 6 — it invests further in the executor.</p></section>
+<section class="mstone"><h3>What the picture looks like at the end <span class="chip c-plan">—</span></h3><p>Reading the &quot;pays back&quot; column as a whole, after stage 10 and before the tail resumes:</p>
+<ul>
+<li>Every remaining child costs <strong>one fewer design pass and one fewer escalation</strong> (1).</li>
+<li>Every number the system reports is <strong>true</strong> (2), and <strong>attributable to a phase</strong> (5).</li>
+<li>A run <strong>survives its own window</strong> (4) instead of dying at a wall.</li>
+<li>Builds have <strong>more than one engine</strong>, chosen on our own measurements (3, 6).</li>
+<li>Handoffs cost <strong>materially less</strong>, and happen <strong>less often</strong> (7).</li>
+<li>The steps that get skipped under pressure <strong>cannot be</strong> (8).</li>
+<li>The review layer <strong>finishes</strong> (9).</li>
+<li>And you can <strong>watch the whole thing</strong> (10).</li>
+</ul>
+<p>Then the original fourteen — #766 onward — run through a machine that has stopped charging them for its own defects.</p></section>
+<section class="mstone"><h3>The one thing most likely to be wrong here <span class="chip c-plan">—</span></h3><p>The ranking assumes the executor path survives stage 3. If spike S3 says cache reuse is unreachable, then stages 6 and 10 are investments in an architecture we are leaving, and this whole order needs re-deriving with the owner. That is the reason S3 sits at fifteen minutes and third place instead of somewhere comfortable near the end.</p></section>
+
+</main>
+<footer>Last updated: 2026-07-31 23:57 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
