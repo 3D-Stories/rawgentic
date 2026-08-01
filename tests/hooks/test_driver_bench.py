@@ -93,7 +93,7 @@ def test_audit_completeness(env):
 # ---- discrimination: the scorers actually compare (red-if-broken) -----------------------------
 def test_wrong_expected_docks_the_dimension(env):
     fx = copy.deepcopy(_fx("f01-intake-clean"))
-    fx["expected"]["seat_model"] = "claude-sonnet-5"      # the run returns opus-5, so this must fail
+    fx["expected"]["seat_model"] = "claude-opus-5"        # the run returns sonnet-5, so this must fail
     assert db.run_fixture(fx, **env)["seat_selection"] == 0.0
     fx2 = copy.deepcopy(_fx("f08-enforcement-breach"))
     fx2["enforcement"]["expected_ok"] = True              # it's a real breach (ok=False), so expect 0

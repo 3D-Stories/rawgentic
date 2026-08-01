@@ -9,7 +9,7 @@
     "intake": [
       {
         "parse_status": "ok",
-        "actual_model": "claude-opus-5",
+        "actual_model": "claude-sonnet-5",
         "payload": "x",
         "usage": {
           "input": 100,
@@ -20,7 +20,7 @@
     ]
   },
   "expected": {
-    "seat_model": "claude-opus-5",
+    "seat_model": "claude-sonnet-5",
     "token_burn_max": 1000
   }
 }

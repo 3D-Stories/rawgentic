@@ -894,8 +894,9 @@ class TestDispatchCaptureDoc:
 class TestDispatchRegexIdentity:
     """#330 Step 11 hardening: the canonical DISPATCH regex must stay
     byte-identical between the shared block and docs/run-records.md, and WF3's
-    review-only variant may differ ONLY in the role group — regex-vs-validator
-    drift would otherwise stay green."""
+    narrowed variant (review|implementation since the #762 build-seat adoption)
+    may differ ONLY in the role group — regex-vs-validator drift would
+    otherwise stay green."""
 
     _BROAD = (
         r"^DISPATCH issue=(\d+) role=(review|implementation|analysis|other) "
@@ -912,10 +913,12 @@ class TestDispatchRegexIdentity:
 
     def test_wf3_regex_differs_only_in_role_group(self):
         wf3 = (REPO_ROOT / "skills" / "fix-bug" / "SKILL.md").read_text()
-        narrow = self._BROAD.replace("role=(review|implementation|analysis|other)", "role=(review)")
+        narrow = self._BROAD.replace(
+            "role=(review|implementation|analysis|other)", "role=(review|implementation)")
         assert narrow in wf3, (
             "fix-bug SKILL.md must carry the canonical regex narrowed ONLY in "
-            "the role group (role=(review))")
+            "the role group (role=(review|implementation) since the #762 "
+            "build-seat adoption)")
 
 
 # --- #331: dead-return detection at WF2's reviewer dispatch sites (Step 8a item 7 ---
