@@ -36,6 +36,30 @@ EXP_MIX = {
 }
 
 
+def _assistant_usage_row(*, input_tokens=2, cache_creation_input_tokens=0,
+                         cache_read_input_tokens=0, output_tokens=1,
+                         model="claude-opus-4-8", message_id=None,
+                         request_id=None, uuid=None):
+    row = {"type": "assistant", "message": {
+        "model": model,
+        "usage": {"input_tokens": input_tokens,
+                  "cache_creation_input_tokens": cache_creation_input_tokens,
+                  "cache_read_input_tokens": cache_read_input_tokens,
+                  "output_tokens": output_tokens},
+    }}
+    if message_id is not None:
+        row["message"]["id"] = message_id
+    if request_id is not None:
+        row["requestId"] = request_id
+    if uuid is not None:
+        row["uuid"] = uuid
+    return row
+
+
+def _write_rows(path, rows):
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+
 # --- parse_session_jsonl: known values (AC5c) ---
 
 def test_parse_known_token_totals():
@@ -51,6 +75,111 @@ def test_parse_model_mix_excludes_synthetic():
     # synthetic's 999s must not leak into the totals either
     assert u["input_tokens"] == EXP_INPUT
     assert u["output_tokens"] == EXP_OUTPUT
+
+
+def test_parse_deduplicates_content_blocks_of_one_assistant_message(tmp_path):
+    """Claude Code repeats one message's cumulative usage for each content block."""
+    p = tmp_path / "content-blocks.jsonl"
+    usage = {"input_tokens": 2, "cache_creation_input_tokens": 50,
+             "cache_read_input_tokens": 100, "output_tokens": 209}
+    rows = [
+        {"type": "assistant", "uuid": "6837462c", "requestId": "req_011CdbnYmrfgY3dcqZe7gop6",
+         "message": {"id": "msg_011CdbnYo4qjdtyRqxHFJ1Xe", "model": "claude-opus-4-8",
+                     "content": [{"type": "text", "text": "Working."}], "usage": usage}},
+        {"type": "assistant", "uuid": "77eb445c", "requestId": "req_011CdbnYmrfgY3dcqZe7gop6",
+         "message": {"id": "msg_011CdbnYo4qjdtyRqxHFJ1Xe", "model": "claude-opus-4-8",
+                     "content": [{"type": "tool_use", "id": "tool-1", "name": "Read", "input": {}}],
+                     "usage": usage}},
+        {"type": "assistant", "uuid": "a8bb9d77", "requestId": "req_011CdbnYmrfgY3dcqZe7gop6",
+         "message": {"id": "msg_011CdbnYo4qjdtyRqxHFJ1Xe", "model": "claude-opus-4-8",
+                     "content": [{"type": "tool_use", "id": "tool-2", "name": "Write", "input": {}}],
+                     "usage": usage}},
+    ]
+    p.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    assert uc.parse_session_jsonl(p)["output_tokens"] == 209
+
+
+def test_parse_rows_without_identity_are_each_counted(tmp_path):
+    p = tmp_path / "no-identity.jsonl"
+    _write_rows(p, [_assistant_usage_row(output_tokens=10),
+                    _assistant_usage_row(output_tokens=10)])
+
+    u = uc.parse_session_jsonl(p)
+    assert u["input_tokens"] == 4
+    assert u["output_tokens"] == 20
+
+
+def test_parse_uses_request_id_when_message_id_is_absent(tmp_path):
+    p = tmp_path / "request-id.jsonl"
+    _write_rows(p, [_assistant_usage_row(request_id="request-1", output_tokens=10),
+                    _assistant_usage_row(request_id="request-1", output_tokens=10)])
+
+    u = uc.parse_session_jsonl(p)
+    assert u["input_tokens"] == 2
+    assert u["output_tokens"] == 10
+
+
+def test_parse_uses_uuid_when_message_and_request_ids_are_absent(tmp_path):
+    p = tmp_path / "uuid.jsonl"
+    _write_rows(p, [_assistant_usage_row(uuid="row-1", output_tokens=10),
+                    _assistant_usage_row(uuid="row-1", output_tokens=10)])
+
+    u = uc.parse_session_jsonl(p)
+    assert u["input_tokens"] == 2
+    assert u["output_tokens"] == 10
+
+
+def test_parse_distinct_message_ids_sum_even_with_same_request_id(tmp_path):
+    p = tmp_path / "distinct-messages.jsonl"
+    _write_rows(p, [_assistant_usage_row(message_id="message-1", request_id="request-1",
+                                         output_tokens=10),
+                    _assistant_usage_row(message_id="message-2", request_id="request-1",
+                                         output_tokens=20)])
+
+    u = uc.parse_session_jsonl(p)
+    assert u["input_tokens"] == 4
+    assert u["output_tokens"] == 30
+
+
+def test_parse_model_mix_and_cost_use_deduplicated_rows(tmp_path):
+    p = tmp_path / "deduplicated-cost.jsonl"
+    row = _assistant_usage_row(message_id="message-1", input_tokens=100,
+                               cache_creation_input_tokens=50,
+                               cache_read_input_tokens=25, output_tokens=20)
+    _write_rows(p, [row, row])
+
+    u = uc.parse_session_jsonl(p)
+    assert u["model_mix"] == {"claude-opus-4-8": {
+        "input_tokens": 175, "output_tokens": 20}}
+    rates = uc.RATE_CARD["claude-opus-4-8"]
+    expected_cost = (100 * rates["input"] + 50 * rates["cache_write"]
+                     + 25 * rates["cache_read"] + 20 * rates["output"]) / 1_000_000
+    assert u["cost_estimate_usd"] == round(expected_cost, 6)
+
+
+def test_parse_divergent_duplicate_keeps_first_and_warns(tmp_path, capsys):
+    p = tmp_path / "divergent.jsonl"
+    _write_rows(p, [_assistant_usage_row(message_id="message-1", input_tokens=2,
+                                         output_tokens=10),
+                    _assistant_usage_row(message_id="message-1", input_tokens=3,
+                                         output_tokens=20)])
+
+    u = uc.parse_session_jsonl(p)
+    assert u["input_tokens"] == 2
+    assert u["output_tokens"] == 10
+    assert "message.id 'message-1' has divergent usage" in capsys.readouterr().err
+
+
+def test_parse_deduplication_preserves_no_usage_data_non_vacuity(tmp_path):
+    p = tmp_path / "duplicate-zero-usage.jsonl"
+    _write_rows(p, [_assistant_usage_row(message_id="message-1", input_tokens=0,
+                                         output_tokens=0),
+                    _assistant_usage_row(message_id="message-1", input_tokens=0,
+                                         output_tokens=0)])
+
+    with pytest.raises(uc.NoUsageData):
+        uc.parse_session_jsonl(p)
 
 
 # --- non-vacuity: a real run must produce NON-null, NON-zero tokens (AC5a) ---
