@@ -487,7 +487,7 @@ def _run(tmp_path, *, breaker="clear", design=2, total=2, spec_tighten=0):
                                      spec_tighten=spec_tighten)),
          "--breaker-result", breaker,
          "--ledger", str(ledger), "--record-out", str(rec), "--note-out", str(note),
-         "--date", "2026-08-01"],
+         "--date", "2026-08-01", "--project-root", str(tmp_path)],
         capture_output=True, text=True)
     return proc, ledger, rec, note
 
@@ -538,3 +538,165 @@ class TestCloseDesignGateCLI:
         proc2, *_ = _run(tmp_path)
         assert proc2.returncode == 0
         assert "PRIOR ENTRY" in note.read_text()
+
+
+# --- #798 Step-11 review fixes ------------------------------------------------
+# Seven High findings from two independent reviewers on the pre-PR diff. Each test
+# below reproduces one defect that the first implementation shipped.
+
+class TestCloseDesignGateHardening:
+    def test_corrupt_counter_refuses_close(self, tmp_path):
+        # R1-H1: _read_loopback_state resets a corrupt source to 0 BEFORE recomputing
+        # total, so {design:2, tdd:"corrupt", total:3} became design=2,total=2 and the
+        # close was approved — defeating the stated fail-closed contract.
+        ledger = tmp_path / "d.jsonl"
+        c = tmp_path / "counters.json"
+        # R1's exact example: with no other source consumed, the reset makes total
+        # recompute to 2, so the GLOBAL guard does not catch it — only a corruption
+        # check can.
+        c.write_text(json.dumps({"design": 2, "tdd": "corrupt", "review": 0,
+                                 "review_design": 0, "spec_tighten": 0, "total": 3}))
+        proc = subprocess.run(
+            [sys.executable, CLI, "close-design-gate", "--issue", "798", "--gate", "4",
+             "--findings-file", str(_findings_file(tmp_path)), "--counters", str(c),
+             "--breaker-result", "clear", "--ledger", str(ledger),
+             "--record-out", str(tmp_path / "e.json"),
+             "--note-out", str(tmp_path / "n.md"), "--date", "2026-08-01"],
+            capture_output=True, text=True)
+        assert proc.returncode != 0, "a corrupt counter must fail closed"
+        assert not ledger.exists()
+
+    def test_non_step4_gate_is_rejected(self, tmp_path):
+        # R1-H3 / R2-H2: --gate 11 wrote adopted gate-11 entries and a
+        # "WF2 Step 11 — design gate CLOSED" marker, escaping the narrow Step-4 policy.
+        ledger = tmp_path / "d.jsonl"
+        proc = subprocess.run(
+            [sys.executable, CLI, "close-design-gate", "--issue", "798", "--gate", "11",
+             "--findings-file", str(_findings_file(tmp_path)),
+             "--counters", str(_counters(tmp_path)), "--breaker-result", "clear",
+             "--ledger", str(ledger), "--record-out", str(tmp_path / "e.json"),
+             "--note-out", str(tmp_path / "n.md"), "--date", "2026-08-01"],
+            capture_output=True, text=True)
+        assert proc.returncode != 0
+        assert not ledger.exists()
+
+    def test_ambiguous_finding_refuses_even_when_breaker_says_clear(self, tmp_path):
+        # R2-H2: the adapter trusted --breaker-result. A caller passing `clear` with an
+        # ambiguous finding in the file closed successfully.
+        ledger = tmp_path / "d.jsonl"
+        ff = tmp_path / "f.json"
+        ff.write_text(json.dumps([{"severity": "High", "category": "correctness",
+                                   "description": "a flaw", "location": "d.md:1",
+                                   "ambiguity_flag": "ambiguous"}]))
+        proc = subprocess.run(
+            [sys.executable, CLI, "close-design-gate", "--issue", "798", "--gate", "4",
+             "--findings-file", str(ff), "--counters", str(_counters(tmp_path)),
+             "--breaker-result", "clear", "--ledger", str(ledger),
+             "--record-out", str(tmp_path / "e.json"),
+             "--note-out", str(tmp_path / "n.md"), "--date", "2026-08-01"],
+            capture_output=True, text=True)
+        assert proc.returncode != 0, "an ambiguous finding must never ride a 'clear' close"
+        assert not ledger.exists()
+
+    def test_paths_outside_the_project_root_are_refused(self, tmp_path):
+        # R2-H4: --ledger/--record-out/--note-out accepted arbitrary absolute paths,
+        # making an ordinary-looking command an arbitrary-write gadget.
+        outside = tmp_path / "outside.jsonl"
+        proc = subprocess.run(
+            [sys.executable, CLI, "close-design-gate", "--issue", "798", "--gate", "4",
+             "--findings-file", str(_findings_file(tmp_path)),
+             "--counters", str(_counters(tmp_path)), "--breaker-result", "clear",
+             "--ledger", str(outside), "--record-out", str(tmp_path / "e.json"),
+             "--note-out", str(tmp_path / "n.md"), "--date", "2026-08-01"],
+            capture_output=True, text=True)
+        assert proc.returncode != 0, "a write target outside the project root must be refused"
+        assert not outside.exists()
+
+    def test_ledger_write_failure_rolls_back(self, tmp_path, monkeypatch):
+        # R1-H2: a failure on entry 2 of 3 left entry 1 behind. Nothing may survive.
+        mod = _reload_plan_lib()
+        ledger = tmp_path / "d.jsonl"
+        findings = [_finding("one"), _finding("two"), _finding("three")]
+        res = mod.budget_exhausted_close(
+            issue=798, gate="4", passes=3, findings=findings,
+            ledger_path=str(ledger), date="2026-08-01",
+            token_factory=_tokens("aa11", "bb22", "cc33"))
+        calls = {"n": 0}
+        real = mod.append_disposition
+
+        def flaky(path, entry):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("disk full")
+            return real(path, entry)
+
+        monkeypatch.setattr(mod, "append_disposition", flaky)
+        with __import__("pytest").raises(OSError):
+            mod.persist_close(res, ledger_path=str(ledger))
+        assert not ledger.exists() or ledger.read_text() == "", \
+            "a partial ledger must be rolled back, not left behind"
+
+
+class TestCloseIsVisibleInTheRenderedRunRecord:
+    """R2-H3: the adapter can succeed while the RENDERED run record still reads as a
+    clean pass. Unit tests on the extra object never invoked the renderer, so the one
+    thing AC2 actually promises — that a human can tell the two apart — went unproven."""
+
+    def _record(self, extra=None):
+        rec = {
+            "schema_version": 1, "workflow": "implement-feature", "issue": 798,
+            "title": "t", "complexity": "standard", "branch": "b", "pr": None,
+            "gates": [{"step": "4", "name": "Design Critique", "findings": 7,
+                       "resolved": 7, "status": "pass"}],
+        }
+        if extra is not None:
+            rec["extra"] = [extra]
+        return rec
+
+    def _render(self, rec):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "work_summary", str(HOOKS_DIR / "work_summary.py"))
+        ws = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ws)
+        return ws.render_summary(rec)
+
+    def test_rendered_clean_and_exhausted_closes_differ(self):
+        mod = _reload_plan_lib()
+        res = mod.budget_exhausted_close(
+            issue=798, gate="4", passes=3, findings=[_finding()],
+            ledger_path="claude_docs/.wf2-state/798/dispositions.jsonl",
+            date="2026-08-01", token_factory=_tokens("aa11"))
+        clean = self._render(self._record())
+        exhausted = self._render(self._record(res.run_record_extra))
+        assert clean != exhausted, "the two closes must not render identically"
+        assert "design_gate_close" in exhausted
+        assert "passes=3" in exhausted
+        assert "design_gate_close" not in clean
+
+    def test_extra_on_the_gate_row_would_render_nothing(self):
+        # The trap this guards: a gate-row key validates silently and disappears.
+        gate_row_rec = self._record()
+        gate_row_rec["gates"][0]["extra"] = {"label": "design_gate_close",
+                                             "value": "budget_exhausted passes=3"}
+        assert "design_gate_close" not in self._render(gate_row_rec), (
+            "if this ever starts rendering, the top-level requirement can be relaxed")
+
+    def test_empty_findings_file_refuses_at_the_cli(self, tmp_path):
+        # adv-diff High: a budget-exhausted close happens BECAUSE findings kept coming,
+        # so an empty list is far likelier to be a collection/serialization bug than a
+        # genuine zero-finding close. The pure helper still permits it (callers may have
+        # legitimately adopted everything earlier); the executable boundary refuses.
+        ledger = tmp_path / "d.jsonl"
+        ff = tmp_path / "f.json"
+        ff.write_text("[]")
+        proc = subprocess.run(
+            [sys.executable, CLI, "close-design-gate", "--issue", "798", "--gate", "4",
+             "--findings-file", str(ff), "--counters", str(_counters(tmp_path)),
+             "--breaker-result", "clear", "--ledger", str(ledger),
+             "--record-out", str(tmp_path / "e.json"),
+             "--note-out", str(tmp_path / "n.md"), "--date", "2026-08-01",
+             "--project-root", str(tmp_path)],
+            capture_output=True, text=True)
+        assert proc.returncode != 0, "an empty findings file must not read as a clean close"
+        assert not ledger.exists()
