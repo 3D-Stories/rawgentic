@@ -4565,3 +4565,81 @@ def test_landing_identity_fields_mirror_enforce():
     # mirrored constants get drift guards (repo convention): the hooks-side writer dedup and
     # the enforce-side reconcile conflict detection must key on the SAME immutable identity.
     assert er._LANDING_IDENTITY_FIELDS == enforce.LANDING_IDENTITY_FIELDS
+
+
+# --- #826: a review seat cannot be dispatched with nothing attached -----------------------------
+# The defect: a Step-4/8a/11 review brief that says "review the attached design" dispatched with an
+# EMPTY context is a quality gate that passes while reviewing nothing. Measured at 3a017dd9 over
+# this repo's own run tree: 167 review-seat observations, 117 with empty context_hashes, 10 of
+# those carrying an attachment-referencing prompt. Guard mirrors the build seat's
+# gate_file_required/plan_context_required precedent — refuse pre-receipt, EXIT_MALFORMED.
+_RC_REFERENCING = [
+    "Review the attached design. Report findings only.",
+    "Review the design document supplied as CONTEXT below (the full markdown).",
+    "# Step 8a review\n\nReview the attached diff for silent failures.",
+    "Judge the diff below against the plan.",
+    "The design is supplied as context below (the full markdown of the design doc).",
+]
+_RC_SELF_CONTAINED = [
+    "hi",
+    "# WF2 Step 11 review\n\nHere is the complete diff, inlined:\n\n```\n--- a/x\n+++ b/x\n```\n",
+    "Assess whether the plan's tasks each carry a riskLevel. Plan text follows inline.",
+]
+
+
+def _rc_dispatch(tmp_path, *, seat="review", prompt, context=(), **kw):
+    """dispatch_seat with a caller-chosen prompt + context (the module's _dispatch pins both)."""
+    qc = QuotaCoordinator(tmp_path / "permits", {"claude": 2, "codex": 4, "zhipu": 2})
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    res = er.dispatch_seat(
+        seat=seat, prompt=prompt, run_id="run1", correlation_id=kw.pop("cid", "wf2:step4"),
+        # the review seat's cross-model invariant needs a non-author provider (see :302) —
+        # an anthropic reviewer over openai-authored work
+        author_provider=kw.pop("author_provider", "openai"), effort=None, timeout=5.0,
+        context=tuple(context),
+        snapshot=_snapshot(), quota=qc, audit=audit, capture_root=str(tmp_path / "runs"),
+        routing=routing, enforce=enforce, run_seat=run_seat,
+        dispatch_real=kw.pop("dispatch_real", _stub()),
+    )
+    return res, audit
+
+
+@pytest.mark.parametrize("prompt", _RC_REFERENCING)
+def test_prompt_references_attachment_true(prompt):
+    assert er.prompt_references_attachment(prompt) is True
+
+
+@pytest.mark.parametrize("prompt", _RC_SELF_CONTAINED)
+def test_prompt_references_attachment_false(prompt):
+    assert er.prompt_references_attachment(prompt) is False
+
+
+def test_prompt_references_attachment_handles_non_str():
+    # fail-closed on a malformed prompt would refuse every dispatch; the predicate answers the
+    # narrow question only, and a non-str simply does not reference an attachment.
+    assert er.prompt_references_attachment(None) is False
+
+
+def test_review_attachment_prompt_without_context_exit2_no_receipt(tmp_path):
+    res, audit = _rc_dispatch(tmp_path, prompt="Review the attached design. Report findings only.")
+    assert res["ok"] is False and res["exit"] == er.EXIT_MALFORMED
+    assert res["error"]["code"] == "review_context_required"
+    assert audit.records() == []  # refused pre-check_pre: no receipt minted, no process spawned
+
+
+def test_review_attachment_prompt_with_context_proceeds(tmp_path):
+    res, _ = _rc_dispatch(tmp_path, prompt="Review the attached design.",
+                          context=("# Design\n\nthe actual design bytes\n",))
+    assert res["ok"] is True, res
+
+
+def test_review_self_contained_prompt_without_context_proceeds(tmp_path):
+    # the 107 legitimate contextless review dispatches must not regress
+    res, _ = _rc_dispatch(tmp_path, prompt=_RC_SELF_CONTAINED[1])
+    assert res["ok"] is True, res
+
+
+def test_non_review_seat_attachment_prompt_without_context_unaffected(tmp_path):
+    # scoped to the seat that has the defect; a plan-seat brief is untouched
+    res, _ = _rc_dispatch(tmp_path, seat="plan", prompt="Review the attached design.")
+    assert res["ok"] is True, res

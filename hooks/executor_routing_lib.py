@@ -214,6 +214,32 @@ def classify_seat(seat: str) -> str:
     raise MalformedConfig(f"unknown seat {seat!r} (wired: {sorted(WIRED_SEATS)}; driver-only: {sorted(DRIVER_ONLY)})")
 
 
+# #826: phrasings by which a review brief tells the model to read material the DISPATCH must
+# attach. Derived from this repo's own run tree, not invented: of 167 recorded review-seat
+# observations at 3a017dd9, 117 carried an empty `context_hashes` and 10 of those carried one of
+# these phrasings — a review of nothing that still returns a verdict the gate reads as a pass.
+# Deliberately a small closed list of observed phrasings rather than a broad "does this prompt
+# expect input" heuristic: a false positive REFUSES a real dispatch, so over-matching costs more
+# than the residual false negatives (which leave today's behavior unchanged).
+_ATTACHMENT_REFERENCE_RE: Final = re.compile(
+    r"\battached\b|supplied as context|as context below|context below"
+    r"|the diff below|diff supplied|below \(the full",
+    re.IGNORECASE)
+
+
+def prompt_references_attachment(prompt) -> bool:
+    """True when ``prompt`` instructs the model to read attached/appended material (#826).
+
+    Answers only that narrow question — it does NOT decide whether a dispatch is legitimate; the
+    caller pairs it with an emptiness test on the context. A non-str prompt is False: this
+    predicate is not the place to fail closed (doing so would refuse every malformed-prompt
+    dispatch on an unrelated ground), and the callers' own trust-boundary reads already reject one.
+    """
+    if not isinstance(prompt, str):
+        return False
+    return _ATTACHMENT_REFERENCE_RE.search(prompt) is not None
+
+
 _WS_ABSENT: Final[object] = object()  # sentinel: workspace file genuinely absent (#474)
 
 
@@ -802,6 +828,17 @@ def dispatch_seat(
     except routing.RoutingError as e:
         return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
                     correlation_id=correlation_id, audit_path=str(audit.path))
+
+    # #826: a review brief that references attached material MUST carry it. Refused here —
+    # pre-receipt, pre-check_pre, mirroring the build seat's gate_file_required below — because a
+    # review dispatched with nothing to review still returns a verdict, and the gate reads that
+    # verdict as a pass. Fail-CLOSED by repo CLAUDE.md §3: this is a correctness boundary, not
+    # convenience routing. Scoped to the review role; other seats are untouched.
+    if role == "review" and not context and prompt_references_attachment(prompt):
+        return _err(EXIT_MALFORMED, "review_context_required",
+                    f"review seat {seat!r} was given a prompt referencing attached material but no "
+                    f"context (--context-file); a review of nothing still returns a verdict",
+                    retryable=False, correlation_id=correlation_id, audit_path=str(audit.path))
 
     # #464 §E: authenticate the build gate ONCE (pre-loop, pre-receipt). Missing evidence is a
     # malformed input (exit 2); a tampered/stale gate is an enforcement denial (exit 4). Either way
