@@ -10,6 +10,14 @@ so, and name the spike that would confirm them.
 **Hosted:** `https://rawgentic-analysis-owner-notes.vercel.app`. The committed `.html` beside
 this file is the source of truth.
 
+**UPDATED 2026-08-01 (second pass).** The owner replied to all 16 answers. Their replies changed
+three of them and settled four decisions. **Read "The owner's replies" section at the bottom
+before acting on any answer above it** — where the two disagree, the reply wins. Corrections that
+matter most: answer 2's route-by-provider recommendation is REJECTED (route by phase); answer 6's
+"codex seats are nearly free" is now FALSE (codex went weekly-only and the pool was exhausted);
+answer 9's rate-card error is worse than filed (every row is wrong, verified against live
+pricing).
+
 ## The headline first
 
 **The owner's top suspicion was right.** The analysis-seat failures were budget-cap kills:
@@ -26,22 +34,22 @@ three models. Answer 8 has the full economics.
 
 | Note | Topic | Verdict | Action |
 |---|---|---|---|
-| 1 | Why build → codex | Containment constraint, not preference | Issue exists (#779 adjacent) |
-| 2 | Orchestrator vs seats | Route by PROVIDER, not by phase | Policy change, folded into plan |
+| 1 | Why build → codex | Containment constraint — and now a single point of failure | #799 (urgent: codex quota gone) |
+| 2 | Orchestrator vs seats | **CORRECTED by owner: route by phase fit, not by provider** | Recommendation withdrawn |
 | 3 | New session, warm cache | Possible in principle, defeated in practice | New issue D (spike S3) |
 | 4 | Why not Opus-reviews-Fable | Rule is cross-VENDOR; relaxation proposed | Owner decision 2 |
 | 5 | Where the +71% went | Five measured mechanisms | Levers listed; #777 + issue F |
-| 6 | Why cache writes/reads so heavy | Fresh session per dispatch | New issue D |
-| 7 | 5-hour-window guard at 90% | Buildable today, two mechanisms confirmed | New issue B (spike S1) |
-| 8 | Why analysis caps exist | Runaway-spend brake; kill semantics are the bug | #778 (owner-deferred) |
-| 9 | Is the analysis trustworthy | Partly — token counts yes, dollars NO | New issue A (rate card) |
-| 10 | Per-dispatch telemetry | Already recorded; aggregation missing | #777 — owner decision 1 |
-| 11 | Executor in herdr panes | Build seat already does; rest headless | New issue E |
-| 12 | Are 35/50 the right thresholds | Do not retune blind; fix re-read cost first | Sequenced in plan |
-| 13 | Fable vs Opus orchestrator burn | Volume, not price | Driver-bench A/B (spike S6) |
-| 14 | Prose we could script | Eight candidates ranked | New issue F |
-| 15 | Diff review cost | Real, measured, five research-backed fixes | New issue C (spike S5) |
-| 16 | Does the epic already cover this | Partly — map below | Issues A–F fill the gaps |
+| 6 | Why cache writes/reads so heavy | Fresh session per dispatch | #794 — now an architecture gate |
+| 7 | 5-hour-window guard at 90% | Endpoint CONFIRMED working (S1 done) | #792 — widened to codex weekly |
+| 8 | Why analysis caps exist | Runaway brake, but only **11 days old** — kill semantics are the bug | #778 (tokens, not dollars) |
+| 9 | Is the analysis trustworthy | Token counts yes, dollars NO — **every card row wrong** | #791 (S2 done) |
+| 10 | Per-dispatch telemetry | Already recorded; aggregation missing | #777 joined to the epic |
+| 11 | Executor in herdr panes | Panes DID spawn — transient splits that self-close | #795 |
+| 12 | Are 35/50 the right thresholds | Owner set **55/75** | #797 |
+| 13 | Fable vs Opus orchestrator burn | Volume, not price — but Opus is also 2x cheaper | Decided on price; A/B not run |
+| 14 | Prose we could script | Eight candidates ranked | #796 — owner: "script what we can" |
+| 15 | Diff review cost | Five research-backed fixes | #793 — owner: "do all that!" |
+| 16 | Does the epic already cover this | Partly — map below | Nine issues now fill the gaps |
 
 ## The 16 answers
 
@@ -311,3 +319,109 @@ resume. What changes at resume:
 4. **Sequencing principle from answer 12:** cheap structural fixes (rate card, rolling log
    summary, pin-guard derivation) land before any threshold retuning or model A/B, so the
    expensive experiments measure a system that isn't bleeding from known holes.
+
+## The owner's replies (2026-08-01, second pass)
+
+The owner read all 16 answers and replied to each. Their replies are authoritative: where a reply
+contradicts an answer above, the reply wins and the answer is marked corrected here.
+
+### Four decisions, settled
+
+| Decision | Owner's call | Status |
+|---|---|---|
+| Join #777 into epic #756 | **Yes, join early** | DONE — queued ahead of #766 in the epic body |
+| Review pairing invariant | **Amend to reviewer ≠ author** (cross-model, not cross-vendor) | DONE — workspace manual updated, D3 superseded |
+| Codify the Step-4 budget-exhausted close | **Codify permanently** | Filed as #798 |
+| Merge the findings PR | **Merge it** | DONE — squash 727cf81, v3.113.1 |
+
+### Three answers CORRECTED by the owner
+
+**Answer 2 is REJECTED.** The recommendation was to route by provider economics. The owner:
+"i dont want to route by providers, i want to route by what is best for each phase." The
+recommendation is withdrawn. Phase fit is the routing criterion; quota pressure is handled by a
+guard (#792), not by bending the routing philosophy around it.
+
+**Answer 6's premise is now FALSE.** "Seats on the codex pool are nearly free with respect to the
+Claude window" was true when written and is not true now. The owner: codex moved from a 5-hour
+plus weekly limit to **weekly only**, and "it did today and used one of my free resets." Codex is
+a scarce pool with its own budget. Consequence: #792 must guard the codex weekly pool and the
+Claude 7-day window, not just the Claude 5-hour window; and the single-build-engine exposure
+(answer 1) became urgent enough to file separately as #799.
+
+**Answer 9 understated the damage.** Spike S2 verified live pricing at platform.claude.com on
+2026-08-01: **every row of the rate card is wrong**, not the three originally named. Fable 5 is
+$10/$50 (card said $3/$15); Opus 5, 4.8 and 4.7 are $5/$25 (card said $15/$75 — deprecated
+Opus-4.1 pricing); Sonnet 5 is $2/$10 on introductory pricing through 2026-08-31 (card said
+$3/$15); Haiku 4.5 is $1/$5 (card said $0.80/$4). Live pricing also has TWO cache-write tiers
+(5-minute at 1.25x, 1-hour at 2x) where the card models one. Two further traps for any comparison:
+the Sonnet introductory rate expires 2026-08-31, and Claude 4.7-and-later models use a newer
+tokenizer producing roughly 30 percent more tokens for the same text, so raw token counts are not
+comparable across model generations.
+
+### Two questions answered with evidence
+
+**"When did the caps get put in?" (note 8).** The owner's memory was right: they are recent. Per-call
+caps arrived in commit `92fbb0d` on **2026-07-21** (`feat(executor): genuine quota detection +
+per-call caps + classifier persistence (H5)`, #558/#567). The routing table itself predates them
+by three days (`d8d6ae5`, #424/#432, 2026-07-18) and shipped without per-call budgets. So the caps
+are **11 days old**, against months of running without them. The runaway they defend against has no
+recorded instance in this repo's history; the failure they caused is measured. The owner's cost
+comparison — "8/10 analysis phases failing is worse than 1/100 analysis sessions running away" —
+stands on the evidence. Recorded on #778, which also carries the owner's requirement that any
+surviving cap be **token-denominated, never dollar-denominated**.
+
+**"I have never seen a pane spawn" (note 11).** They did spawn; they were invisible. Three
+confirmations: `capabilities_lib.derive_capabilities()` returns `executor_terminal_backend = herdr`
+for this project; `hooks/executor_routing_lib.py:485` routes the build seat to it; and
+`.rawgentic/runtime/registry/jobs.json` carries `"terminal_backend": "herdr"` on four #762 build
+jobs. The reason nobody saw them: `HerdrBackend.new_session` uses `pane split --current`, which
+splits the **calling process's own pane** and inherits its tab, then `_close_and_verify` closes the
+pane when the dispatch finishes. Some dispatches ran 18 seconds. A short-lived split in a tab you
+are not watching, that tidies itself away, looks exactly like nothing happening. #795 therefore
+needs durable pane labels and keep-open-on-completion, not just wider seat coverage.
+
+### Answer 3 is now an architecture decision gate
+
+The owner: "if we cant get cache working, we may need to abandon executor path and go back to
+orchastrator with sub-agents." Spike S3 is promoted to the first acceptance criterion of #794 and
+runs before any implementation. If the cache miss turns out to be caused by volatility inside
+Claude Code rather than by our own prompt bytes, that is the trigger to cost the
+orchestrator-with-subagents path honestly and put the architecture choice to the owner — not to
+keep optimizing around it. The negative result gets reported, not buried.
+
+### Note 13 resolved in practice
+
+The owner: "fable is hard to justify as the limits are soooo much lower," and they switched the
+orchestrator to Opus 5 mid-session. The pricing confirms the instinct: Opus 5 at $5/$25 is half
+Fable's $10/$50 per token with the same 1M context window. The A/B (spike S6) would need
+`driver-bench`, which already shipped (#430, closed) — so if the data is ever wanted it is a run
+of existing machinery, not new construction. Not worth running to re-derive a decision already
+made on price.
+
+## Spike status (owner asked how these get tackled)
+
+| Spike | Status | Where it lives now |
+|---|---|---|
+| S1 — OAuth usage endpoint | **DONE 2026-08-01** — works; `five_hour` 19.0, `seven_day` 66.0, dollar fields null so the guard must key on `utilization` | Result posted to #792 |
+| S2 — live pricing | **DONE 2026-08-01** — every card row wrong | Result posted to #791 |
+| S3 — cache reuse on identical briefs | Promoted to **AC1 of #794**, runs first | #794 |
+| S4 — read the failed analysis receipts | **DONE** (previous session) | Answer 8 above |
+| S5 — strip generated files from the #762 patch | **AC1 of #793**, sizes the rest | #793 |
+| S6 — Fable vs Opus orchestrator A/B | Not scheduled — decision made on price; `driver-bench` exists if data is ever wanted | #430 (closed, shipped) |
+
+No spike is homeless: the two cheap ones are done, two are the first acceptance criterion of their
+issue, and one is deliberately not being run with the reason stated.
+
+## Issues filed from this review
+
+| Issue | Scope |
+|---|---|
+| #791 | Rate-card fix (every row) |
+| #792 | Quota guard — Claude 5-hour and 7-day, plus the codex weekly pool |
+| #793 | Adversarial-diff economics |
+| #794 | Seat cache-reuse — and the executor-vs-subagents decision gate |
+| #795 | Herdr pane visibility, durable labels, keep-open |
+| #796 | Prose-to-script batch (eight verbs) |
+| #797 | Context-meter thresholds to 55/75, rolling log summary, reload-vs-fill measured |
+| #798 | Codify the Step-4 budget-exhausted close |
+| #799 | Unblock Claude-lane mutating builds |
