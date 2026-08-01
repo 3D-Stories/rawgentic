@@ -1072,3 +1072,89 @@ class TestStepElevenRegressions:
                       strict_goal_binding=True)
         with pytest.raises(ll.LauncherError):
             ll.perform_handoff(**kw)
+
+
+# ---------------------------------------------------------------------------
+# #730 — --predecessor-goal-condition-file: the missing twin of a pair the
+# surface already establishes twice (--goal-condition, --resume-prompt).
+# ---------------------------------------------------------------------------
+
+PRED_CONDITION = "the predecessor's own armed guard"
+# A real goal condition routinely carries backticks and $(...) — the exact hazard the repo answers
+# with `git commit -F <file>` (CLAUDE.md §2). If the file path did not exist, this text could only
+# be passed inline, working against that rule.
+SHELL_HOSTILE = "guard: run `pytest tests/ -q` and $(git rev-parse HEAD) must match\nsecond line\n"
+
+
+def _seen_handoff(monkeypatch):
+    """Capture perform_handoff's kwargs without launching anything."""
+    seen: dict = {}
+
+    def fake(**kw):
+        seen.update(kw)
+        return {"ok": True, "results": {}, "steps": [], "new_pane": "w1:pZZ",
+                "session_id": "s", "cleanup": None, "truncated": False,
+                "failed_step": None, "teardown_skipped": None, "predecessor_guard": None}
+
+    monkeypatch.setattr(ll, "perform_handoff", fake)
+    return seen
+
+
+class TestPredecessorGoalConditionFile:
+    def test_the_flag_exists_on_the_surface(self) -> None:
+        """AC1: the pair is visible in --help, so the next caller sees it without a round-trip."""
+        proc = _cli("ad-hoc-handoff", "--help")
+        assert proc.returncode == 0, proc.stderr
+        assert "--predecessor-goal-condition-file" in proc.stdout
+
+    def test_file_form_behaves_identically_to_inline(self, tmp_path, monkeypatch) -> None:
+        """AC1: same value reaches perform_handoff whichever form supplied it."""
+        seen = _seen_handoff(monkeypatch)
+        assert ll.main(_argv(tmp_path, **{
+            "--predecessor-goal-condition": PRED_CONDITION})) == 0
+        inline_value = seen["predecessor_goal_condition"]
+
+        path = tmp_path / "pred.txt"
+        path.write_text(PRED_CONDITION, encoding="utf-8")
+        seen2 = _seen_handoff(monkeypatch)
+        assert ll.main(_argv(tmp_path, **{
+            "--predecessor-goal-condition-file": str(path)})) == 0
+        assert seen2["predecessor_goal_condition"] == inline_value == PRED_CONDITION
+
+    def test_both_forms_together_are_refused(self, tmp_path) -> None:
+        """AC2: same treatment as the --goal-condition pair — argparse refuses, exit 2."""
+        path = tmp_path / "pred.txt"
+        path.write_text(PRED_CONDITION, encoding="utf-8")
+        proc = _cli(*_argv(tmp_path, **{"--predecessor-goal-condition": PRED_CONDITION,
+                                        "--predecessor-goal-condition-file": str(path)}))
+        assert proc.returncode == 2, proc.stdout
+        assert "not allowed with" in proc.stderr, proc.stderr
+
+    def test_missing_file_names_the_path_and_never_yields_an_empty_condition(
+            self, tmp_path) -> None:
+        """AC3: a silent empty condition would hand the successor an empty goal."""
+        missing = tmp_path / "nope.txt"
+        proc = _cli(*_argv(tmp_path, **{"--predecessor-goal-condition-file": str(missing)}))
+        assert proc.returncode != 0
+        assert str(missing) in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+
+    def test_shell_hostile_condition_survives_the_round_trip_verbatim(
+            self, tmp_path, monkeypatch) -> None:
+        """AC5: backticks and $(...) are exactly why the file form has to exist."""
+        path = tmp_path / "pred.txt"
+        path.write_text(SHELL_HOSTILE, encoding="utf-8")
+        seen = _seen_handoff(monkeypatch)
+        assert ll.main(_argv(tmp_path, **{
+            "--predecessor-goal-condition-file": str(path)})) == 0
+        assert seen["predecessor_goal_condition"] == SHELL_HOSTILE
+
+    def test_absent_on_both_forms_stays_none(self, tmp_path, monkeypatch) -> None:
+        """The flag is optional: supplying neither must not become an empty string."""
+        seen = _seen_handoff(monkeypatch)
+        assert ll.main(_argv(tmp_path)) == 0
+        assert seen["predecessor_goal_condition"] is None
+
+    def test_skill_documents_the_file_form(self) -> None:
+        """AC6: the skill shows the pair where it documents the inline one."""
+        text = (REPO_ROOT / "skills" / "pane-handoff" / "SKILL.md").read_text(encoding="utf-8")
+        assert "--predecessor-goal-condition-file" in text

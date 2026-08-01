@@ -3219,6 +3219,21 @@ def _read_text_arg(inline: str | None, path: str | None, what: str) -> str:
         raise LauncherError(f"cannot read the {what} from {path!r}: {exc}") from exc
 
 
+def _read_optional_text_arg(inline: str | None, path: str | None, what: str) -> str | None:
+    """`_read_text_arg` for an input that may legitimately be absent entirely (#730).
+
+    The goal/prompt pairs are `required=True`, so exactly one of their two forms is always present.
+    The predecessor condition is optional — it is only meaningful when tearing down — so the
+    both-absent case must return None rather than reaching `open(None)`. Delegates to
+    `_read_text_arg` so there is ONE file reader, and so an unreadable path still fails loudly
+    naming the path instead of yielding an empty condition (which would hand the successor an
+    empty goal).
+    """
+    if inline is None and path is None:
+        return None
+    return _read_text_arg(inline, path, what)
+
+
 def _cmd_ad_hoc_handoff(args) -> int:
     """#700 — the ad-hoc handoff: `perform_handoff` with no campaign behind it.
 
@@ -3350,7 +3365,9 @@ def _cmd_ad_hoc_handoff(args) -> int:
         # CONFIRMED before the pane is closed. `own` is this session's own id, already required
         # above for the ownership proof.
         predecessor_session=(own if teardown else None),
-        predecessor_goal_condition=args.predecessor_goal_condition,
+        predecessor_goal_condition=_read_optional_text_arg(
+            args.predecessor_goal_condition, args.predecessor_goal_condition_file,
+            "predecessor goal condition"),
         strict_goal_binding=strict_binding,
         **({"expected_predecessor_goal": expected_goal} if strict_binding else {}))
     payload = {k: out[k] for k in
@@ -3666,10 +3683,21 @@ def main(argv: list[str] | None = None) -> int:
                       help="keep the anchor pane alive after a successful handoff. Your /goal stays "
                            "ARMED and the output says so — use this only for an additive handoff "
                            "where you keep working. Named to match the `handoff` subcommand")
-    p_ah.add_argument("--predecessor-goal-condition", default=None,
-                      help="your OWN currently-armed goal condition, used only with "
-                           "the default retirement to bind the clear receipt to the guard actually "
-                           "cleared. Read it with `read-goal-condition --transcript <own>.jsonl`")
+    # #730: the third condition flag was the only one WITHOUT a `-file` twin, while
+    # `--goal-condition` and `--resume-prompt` both have one. The asymmetry was invisible until
+    # argparse rejected the call, and it cost a real hand-off a wasted invocation at the moment it
+    # had the least context to spend. Not `required=True` — unlike the goal/prompt pairs this whole
+    # input is optional (it is only meaningful when tearing down).
+    ah_pred = p_ah.add_mutually_exclusive_group(required=False)
+    ah_pred.add_argument("--predecessor-goal-condition", default=None,
+                         help="your OWN currently-armed goal condition, used only with "
+                              "the default retirement to bind the clear receipt to the guard "
+                              "actually cleared. Read it with `read-goal-condition --transcript "
+                              "<own>.jsonl`")
+    ah_pred.add_argument("--predecessor-goal-condition-file", default=None,
+                         help="the same condition, read verbatim from a file (preferred: a real "
+                              "condition routinely carries backticks and $(...), which the repo "
+                              "answers with a file rather than a command line)")
     # #758 — a caller ASSERTION that the owner explicitly approved a goal text differing from
     # the predecessor's live goal (the verbatim-carry escape hatch). Takes the owner's verbatim
     # yes/no answer, never a bare boolean: the answer is recorded in the output JSON so the
