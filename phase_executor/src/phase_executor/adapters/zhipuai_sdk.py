@@ -19,7 +19,8 @@ from typing import Optional, Union
 
 from .. import contract
 from ..capture import create_capture
-from .base import AdapterRequest, ParsedResult, ProcOutcome, build_observation
+from .base import (AdapterRequest, ParsedResult, ProcOutcome, build_observation,
+                   compose_provider_input)
 
 ENGINE = "zhipuai"
 
@@ -91,10 +92,11 @@ def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, rout
     if mt is not None and (not isinstance(mt, int) or isinstance(mt, bool) or mt < 1):
         raise contract.CompositionError(
             f"zhipuai launch: max_tokens must be an int >= 1 (got {mt!r})")
-    payload = json.dumps({"model": req.requested_model, "prompt": req.prompt,
+    provider_input = compose_provider_input(req.prompt, req.context)  # #829: context must REACH the provider
+    payload = json.dumps({"model": req.requested_model, "prompt": provider_input,
                           "max_tokens": mt if mt is not None else 1024})
     cap = create_capture(capture_root, run_id, req.seat, attempt_id)
-    cap.write_input(req.prompt)
+    cap.write_input(provider_input)
     started = time.monotonic()
     proc = _invoke_worker(payload, req.timeout)
     timing_ms = int((time.monotonic() - started) * 1000)

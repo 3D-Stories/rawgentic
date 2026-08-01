@@ -99,6 +99,33 @@ def run_subprocess(cmd: Sequence[str], stdin: str, timeout: float, *, env: Optio
         return ProcOutcome(returncode=proc.returncode, stdout=out or "", stderr=err or "", timed_out=True)
 
 
+def compose_provider_input(prompt: str, context) -> str:
+    """The EXACT bytes handed to the provider (#829) — the ONE place prompt + attached context
+    are joined, so every adapter delivers the same shape and `recorded == sent`.
+
+    Before #829 each adapter sent ``req.prompt`` alone while ``req.context`` was consumed only by
+    ``capture.hash_context``. A dispatch that attached an artifact therefore produced a non-empty
+    ``context_hashes`` — POSITIVE audit evidence — while the model saw only the brief. That is
+    worse than dropping the flag: the trail asserts a delivery that never happened.
+
+    Items are delimited and numbered rather than bare-concatenated, because an artifact's own text
+    would otherwise read as further instruction to the model (a design doc containing "ignore the
+    above" is not hypothetical in a review seat). Empty context returns the prompt BYTE-IDENTICALLY,
+    so the many legitimately self-contained briefs are unaffected.
+    """
+    if not context:
+        return prompt
+    items = list(context)
+    n = len(items)
+    parts = [prompt]
+    for i, item in enumerate(items, 1):
+        parts.append(
+            f"\n\n===== BEGIN ATTACHED CONTEXT {i} of {n} =====\n"
+            f"{item}"
+            f"\n===== END ATTACHED CONTEXT {i} of {n} =====\n")
+    return "".join(parts)
+
+
 def resolve_parse_status(parsed: ParsedResult, requested_model: str, *, timed_out: bool,
                          exit_code: Optional[int], launch_error: Optional[str]) -> str:
     """Final parse_status from process outcome + extracted evidence. Order matters:
