@@ -14,7 +14,41 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
-## Epic #756 — silent failures: the executor instruction layer (#735 → #733 → #732 → #758 → #767 → #765) · v3.111.0
+## Epic #756 — silent failures: the executor instruction layer (#735 → #733 → #732 → #758 → #767 → #765 → #762) · v3.112.0
+
+Seventh slot (#762, sessions ff40b6d5 → 89f42f76 → 3fecd708 → f0517473 across three clean-seam
+pane-handoffs, v3.112.0, full spine): the wiring child — the executor build seat becomes the
+PRIMARY WF2/WF3 implementation path, proven by dogfood (Tasks 3–6 and the WF3 drill each ran the
+real mint-gate → dispatch → exact-path collect → audited landing cycle — the first real build-seat
+receipts the #762 census demanded; run B's final reconcile closes CLEAN, 8 calls, zero anomalies).
+Shipped: audited landing (`landed_work_product` bound to the landing identity, scoped dirty check,
+expected-feature-ref persisted at collect and REQUIRED at land — same-base-sha replay refuses,
+R5-B), reconcile arms (`unlanded_work_product`/`orphan_landing`/`landing_mismatch`/
+`landing_conflict` ok-flipping + the NAMED report-only `pre_cutover_unverifiable` bucket, R5-D),
+the owner's verbatim 8-seat matrix retune (analysis budget 2.0→10.0; `INCUMBENT_MODEL` →
+claude-fable-5 — the R4-E owner-veto item presented at the merge gate), WF2 §8 prose truth +
+delegation-fence flip citing follow-up #779 (filed), WF3 build adoption (R4-D complexity mapping,
+mint-gate plan grammar, executor-primary Step 7, subprocess e2e), docs truth flips + the R4-G AC1
+atomic recipe — executed LIVE: all 24 active workspace projects now carry declarative
+`executorRouting` (owner D30, backup retained), and WF2+WF3 diagram REV 3.112.0. Owner decisions:
+D30 (AC1/AC4/AC2-WF3 ratified in-session), D31 (Task 2 orchestrator-inline — an honest task-scoped
+gate refuses a bakeoff-gated HIGH task on single dispatch and no build bake-off caller exists; the
+live refusal evidence rides the PR, the gap is #779's). Two-run chain by design (#474): T3's
+digest change ended run A's epoch; run A closed honestly non-reconciled (2 documented dead Step-2
+attempts + the probe row in pre_cutover), run B reconciled clean. Gate economics: design 3 passes
+(24 unique findings, 17 dispositions, budget-exhausted close per five owner precedents — itself
+the second owner-veto item); plan gate 7 findings; Step-8a wave 3 findings (the reconcile
+land-time-binding High) + 4 pre-existing stale pins; Step 9 caught 9 MORE stale-pin regressions
+outside T3/T5 allowlists (driver-bench fixtures + the WF3 regex pin — the process finding: a
+retune task's allowlist must carry every pin-guard surface of the constant it changes), suite
+6447→6514/21/0 exit 0; Step-11 wave 2 executor reviewers → 5 unique (1 High, three layers
+independently converging on the item-4 baseline-destroying restore — now landing-state-aware; +
+landing/reconcile conflict-identity parity, run_id one-to-one validation, retune prose now
+guard-tied to `DESIGN_MODELS` + the routing table, seat-derived WF3 DISPATCH type), all fixed
+red-first; adversarial diff layer failed (truncated) — recorded loudly, leads source-adjudicated.
+Scan clean (iac skip visible). All red-before-green; loop-backs design 2/2, global 2/3.
+
+## Epic #756 — earlier slots · v3.111.0 and prior
 
 Sixth slot (#765, session 4ac8c4b0 → b9a74758 → c2710ce0 across two clean-seam pane-handoffs,
 v3.111.0, full spine after an honest lane re-run): the bake-off decision child — the WIRE-vs-RETIRE
