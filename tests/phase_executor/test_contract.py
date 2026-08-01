@@ -600,7 +600,8 @@ def test_shipped_table_claude_seats_carry_max_budget_usd():
     import pathlib
     p = pathlib.Path(contract.__file__).resolve().parent / "routing" / "rawgentic.routing-table.json"
     t = _json.loads(p.read_text())
-    expected = {"analysis": 2.0, "ship": 2.0, "review": 5.0, "plan": 5.0,
+    # owner retune 2026-07-31 (#762 R3-E): analysis 2.0 -> 10.0
+    expected = {"analysis": 10.0, "ship": 2.0, "review": 5.0, "plan": 5.0,
                 "intake": 5.0, "design": 5.0, "build": 10.0}
     for seat_name, want in expected.items():
         seat = t["seats"][seat_name]

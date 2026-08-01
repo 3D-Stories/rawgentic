@@ -474,7 +474,8 @@ def _validate_record(obj, lineno: int) -> None:
                              f"{obj['landing_status']!r} not in {_LANDING_STATUSES}")
         if not isinstance(obj["ts"], int) or isinstance(obj["ts"], bool):
             raise ValueError(f"audit line {lineno}: landed_work_product ts not an int")
-        foreign = [k for k in ("binding_version", *_BINDING_V2_EXTRA) if k in obj]
+        foreign = [k for k in ("binding_version", *_BINDING_V2_EXTRA, *_BINDING_V2_OPTIONAL)
+                   if k in obj]
         if foreign:
             # D1: schema exclusivity — the work_product binding vocabulary never rides a
             # landing record (the #767 F3 versioned-evolution lesson).
@@ -907,9 +908,12 @@ def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: b
     def _binding_key(r):
         # #767: the match key carries the binding identity. Legacy (v1) records contribute
         # (None, None, None) for the version half, so a v2 expectation can never be satisfied
-        # by a v1 record (or vice versa), and a v2 pair must agree on target_ref + paths_digest.
+        # by a v1 record (or vice versa), and a v2 pair must agree on target_ref + paths_digest
+        # — and (#762 8a) on expected_feature_ref: destination drift, or only one side
+        # asserting a destination, never satisfies the expectation.
         return (r.get("receipt_nonce"), r.get("candidate_tree_sha"), r.get("new_sha"),
-                r.get("binding_version"), r.get("target_ref"), r.get("paths_digest"))
+                r.get("binding_version"), r.get("target_ref"), r.get("paths_digest"),
+                r.get("expected_feature_ref"))
 
     wp_tuples = {_binding_key(w) for w in work_products}
     for e in records:
@@ -954,6 +958,14 @@ def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: b
             landing_mismatch.append(f"{n}:target-ref")
         if not any(w.get("new_sha") == rec_l["new_sha"] for w in paired):
             landing_mismatch.append(f"{n}:new-sha")
+        # #762 8a: mirror the land-time bindings (R4-C base-sha, 762-s4-15 destination ref)
+        # at reconcile — a wp binds only the fields it asserts (None = legacy, unasserted).
+        if not any(w.get("expected_feature_ref") in (None, rec_l["feature_ref"])
+                   for w in paired):
+            landing_mismatch.append(f"{n}:feature-ref")
+        if not any((w.get("work_product") or {}).get("base_sha") in (None, rec_l["pre_sha"])
+                   for w in paired):
+            landing_mismatch.append(f"{n}:pre-sha")
 
     def _landed(w) -> bool:
         # only a FULLY-bound landing satisfies a work product — canonical temp ref, matching
@@ -963,6 +975,8 @@ def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: b
                    and rec_l["temp_ref"] == f"refs/rawgentic/collect/{n}"
                    and w.get("target_ref") == rec_l["temp_ref"]
                    and w.get("new_sha") == rec_l["new_sha"]
+                   and w.get("expected_feature_ref") in (None, rec_l["feature_ref"])
+                   and (w.get("work_product") or {}).get("base_sha") in (None, rec_l["pre_sha"])
                    and (run_id is None or rec_l.get("run_id") == run_id)
                    for rec_l in landings)
 

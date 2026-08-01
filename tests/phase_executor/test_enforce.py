@@ -1494,7 +1494,8 @@ def _landing_for(nonce, *, new="sha256:new1", feature_ref="refs/heads/feat", run
 
 def _code_wp_rec(nonce, *, new="sha256:new1", target=None, feature="refs/heads/feat"):
     r = _wp_rec(nonce, new=new)
-    r["work_product"] = dict(r["work_product"], kind="code")
+    # nested base_sha matches _landing_for's default pre — the #762 8a pre-sha arm binds them
+    r["work_product"] = dict(r["work_product"], kind="code", base_sha=_SHA_A)
     r.update({"binding_version": 2,
               "target_ref": target or f"refs/rawgentic/collect/{nonce}",
               "paths_digest": "sha256:" + "ab" * 32,
@@ -1614,3 +1615,58 @@ def test_reconcile_landing_byte_identical_duplicates_collapse():
     res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
     assert res.ok, res
     assert res.landing_conflict == ()
+
+
+# ---- #762 Step-8a wave: landing↔work-product binding agreement at reconcile ----
+
+def test_reconcile_landing_feature_ref_disagreement_flips_ok():
+    # #762 8a F-A: the landing's feature_ref must agree with the paired code work product's
+    # expected_feature_ref — a schema-valid landing on the WRONG destination branch never
+    # satisfies the work product (the reconcile-side half of 762-s4-15).
+    recs = _base_pair() + [_code_wp_rec("n1"),
+                           _landing_for("n1", feature_ref="refs/heads/OTHER")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("n1" in x and "feature-ref" in x for x in res.landing_mismatch)
+    assert any("n1" in x for x in res.unlanded_work_product)
+
+
+def test_reconcile_landing_pre_sha_disagreement_flips_ok():
+    # #762 8a F-A: landing.pre_sha must agree with the authorizing work product's nested
+    # base_sha — the land-time R4-C binding (762-s4-11), mirrored at reconcile.
+    recs = _base_pair() + [_code_wp_rec("n1"), _landing_for("n1", pre=_SHA_B)]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("n1" in x and "pre-sha" in x for x in res.landing_mismatch)
+    assert any("n1" in x for x in res.unlanded_work_product)
+
+
+def test_reconcile_landing_unasserted_bindings_still_land():
+    # legacy shape: a code wp asserting neither expected_feature_ref nor a nested base_sha
+    # pairs on the original identity alone — the new arms bind only asserted fields.
+    wp = _code_wp_rec("n1")
+    wp.pop("expected_feature_ref")
+    wp["work_product"] = {k: v for k, v in wp["work_product"].items() if k != "base_sha"}
+    recs = _base_pair() + [wp, _landing_for("n1", feature_ref="refs/heads/OTHER", pre=_SHA_B)]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+
+
+def test_reconcile_expected_wp_feature_ref_drift_is_missing():
+    # #762 8a F-B: the expectation match key carries expected_feature_ref — an
+    # expected_work_product and work_product agreeing on every other v2 field but asserting
+    # different destination branches (or only one side asserting) must NOT satisfy each other.
+    exp = dict(_code_wp_rec("n1"), kind="expected_work_product")
+    wp = _code_wp_rec("n1", feature="refs/heads/OTHER")
+    recs = [_receipt_rec("n1"), _obs_rec("n1"), exp, wp]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and any("n1" in x for x in res.missing_work_product)
+
+
+def test_landed_schema_exclusivity_refuses_expected_feature_ref(tmp_path):
+    # #762 8a F-C: expected_feature_ref is work_product v2 binding vocabulary
+    # (_BINDING_V2_OPTIONAL) — a landing record carrying it refuses like the rest.
+    bad = _landing_rec()
+    bad["expected_feature_ref"] = "refs/heads/feat"
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _audit_roundtrip(tmp_path / "efr", bad)
