@@ -77,14 +77,16 @@ marker; this gate is only for the unprompted path.
 payload is what `clear-prep` produces — run it first, then come back with its resume-prompt file.
 Write the prompt to a file and pass the path; never inline a long prompt.
 
-**If your goal is armed, clear it before handing off — this is load-bearing, not hygiene (#802).**
-`clear-prep` runs `/goal clear` for you, which is the part the DEFAULT (teardown) path depends on.
-Hand-authoring the prompt instead of running `clear-prep` is fine; skipping the goal clear is not.
-Teardown validates the newest `goal_status` row fail-closed, and Stop-hook goal EVALUATIONS carry
-no sentinel — so once your goal has been evaluated even once, teardown REFUSES with exit 2 before
-any step runs. `/goal clear` appends a trusted row and teardown proceeds. (Measured 2026-08-01: 53
-of the 120 most recent transcripts were in the refusing state. Root cause of the writer asymmetry
-is #782.)
+**An armed goal no longer blocks teardown (#782 — this reverses the #802 guidance).** Teardown still
+validates the newest `goal_status` row fail-closed, and Stop-hook goal EVALUATIONS still carry no
+sentinel — but an unstamped `met: false` row whose condition is byte-equal to the armed one now
+reads as CORROBORATION of the goal already trusted, not as ambiguity, so the ordinary
+"my goal has been evaluated" case proceeds. Before #782 it refused with exit 2 before any step ran,
+which is what left panes open three sessions running; measured 2026-08-01, 85 of 122 trusted-origin
+rows are exactly that shape. Running `clear-prep` (which runs `/goal clear` for you) is still the
+tidier path and still recommended, but it is no longer a precondition. What DOES still refuse is a
+genuinely unreadable tail — a torn write, a malformed `met`, or a row proposing a DIFFERENT
+condition — and that refusal is now meaningful rather than routine.
 
 Two hard rules about the prompt, both of which the command enforces by refusing:
 
@@ -218,7 +220,7 @@ The JSON on stdout carries `results` and `failed_step`. Report what it says, not
 | `send_resume_nudge` | a herdr call failed outright | herdr-side problem, not a timing one |
 | `predecessor_goal_clear` | the handoff worked; clearing YOUR goal did not | your pane is left **open** on purpose — run `/goal clear` in it yourself |
 | `predecessor_goal_binding` | the goal state changed between validation and teardown (#758) | the successor runs with the VALIDATED goal; your pane is left **open** and untouched — read its goal before clearing or closing anything |
-| **`null`, exit 2, "the newest goal evidence … fails validation"** | NOT a step failure — the refusal fires BEFORE any step runs, so nothing was handed over at all. Your goal is armed and its newest row is a sentinel-less Stop-hook evaluation (#802; writer asymmetry is #782) | run `/goal clear` in this pane and retry — that appends a trusted row and teardown proceeds. To hand off WITHOUT retiring this pane, re-run with `--no-teardown` and relay the manual retirement steps yourself |
+| **`null`, exit 2, "the newest goal evidence … fails validation"** | NOT a step failure — the refusal fires BEFORE any step runs, so nothing was handed over at all. Since #782 this is NO LONGER the routine armed-goal case (a sentinel-less evaluation agreeing with the armed goal now passes): it means the transcript tail is genuinely unreadable — a torn write, a malformed `met`, or a row proposing a DIFFERENT condition | read the last few `goal_status` lines of your transcript before assuming anything. `/goal clear` in this pane then retry still works (it appends a trusted row); to hand off WITHOUT retiring this pane, re-run with `--no-teardown` and relay the manual retirement steps yourself |
 
 If you had **already** cleared your goal before handing off — which is what `clear-prep` tells you to
 do — that is not a failure and never reports one: `results.predecessor_goal_clear` reads
