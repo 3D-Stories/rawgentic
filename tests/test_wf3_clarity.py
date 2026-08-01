@@ -207,22 +207,21 @@ class TestDelegatedReadsWF3:
             "WF3 must not wire the delegated-read temp-artifact surface (#320 AC4)")
 
 
-# --- #330: canonical DISPATCH completion-time audit-line grammar (review-only) ---
+# --- #330: canonical DISPATCH completion-time audit-line grammar (WF3 review + build) ---
 
 class TestDispatchGrammar:
-    """Drift guard for the #330 canonical DISPATCH audit line, WF3 review-only
-    variant. WF3 dispatches only the `review` role, so its grammar line pins
-    role=review literally. Whitespace-normalized per the repo convention."""
+    """Drift guard for the #330 canonical DISPATCH audit line, WF3's review +
+    implementation variant. Whitespace-normalized per the repo convention."""
 
     def test_wf3_canonical_grammar_sentence_present(self):
         corpus = " ".join(skill_corpus("fix-bug").split())
         grammar = (
-            "DISPATCH issue=<n> role=review type=<subagent_type> "
+            "DISPATCH issue=<n> role=<review|implementation> type=<subagent_type> "
             "model=<model|null> effort=<effort|null> "
             "outcome=<ok|error|retried|dead> resolution=<primary|fallback|generic>"
         )
         assert grammar in corpus, (
-            "the WF3 review-only canonical DISPATCH grammar line must be present "
+            "the WF3 review/build canonical DISPATCH grammar line must be present "
             "in the fix-bug corpus")
 
     def test_wf3_per_invocation_emission_rule_present(self):
@@ -257,12 +256,12 @@ class TestDispatchGrammar:
             "values must be present (#331)")
 
 
-# --- #470: WF3 bespoke executor-dispatch contract (review-narrowed PRIMARY tier) ---
+# --- #470: WF3 bespoke executor-dispatch contract (review + build PRIMARY tier) ---
 
 class TestExecutorDispatchContractWF3:
     """Drift guards for the #470 executor-dispatch contract in WF3's bespoke
-    model-routing block. WF3 is review-only, so the contract is narrowed to the
-    review seat (no build seat → no `--gate-file`/`--plan-file`). Companion to
+    model-routing block. WF3 routes review and fix-plan implementation work through
+    executor seats. Companion to
     test_wf2_clarity.py::TestDispatchGrammar::test_wf2_producer_sentence_present
     and test_model_routing_resolve_prose.py (the WF2/shared-source guards). One
     canonical sentence per assert, whitespace-normalized, corpus `in`."""
@@ -275,21 +274,51 @@ class TestExecutorDispatchContractWF3:
             "the WF3 executor-dispatch contract header (PRIMARY tier) must be "
             "present in the fix-bug corpus")
 
-    def test_review_only_no_build_seat_clause_present(self):
+    def test_fix_plan_build_seat_clause_present(self):
         corpus = _norm(_text())
-        assert ("WF3 dispatches ONLY review seats — it has no build seat, so no "
-                "`--gate-file`/`--plan-file` material ever crosses this boundary") in corpus, (
-            "the WF3 review-only / no-build-seat clause must be present — WF3 "
-            "carries no `--gate-file`/`--plan-file` material (#470)")
+        assert ("WF3 fix-plan tasks dispatch through the executor `build` seat: mint "
+                "the gate from the WF3 fix plan, dispatch with `--gate-file` and "
+                "`--plan-file`, then collect and land the work product audited.") in corpus, (
+            "the WF3 fix-plan build-seat adoption clause must be present (#762)")
+
+    def test_step5_mint_gate_compatible_plan_grammar_present(self):
+        step5 = _norm(_section(_text(), "## Step 5:", "## Step 6:"))
+        assert ("Every task heading is exactly `### Task <id>: <title>` (`##` headings "
+                "parse to zero tasks); each task includes `- riskLevel: high|standard` "
+                "and `- files: <declared paths>`; and the plan has one canonical "
+                "`- estimated-lines: <nonnegative int>` line.") in step5, (
+            "Step 5 must use the mint-gate-compatible WF3 fix-plan grammar (#762)")
+
+    def test_step7_executor_primary_paragraph_present(self):
+        step7 = _norm(_section(_text(), "## Step 7:", "## Step 8:"))
+        assert ("Executor-primary implementation loop (#762): for each task in the "
+                "3-6-task fix plan, record pre-task state → dispatch → collect → land "
+                "audited → assert branch advance plus non-empty content → run the scoped "
+                "suite; emit exactly one canonical `DISPATCH` line per workflow dispatch.") in step7, (
+            "Step 7 must carry the WF2-style executor-primary per-task loop (#762)")
+
+    def test_wf3_complexity_mapping_present(self):
+        corpus = _norm(_text())
+        assert ("WF3 complexity mapping for `mint-gate`: `trivial_work=true → trivial`; "
+                "`simple_bug|moderate_bug → standard`; `complex_bug → complex` "
+                "(normally upgrade to WF2; this mapping covers an owner-overridden "
+                "stay-in-WF3 case).") in corpus, (
+            "the R4-D WF3 complexity-to-gate mapping must be present (#762)")
 
     def test_producer_sentence_present(self):
+        # #762 Step-11 r2-4/r1-3: WF3 dispatches BOTH seats since the build adoption — the
+        # producer type derives from the seat, never hardcodes executor:review.
         corpus = _norm(_text())
-        assert ("The producer is the executor result dict (`type=executor:review`, "
-                "`model=<actual_model>`, `resolution=primary`) on the primary tier, "
+        assert ("The producer is the executor result dict (`type=executor:<seat>` — "
+                "`executor:review` for review dispatches, `executor:build` for "
+                "implementation dispatches — `model=<actual_model>`, "
+                "`resolution=primary`) on the primary tier, "
                 "or — under the LEGACY architecture only — the Agent-tool dispatch "
                 "(`resolution=fallback`).") in corpus, (
-            "the WF3 DISPATCH producer sentence (executor result dict vs "
-            "legacy-architecture Agent-tool) must be present (#474)")
+            "the WF3 DISPATCH producer sentence (seat-derived executor type vs "
+            "legacy-architecture Agent-tool) must be present (#474, #762)")
+        assert "(`type=executor:review`, `model=<actual_model>`" not in corpus, (
+            "the pre-#762 hardcoded executor:review producer form must be gone")
 
     def test_per_run_tier_selection_present(self):
         corpus = _norm(_text())

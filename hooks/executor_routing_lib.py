@@ -1621,6 +1621,11 @@ def _intent_semantic_error(intent, receipt_nonce: str) -> Optional[str]:
             v = intent.get(k)
             if not isinstance(v, str) or not v:
                 return f"{k} must be a non-empty string (got {v!r})"
+    if "expected_feature_ref" in intent:
+        # #762 R5-B: optional, but when present it must be a real branch ref
+        v = intent.get("expected_feature_ref")
+        if not isinstance(v, str) or not v.startswith("refs/heads/"):
+            return f"expected_feature_ref must be a refs/heads/-rooted string (got {v!r})"
     return None
 
 
@@ -1628,7 +1633,8 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
                          expected_target_sha: str, kind: str,
                          registry, manager, audit, intent_dir: str,
                          correlation_id: Optional[str] = None,
-                         promote_paths: Optional[list] = None) -> dict:
+                         promote_paths: Optional[list] = None,
+                         expected_feature_ref: Optional[str] = None) -> dict:
     """#559 AC1 (design §2.6) — promote a completed build's appendix work product onto
     ``target_ref`` and record an audited ``work_product`` binding. TWO-PHASE, crash-recoverable,
     audit-idempotent:
@@ -1658,6 +1664,16 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
         promote_appendix_only, promote_paths_only, PromotionResult, WorktreeError,
         _norm_rel_components)
     ce = correlation_id
+    if kind == "code" or expected_feature_ref is not None:
+        # #762 R5-B: the destination is authorized at COLLECT time — a code collect must
+        # persist the feature ref the landing verb will later require byte-equal; a supplied
+        # ref on any kind must be a real branch ref.
+        if not isinstance(expected_feature_ref, str) or not expected_feature_ref.startswith("refs/heads/"):
+            return _err(EXIT_MALFORMED, "invalid_expected_feature_ref",
+                        f"collect-work-product: --kind code requires --expected-feature-ref as a "
+                        f"refs/heads/-rooted branch ref (got {expected_feature_ref!r}) — the "
+                        f"landing destination is authorized by this collect-time record",
+                        retryable=False, correlation_id=ce)
     if promote_paths is None:
         if kind == "code":
             # Step-11 R1-F1 (flag half): code collection must never silently downgrade to the
@@ -1802,7 +1818,8 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
     legacy_intent = same_nonce and ("target_ref" not in intent or "paths_digest" not in intent)
     same_binding = (same_nonce and not legacy_intent
                     and intent.get("target_ref") == target_ref
-                    and intent.get("paths_digest") == paths_digest)
+                    and intent.get("paths_digest") == paths_digest
+                    and intent.get("expected_feature_ref") == expected_feature_ref)
     landed = same_nonce and bool(intent.get("new_sha"))
     legacy_verified = False
     if same_nonce:
@@ -1905,12 +1922,16 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
             intent = {"receipt_nonce": record.receipt_nonce, "candidate_tree_sha": candidate_tree_sha,
                       "expected_target_sha": expected_target_sha, "new_sha": new_sha,
                       "target_ref": target_ref, "paths_digest": paths_digest, "consumed": False}
+            if expected_feature_ref is not None:
+                intent["expected_feature_ref"] = expected_feature_ref
             _atomic_write_json(intent_path, intent)
         else:
             # PHASE 1 — durable intent BEFORE the irreversible CAS (new_sha unknown yet, F-b)
             intent = {"receipt_nonce": record.receipt_nonce, "candidate_tree_sha": candidate_tree_sha,
                       "expected_target_sha": expected_target_sha, "new_sha": None,
                       "target_ref": target_ref, "paths_digest": paths_digest, "consumed": False}
+            if expected_feature_ref is not None:
+                intent["expected_feature_ref"] = expected_feature_ref
             _atomic_write_json(intent_path, intent)
             try:
                 promotion = manager.promote(
@@ -1950,7 +1971,10 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
         # Full-key dedup (8a R1-M4): a same-3-tuple record with a DIFFERENT binding must not
         # suppress ours. A legacy (fieldless) record satisfies the key ONLY on a legacy-verified
         # resume — else a pre-#767 crash resumed under new code would double-append.
-        if r.get("target_ref") == target_ref and r.get("paths_digest") == paths_digest:
+        # #762 R5-B: the destination authorization is part of the binding — a same-target
+        # record bound to a different feature ref is a different collect.
+        if (r.get("target_ref") == target_ref and r.get("paths_digest") == paths_digest
+                and r.get("expected_feature_ref") == expected_feature_ref):
             return True
         return legacy_verified and "target_ref" not in r
 
@@ -1963,7 +1987,8 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
     if not already_expected:
         audit.append_expected_work_product(receipt_nonce=record.receipt_nonce,
                                            candidate_tree_sha=candidate_tree_sha, new_sha=new_sha,
-                                           target_ref=target_ref, paths_digest=paths_digest)
+                                           target_ref=target_ref, paths_digest=paths_digest,
+                                           expected_feature_ref=expected_feature_ref)
     # PHASE 2 — derive → audit-search-then-append (idempotent) → mark consumed
     try:
         wp = derive_work_product(manager, handle, kind=kind, promotion=promotion)
@@ -1980,7 +2005,8 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
         audit.append_work_product(receipt_nonce=record.receipt_nonce,
                                   candidate_tree_sha=candidate_tree_sha, new_sha=new_sha,
                                   work_product=wp, target_ref=target_ref,
-                                  paths_digest=paths_digest)
+                                  paths_digest=paths_digest,
+                                  expected_feature_ref=expected_feature_ref)
     intent["consumed"] = True
     _atomic_write_json(intent_path, intent)
     return {"ok": True, "exit": EXIT_OK, "action": "collect_work_product",
@@ -1992,30 +2018,73 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
-def land_work_product(*, repo: str, expected_ref: str, pre_sha: str, new_sha: str,
-                      temp_ref: str, correlation_id: Optional[str] = None,
-                      git_runner=None) -> dict:
-    """#767 Step-11 (lane R1-F2): the PRODUCTION landing half of the two-step collection —
-    fast-forward the checked-out feature branch onto the collected temp-ref commit, guarded
-    exactly as Step 8 (b) documents. Fail-closed throughout:
+def _parse_porcelain_z(out: str) -> set:
+    """R3-F: parse ``git status --porcelain=v1 -z`` output into the exact byte-path set.
+    ``-z`` disables quoting (newline-in-name safe); rename/copy entries contribute BOTH
+    paths (defensive — the caller passes ``--no-renames``, so none should appear)."""
+    paths = set()
+    toks = out.split("\0")
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if not t:
+            break
+        xy, path = t[:2], t[3:]
+        paths.add(path)
+        if xy and xy[0] in "RC":
+            i += 1
+            if i < len(toks) and toks[i]:
+                paths.add(toks[i])
+        i += 1
+    return paths
 
-      1. clean tree — ``git status --porcelain`` must be empty (the landing materializes the
-         checkout over the operator's files);
-      2. exact symbolic ref — ``git symbolic-ref -q HEAD`` must equal ``expected_ref`` (a
-         detached HEAD or a different branch at the same SHA refuses);
-      3. tri-state on the ref's SHA — already exactly ``new_sha`` → ``already_landed`` (crash
-         recovery: cleanup only); at ``pre_sha`` → ``git merge --ff-only new_sha``; anything
-         else refuses;
-      4. postconditions — HEAD and ``expected_ref`` both resolve to exactly ``new_sha``;
-      5. CAS temp-ref delete — ``git update-ref -d temp_ref new_sha`` (old-value-guarded); a
-         delete failure never un-lands: the result carries ``temp_ref_deleted`` honestly.
+
+# R3-B: the landing IDENTITY — every record field except ts and landing_status (retry metadata).
+_LANDING_IDENTITY_FIELDS = ("receipt_nonce", "feature_ref", "pre_sha", "new_sha", "temp_ref",
+                            "run_id", "landing_version")
+
+
+def land_work_product(*, repo: Optional[str] = None, expected_ref: str, pre_sha: str,
+                      new_sha: str, temp_ref: str, correlation_id: Optional[str] = None,
+                      git_runner=None, run_id: Optional[str] = None,
+                      workspace: Optional[str] = None, project: Optional[str] = None,
+                      no_audit: bool = False, audit=None, clock=None) -> dict:
+    """#767 Step-11 + #762 D1/D2/R3-A/R3-B/R4-B/R4-C/R5-B: the PRODUCTION landing half of the
+    two-step collection — fast-forward the checked-out feature branch onto the collected
+    temp-ref commit, AUDITED by default. Fail-closed throughout.
+
+    Two modes (rev-2 adoption 2 — an unaudited landing is a stated choice, never an accident):
+    - AUDITED (default): requires ``run_id`` plus ``workspace``+``project`` (or an injected
+      ``audit`` with an explicit ``repo``). The repository derives EXCLUSIVELY from
+      workspace+project resolution; a ``repo`` also given must canonically equal it
+      (``landing_repo_mismatch``). Authorization (R3-A/R4-C/R5-B) binds the landing to the
+      collect-time record: exactly ONE code-kind work_product with this receipt nonce,
+      ``target_ref == temp_ref`` and ``new_sha``; its inner ``base_sha == pre_sha``; its
+      persisted ``expected_feature_ref == expected_ref`` — on BOTH tri-state paths.
+    - ``no_audit=True``: the pure-git verb (standalone/ops use, greppable opt-out); identity
+      args must be absent.
+
+    Landing state machine (R4-B, normative order): authorize → merge + postconditions →
+    append ``landed_work_product`` (idempotent on the full immutable identity; a same-key
+    different-identity record is ``landing_identity_conflict``, exit 5) → CAS temp-ref delete.
+    An append failure RETAINS the temp ref (exit 5; a retry heals via the already-landed
+    path). Already-landed retry: temp ref present → must resolve to ``new_sha``; temp ref
+    absent AND a matching landing record present → the record IS the heal; temp ref absent
+    AND no record → refuse loudly.
+
+    D2 (the live-probe finding): the dirty check is SCOPED to the collision set —
+    ``changed = git diff --no-renames --name-only -z pre..new`` intersected with
+    ``git status --porcelain=v1 -z --untracked-files=all --no-renames`` (exact byte paths,
+    per-file untracked enumeration). Unrelated dirt lands; a colliding path refuses
+    (``landing_dirty_paths``, naming the paths). git's own ff checkout-overwrite protection
+    is retained as the fail-loud backstop.
 
     A bare ``update-ref`` on the checked-out branch is exactly what this exists to replace —
     it would move the ref while index/files stay at the pre-task state, so the scoped suite
-    would test stale code. ``git_runner`` is injected for tests; the audit-side feature-ref
-    binding is a tracked follow-up (#762 wires the full path)."""
+    would test stale code. ``git_runner``/``audit``/``clock`` are injected for tests."""
     ce = correlation_id
     run = git_runner or _git_runner
+    tick = clock or time.time
     if (not isinstance(expected_ref, str) or not expected_ref.startswith("refs/heads/")
             or not isinstance(temp_ref, str)
             or not temp_ref.startswith("refs/rawgentic/collect/")):
@@ -2027,20 +2096,158 @@ def land_work_product(*, repo: str, expected_ref: str, pre_sha: str, new_sha: st
         return _err(EXIT_MALFORMED, "landing_invalid_input",
                     f"land-work-product: pre_sha and new_sha must be 40-hex commit SHAs "
                     f"(got {pre_sha!r}, {new_sha!r})", retryable=False, correlation_id=ce)
+    # --- mode resolution (rev-2 adoption 2) ----------------------------------------------------
+    if no_audit:
+        if run_id is not None or workspace is not None or project is not None or audit is not None:
+            return _err(EXIT_MALFORMED, "landing_audit_mode_conflict",
+                        "land-work-product: --no-audit and audit identity args are mutually "
+                        "exclusive — an unaudited landing is a stated choice", retryable=False,
+                        correlation_id=ce)
+        repo = repo or "."
+    else:
+        if not run_id or (audit is None and not (workspace and project)):
+            return _err(EXIT_MALFORMED, "landing_identity_required",
+                        "land-work-product: audited mode requires --run-id --workspace "
+                        "--project (or pass --no-audit as the explicit unaudited opt-out)",
+                        retryable=False, correlation_id=ce)
+        try:
+            # #762 Step-11 r2-5: RoutingAuditLog SANITIZES its run_id component ('a/b' and
+            # 'a_b' address the same audit directory), so a path-unsafe id could consume a
+            # foreign run stream's work-product authorization — refuse at entry, before any
+            # audit read or git mutation (the same validation every other entry point runs).
+            _safe_component(run_id, "run_id")
+        except MalformedConfig as e:
+            return _err(EXIT_MALFORMED, "landing_invalid_input",
+                        f"land-work-product: {e}", retryable=False, correlation_id=ce)
+        if audit is None:
+            try:
+                pe = _import_phase_executor()
+            except ImportError as e:
+                return _err(EXIT_INTERNAL, "phase_executor_import_failed", str(e),
+                            retryable=False, correlation_id=ce)
+            try:
+                repo_root = resolve_repo_root(workspace, project)
+            except MalformedConfig as e:
+                return _err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False,
+                            correlation_id=ce)
+            if repo is not None and Path(repo).resolve() != repo_root:
+                # R3-A: the repository derives from workspace+project — a divergent --repo is
+                # a cross-project landing attempt, refused before any git runs.
+                return _err(EXIT_ENFORCEMENT, "landing_repo_mismatch",
+                            f"land-work-product: --repo {repo!r} does not resolve to the "
+                            f"project root {str(repo_root)!r} derived from workspace+project",
+                            retryable=False, correlation_id=ce)
+            repo = str(repo_root)
+            try:
+                # capture_root mirrors derive_paths (run_seat/RoutingAuditLog each append
+                # run_id exactly once); landing deliberately skips the routing-table resolve —
+                # a broken seat table must not block recovering an already-collected landing.
+                audit = pe.enforce.RoutingAuditLog(repo_root / ".rawgentic" / "runs", run_id)
+            except (OSError, ValueError) as e:
+                return _err(EXIT_INTERNAL, "runtime_init_failed", f"{type(e).__name__}: {e}",
+                            retryable=False, correlation_id=ce)
+        elif repo is None:
+            return _err(EXIT_MALFORMED, "landing_invalid_input",
+                        "land-work-product: an injected audit requires an explicit repo",
+                        retryable=False, correlation_id=ce)
+    nonce = temp_ref[len("refs/rawgentic/collect/"):]
+    if not nonce:
+        return _err(EXIT_MALFORMED, "landing_invalid_input",
+                    f"land-work-product: temp_ref {temp_ref!r} carries no receipt nonce",
+                    retryable=False, correlation_id=ce)
 
     def _git(*args):
         return run(["git", "-C", repo, *args])
 
-    rc, out, err = _git("status", "--porcelain")
-    if rc != 0:
-        return _err(EXIT_INTERNAL, "landing_git_failed",
-                    f"land-work-product: git status failed: {err.strip()}", retryable=False,
-                    correlation_id=ce)
-    if out.strip():
-        return _err(EXIT_ENFORCEMENT, "landing_dirty_tree",
-                    "land-work-product: the checkout has uncommitted changes — landing "
-                    "materializes files over the working tree; commit/stash first",
-                    retryable=False, correlation_id=ce)
+    # --- audited authorization (R3-A/R4-C/R5-B) — BEFORE any git mutation, both tri-states ----
+    has_matching_landing = has_conflicting_landing = False
+    ours = None
+    if not no_audit:
+        try:
+            records = audit.records()
+        except ValueError as e:
+            return _err(EXIT_INTERNAL, "landing_audit_unreadable",
+                        f"land-work-product: the run audit log failed fail-closed validation "
+                        f"({e}) — inspect it manually", retryable=False, correlation_id=ce)
+        wps = [r for r in records if r.get("kind") == "work_product"
+               and r.get("receipt_nonce") == nonce
+               and r.get("target_ref") == temp_ref
+               and r.get("new_sha") == new_sha
+               and (r.get("work_product") or {}).get("kind") == "code"]
+        if len(wps) != 1:
+            return _err(EXIT_ENFORCEMENT, "landing_unauthorized",
+                        f"land-work-product: expected exactly 1 code work_product record "
+                        f"binding receipt {nonce!r} to {temp_ref!r} at {new_sha!r}, found "
+                        f"{len(wps)} — the collect record is the authorization; refusing",
+                        retryable=False, correlation_id=ce)
+        inner = wps[0].get("work_product") or {}
+        if inner.get("base_sha") != pre_sha:
+            # R4-C: pre_sha is bound to the collected evidence, not caller-asserted — a
+            # fabricated pre_sha must not mint an audit record (either tri-state path).
+            return _err(EXIT_ENFORCEMENT, "landing_unauthorized",
+                        f"land-work-product: --pre-sha {pre_sha!r} does not equal the "
+                        f"authorizing work product's base_sha "
+                        f"{inner.get('base_sha')!r} — refusing", retryable=False,
+                        correlation_id=ce)
+        if wps[0].get("expected_feature_ref") != expected_ref:
+            # R5-B: the destination is authorized by the collect-time record, not the caller —
+            # replaying a valid work product onto a different branch refuses.
+            return _err(EXIT_ENFORCEMENT, "landing_feature_ref_mismatch",
+                        f"land-work-product: --expected-ref {expected_ref!r} does not equal "
+                        f"the collect-time expected_feature_ref "
+                        f"{wps[0].get('expected_feature_ref')!r} — refusing", retryable=False,
+                        correlation_id=ce)
+        ours = {"receipt_nonce": nonce, "feature_ref": expected_ref, "pre_sha": pre_sha,
+                "new_sha": new_sha, "temp_ref": temp_ref, "run_id": run_id,
+                "landing_version": 1}
+        for r in records:
+            if r.get("kind") != "landed_work_product":
+                continue
+            if r.get("receipt_nonce") != nonce:
+                continue
+            if all(r.get(k) == ours[k] for k in _LANDING_IDENTITY_FIELDS):
+                has_matching_landing = True
+            else:
+                # #762 Step-11 r2-2: index by receipt nonce ALONE — reconcile treats ANY two
+                # distinct identities for one nonce as landing_conflict, so a same-nonce
+                # record at a DIFFERENT new_sha (a poisoned or corrupt landing) must conflict
+                # here too, not slip past a (nonce, new_sha) filter until post-merge.
+                has_conflicting_landing = True
+        if has_conflicting_landing:
+            # Refuse BEFORE any git mutation (r2-2); _append_landing keeps the same guard as
+            # defense in depth. The temp ref is retained for forensics.
+            return _err(EXIT_INTERNAL, "landing_identity_conflict",
+                        f"land-work-product: an existing landed_work_product for receipt "
+                        f"{nonce!r} carries a DIFFERENT immutable identity — refusing before "
+                        f"any git mutation; reconcile manually", retryable=False,
+                        correlation_id=ce)
+
+    def _append_landing(status: str):
+        """R4-B: append (idempotent, conflict-refusing) — returns an error dict or None."""
+        if has_conflicting_landing:
+            # R3-B: same (receipt_nonce, new_sha), different immutable identity — an
+            # IMMEDIATE append-time integrity error; the temp ref is retained for forensics.
+            return _err(EXIT_INTERNAL, "landing_identity_conflict",
+                        f"land-work-product: an existing landed_work_product for receipt "
+                        f"{nonce!r} at {new_sha!r} carries a DIFFERENT immutable identity — "
+                        f"refusing to append; reconcile manually", retryable=False,
+                        correlation_id=ce)
+        if has_matching_landing:
+            return None  # full-identity dedup: the record already exists
+        try:
+            audit.append_landed_work_product(
+                receipt_nonce=nonce, feature_ref=expected_ref, pre_sha=pre_sha,
+                new_sha=new_sha, temp_ref=temp_ref, landing_status=status, run_id=run_id,
+                ts=int(tick()))
+        except (OSError, ValueError) as e:
+            # R4-B: the merge stands (git is the source of truth); the temp ref is retained
+            # so a retry heals via the already-landed path.
+            return _err(EXIT_INTERNAL, "landing_append_failed",
+                        f"land-work-product: the landing record failed to append "
+                        f"({type(e).__name__}: {e}) — the merge stands and the temp ref is "
+                        f"retained; re-run to heal", retryable=False, correlation_id=ce)
+        return None
+
     rc, ref, _e = _git("symbolic-ref", "-q", "HEAD")
     if rc != 0 or ref.strip() != expected_ref:
         return _err(EXIT_ENFORCEMENT, "landing_wrong_ref",
@@ -2053,17 +2260,73 @@ def land_work_product(*, repo: str, expected_ref: str, pre_sha: str, new_sha: st
                     f"land-work-product: rev-parse HEAD failed: {err.strip()}", retryable=False,
                     correlation_id=ce)
     head = head.strip()
+    tr_rc, tr_sha, _e = _git("rev-parse", "--verify", "--quiet", temp_ref)
+    tr_sha = tr_sha.strip()
     if head == new_sha:
-        # already landed (crash-after-merge recovery): cleanup only, never a refusal
-        del_rc, _o, _e = _git("update-ref", "-d", temp_ref, new_sha)
-        return {"ok": True, "exit": EXIT_OK, "action": "land_work_product",
-                "status": "already_landed", "new_sha": new_sha,
-                "temp_ref_deleted": del_rc == 0, "correlation_id": ce}
+        # already landed (crash-after-merge recovery, R4-B)
+        if no_audit:
+            del_rc, _o, _e = _git("update-ref", "-d", temp_ref, new_sha)
+            return {"ok": True, "exit": EXIT_OK, "action": "land_work_product",
+                    "status": "already_landed", "new_sha": new_sha,
+                    "temp_ref_deleted": del_rc == 0, "correlation_id": ce}
+        if tr_rc == 0:
+            if tr_sha != new_sha:
+                return _err(EXIT_ENFORCEMENT, "landing_temp_ref_mismatch",
+                            f"land-work-product: {temp_ref!r} resolves to {tr_sha!r}, not the "
+                            f"landed SHA {new_sha!r} — refusing", retryable=False,
+                            correlation_id=ce)
+            fail = _append_landing("already_landed")
+            if fail:
+                return fail
+            del_rc, _o, _e = _git("update-ref", "-d", temp_ref, new_sha)
+            return {"ok": True, "exit": EXIT_OK, "action": "land_work_product",
+                    "status": "already_landed", "new_sha": new_sha,
+                    "temp_ref_deleted": del_rc == 0, "correlation_id": ce}
+        if has_matching_landing:
+            # the landing record IS the heal — merge landed, record present, temp ref gone
+            return {"ok": True, "exit": EXIT_OK, "action": "land_work_product",
+                    "status": "already_landed", "new_sha": new_sha,
+                    "temp_ref_deleted": True, "correlation_id": ce}
+        if has_conflicting_landing:
+            return _err(EXIT_INTERNAL, "landing_identity_conflict",
+                        f"land-work-product: the only landing evidence for receipt {nonce!r} "
+                        f"at {new_sha!r} carries a DIFFERENT immutable identity — reconcile "
+                        f"manually", retryable=False, correlation_id=ce)
+        return _err(EXIT_ENFORCEMENT, "landing_record_missing",
+                    f"land-work-product: {expected_ref!r} is already at {new_sha!r} but the "
+                    f"temp ref is gone and NO landing record exists — cannot authorize the "
+                    f"heal; reconcile manually", retryable=False, correlation_id=ce)
     if head != pre_sha:
         return _err(EXIT_ENFORCEMENT, "landing_unexpected_sha",
                     f"land-work-product: {expected_ref!r} is at {head!r} — neither the recorded "
                     f"pre-task SHA {pre_sha!r} nor the landed SHA {new_sha!r}; the branch moved "
                     f"underneath — refusing", retryable=False, correlation_id=ce)
+    if tr_rc != 0 or tr_sha != new_sha:
+        # R3-A: the temp ref must hold exactly the collected commit before a fresh landing
+        return _err(EXIT_ENFORCEMENT, "landing_temp_ref_mismatch",
+                    f"land-work-product: {temp_ref!r} "
+                    f"{'does not exist' if tr_rc != 0 else 'resolves to ' + repr(tr_sha)}, "
+                    f"expected {new_sha!r} — refusing", retryable=False, correlation_id=ce)
+    # --- D2/R3-F: SCOPED dirty check — refuse only a changed∩dirty collision, by name --------
+    rc, out, err = _git("diff", "--no-renames", "--name-only", "-z",
+                        f"{pre_sha}..{new_sha}")
+    if rc != 0:
+        return _err(EXIT_INTERNAL, "landing_git_failed",
+                    f"land-work-product: git diff failed: {err.strip()}", retryable=False,
+                    correlation_id=ce)
+    changed = {p for p in out.split("\0") if p}
+    rc, out, err = _git("status", "--porcelain=v1", "-z", "--untracked-files=all",
+                        "--no-renames")
+    if rc != 0:
+        return _err(EXIT_INTERNAL, "landing_git_failed",
+                    f"land-work-product: git status failed: {err.strip()}", retryable=False,
+                    correlation_id=ce)
+    colliding = sorted(changed & _parse_porcelain_z(out))
+    if colliding:
+        return _err(EXIT_ENFORCEMENT, "landing_dirty_paths",
+                    f"land-work-product: the landing would materialize over dirty paths "
+                    f"{colliding!r} — commit/stash exactly these first (unrelated dirt is "
+                    f"tolerated)", retryable=False, correlation_id=ce)
     rc, _o, err = _git("merge", "--ff-only", new_sha)
     if rc != 0:
         return _err(EXIT_ENFORCEMENT, "landing_ff_refused",
@@ -2076,6 +2339,10 @@ def land_work_product(*, repo: str, expected_ref: str, pre_sha: str, new_sha: st
                     f"land-work-product: post-merge state is not exactly {new_sha!r} "
                     f"(HEAD {head2.strip()!r}, {expected_ref} {ref2.strip()!r}) — inspect "
                     f"manually", retryable=False, correlation_id=ce)
+    if not no_audit:
+        fail = _append_landing("landed")
+        if fail:
+            return fail
     del_rc, _o, _e = _git("update-ref", "-d", temp_ref, new_sha)
     return {"ok": True, "exit": EXIT_OK, "action": "land_work_product", "status": "landed",
             "new_sha": new_sha, "temp_ref_deleted": del_rc == 0, "correlation_id": ce}
@@ -2567,7 +2834,7 @@ def _git_runner(cmd, env=None):
 
 
 def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
-                    prompt, gate_decision, plan_context) -> dict:
+                    prompt, gate_decision, plan_context, *, resolved_table: ResolvedTable) -> dict:
     """#470 §1 provisioning — construct the ``Supervisor`` (quota coordinator, registry/capture
     roots, tmux socket from the same config the CLI already resolved) + the seat's git worktree via
     ``WorktreeManager``, then run ``supervised_dispatch``. The provider-touching steps (probe-session
@@ -2591,7 +2858,8 @@ def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
             return _err(EXIT_AVAILABILITY, "no_sandboxed_mutating_lane",
                         f"mutating seat {args.seat!r}: no FS-sandboxed provider in its chain "
                         f"(allowlist: {sorted(MUTATING_FS_SANDBOXED)}) — declare a codex lane or "
-                        f"ship the FS-sandbox child", retryable=False,
+                        f"ship the FS-sandbox child; resolved table "
+                        f"{resolved_table.source} at {resolved_table.path}", retryable=False,
                         correlation_id=ce, audit_path=str(audit.path))
         target = sandboxed[0]
         lane = target["lane"]
@@ -2781,7 +3049,8 @@ def _do_dispatch(args) -> int:
     # project phaseExecutorTable override) fails CLOSED (like the import guard) rather than
     # crashing to a bare traceback (Step-8a R1/R2; #445 resolve_table).
     try:
-        snap = resolve_table(repo_root, pe.routing).snapshot
+        rt = resolve_table(repo_root, pe.routing)
+        snap = rt.snapshot
         paths = derive_paths(repo_root, args.project, args.run_id, snap.pool_concurrency())
     except MalformedConfig as e:
         return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False,
@@ -2938,7 +3207,7 @@ def _do_dispatch(args) -> int:
     mutating = bool({"edit", "bash"} & set(manifest.get("tool_grants") or ()))
     if mutating:
         result = _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
-                                 prompt, gate_decision, plan_context)
+                                 prompt, gate_decision, plan_context, resolved_table=rt)
         if plan_freshness is not None and isinstance(result, dict):
             result["plan_freshness"] = plan_freshness
         return _emit(result)
@@ -3103,16 +3372,20 @@ def _do_collect_work_product(args) -> int:
         run_id=args.run_id, session_name=args.session_name, target_ref=args.target_ref,
         expected_target_sha=args.expected_target_sha, kind=args.kind,
         registry=registry, manager=manager, audit=audit, intent_dir=str(intent_dir),
-        correlation_id=args.correlation_id, promote_paths=args.promote_paths))
+        correlation_id=args.correlation_id, promote_paths=args.promote_paths,
+        expected_feature_ref=args.expected_feature_ref))
 
 
 def _do_land_work_product(args) -> int:
-    """#767 Step-11 R1-F2: CLI wrapper for the production guarded landing — pure git against the
-    orchestrator's checkout, no registry/audit context needed (the audit-side feature-ref binding
-    is #762's follow-up)."""
+    """#767 Step-11 R1-F2 + #762 D1: CLI wrapper for the production guarded landing — audited
+    by default (identity args REQUIRED; ``--no-audit`` is the explicit, greppable opt-out for
+    standalone/ops use). The function resolves the repo and builds the run's RoutingAuditLog
+    from workspace+project itself."""
     return _emit(land_work_product(
         repo=args.repo, expected_ref=args.expected_ref, pre_sha=args.pre_sha,
-        new_sha=args.new_sha, temp_ref=args.temp_ref, correlation_id=args.correlation_id))
+        new_sha=args.new_sha, temp_ref=args.temp_ref, correlation_id=args.correlation_id,
+        run_id=args.run_id, workspace=args.workspace, project=args.project,
+        no_audit=args.no_audit))
 
 
 def _status_tail(path: Path, limit: int = 200) -> str:
@@ -3425,24 +3698,36 @@ def _do_reconcile(args) -> int:
     expected = [e.as_expected_call() for e in state.expected]
     try:
         rec = pe.enforce.reconcile_run(expected, records, initial_digest=state.initial_digest,
-                                       require_nonempty=final)
+                                       require_nonempty=final, run_id=args.run_id)
     except ValueError as e:  # duplicate expected tuples / broken epoch chain — fail-closed anomaly
         return _emit({"run_id": args.run_id, "mode": args.mode, "reconciled": False,
                       "reason": f"reconcile_run: {e}", "exit": EXIT_ANOMALY})
+    # #762 R5-C: every landing bucket enumerated explicitly — a new Reconcile field that never
+    # reaches this dict would be a silently-invisible anomaly class.
     buckets = {"missing_receipt": rec.missing_receipt, "failed_precheck": rec.failed_precheck,
                "missing_obs": rec.missing_obs, "binding_mismatch": rec.binding_mismatch,
                "duplicate_nonce": rec.duplicate_nonce, "duplicate": rec.duplicate,
                "unverified": rec.unverified, "unaudited_digest": rec.unaudited_digest,
-               "orphan": rec.orphan}
+               "orphan": rec.orphan, "orphan_work_product": rec.orphan_work_product,
+               "duplicate_work_product": rec.duplicate_work_product,
+               "missing_work_product": rec.missing_work_product,
+               "unlanded_work_product": rec.unlanded_work_product,
+               "orphan_landing": rec.orphan_landing,
+               "landing_mismatch": rec.landing_mismatch,
+               "landing_conflict": rec.landing_conflict}
     present = {k: list(v) for k, v in buckets.items() if v}
     if final:
         reconciled = rec.ok
     else:
         # provisional: fail only on a HARD breach; tolerate not-yet-observed in-flight calls
+        # (#762 R5-C: the landing buckets are hard — they are deliberately NOT tolerated)
         reconciled = not any(k not in _PROVISIONAL_TOLERATED for k in present)
     return _emit({"run_id": args.run_id, "mode": args.mode, "closed": state.closed,
                   "expected_calls": len(expected), "reconciled": reconciled,
-                  "anomalies": present, "exit": EXIT_OK if reconciled else EXIT_ANOMALY})
+                  "anomalies": present,
+                  # R5-D: report-only bucket — visible, named, never a verdict input
+                  "report": {"pre_cutover_unverifiable": list(rec.pre_cutover_unverifiable)},
+                  "exit": EXIT_OK if reconciled else EXIT_ANOMALY})
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -3509,17 +3794,25 @@ def main(argv: Optional[list] = None) -> int:
                     help="#767: exact relative file promotable by this collect (repeatable; one "
                          "per declared task file; REQUIRED for --kind code); absent -> the "
                          "appendix-prefix default")
+    cw.add_argument("--expected-feature-ref", dest="expected_feature_ref",
+                    help="#762 R5-B: the refs/heads/ feature ref this collect authorizes "
+                         "landing on (REQUIRED for --kind code); land-work-product requires "
+                         "byte-exact equality with its --expected-ref")
     cw.add_argument("--correlation-id", dest="correlation_id")
     cw.add_argument("--workspace", required=True)
     cw.add_argument("--project", required=True)
     cw.set_defaults(fn=_do_collect_work_product)
 
     lw = sub.add_parser("land-work-product",
-                        help="#767 Step-11: guarded tri-state landing — fast-forward the "
-                             "checked-out feature branch onto a collected temp-ref commit "
-                             "(clean tree, exact symbolic ref, ff-only, postconditions, CAS "
-                             "temp-ref delete)")
-    lw.add_argument("--repo", default=".", help="path to the orchestrator checkout (default: .)")
+                        help="#767 Step-11 / #762 D1: guarded AUDITED tri-state landing — "
+                             "fast-forward the checked-out feature branch onto a collected "
+                             "temp-ref commit (authorization bound to the collect record, "
+                             "scoped dirty check, ff-only, postconditions, landed_work_product "
+                             "audit append, CAS temp-ref delete). Identity args required; "
+                             "--no-audit is the explicit unaudited opt-out")
+    lw.add_argument("--repo", default=None,
+                    help="path to the orchestrator checkout (audited mode derives it from "
+                         "workspace+project and merely cross-checks this; --no-audit default: .)")
     lw.add_argument("--expected-ref", required=True, dest="expected_ref",
                     help="the feature ref recorded before dispatch (refs/heads/...)")
     lw.add_argument("--pre-sha", required=True, dest="pre_sha",
@@ -3528,6 +3821,13 @@ def main(argv: Optional[list] = None) -> int:
                     help="the collected commit SHA (collect-work-product's new_sha)")
     lw.add_argument("--temp-ref", required=True, dest="temp_ref",
                     help="the per-receipt collect ref (refs/rawgentic/collect/<nonce>)")
+    lw.add_argument("--run-id", dest="run_id",
+                    help="the run whose audit log records the landing (audited mode)")
+    lw.add_argument("--workspace", help="workspace file (audited mode)")
+    lw.add_argument("--project", help="project name (audited mode)")
+    lw.add_argument("--no-audit", action="store_true", dest="no_audit",
+                    help="#762: explicit unaudited opt-out — pure-git landing for "
+                         "standalone/ops use; mutually exclusive with the identity args")
     lw.add_argument("--correlation-id", dest="correlation_id")
     lw.set_defaults(fn=_do_land_work_product)
 

@@ -495,7 +495,8 @@ def test_production_claude_argv_single_run(tmp_path):
              dispatch=_req_capture(reqs))
     _, req = reqs[0]
     cmd = claude_cli.build_command(req.requested_model, effort=req.effort, profile=req.profile)
-    assert cmd[cmd.index("--max-budget-usd") + 1] == "2.0"
+    # owner retune 2026-07-31 (#762 R3-E): analysis max_budget_usd 2.0 -> 10.0
+    assert cmd[cmd.index("--max-budget-usd") + 1] == "10.0"
     assert "--allowedTools" in cmd
 
 

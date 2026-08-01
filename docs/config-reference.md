@@ -273,6 +273,12 @@ Optional versioned descriptor naming the project-owned **phase-executor seat tab
 `routing-table.schema.json` shape) that **completely replaces** the package default — never a
 merge overlay. Seeded (and optionally per-seat tweaked) from the package table by `/rawgentic:setup` Step 2i (#446); an un-tweaked project resolves a digest-identical table to the shipped default.
 
+**Per-project override recipe.** In the project's committed `.rawgentic.json`, set
+`"phaseExecutorTable": { "version": 1, "file": "claude_docs/routing/phase-executor-table.json" }`.
+`executor_routing_lib.resolve_table` then resolves that complete replacement table. With no
+`phaseExecutorTable.file` override, it resolves the package default; a declared but broken
+override refuses at resolution and never silently falls back.
+
 **Answered-defaults sentinel (#531):** `"phaseExecutorTable": { "version": 1, "file": null }`
 records that setup asked and the user kept the package defaults. It derives and resolves
 exactly like an absent section (package default, no table file), but the key's presence stops
@@ -294,9 +300,10 @@ executor CLI and the driver-bench):
   the package default** (the same false-cutover posture as `executorRouting`).
 
 Distinct from two neighbors: [`modelRouting`](#modelrouting) routes *prose subagent roles*
-(fail-open); the workspace [`executorRouting`](#executorrouting) block decides *whether* a seat
-routes through the executor at all — `phaseExecutorTable` decides *which table* the executor
-routes on. Capability surface: [`phase_executor_table`](#config-loading-protocol).
+(fail-open); the workspace [`executorRouting`](#executorrouting) block is validated but does
+not select a routing tier — the workspace-level `defaultArchitecture` does (absent = executor).
+`phaseExecutorTable` decides *which table* the executor routes on. Capability surface:
+[`phase_executor_table`](#config-loading-protocol).
 
 The official workflow diagram (`docs/workflow-diagram.html`) renders this resolved table
 per WF2 phase — seat, default model, fallback chain, routing-mode classification — generated
@@ -726,7 +733,8 @@ Shape:
 Semantics (consumed by `hooks/executor_routing_lib.py`) — **rewritten by #474: the seat modes no
 longer select the tier;** [`defaultArchitecture`](#defaultarchitecture-and-the-legacy-rollback)
 does (absent = executor). The block is still VALIDATED, and a declared mode must AGREE with the
-architecture:
+architecture. Thus a workspace-entry block documents intent and refuses a contradiction; it
+does not route a seat or select the architecture:
 
 - **`inherit`** (a seat's mode) — the legacy Agent-tool path. Valid ONLY under
   `defaultArchitecture: "legacy"` (an `"inherit"` seat under the executor architecture is a
@@ -744,6 +752,14 @@ mode outside `{inherit, executor}`, or a mode contradicting the architecture) ma
 / `dispatch` return **exit 2** — a typo'd value must fail loud, never silently pick a side (a false
 cutover, either direction). Executor routing is an enforcement/verification choke point, so a
 config it cannot evaluate denies rather than degrades.
+
+**AC1 live workspace mutation procedure.** To add `executorRouting` blocks to a live
+`.rawgentic_workspace.json`, make one read-modify-write operation: read and retain a backup,
+add **only** the `executorRouting` key to the chosen project entries, write the complete JSON to
+a temporary file in the same directory, then atomically replace the workspace file with
+`os.replace`. After the replacement, validate both the JSON round-trip and
+`parse_executor_routing()` over **every** project entry. If either validation fails, restore the
+backup and report the failure; do not alter any other workspace key.
 
 Seat ↔ WF-step mapping (the prose wiring lands in #417): `intake` → WF2 Step 2 (analyze),
 `plan` → Step 5 (plan), `ship` → Step 12 (README/changelog/version/docs). Driver-only stages

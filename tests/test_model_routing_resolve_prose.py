@@ -46,6 +46,15 @@ def test_wf3_fix_bug_carries_concurrency_and_fallback():
     assert "handled hard failure, never a silent downgrade" in norm
 
 
+def test_wf3_fix_bug_carries_build_seat_clause():
+    # #762: WF3's bespoke block now dispatches fix-plan implementation work through
+    # the build seat; whitespace-normalized single-file anchor.
+    norm = _norm((REPO / "skills" / "fix-bug" / "SKILL.md").read_text(encoding="utf-8"))
+    assert ("WF3 fix-plan tasks dispatch through the executor `build` seat: mint "
+            "the gate from the WF3 fix plan, dispatch with `--gate-file` and "
+            "`--plan-file`, then collect and land the work product audited.") in norm
+
+
 # --- #470: the executor-dispatch contract replaced the Agent-tool-only prose. ---
 # New canonical sentences in the single-source shared block. Anchored to the
 # shared source (single source of truth), whitespace-normalized per the repo
@@ -177,17 +186,20 @@ def test_step3_row_states_wired_truth():
 
 def test_run_records_reconciliation_states_wired_join_truth():
     """#765: the run-records reconciliation section must not defer to the CLOSED #472,
-    and must state the honest per-stream join truth (design rounds carry workflow
-    identity; the build stream's wiring is #762's)."""
+    and must state #762's shipped landing-audit join while retaining the uncalled,
+    prospective build-bake-off follow-up (#779)."""
     text = (REPO / "docs" / "run-records.md").read_text(encoding="utf-8")
     start = text.index("### Audit-stream reconciliation")
     end = text.index("### Capture", start)
     section = _norm(text[start:end])
     assert "#472" not in section, \
         "run-records reconciliation must not defer to the closed #472 (#765)"
-    assert "#762" in section, \
-        "the build bake-off stream's wiring/reconciliation must point at the OPEN #762"
-    assert "correlation_id" in section
+    assert "landed_work_product" in section
+    assert "receipt_nonce" in section
+    assert "pre_cutover_unverifiable" in section
+    assert "#779" in section, \
+        "the uncalled build bake-off follow-up must point at #779, not #762"
+    assert "no current reconciliation join is performed on `correlation_id`" in section
 
 
 # --- #735: Step-8 executor-primary sentence + legacy-conditioned delegation --
@@ -252,3 +264,70 @@ def test_review_seat_row_names_no_review_fast_seat():
             f"{skill}: dispatch prose must not name review_fast as a seat"
     assert "--seat <review|review_fast>" not in _norm(skill_corpus("fix-bug")), \
         "fix-bug: the dispatch CLI template must use --seat review"
+
+
+# --- #762 Step-11 r1-2/r2-3: retune-pinned prose tracks the EXECUTABLE policy ---------------
+
+_MODEL_SHORT = {"gpt-5.6-sol": "sol", "claude-fable-5": "fable", "claude-opus-5": "opus",
+                "claude-sonnet-5": "sonnet", "gpt-5.6-terra": "terra"}
+
+
+def _short(model_id: str) -> str:
+    assert model_id in _MODEL_SHORT, (
+        f"model id {model_id!r} has no short prose name — extend _MODEL_SHORT so the "
+        f"retune-prose guards keep tracking the executable policy")
+    return _MODEL_SHORT[model_id]
+
+
+def _design_pairing() -> str:
+    sys.path.insert(0, str(REPO / "hooks"))
+    import bakeoff_policy  # noqa: E402  pylint: disable=import-outside-toplevel
+    a, b = bakeoff_policy.DESIGN_MODELS
+    return f"{_short(a)} vs {_short(b)}"
+
+
+def _review_chain() -> str:
+    import json  # pylint: disable=import-outside-toplevel
+    table = json.loads((REPO / "phase_executor" / "src" / "phase_executor" / "routing"
+                        / "rawgentic.routing-table.json").read_text(encoding="utf-8"))
+    seat = table["seats"]["review"]
+    order = [seat["primary"]["model"]] + [c["model"] for c in seat["chain"]
+                                          if c["model"] != seat["primary"]["model"]]
+    return " → ".join(_short(m) for m in order)
+
+
+def test_design_pairing_prose_tracks_design_models():
+    # A future retune of DESIGN_MODELS fails these until the prose moves with it (r1-2/r2-3).
+    pairing = _design_pairing()
+    for surface in (SHARED, REPO / "skills" / "implement-feature" / "SKILL.md"):
+        text = _norm(surface.read_text(encoding="utf-8"))
+        assert f"({pairing} concurrent, glm-5.2 judge)" in text, (
+            f"{surface.name}: the design-round pairing prose must state the executable "
+            f"DESIGN_MODELS pairing {pairing!r}")
+
+
+def test_design_pairing_current_diagram_rev_tracks_design_models():
+    # Only the CURRENT (non-superseded) diagram rev must track the live pairing; historical
+    # revs legitimately keep the models of their day.
+    pairing = _design_pairing()
+    html = (REPO / "docs" / "workflow-diagram.html").read_text(encoding="utf-8")
+    m = re.search(r'"([0-9.]+)": \{ superseded:false', html)
+    assert m, "no non-superseded wf2 rev found in the diagram data"
+    start = m.start()
+    nxt = re.search(r'"[0-9.]+": \{ superseded:"', html[start:])
+    block = html[start:start + nxt.start()] if nxt else html[start:]
+    assert f"· {pairing} ·" in block, (
+        f"the current diagram rev {m.group(1)} must state the executable pairing {pairing!r}")
+    others = set(re.findall(r"· (\w+ vs \w+) ·", block)) - {pairing}
+    assert not others, f"current diagram rev carries a non-executable pairing: {others}"
+
+
+def test_review_chain_prose_tracks_routing_table():
+    chain = _review_chain()
+    for surface, needle in (
+            (SHARED, f"the `review` chain {chain}"),
+            (REPO / "skills" / "implement-feature" / "SKILL.md", f"the `review` chain {chain}"),
+            (REPO / "skills" / "fix-bug" / "SKILL.md", f"the routing table, {chain}")):
+        text = _norm(surface.read_text(encoding="utf-8"))
+        assert needle in text, (
+            f"{surface}: the review-chain prose must state the executable order {chain!r}")

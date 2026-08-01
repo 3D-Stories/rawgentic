@@ -289,15 +289,19 @@ Two audit streams exist by design and are reconciled by DECLARATION, not by wiri
 - **Bake-off records** (competitive design seats) carry their own audit spine
   (`bakeoff_results` + gate attestations); a competitive round is NEVER single-dispatched
   (`COMPETITIVE_ONLY` refusal), so the two streams cannot double-count one dispatch.
-- **Join keys, per stream (the honest state since #765):** a **design round** dispatched
-  through the wired WF2 Step-3 caller (`bakeoff_policy.py design-round`, #765) carries the
-  workflow's `run_id` AND `correlation_id` in its record and on every candidate — a
-  consumer joins those on identity, never on wall-clock. The **build bake-off** stream has
-  no workflow caller yet: its records carry a `run_id` only (`correlation_id: None` unless
-  a caller supplies one), so it is NOT currently joinable on `correlation_id` — its wiring
-  and reconciliation land with the build-seat adoption work (#762). Merging the competitive
-  stream INTO RoutingAuditLog (one physical stream) remains deliberately deferred; until
-  then this section IS the reconciliation contract.
+- **Current joins and limits (the honest state since #765):** #762 shipped the landing-audit
+  join: `landed_work_product` records bind a landing to its `work_product` record and its
+  receipt by `receipt_nonce`; real build receipts participate in that join. The `reconcile`
+  verb enumerates `unlanded`, `orphan`, `mismatch`, and `conflict` buckets, plus the
+  report-only `pre_cutover_unverifiable` bucket. A wired WF2 Step-3 **design round**
+  (`bakeoff_policy.py design-round`, #765) associates its record and candidates with the
+  workflow by `run_id`; it carries `correlation_id`, but no current reconciliation join is
+  performed on `correlation_id`. The **build bake-off** stream remains UNCALLED and
+  unjoined: no workflow caller ships in #762, and its competitive-round correlation-id
+  join remains prospective. The executor-tier whole-issue receipts and build bake-off
+  caller are follow-up #779. Merging the competitive stream INTO RoutingAuditLog (one
+  physical stream) remains deliberately deferred; until then this section IS the
+  reconciliation contract.
 
 ### Capture (#330)
 

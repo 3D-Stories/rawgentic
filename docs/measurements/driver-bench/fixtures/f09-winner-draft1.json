@@ -18,10 +18,10 @@
         }
       },
       {
-        "model": "claude-opus-5",
+        "model": "claude-fable-5",
         "parse_status": "ok",
-        "actual_model": "claude-opus-5",
-        "payload": "draft opus",
+        "actual_model": "claude-fable-5",
+        "payload": "draft fable",
         "usage": {
           "input": 100,
           "output": 50,

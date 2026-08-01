@@ -3,6 +3,7 @@ no live provider call), CLI contract, guarded import. Asserts the ACTUAL executi
 paths (executor -> routed model; inherit -> prior behavior untouched)."""
 import json
 import os
+import re
 import subprocess
 import sys
 import types
@@ -591,6 +592,33 @@ _PLAN_STD = ("### Task 1: build the thing (#470)\n"
              "- files: hooks/foo.py, hooks/bar.py\n")
 
 
+def test_mint_gate_e2e_from_wf3_format_fix_plan(tmp_path):
+    """#762: a WF3-format plan supplies the gate's two CLI facts end-to-end."""
+    plan = tmp_path / "fix-plan.md"
+    gate = tmp_path / "gate.json"
+    plan.write_text(
+        "- wf3-complexity: moderate_bug\n"
+        "- estimated-lines: 9\n\n"
+        "### Task 1: reproduce the bug\n"
+        "- riskLevel: standard\n"
+        "- files: tests/test_widget.py\n\n"
+        "### Task 2: make the minimal fix\n"
+        "- riskLevel: standard\n"
+        "- files: src/widget.py\n\n"
+        "### Task 3: cover the regression\n"
+        "- riskLevel: standard\n"
+        "- files: tests/test_widget.py\n",
+        encoding="utf-8")
+    fields = dict(re.findall(r"^- ([a-z0-9-]+): (.+)$", plan.read_text(encoding="utf-8"), re.M))
+    mapped_complexity = {"simple_bug": "standard", "moderate_bug": "standard",
+                         "complex_bug": "complex"}[fields["wf3-complexity"]]
+    result = _run_cli("mint-gate", "--plan-file", str(plan),
+                      "--issue-complexity", mapped_complexity,
+                      "--plan-est-lines", fields["estimated-lines"], "--out", str(gate))
+    assert result.returncode == 0, result.stderr
+    assert json.loads(gate.read_text(encoding="utf-8"))["decision"] is False
+
+
 def _gate470(plan_content=_PLAN_STD, *, risk="standard", complexity="standard", lines=7, file_count=2):
     """A #470 build gate that RECORDS the plan-file digest it was minted against. The snapshot facts
     are set to MATCH what the mint derives from ``plan_content`` (aggregate risk, distinct-file count)
@@ -927,6 +955,65 @@ class TestResolveTable:
         _cfg(repo, pointer="nope/missing.json")
         with pytest.raises(er.MalformedConfig, match="missing.json"):
             er.resolve_table(repo, routing)
+
+
+def _supervised_no_sandboxed_lane(*, rt, monkeypatch):
+    """Drive only the chain filter; no provider/worktree side effect is reachable."""
+    pe = er._import_phase_executor()  # noqa: SLF001 - test the CLI's resolved-package seam
+    monkeypatch.setattr(pe, "PROVIDER_ENGINE", {"anthropic": "claude", "openai": "claude"})
+    args = types.SimpleNamespace(seat="build", correlation_id="762-r3h", author_provider=None)
+    return er._run_supervised(  # noqa: SLF001 - refusal is owned by this helper
+        args, pe, rt.snapshot, {}, None, types.SimpleNamespace(path="audit.jsonl"), {},
+        rt.path.parent, "", None, None, resolved_table=rt)
+
+
+def test_no_sandboxed_mutating_lane_names_package_default_provenance(tmp_path, monkeypatch):
+    repo = tmp_path / "default-project"
+    repo.mkdir()
+    rt = er.resolve_table(repo, routing)
+    result = _supervised_no_sandboxed_lane(rt=rt, monkeypatch=monkeypatch)
+    message = result["error"]["message"]
+    assert rt.source in message and str(rt.path) in message
+
+
+def test_no_sandboxed_mutating_lane_names_project_override_provenance(tmp_path, monkeypatch):
+    repo = tmp_path / "override-project"
+    _cfg(repo, pointer="claude_docs/routing/table.json")
+    table = repo / "claude_docs" / "routing" / "table.json"
+    table.parent.mkdir(parents=True)
+    table.write_bytes(routing.default_table_path().read_bytes())
+    rt = er.resolve_table(repo, routing)
+    result = _supervised_no_sandboxed_lane(rt=rt, monkeypatch=monkeypatch)
+    message = result["error"]["message"]
+    assert rt.source == "project_file"
+    assert rt.source in message and str(rt.path) in message
+
+
+def test_retuned_package_table_resolves_and_review_keeps_cross_model_chain_eligible(tmp_path):
+    repo = tmp_path / "retuned-package-default"
+    repo.mkdir()
+    rt = er.resolve_table(repo, routing)  # package schema + semantic validation entry point
+    expected = {
+        "intake": ("claude-sonnet-5", ["claude-fable-5", "claude-sonnet-5"], "xhigh"),
+        "analysis": ("claude-opus-5", ["claude-fable-5", "claude-sonnet-5"], "high"),
+        "design": ("gpt-5.6-sol", ["claude-fable-5"], "high"),
+        "plan": ("claude-opus-5", ["claude-fable-5", "claude-sonnet-5"], "high"),
+        "build": ("claude-sonnet-5", ["claude-opus-5", "gpt-5.6-terra"], "high"),
+        "review": ("gpt-5.6-sol", ["claude-fable-5", "claude-sonnet-5"], "high"),
+        "ship": ("claude-sonnet-5", ["claude-opus-5", "claude-fable-5"], "high"),
+        "offload": ("hermes-agent", ["claude-sonnet-5"], "medium"),
+    }
+    for seat, (primary, chain, effort) in expected.items():
+        spec = rt.snapshot.seat(seat)
+        assert spec["primary"]["model"] == primary
+        assert [entry["model"] for entry in spec["chain"]] == chain
+        assert spec["manifest"]["effort"] == effort
+        assert [target["model"] for target in routing.eligible_targets(seat, rt.snapshot)] == [
+            primary, *chain]
+    assert rt.snapshot.seat("analysis")["manifest"]["bounds"]["max_budget_usd"] == 10.0
+    review = routing.eligible_targets("review", rt.snapshot, author_provider="anthropic")
+    assert review[0]["model"] == "gpt-5.6-sol"
+    assert [target["model"] for target in review] == ["gpt-5.6-sol"]
 
 
 class TestResolveTerminalBackend:
@@ -2251,6 +2338,8 @@ def _seed_authorized_audit(audit, *, nonce="rn1", cid="c1", seat="build", run_id
 def _collect(tmp_path, reg, mgr, *, run_id="run1", session="sess1",
              target="refs/heads/integration", expected="0" * 40, kind="docs", audit=None, seed=True,
              obs_status="ok", **collect_kw):
+    if kind == "code":  # #762 R5-B: code collects carry the landing-destination authorization
+        collect_kw.setdefault("expected_feature_ref", "refs/heads/integration")
     audit = audit or enforce.RoutingAuditLog(tmp_path / "runs", run_id)
     if seed:  # F7 (#571): a promotion needs an authorized build receipt + verified obs
         _seed_authorized_audit(audit, run_id=run_id, obs_status=obs_status)
@@ -4340,3 +4429,139 @@ def test_collect_appendix_different_target_intent_conflict(tmp_path):
     r2, _ = _collect(tmp_path, reg, mgr, target="refs/heads/other-branch")
     assert r2["ok"] is False
     assert r2["error"]["code"] == "intent_conflict"
+
+
+# ---------------------------------------------------------------------------
+# #762 Task 2 (R5-C): the reconcile CLI enumerates the landing buckets — one test per
+# surfaced bucket, hard in provisional mode; pre_cutover is a REPORT, never an ok-flip.
+# ---------------------------------------------------------------------------
+
+_LANE762 = {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth",
+            "pool": "claude", "credential_ref": None}
+
+
+def _r762_receipt(nonce, cid):
+    tid = list(enforce.target_identity({"model": "claude-sonnet-5", "lane": _LANE762}))
+    return {"kind": "receipt", "nonce": nonce, "seat": "analysis", "correlation_id": cid,
+            "attempt_id": "0", "target_identity": tid, "config_digest": "sha256:cfg",
+            "verdict": "pass"}
+
+
+def _r762_obs(nonce, cid):
+    inner = {"schema_version": "1", "run_id": "run1", "attempt_id": "0", "seat": "analysis",
+             "correlation_id": cid,
+             "engine": "claude", "transport": "native", "requested_model": "claude-sonnet-5",
+             "actual_model": "claude-sonnet-5", "prompt_hash": "sha256:x", "context_hashes": [],
+             "usage": {"input": 1, "output": 1}, "timing_ms": 1, "queued_ms": 0,
+             "process": {"exit_code": 0, "timed_out": False}, "parse_status": "ok",
+             "parsed_payload": None, "raw_capture_path": None, "fallback_reason": None,
+             "routing_config_digest": "sha256:cfg", "dispatched_lane": _LANE762}
+    return {"kind": "observation", "receipt_nonce": nonce, "observation": inner}
+
+
+def _r762_code_wp(nonce, *, new="b" * 40):
+    return {"kind": "work_product", "receipt_nonce": nonce, "candidate_tree_sha": "t",
+            "new_sha": new,
+            "work_product": {"kind": "code", "worktree_path": "/wt", "base_sha": "a" * 40,
+                             "head_sha": "h", "content_tree_sha": "t",
+                             "changed_paths": ["x.py"], "documents": [], "tests": [],
+                             "promotion_status": "promoted"},
+            "binding_version": 2, "target_ref": f"refs/rawgentic/collect/{nonce}",
+            "paths_digest": "sha256:" + "ab" * 32, "expected_feature_ref": "refs/heads/feat"}
+
+
+def _r762_landing(nonce, *, new="b" * 40, feature="refs/heads/feat", run_id="run1",
+                  temp=None):
+    return {"kind": "landed_work_product", "landing_version": 1, "receipt_nonce": nonce,
+            "feature_ref": feature, "pre_sha": "a" * 40, "new_sha": new,
+            "temp_ref": temp or f"refs/rawgentic/collect/{nonce}",
+            "landing_status": "landed", "run_id": run_id, "ts": 1000}
+
+
+def _r762_run(tmp_path, records, *, expected=("c1",), mode="final", closed=True):
+    ws, repo = _analysis_project(tmp_path)
+    rd = _run_dir(repo)
+    lg = ledger.ExpectedCallLedger(rd, "run1")
+    lg.append_initial("sha256:cfg", architecture="executor")
+    for cid in expected:
+        lg.append_expected("analysis", cid)
+    if closed:
+        lg.append_run_closed()
+    (rd / "routing-audit.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    return er.main(["reconcile", "--run-id", "run1", "--mode", mode,
+                    "--workspace", ws, "--project", "rawgentic"])
+
+
+def test_cli_reconcile_flags_unlanded_work_product(tmp_path, capsys):
+    recs = [_r762_receipt("n1", "c1"), _r762_obs("n1", "c1"),
+            _r762_code_wp("n1"), _r762_landing("n1"),
+            _r762_receipt("n2", "c2"), _r762_obs("n2", "c2"),
+            _r762_code_wp("n2", new="c" * 40)]
+    rc = _r762_run(tmp_path, recs, expected=("c1", "c2"))
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ANOMALY and out["reconciled"] is False
+    assert any("n2" in x for x in out["anomalies"]["unlanded_work_product"])
+
+
+def test_cli_reconcile_flags_orphan_landing(tmp_path, capsys):
+    recs = [_r762_receipt("n1", "c1"), _r762_obs("n1", "c1"),
+            _r762_code_wp("n1"), _r762_landing("n1"), _r762_landing("nX", new="d" * 40)]
+    rc = _r762_run(tmp_path, recs)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ANOMALY
+    assert any("nX" in x for x in out["anomalies"]["orphan_landing"])
+
+
+def test_cli_reconcile_flags_landing_mismatch(tmp_path, capsys):
+    recs = [_r762_receipt("n1", "c1"), _r762_obs("n1", "c1"),
+            _r762_code_wp("n1"), _r762_landing("n1", new="d" * 40)]
+    rc = _r762_run(tmp_path, recs)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ANOMALY
+    assert any("n1" in x for x in out["anomalies"]["landing_mismatch"])
+
+
+def test_cli_reconcile_flags_landing_conflict(tmp_path, capsys):
+    recs = [_r762_receipt("n1", "c1"), _r762_obs("n1", "c1"),
+            _r762_code_wp("n1"), _r762_landing("n1"),
+            _r762_landing("n1", feature="refs/heads/OTHER")]
+    rc = _r762_run(tmp_path, recs)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ANOMALY
+    assert any("n1" in x for x in out["anomalies"]["landing_conflict"])
+
+
+def test_cli_reconcile_flags_foreign_run_landing(tmp_path, capsys):
+    # the CLI passes its own --run-id into the run-identity arm
+    recs = [_r762_receipt("n1", "c1"), _r762_obs("n1", "c1"),
+            _r762_code_wp("n1"), _r762_landing("n1", run_id="runFOREIGN")]
+    rc = _r762_run(tmp_path, recs)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ANOMALY
+    assert any("n1" in x for x in out["anomalies"]["landing_mismatch"])
+
+
+def test_cli_reconcile_reports_pre_cutover_without_failing(tmp_path, capsys):
+    # R5-D: a pre-cutover code work_product (no landing records in the run) is REPORTED,
+    # named, and never flips the verdict — the honest legacy bucket.
+    recs = [_r762_receipt("n1", "c1"), _r762_obs("n1", "c1"), _r762_code_wp("n1")]
+    rc = _r762_run(tmp_path, recs)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_OK and out["reconciled"] is True
+    assert any("n1" in x for x in out["report"]["pre_cutover_unverifiable"])
+
+
+def test_cli_reconcile_landing_buckets_hard_in_provisional(tmp_path, capsys):
+    # R5-C: the landing buckets are HARD failures in provisional mode (never in-flight tolerance)
+    recs = [_r762_receipt("n1", "c1"), _r762_obs("n1", "c1"),
+            _r762_code_wp("n1"), _r762_landing("n1"), _r762_landing("nX", new="d" * 40)]
+    rc = _r762_run(tmp_path, recs, mode="provisional", closed=False)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ANOMALY and out["reconciled"] is False
+
+
+def test_landing_identity_fields_mirror_enforce():
+    # mirrored constants get drift guards (repo convention): the hooks-side writer dedup and
+    # the enforce-side reconcile conflict detection must key on the SAME immutable identity.
+    assert er._LANDING_IDENTITY_FIELDS == enforce.LANDING_IDENTITY_FIELDS

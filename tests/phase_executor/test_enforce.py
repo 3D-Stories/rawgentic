@@ -1321,3 +1321,352 @@ def test_append_work_product_rejects_empty_identity(tmp_path):
     with pytest.raises(ValueError):
         log.append_expected_work_product(receipt_nonce="n1", candidate_tree_sha="t", new_sha="s",
                                          target_ref="", paths_digest="")
+
+
+# ---- #762 D1/R3-B/R5-B: the landed_work_product audit kind + expected_feature_ref field ----
+
+_SHA_A = "a" * 40
+_SHA_B = "b" * 40
+
+
+def _landing_rec(nonce="n1", *, feature_ref="refs/heads/feat", pre=_SHA_A, new=_SHA_B,
+                 temp="refs/rawgentic/collect/n1", status="landed", run_id="runL", ts=1000):
+    return {"kind": "landed_work_product", "landing_version": 1, "receipt_nonce": nonce,
+            "feature_ref": feature_ref, "pre_sha": pre, "new_sha": new, "temp_ref": temp,
+            "landing_status": status, "run_id": run_id, "ts": ts}
+
+
+def test_append_landed_work_product_roundtrip(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path / "runs", "runL")
+    log.append_landed_work_product(
+        receipt_nonce="n1", feature_ref="refs/heads/feat", pre_sha=_SHA_A, new_sha=_SHA_B,
+        temp_ref="refs/rawgentic/collect/n1", landing_status="landed", run_id="runL", ts=1000)
+    recs = log.records()
+    assert len(recs) == 1
+    r = recs[0]
+    assert r["kind"] == "landed_work_product" and r["landing_version"] == 1
+    assert r["feature_ref"] == "refs/heads/feat" and r["landing_status"] == "landed"
+    assert r["run_id"] == "runL" and r["ts"] == 1000
+
+
+def test_landed_missing_required_field_refuses(tmp_path):
+    for field in ("landing_version", "receipt_nonce", "feature_ref", "pre_sha", "new_sha",
+                  "temp_ref", "landing_status", "run_id", "ts"):
+        bad = _landing_rec()
+        del bad[field]
+        with pytest.raises(ValueError):
+            _audit_roundtrip(tmp_path / field, bad)
+
+
+def test_landed_version_exact_int_one(tmp_path):
+    # exact non-boolean int 1: True, 2, "1", 1.0 all refuse
+    for i, v in enumerate((True, 2, "1", 1.0)):
+        bad = _landing_rec()
+        bad["landing_version"] = v
+        with pytest.raises(ValueError):
+            _audit_roundtrip(tmp_path / f"v{i}", bad)
+
+
+def test_landed_ref_rooting_refused(tmp_path):
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path / "fr", _landing_rec(feature_ref="feat"))
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path / "tr", _landing_rec(temp="refs/heads/n1"))
+
+
+def test_landed_sha_shape_refused(tmp_path):
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path / "s1", _landing_rec(pre="abc"))
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path / "s2", _landing_rec(new="Z" * 40))
+
+
+def test_landed_status_enum_refused(tmp_path):
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path / "st", _landing_rec(status="merged"))
+
+
+def test_landed_ts_int_refused(tmp_path):
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path / "t1", _landing_rec(ts="1000"))
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path / "t2", _landing_rec(ts=True))
+
+
+def test_landed_schema_exclusivity_refuses_binding_fields(tmp_path):
+    # D1: mutually exclusive with the work_product v1/v2 schemas — any binding-vocabulary
+    # field on a landing record is refused.
+    for i, (k, v) in enumerate((("binding_version", 2), ("target_ref", "refs/heads/x"),
+                                ("paths_digest", "sha256:" + "0" * 64))):
+        bad = _landing_rec()
+        bad[k] = v
+        with pytest.raises(ValueError):
+            _audit_roundtrip(tmp_path / f"x{i}", bad)
+
+
+def test_landed_poison_diagnostic_names_line(tmp_path):
+    # R3-J: a malformed landing record makes records() raise with a loud line-numbered diagnostic
+    log = enforce.RoutingAuditLog(tmp_path / "runs", "runL")
+    log._write_locked(_landing_rec())  # pylint: disable=protected-access
+    log._write_locked(_landing_rec(status="bogus"))  # pylint: disable=protected-access
+    with pytest.raises(ValueError, match="audit line 2"):
+        log.records()
+
+
+def test_append_landed_work_product_writer_validates(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path / "runs", "runL")
+    kw = dict(receipt_nonce="n1", feature_ref="refs/heads/feat", pre_sha=_SHA_A, new_sha=_SHA_B,
+              temp_ref="refs/rawgentic/collect/n1", landing_status="landed", run_id="runL",
+              ts=1000)
+    for bad in (dict(kw, feature_ref="feat"), dict(kw, temp_ref="refs/heads/n1"),
+                dict(kw, pre_sha="xyz"), dict(kw, landing_status="merged"),
+                dict(kw, receipt_nonce=""), dict(kw, run_id=""), dict(kw, ts="1000")):
+        with pytest.raises(ValueError):
+            log.append_landed_work_product(**bad)
+    assert log.records() == []  # nothing bad was ever written
+
+
+def test_validate_v2_expected_feature_ref_roundtrip(tmp_path):
+    # R5-B: a v2 record may carry expected_feature_ref (refs/heads/-rooted non-empty string)
+    ok = _wp_rec_v2("n1")
+    ok["expected_feature_ref"] = "refs/heads/feat"
+    recs = _audit_roundtrip(tmp_path, ok)
+    assert recs and recs[0]["expected_feature_ref"] == "refs/heads/feat"
+
+
+def test_validate_expected_feature_ref_without_version_refuses(tmp_path):
+    # hybrid rule extension: the field is v2 vocabulary — present without binding_version refuses
+    bad = _wp_rec("n1")
+    bad["expected_feature_ref"] = "refs/heads/feat"
+    with pytest.raises(ValueError):
+        _audit_roundtrip(tmp_path, bad)
+
+
+def test_validate_expected_feature_ref_shape_refused(tmp_path):
+    for i, v in enumerate(("", "feat", ["refs/heads/feat"])):
+        bad = _wp_rec_v2("n1")
+        bad["expected_feature_ref"] = v
+        with pytest.raises(ValueError):
+            _audit_roundtrip(tmp_path / f"e{i}", bad)
+
+
+def test_append_work_product_expected_feature_ref_requires_v2(tmp_path):
+    # writer hygiene: expected_feature_ref rides the v2 binding only — without target_ref it
+    # would be a version-downgraded hybrid at read time, so the writer refuses it up front.
+    log = enforce.RoutingAuditLog(tmp_path / "runs", "runv")
+    with pytest.raises(ValueError):
+        log.append_work_product(receipt_nonce="n1", candidate_tree_sha="t", new_sha="s",
+                                work_product=_valid_wp(),
+                                expected_feature_ref="refs/heads/feat")
+    with pytest.raises(ValueError):
+        log.append_expected_work_product(receipt_nonce="n1", candidate_tree_sha="t", new_sha="s",
+                                         expected_feature_ref="refs/heads/feat")
+    with pytest.raises(ValueError):
+        log.append_work_product(receipt_nonce="n1", candidate_tree_sha="t", new_sha="s",
+                                work_product=_valid_wp(), target_ref="refs/heads/x",
+                                paths_digest="sha256:" + "0" * 64,
+                                expected_feature_ref="not-rooted")
+
+
+def test_append_work_product_expected_feature_ref_roundtrip(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path / "runs", "runv")
+    log.append_expected_work_product(receipt_nonce="n1", candidate_tree_sha="t", new_sha="s",
+                                     target_ref="refs/heads/x",
+                                     paths_digest="sha256:" + "0" * 64,
+                                     expected_feature_ref="refs/heads/feat")
+    log.append_work_product(receipt_nonce="n1", candidate_tree_sha="t", new_sha="s",
+                            work_product=_valid_wp(), target_ref="refs/heads/x",
+                            paths_digest="sha256:" + "0" * 64,
+                            expected_feature_ref="refs/heads/feat")
+    recs = log.records()
+    assert [r["expected_feature_ref"] for r in recs] == ["refs/heads/feat", "refs/heads/feat"]
+
+
+# ---- #762 Task 2: landing reconcile arms (D1 reader + R3-B A4 + R5-D + rev-2 adoption 4) ----
+
+def _landing_for(nonce, *, new="sha256:new1", feature_ref="refs/heads/feat", run_id="runL",
+                 pre=_SHA_A, temp=None, status="landed", ts=1000):
+    return {"kind": "landed_work_product", "landing_version": 1, "receipt_nonce": nonce,
+            "feature_ref": feature_ref, "pre_sha": pre,
+            "new_sha": new, "temp_ref": temp or f"refs/rawgentic/collect/{nonce}",
+            "landing_status": status, "run_id": run_id, "ts": ts}
+
+
+def _code_wp_rec(nonce, *, new="sha256:new1", target=None, feature="refs/heads/feat"):
+    r = _wp_rec(nonce, new=new)
+    # nested base_sha matches _landing_for's default pre — the #762 8a pre-sha arm binds them
+    r["work_product"] = dict(r["work_product"], kind="code", base_sha=_SHA_A)
+    r.update({"binding_version": 2,
+              "target_ref": target or f"refs/rawgentic/collect/{nonce}",
+              "paths_digest": "sha256:" + "ab" * 32,
+              "expected_feature_ref": feature})
+    return r
+
+
+def _base_pair(nonce="n1"):
+    return [_receipt_rec(nonce), _obs_rec(nonce)]
+
+
+def test_reconcile_landed_pair_clean():
+    recs = _base_pair() + [_code_wp_rec("n1"), _landing_for("n1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+    assert res.unlanded_work_product == () and res.orphan_landing == ()
+    assert res.landing_mismatch == () and res.landing_conflict == ()
+    assert res.pre_cutover_unverifiable == ()
+
+
+def test_reconcile_unlanded_work_product_flips_ok():
+    # a code work_product POSITIONED AFTER the run's first landing with no landing of its
+    # own = delivered-but-lost work (D1); flips ok.
+    recs = (_base_pair() + [_code_wp_rec("n1"), _landing_for("n1")]
+            + [_receipt_rec("n2", cid="c2"), _obs_rec("n2", cid="c2"),
+               _code_wp_rec("n2", new="sha256:new2")])
+    res = enforce.reconcile_run([_EC(), _EC(cid="c2")], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("n2" in x for x in res.unlanded_work_product)
+
+
+def test_reconcile_pre_cutover_is_reported_never_ok_flip():
+    # R5-D: a code work_product positioned BEFORE the run's first landing record classifies
+    # pre_cutover_unverifiable — a NAMED report bucket that does not flip ok.
+    recs = (_base_pair() + [_code_wp_rec("n1", new="sha256:new0")]
+            + [_receipt_rec("n2", cid="c2"), _obs_rec("n2", cid="c2"),
+               _code_wp_rec("n2", new="sha256:new2"), _landing_for("n2", new="sha256:new2")])
+    res = enforce.reconcile_run([_EC(), _EC(cid="c2")], recs, initial_digest="sha256:d")
+    assert res.ok, res
+    assert any("n1" in x for x in res.pre_cutover_unverifiable)
+    assert res.unlanded_work_product == ()
+
+
+def test_reconcile_no_landings_at_all_is_all_pre_cutover():
+    # zero landing records in the run = the pre-#762 world; every unmatched code wp is
+    # pre_cutover (reported), never a hard unlanded failure — historical runs stay readable.
+    recs = _base_pair() + [_code_wp_rec("n1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+    assert any("n1" in x for x in res.pre_cutover_unverifiable)
+
+
+def test_reconcile_orphan_landing_flips_ok():
+    recs = _base_pair() + [_code_wp_rec("n1"), _landing_for("n1"),
+                           _landing_for("nX", new="sha256:other")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("nX" in x for x in res.orphan_landing)
+
+
+def test_reconcile_landing_mismatch_new_sha_flips_ok():
+    recs = _base_pair() + [_code_wp_rec("n1", new="sha256:new1"),
+                           _landing_for("n1", new="sha256:FORGED")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("n1" in x for x in res.landing_mismatch)
+
+
+def test_reconcile_landing_mismatch_noncanonical_temp_ref(tmp_path):
+    # R3-B A4: temp_ref must be the canonical nonce ref — a schema-valid but mis-bound
+    # record fails reconcile and never suppresses the unlanded flag.
+    recs = _base_pair() + [_code_wp_rec("n1"),
+                           _landing_for("n1", temp="refs/rawgentic/collect/OTHER")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("n1" in x for x in res.landing_mismatch)
+    assert any("n1" in x for x in res.unlanded_work_product)  # the mis-bound landing heals nothing
+
+
+def test_reconcile_landing_mismatch_target_ref_disagrees():
+    # R3-B A4: the paired code work_product's target_ref must equal the landing's temp_ref
+    recs = _base_pair() + [_code_wp_rec("n1", target="refs/rawgentic/collect/n1"),
+                           _landing_for("n1", temp="refs/rawgentic/collect/n1x")]
+    # the landing's temp ref is canonical for nonce "n1x", not "n1" — mis-bound either way
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("n1" in x for x in res.landing_mismatch)
+
+
+def test_reconcile_landing_run_id_mismatch_flags():
+    recs = _base_pair() + [_code_wp_rec("n1"), _landing_for("n1", run_id="runFOREIGN")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d", run_id="runL")
+    assert not res.ok
+    assert any("n1" in x for x in res.landing_mismatch)
+
+
+def test_reconcile_landing_run_id_unchecked_when_unknown():
+    # reconcile_run without a run_id (legacy callers/tests) skips the run-identity arm
+    recs = _base_pair() + [_code_wp_rec("n1"), _landing_for("n1", run_id="runFOREIGN")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+
+
+def test_reconcile_landing_conflict_differing_content_flips_ok():
+    # rev-2 adoption 4 + R3-B: same nonce, two landings with DIFFERING immutable identity
+    recs = _base_pair() + [_code_wp_rec("n1"), _landing_for("n1"),
+                           _landing_for("n1", feature_ref="refs/heads/OTHER")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("n1" in x for x in res.landing_conflict)
+
+
+def test_reconcile_landing_byte_identical_duplicates_collapse():
+    # byte-identical duplicates (retry metadata aside) collapse — no conflict
+    recs = _base_pair() + [_code_wp_rec("n1"), _landing_for("n1"),
+                           _landing_for("n1", status="already_landed", ts=2000)]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+    assert res.landing_conflict == ()
+
+
+# ---- #762 Step-8a wave: landing↔work-product binding agreement at reconcile ----
+
+def test_reconcile_landing_feature_ref_disagreement_flips_ok():
+    # #762 8a F-A: the landing's feature_ref must agree with the paired code work product's
+    # expected_feature_ref — a schema-valid landing on the WRONG destination branch never
+    # satisfies the work product (the reconcile-side half of 762-s4-15).
+    recs = _base_pair() + [_code_wp_rec("n1"),
+                           _landing_for("n1", feature_ref="refs/heads/OTHER")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("n1" in x and "feature-ref" in x for x in res.landing_mismatch)
+    assert any("n1" in x for x in res.unlanded_work_product)
+
+
+def test_reconcile_landing_pre_sha_disagreement_flips_ok():
+    # #762 8a F-A: landing.pre_sha must agree with the authorizing work product's nested
+    # base_sha — the land-time R4-C binding (762-s4-11), mirrored at reconcile.
+    recs = _base_pair() + [_code_wp_rec("n1"), _landing_for("n1", pre=_SHA_B)]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("n1" in x and "pre-sha" in x for x in res.landing_mismatch)
+    assert any("n1" in x for x in res.unlanded_work_product)
+
+
+def test_reconcile_landing_unasserted_bindings_still_land():
+    # legacy shape: a code wp asserting neither expected_feature_ref nor a nested base_sha
+    # pairs on the original identity alone — the new arms bind only asserted fields.
+    wp = _code_wp_rec("n1")
+    wp.pop("expected_feature_ref")
+    wp["work_product"] = {k: v for k, v in wp["work_product"].items() if k != "base_sha"}
+    recs = _base_pair() + [wp, _landing_for("n1", feature_ref="refs/heads/OTHER", pre=_SHA_B)]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+
+
+def test_reconcile_expected_wp_feature_ref_drift_is_missing():
+    # #762 8a F-B: the expectation match key carries expected_feature_ref — an
+    # expected_work_product and work_product agreeing on every other v2 field but asserting
+    # different destination branches (or only one side asserting) must NOT satisfy each other.
+    exp = dict(_code_wp_rec("n1"), kind="expected_work_product")
+    wp = _code_wp_rec("n1", feature="refs/heads/OTHER")
+    recs = [_receipt_rec("n1"), _obs_rec("n1"), exp, wp]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and any("n1" in x for x in res.missing_work_product)
+
+
+def test_landed_schema_exclusivity_refuses_expected_feature_ref(tmp_path):
+    # #762 8a F-C: expected_feature_ref is work_product v2 binding vocabulary
+    # (_BINDING_V2_OPTIONAL) — a landing record carrying it refuses like the rest.
+    bad = _landing_rec()
+    bad["expected_feature_ref"] = "refs/heads/feat"
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _audit_roundtrip(tmp_path / "efr", bad)

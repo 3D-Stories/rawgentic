@@ -35,9 +35,9 @@ DEFAULT_SINK_PATH = _REPO / "docs" / "measurements" / "bakeoff_results.jsonl"
 # model named here MUST appear somewhere in that table, or _lane_for_model refuses; the
 # owner retune 2026-07-24 retired claude-opus-4-8 from the table in favour of claude-opus-5,
 # and a drift guard pins DESIGN_MODELS to the design seat's own model set).
-DESIGN_MODELS: tuple = ("gpt-5.6-sol", "claude-opus-5")                       # sol vs opus, every round
+DESIGN_MODELS: tuple = ("gpt-5.6-sol", "claude-fable-5")                      # sol vs fable, every round
 BUILD_MODELS: tuple = ("claude-sonnet-5", "claude-opus-5", "gpt-5.6-terra")   # gate-flagged bake-off
-INCUMBENT_MODEL = "claude-opus-5"   # the headless judge-degrade fallback (owner-picked, §3.3)
+INCUMBENT_MODEL = "claude-fable-5"  # the headless judge-degrade fallback (owner-picked, #762 R4-E)
 
 
 class RubricUnavailable(RuntimeError):
@@ -205,6 +205,17 @@ def make_glm_judge(rubric_text: str, *, seed, complete_fn=None, build_evidence=N
     return judge
 
 
+def _incumbent_index(models: Sequence[str]) -> int:
+    """Return the declared incumbent's candidate index or fail before a false winner is chosen."""
+    if INCUMBENT_MODEL not in models:
+        # #762 R4-E: INCUMBENT_MODEL is intentionally absent from BUILD_MODELS, so a build-round
+        # judge degrade now raises. That bake-off has no workflow caller today (#762 R3-G), and a
+        # silent index-0 winner was the defect; the retuned design tuple still includes fable.
+        raise ValueError(
+            f"incumbent {INCUMBENT_MODEL!r} is absent from competitor set {tuple(models)!r}")
+    return models.index(INCUMBENT_MODEL)
+
+
 # ---- failure strategy -------------------------------------------------------------------------
 def hybrid_failure_strategy(*, headless: bool, incumbent_index: int, sink=None,
                             run_id=None, correlation_id=None):
@@ -319,7 +330,7 @@ def _verified_decision(gate_decision) -> bool:
 def run_design_round(prompt, *, snapshot, quota, capture_root, headless, seed,
                      sink_path=None, models=DESIGN_MODELS, complete_fn=None, dispatch=None,
                      run_id=None, correlation_id=None, rubric_text=None):
-    """Competitive design round (sol vs opus every round), glm-5.2 judge on the design rubric.
+    """Competitive design round (sol vs fable every round), glm-5.2 judge on the design rubric.
     Winner's exact bytes become the phase artifact. Returns ``run_competitive``'s
     ``(winner, losers, judge_obs, record)``.
 
@@ -333,7 +344,7 @@ def run_design_round(prompt, *, snapshot, quota, capture_root, headless, seed,
         raise ValueError("rubric_text is blank — pass load_rubric('design') output or None")
     pe = _pe()
     candidates = _candidates_for(snapshot, models, prompt, seat="design", correlation_id=correlation_id)
-    incumbent_index = models.index(INCUMBENT_MODEL) if INCUMBENT_MODEL in models else 0
+    incumbent_index = _incumbent_index(models)
     # #765 (8a R1-M2): one rubric read — a caller that hashes the rubric passes the SAME
     # text the judge sees, so the recorded hash can never describe a different rubric.
     judge = make_glm_judge(rubric_text if rubric_text is not None else load_rubric("design"),
@@ -367,7 +378,7 @@ def run_build_bakeoff(prompt, *, gate_decision, snapshot, quota, capture_root, h
                   "scores": None, "bakeoff_skipped": True}
         return obs, [], None, record
     candidates = _candidates_for(snapshot, models, prompt, seat="build")
-    incumbent_index = models.index(INCUMBENT_MODEL) if INCUMBENT_MODEL in models else 0
+    incumbent_index = _incumbent_index(models)
     judge = make_glm_judge(load_rubric("build"), seed=seed, complete_fn=complete_fn, build_evidence=build_evidence)
     sink = bakeoff_sink(sink_path)
     strategy = hybrid_failure_strategy(headless=headless, incumbent_index=incumbent_index, sink=sink)
