@@ -54,14 +54,14 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body class="tpl-report">
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-31 20:13 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-31 20:30 MDT</div>
 <h1>Why #762 took so long — a telemetry retrospective</h1>
 <p class="sub">Epic #756 child 7/21 · rawgentic · 2026-08-01</p>
 </header>
 <main>
 <h1>Why #762 took so long — a telemetry retrospective</h1>
 <p><strong>Commissioned by the owner 2026-08-01 (decision log D32), written at the close of child 7/21 of epic #756.</strong> Every number below comes from a recorded artifact named at the point of use — <code>docs/measurements/run_records.jsonl</code>, <code>hooks/step_state.py timing</code>, the executor observation receipts under <code>.rawgentic/runs/wf2-762-*/</code>, the session transcripts under <code>~/.claude/projects/</code>, and the append-only decision log. Nothing here is estimated from memory. Where a figure could not be recovered, it says so.</p>
-<p>---</p>
+<p><strong>Hosted:</strong> <code>https://rawgentic-analysis-762.vercel.app</code> (verified 200, cache-busted, real title). The committed <code>.html</code> beside this file is the source of truth.</p>
 <h2>The short answer</h2>
 <p>#762 was the most expensive child of this epic by a wide margin, and the reason is not one big stall — it is <strong>four structural taxes that each cost 20–60 minutes and stacked</strong>.</p>
 <table>
@@ -75,13 +75,12 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <tr><td>Files changed</td><td><strong>38</strong></td><td>27 (#765)</td><td>1.4×</td></tr>
 </tbody>
 </table>
-<p>The wall-clock number is the one that misleads. By raw wall clock #762 (6.74 h) reads *shorter* than #735 (12.13 h) and #767 (8.51 h) — but those two spent 83% and 69% of their clock <strong>idle</strong>, waiting on the owner or a quota pause. Strip idle out and #762 has the <strong>longest active working time of any child in the epic</strong>, and it cost more than twice the next child.</p>
+<p>The wall-clock number is the one that misleads. By raw wall clock #762 (6.74 h) reads <strong>shorter</strong> than #735 (12.13 h) and #767 (8.51 h) — but those two spent 83% and 69% of their clock <strong>idle</strong>, waiting on the owner or a quota pause. Strip idle out and #762 has the <strong>longest active working time of any child in the epic</strong>, and it cost more than twice the next child.</p>
 <p>So the honest framing is: #762 did not sit around waiting. It genuinely worked longer, and burned more tokens per unit of work, than anything else in this epic.</p>
-<p>---</p>
 <h2>Where the clock actually went</h2>
 <p><code>hooks/step_state.py timing --project rawgentic --issue 762</code> — status <code>complete</code>, total 24,276 s (6.74 h), idle threshold 1,800 s:</p>
 <table>
-<thead><tr><th>phase</th><th>seconds</th><th>share of total</th><th>share of *active*</th></tr></thead>
+<thead><tr><th>phase</th><th>seconds</th><th>share of total</th><th>share of <strong>active</strong></th></tr></thead>
 <tbody>
 <tr><td>idle</td><td>13,186</td><td>54.3%</td><td>—</td></tr>
 <tr><td>design</td><td>3,817</td><td>15.7%</td><td>34.4%</td></tr>
@@ -106,11 +105,10 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <tr><td><code>65a021d4</code></td><td>01:45:50 → 02:10:30</td><td>0.41</td><td>470</td></tr>
 </tbody>
 </table>
-<p>---</p>
 <h2>The four taxes, measured</h2>
 <h3>Tax 1 — Five sessions, four mid-child handoffs (the largest single cost)</h3>
 <p>#762 ran across <strong>five sessions with four handoffs, every one of them mid-child</strong>. No other child in this epic needed more than three legs.</p>
-<p>The advisory context-meter tier fired at 45%, 36%, and 39% — always *inside* a child, never at a clean child boundary. Each handoff then paid a full state-reconstruction cost: the run contract, the handoff file, the decision log (D1→D34 by the end), and the relevant <code>session_notes.md</code> section, re-read from scratch before any work could resume.</p>
+<p>The advisory context-meter tier fired at 45%, 36%, and 39% — always <strong>inside</strong> a child, never at a clean child boundary. Each handoff then paid a full state-reconstruction cost: the run contract, the handoff file, the decision log (D1→D34 by the end), and the relevant <code>session_notes.md</code> section, re-read from scratch before any work could resume.</p>
 <p>The measurable signature is the input-token count: <strong>467.5M input tokens across 5 legs</strong>, against #733&#x27;s 280.8M across 2 legs. Per-leg input is roughly flat (92M–123M) — which is exactly what a fixed re-read tax looks like, paid once per leg regardless of how much new work that leg did. Leg <code>3fecd708</code> did 0.73 h of work and still spent 92.4M input tokens.</p>
 <p>Cost of this tax: reconstruction is not separately clocked, but the token arithmetic puts it at roughly <strong>90M input tokens ≈ $40 of the $254</strong> in avoidable re-reading, and it is the direct cause of #762&#x27;s 2.2× cost ratio.</p>
 <h3>Tax 2 — The Step-4 design gate ran three passes and still closed budget-exhausted</h3>
@@ -126,7 +124,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 </tbody>
 </table>
 <p>Plus the design rewrites between passes — rev 1 → rev 5 — which live inside the 3,817 s design phase.</p>
-<p><strong>This is not a #762 problem. It is the epic&#x27;s dominant pattern.</strong> Six consecutive children closed Step 4 the same way: #735 (D4), #733 (D11), #758 (D18), #767 (D22), #765 (D25), #762 (D30). Every single time the escalation asked the owner the same question, and every single time — now seven, counting today&#x27;s ratification — the answer was *apply the final fixes, proceed, no further review pass*.</p>
+<p><strong>This is not a #762 problem. It is the epic&#x27;s dominant pattern.</strong> Six consecutive children closed Step 4 the same way: #735 (D4), #733 (D11), #758 (D18), #767 (D22), #765 (D25), #762 (D30). Every single time the escalation asked the owner the same question, and every single time — now seven, counting today&#x27;s ratification — the answer was <strong>apply the final fixes, proceed, no further review pass</strong>.</p>
 <p><code>MAX_DESIGN_LOOPBACK_ITERATIONS = 2</code> is therefore not describing these designs. Three passes is what they actually take, and the third pass&#x27;s verdict is a foregone conclusion.</p>
 <h3>Tax 3 — The analysis seat wasted 78% of its time failing</h3>
 <p>Step 2&#x27;s analysis fan-out is the worst-performing seat in the run. From the observation receipts under <code>.rawgentic/runs/wf2-762-ff40b6d5/analysis/</code>:</p>
@@ -153,26 +151,23 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>  <code>role=(review|implementation)</code>) omitted <code>tests/test_wf2_clarity.py</code>&#x27;s <code>TestDispatchRegexIdentity</code>.</p>
 <p><strong>4 stale pins surfaced at Step 8a. Nine more surfaced at Step 9</strong> — as a red full suite (6,505 passed / 9 failed) that had to be root-caused before the gate could pass. Each full suite run is ~250 s, so this cost at minimum <strong>two extra full-suite runs (~500 s)</strong> plus the diagnosis.</p>
 <p>The second occurrence is the expensive part: T3&#x27;s lesson was already recorded at Step 8a (&quot;a retune task&#x27;s allowlist must carry its pin-guard files&quot;) and T5 repeated the same class of miss anyway, because the lesson was a note rather than a mechanism.</p>
-<p>---</p>
 <h2>Three smaller costs, named for completeness</h2>
 <p><strong>The two-run epoch chain (~one reconcile&#x27;s worth of work).</strong> T3&#x27;s routing-table edit changed the config digest, which correctly ended run A&#x27;s dispatch epoch (<code>run_digest_conflict</code>, #474 working as designed). Run A had to be closed honestly with a non-reconciling final record, run B declared, and the reconcile performed twice. Lesson recorded at the time: <strong>sequence config-digest changes last</strong>.</p>
 <p><strong>The high-task/bake-off structural gap (16 min of owner round-trip, D31).</strong> Task 2 was <code>riskLevel: high</code>; a task-scoped gate decides bake-off on <code>risk_high</code> alone; <code>check_pre</code> refuses any bake-off outcome on a single dispatch; and the build bake-off has no workflow caller. So a HIGH task <strong>structurally cannot dispatch through the build seat today</strong>. No bypass exists (relabeling raises <code>GateTamperError</code>) — fail-closed working as designed, but it cost an <code>/ask-owner</code> round trip and forced Task 2 inline. Tracked in #779.</p>
 <p><strong>The concurrent-merge race (~10 min, at the very last step).</strong> PR #780 (v3.111.1, docs-only) merged to main at 01:49:14Z — <strong>9 minutes after #762&#x27;s CI went green</strong> and 6 minutes after the merge gate had read <code>mergeStateStatus: CLEAN</code>. The merge then failed on conflicts in all four version surfaces plus the README changelog. Resolution: merge commit <code>77a7a4f</code>, full suite re-run (251 s), CI re-run (~5 min).</p>
-<p>---</p>
 <h2>What to change, ranked by measured payoff</h2>
 <h3>1. Codify the budget-exhausted Step-4 close. Stop asking.</h3>
-<p><strong>Evidence:</strong> 6 of 7 children, 7 identical owner answers. <strong>Cost today:</strong> a blocking escalation per child, plus a third reviewer pass whose verdict is already known (24.5 min of reviewer time on #762 alone). <strong>Change:</strong> either raise <code>MAX_DESIGN_LOOPBACK_ITERATIONS</code> to 3 so the budget matches reality, or make the budget-exhausted close an automatic *apply-and-proceed with the decision logged* rather than an owner stop. This is the single highest-value change available and it is prose plus a constant.</p>
+<p><strong>Evidence:</strong> 6 of 7 children, 7 identical owner answers. <strong>Cost today:</strong> a blocking escalation per child, plus a third reviewer pass whose verdict is already known (24.5 min of reviewer time on #762 alone). <strong>Change:</strong> either raise <code>MAX_DESIGN_LOOPBACK_ITERATIONS</code> to 3 so the budget matches reality, or make the budget-exhausted close an automatic <strong>apply-and-proceed with the decision logged</strong> rather than an owner stop. This is the single highest-value change available and it is prose plus a constant.</p>
 <h3>2. Root-cause the analysis seat&#x27;s <code>nonzero_exit</code>.</h3>
 <p><strong>Evidence:</strong> 8/10 attempts failed, all three chain entries exhausted, 1,229 s wasted, while <code>build</code> and <code>review</code> went 13/13 on the same infrastructure. <strong>Change:</strong> read the stderr on those eight receipts before the next analysis fan-out. A seat that fails 78% of the time is a bug, not a routing preference — and because it exhausts the whole chain, it also burns the fallback budget that exists for real availability failures.</p>
 <h3>3. Derive pin-guard surfaces into the task allowlist mechanically.</h3>
-<p><strong>Evidence:</strong> 13 stale pins in one child, across two gates, with the second batch landing *after* the lesson from the first was written down. <strong>Change:</strong> when a plan task changes a constant or a pinned sentence, compute the guard files that reference it and add them to that task&#x27;s allowlist at plan time. A note in a session file did not prevent the recurrence; a mechanism would.</p>
+<p><strong>Evidence:</strong> 13 stale pins in one child, across two gates, with the second batch landing <strong>after</strong> the lesson from the first was written down. <strong>Change:</strong> when a plan task changes a constant or a pinned sentence, compute the guard files that reference it and add them to that task&#x27;s allowlist at plan time. A note in a session file did not prevent the recurrence; a mechanism would.</p>
 <h3>4. Make a child fit one session, or make the handoff cheap.</h3>
 <p><strong>Evidence:</strong> 5 legs, 4 mid-child handoffs, ~90M input tokens (~$40) of re-read tax, flat per-leg input regardless of work done. <strong>Change:</strong> two independent options. (a) The advisory tier fires at 36–45%, always mid-child — if a child of this size cannot fit one session, the tier is firing too late to reach a boundary. (b) The re-read is dominated by the decision log, which is now 35 entries and grows every child; a rolling summary with the full log kept as an appendix would cut the per-leg fixed cost directly.</p>
 <h3>5. Sequence config-digest changes last within a plan.</h3>
 <p>Already recorded during the run; repeating it here so it survives the session.</p>
-<p>---</p>
 <h2>One process defect this retrospective itself found</h2>
-<p>The completion gate&#x27;s item 13 keys on the exact string <code>## Deferred verification</code> (<code>hooks/plan_lib.py:342</code>). PR #781&#x27;s body carried that section as an <strong>H1</strong> — matching the body&#x27;s other headings — so the mechanical guard failed at the end of the run, *after the PR had already merged*. The shipped template is correct and even says &quot;do not reword it&quot; (<code>references/steps.md:1541</code>); this was an authoring slip.</p>
+<p>The completion gate&#x27;s item 13 keys on the exact string <code>## Deferred verification</code> (<code>hooks/plan_lib.py:342</code>). PR #781&#x27;s body carried that section as an <strong>H1</strong> — matching the body&#x27;s other headings — so the mechanical guard failed at the end of the run, <strong>after the PR had already merged</strong>. The shipped template is correct and even says &quot;do not reword it&quot; (<code>references/steps.md:1541</code>); this was an authoring slip.</p>
 <p>Nothing had actually vanished — the deferral was legible in the body throughout — but the guard is the guard, so the heading was corrected on the merged PR body rather than the check being waived. Two things worth carrying forward:</p>
 <ul>
 <li><strong>Call <code>assert_pr_body_has_deferred_section</code> at Step-12 authoring time</strong>, not only at the</li>
@@ -181,8 +176,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <ul>
 <li><strong><code>gh pr edit</code> is unusable on this repo.</strong> It aborts on the Projects-classic GraphQL deprecation</li>
 </ul>
-<p>  (<code>repository.pullRequest.projectCards</code>) and the edit does *not* land. The working path is   <code>gh api -X PATCH repos/&lt;owner&gt;/&lt;repo&gt;/pulls/&lt;n&gt; --input &lt;json&gt;</code>.</p>
-<p>---</p>
+<p>  (<code>repository.pullRequest.projectCards</code>) and the edit does <strong>not</strong> land. The working path is   <code>gh api -X PATCH repos/&lt;owner&gt;/&lt;repo&gt;/pulls/&lt;n&gt; --input &lt;json&gt;</code>.</p>
 <h2>Cross-child data, for the record</h2>
 <p>Recorded step-timing totals and usage, all seven merged children of epic #756:</p>
 <table>
@@ -197,11 +191,11 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <tr><td><strong>#762</strong></td><td><strong>full</strong></td><td><strong>6.74</strong></td><td><strong>54%</strong></td><td><strong>3.08</strong></td><td><strong>$254.21</strong></td><td><strong>467.5</strong></td><td><strong>2,533</strong></td><td><strong>38</strong></td><td><strong>77</strong></td></tr>
 </tbody>
 </table>
-<p>Related: the owner-commissioned before/after token-usage doc for the executor switch is live at &lt;https://token-usage-deploy.vercel.app&gt; (verified 200, cache-busted, title *&quot;Token usage: before vs after the executor switch (2026-07-31)&quot;*).</p>
+<p>Related: the owner-commissioned before/after token-usage doc for the executor switch is live at <code>https://rawgentic-analysis-executor-tokens.vercel.app</code> (legacy alias: <code>token-usage-deploy.vercel.app</code>) (verified 200, cache-busted, title *&quot;Token usage: before vs after the executor switch (2026-07-31)&quot;*).</p>
 <p><strong>Not checked, and named as such:</strong> per-handoff reconstruction time is inferred from token counts, not separately clocked — no timer brackets the &quot;read the contract and the log&quot; phase, so the ~$40 figure in Tax 1 is arithmetic on flat per-leg input, not a measured interval. The eight <code>nonzero_exit</code> analysis receipts were counted and timed but their stderr was <strong>not</strong> read, so lever 2 names a symptom, not a root cause.</p>
 <section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#762 (feature, complex)</td></tr><tr><th>Lane</th><td>full</td></tr><tr><th>Tests</th><td>77 added · 6519/6540 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac</td></tr><tr><th>Outcome</th><td>PR 781 · merged: True · CI: passed</td></tr><tr><th>Usage</th><td>in 467486095 / out 2533389 tokens · 24276s wall</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>24</td><td>24</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>7</td><td>7</td><td>pass</td></tr><tr><td>8a</td><td>Per-task Review</td><td>3</td><td>3</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>9</td><td>9</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>5</td><td>5</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-31 20:13 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-31 20:30 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

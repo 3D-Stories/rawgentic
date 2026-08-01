@@ -7,7 +7,7 @@ receipts under `.rawgentic/runs/wf2-762-*/`, the session transcripts under
 `~/.claude/projects/`, and the append-only decision log. Nothing here is estimated from memory.
 Where a figure could not be recovered, it says so.
 
----
+**Hosted:** `https://rawgentic-analysis-762.vercel.app` (verified 200, cache-busted, real title). The committed `.html` beside this file is the source of truth.
 
 ## The short answer
 
@@ -23,7 +23,7 @@ stall — it is **four structural taxes that each cost 20–60 minutes and stack
 | Active (non-idle) work | **3.08 h** | 2.68 h (#765) | 1.15× |
 | Files changed | **38** | 27 (#765) | 1.4× |
 
-The wall-clock number is the one that misleads. By raw wall clock #762 (6.74 h) reads *shorter*
+The wall-clock number is the one that misleads. By raw wall clock #762 (6.74 h) reads **shorter**
 than #735 (12.13 h) and #767 (8.51 h) — but those two spent 83% and 69% of their clock **idle**,
 waiting on the owner or a quota pause. Strip idle out and #762 has the **longest active working
 time of any child in the epic**, and it cost more than twice the next child.
@@ -31,14 +31,12 @@ time of any child in the epic**, and it cost more than twice the next child.
 So the honest framing is: #762 did not sit around waiting. It genuinely worked longer, and burned
 more tokens per unit of work, than anything else in this epic.
 
----
-
 ## Where the clock actually went
 
 `hooks/step_state.py timing --project rawgentic --issue 762` — status `complete`, total 24,276 s
 (6.74 h), idle threshold 1,800 s:
 
-| phase | seconds | share of total | share of *active* |
+| phase | seconds | share of total | share of **active** |
 |---|---|---|---|
 | idle | 13,186 | 54.3% | — |
 | design | 3,817 | 15.7% | 34.4% |
@@ -67,8 +65,6 @@ spans summing to 25,885 s (legs overlap ~1 min each at handoff).
 | `f0517473` | 00:43:04 → 01:48:19 | 1.09 | 937 |
 | `65a021d4` | 01:45:50 → 02:10:30 | 0.41 | 470 |
 
----
-
 ## The four taxes, measured
 
 ### Tax 1 — Five sessions, four mid-child handoffs (the largest single cost)
@@ -76,7 +72,7 @@ spans summing to 25,885 s (legs overlap ~1 min each at handoff).
 #762 ran across **five sessions with four handoffs, every one of them mid-child**. No other child
 in this epic needed more than three legs.
 
-The advisory context-meter tier fired at 45%, 36%, and 39% — always *inside* a child, never at a
+The advisory context-meter tier fired at 45%, 36%, and 39% — always **inside** a child, never at a
 clean child boundary. Each handoff then paid a full state-reconstruction cost: the run contract,
 the handoff file, the decision log (D1→D34 by the end), and the relevant `session_notes.md`
 section, re-read from scratch before any work could resume.
@@ -111,8 +107,8 @@ phase.
 **This is not a #762 problem. It is the epic's dominant pattern.** Six consecutive children closed
 Step 4 the same way: #735 (D4), #733 (D11), #758 (D18), #767 (D22), #765 (D25), #762 (D30). Every
 single time the escalation asked the owner the same question, and every single time — now seven,
-counting today's ratification — the answer was *apply the final fixes, proceed, no further review
-pass*.
+counting today's ratification — the answer was **apply the final fixes, proceed, no further review
+pass**.
 
 `MAX_DESIGN_LOOPBACK_ITERATIONS = 2` is therefore not describing these designs. Three passes is
 what they actually take, and the third pass's verdict is a foregone conclusion.
@@ -155,8 +151,6 @@ The second occurrence is the expensive part: T3's lesson was already recorded at
 ("a retune task's allowlist must carry its pin-guard files") and T5 repeated the same class of
 miss anyway, because the lesson was a note rather than a mechanism.
 
----
-
 ## Three smaller costs, named for completeness
 
 **The two-run epoch chain (~one reconcile's worth of work).** T3's routing-table edit changed the
@@ -177,8 +171,6 @@ merge gate had read `mergeStateStatus: CLEAN`. The merge then failed on conflict
 version surfaces plus the README changelog. Resolution: merge commit `77a7a4f`, full suite re-run
 (251 s), CI re-run (~5 min).
 
----
-
 ## What to change, ranked by measured payoff
 
 ### 1. Codify the budget-exhausted Step-4 close. Stop asking.
@@ -186,7 +178,7 @@ version surfaces plus the README changelog. Resolution: merge commit `77a7a4f`, 
 **Cost today:** a blocking escalation per child, plus a third reviewer pass whose verdict is
 already known (24.5 min of reviewer time on #762 alone).
 **Change:** either raise `MAX_DESIGN_LOOPBACK_ITERATIONS` to 3 so the budget matches reality, or
-make the budget-exhausted close an automatic *apply-and-proceed with the decision logged* rather
+make the budget-exhausted close an automatic **apply-and-proceed with the decision logged** rather
 than an owner stop. This is the single highest-value change available and it is prose plus a
 constant.
 
@@ -198,7 +190,7 @@ fails 78% of the time is a bug, not a routing preference — and because it exha
 it also burns the fallback budget that exists for real availability failures.
 
 ### 3. Derive pin-guard surfaces into the task allowlist mechanically.
-**Evidence:** 13 stale pins in one child, across two gates, with the second batch landing *after*
+**Evidence:** 13 stale pins in one child, across two gates, with the second batch landing **after**
 the lesson from the first was written down.
 **Change:** when a plan task changes a constant or a pinned sentence, compute the guard files that
 reference it and add them to that task's allowlist at plan time. A note in a session file did not
@@ -215,14 +207,12 @@ rolling summary with the full log kept as an appendix would cut the per-leg fixe
 ### 5. Sequence config-digest changes last within a plan.
 Already recorded during the run; repeating it here so it survives the session.
 
----
-
 ## One process defect this retrospective itself found
 
 The completion gate's item 13 keys on the exact string `## Deferred verification`
 (`hooks/plan_lib.py:342`). PR #781's body carried that section as an **H1** — matching the body's
-other headings — so the mechanical guard failed at the end of the run, *after the PR had already
-merged*. The shipped template is correct and even says "do not reword it"
+other headings — so the mechanical guard failed at the end of the run, **after the PR had already
+merged**. The shipped template is correct and even says "do not reword it"
 (`references/steps.md:1541`); this was an authoring slip.
 
 Nothing had actually vanished — the deferral was legible in the body throughout — but the guard is
@@ -232,10 +222,8 @@ Two things worth carrying forward:
 - **Call `assert_pr_body_has_deferred_section` at Step-12 authoring time**, not only at the
   end-of-run gate. Here it fired when the fix was maximally awkward.
 - **`gh pr edit` is unusable on this repo.** It aborts on the Projects-classic GraphQL deprecation
-  (`repository.pullRequest.projectCards`) and the edit does *not* land. The working path is
+  (`repository.pullRequest.projectCards`) and the edit does **not** land. The working path is
   `gh api -X PATCH repos/<owner>/<repo>/pulls/<n> --input <json>`.
-
----
 
 ## Cross-child data, for the record
 
@@ -252,7 +240,7 @@ Recorded step-timing totals and usage, all seven merged children of epic #756:
 | **#762** | **full** | **6.74** | **54%** | **3.08** | **$254.21** | **467.5** | **2,533** | **38** | **77** |
 
 Related: the owner-commissioned before/after token-usage doc for the executor switch is live at
-<https://token-usage-deploy.vercel.app> (verified 200, cache-busted, title *"Token usage: before vs
+`https://rawgentic-analysis-executor-tokens.vercel.app` (legacy alias: `token-usage-deploy.vercel.app`) (verified 200, cache-busted, title *"Token usage: before vs
 after the executor switch (2026-07-31)"*).
 
 **Not checked, and named as such:** per-handoff reconstruction time is inferred from token counts,
