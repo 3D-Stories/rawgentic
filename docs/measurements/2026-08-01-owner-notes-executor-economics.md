@@ -1,5 +1,12 @@
 # The owner's 16 notes on executor economics — answered
 
+> **Correction (2026-08-01, #791).** The dollar figures in this document — including the
+> "$220 → $185, −16%" comparison — were computed with a rate card that was wrong in both
+> directions. Fable was priced BELOW Opus 5 when it is actually 2x its per-token cost, which
+> inverts the orchestrator-cost conclusion this doc drew. The card is corrected in
+> `hooks/usage_capture.py`; the numbers below are left as written (this is a dated measurement
+> record) but should not be used for cost decisions. Token counts and timings are unaffected.
+
 **Written 2026-08-01 in response to the owner's review of the token-usage analysis
 (`https://rawgentic-analysis-executor-tokens.vercel.app`).** Every answer below cites a recorded
 artifact — executor receipts under `.rawgentic/runs/wf2-762-ff40b6d5/`, the routing table, the

@@ -313,3 +313,88 @@ def test_rate_card_covers_every_shipped_routing_table_model():
 def test_claude_opus_5_has_a_nonzero_rate_row():
     o = uc.RATE_CARD["claude-opus-5"]
     assert all(o[k] > 0 for k in ("input", "cache_write", "cache_read", "output"))
+
+
+# --- #791: the rate card must match LIVE published pricing --------------------
+#
+# Retrieved 2026-08-01 from https://platform.claude.com/docs/en/about-claude/pricing
+# (docs.claude.com 302-redirects there). The claude-api skill's cached model table
+# is explicitly NOT the source — it was stale by 2026-06-24 and is what let the card
+# drift in both directions.
+#
+# Every row below was wrong before this change, not just the two the issue names:
+#   fable-5   priced at Sonnet rates  -> 3.3x UNDER
+#   opus-5/4.8/4.7 at Opus-4.1 rates  -> 3x OVER
+#   sonnet-5  missed the introductory cut
+#   haiku-4.5 carried Haiku 3.5's prices
+#
+# cache_write is the 5-MINUTE tier (1.25x input). The transcript exposes a single
+# `cache_creation_input_tokens` field with no tier discriminator, so a 1h write
+# (2x input) is under-counted here — documented, not silently assumed.
+
+LIVE_PRICING_2026_08_01 = {
+    "claude-opus-5":   {"input": 5.0,  "cache_write": 6.25,  "cache_read": 0.50, "output": 25.0},
+    "claude-opus-4-8": {"input": 5.0,  "cache_write": 6.25,  "cache_read": 0.50, "output": 25.0},
+    "claude-opus-4-7": {"input": 5.0,  "cache_write": 6.25,  "cache_read": 0.50, "output": 25.0},
+    # sonnet-5 is date-dependent — see _expected_sonnet_5() below; the entry here is
+    # replaced at collection time so this table and the expiry guard can never disagree.
+    "claude-haiku-4-5-20251001":
+                       {"input": 1.0,  "cache_write": 1.25,  "cache_read": 0.10, "output": 5.0},
+    "claude-fable-5":  {"input": 10.0, "cache_write": 12.50, "cache_read": 1.00, "output": 50.0},
+}
+
+
+def _expected_sonnet_5():
+    """Introductory $2/$10 THROUGH 2026-08-31; $3/$15 from 2026-09-01.
+
+    Derived in ONE place so the parametrized row and the expiry guard cannot demand
+    different values on the same day — an earlier draft pinned $2 unconditionally while
+    the expiry guard demanded $3 after the cutover, which would have been an unfixable
+    red on 2026-09-01.
+    """
+    import datetime
+    if datetime.date.today() <= uc.SONNET_5_INTRO_ENDS:
+        return {"input": 2.0, "cache_write": 2.50, "cache_read": 0.20, "output": 10.0}
+    return {"input": 3.0, "cache_write": 3.75, "cache_read": 0.30, "output": 15.0}
+
+
+LIVE_PRICING_2026_08_01["claude-sonnet-5"] = _expected_sonnet_5()
+
+
+@pytest.mark.parametrize("model", sorted(LIVE_PRICING_2026_08_01))
+def test_rate_card_row_matches_live_published_pricing(model):
+    assert uc.RATE_CARD[model] == LIVE_PRICING_2026_08_01[model], (
+        f"{model} disagrees with pricing retrieved 2026-08-01 from "
+        "platform.claude.com/docs/en/about-claude/pricing")
+
+
+def test_cache_multipliers_hold_for_every_row():
+    # The published multipliers are 1.25x input for a 5m write and 0.1x for a read.
+    # This catches a hand-edited row whose cache values were not re-derived.
+    for model, row in uc.RATE_CARD.items():
+        assert row["cache_write"] == pytest.approx(row["input"] * 1.25), model
+        assert row["cache_read"] == pytest.approx(row["input"] * 0.10), model
+
+
+def test_fable_is_twice_opus_5_per_token():
+    # The old card priced fable BELOW opus-5, inverting the real ratio and masking
+    # the orchestrator-cost comparison. Pin the direction, not just the values.
+    assert uc.RATE_CARD["claude-fable-5"]["input"] == 2 * uc.RATE_CARD["claude-opus-5"]["input"]
+    assert uc.RATE_CARD["claude-fable-5"]["output"] == 2 * uc.RATE_CARD["claude-opus-5"]["output"]
+
+
+def test_sonnet_5_introductory_pricing_expiry_is_flagged():
+    # Sonnet 5 is on introductory pricing THROUGH 2026-08-31; on 2026-09-01 it becomes
+    # $3/$15. This test fails once that date passes so the card cannot silently rot.
+    import datetime
+    assert uc.SONNET_5_INTRO_ENDS == datetime.date(2026, 8, 31)
+    assert uc.RATE_CARD["claude-sonnet-5"] == _expected_sonnet_5(), (
+        "Sonnet 5 introductory pricing ended 2026-08-31 — the card must move to "
+        "$3/$3.75/$0.30/$15")
+
+
+def test_pricing_source_and_retrieval_date_are_recorded():
+    # AC2: the source must be named in the module, not only in a PR description.
+    src = uc.RATE_CARD_SOURCE
+    assert "platform.claude.com" in src["url"]
+    assert src["retrieved"] == "2026-08-01"
