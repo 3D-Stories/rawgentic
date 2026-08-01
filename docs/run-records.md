@@ -106,15 +106,6 @@ telemetry is versioned and reproducible alongside the code it measures.
 ## Usage telemetry & ccusage backfill
 
 `usage` (#155) is optional per-run telemetry: `input_tokens`, `output_tokens`,
-> **Dollar columns written before 2026-08-01 are unreliable (#791).** The rate card in
-> `hooks/usage_capture.py` was wrong in BOTH directions until then — `claude-fable-5` sat at
-> Sonnet rates (3.3x under), `claude-opus-5`/`4-8`/`4-7` at deprecated Opus-4.1 rates (3x over),
-> `claude-sonnet-5` missed its introductory cut, and `claude-haiku-4-5` carried Haiku 3.5's
-> prices. **127 of 188 records** carry a `cost_estimate_usd` computed with those rates. The store
-> is append-only, so they are NOT rewritten — treat any pre-2026-08-01 dollar figure as
-> indicative only. **Token counts are unaffected**: they are summed from transcripts, never
-> priced. Prices now carry their source and retrieval date in `RATE_CARD_SOURCE`.
-
 `cost_estimate_usd`, `wall_clock_s`, and a per-model `model_mix` breakdown. Most
 runs are billed against a Claude subscription rather than metered per API call,
 so **tokens-by-model in `model_mix` is the primary metric** Tier-2 should trend
@@ -123,6 +114,15 @@ useful for cross-checking, not what a subscription user is actually paying).
 When present, `usage` is validated strictly (all five keys, nullable values);
 when the harness can't surface real numbers, the workflow **omits the whole
 object** rather than persist a fabricated one.
+
+> **Dollar columns written before 2026-08-01 are unreliable (#791).** The rate card in
+> `hooks/usage_capture.py` was wrong in BOTH directions until then — `claude-fable-5` sat at
+> Sonnet rates (3.3x under), `claude-opus-5`/`4-8`/`4-7` at deprecated Opus-4.1 rates (3x over),
+> `claude-sonnet-5` missed its introductory cut, and `claude-haiku-4-5` carried Haiku 3.5's
+> prices. **127 of 188 records** carry a `cost_estimate_usd` computed with those rates. The store
+> is append-only, so they are NOT rewritten — treat any pre-2026-08-01 dollar figure as
+> indicative only. **Token counts are unaffected**: they are summed from transcripts, never
+> priced. Prices now carry their source and retrieval date in `RATE_CARD_SOURCE`.
 
 Since #189, `usage` is populated live by `hooks/usage_capture.py`, which parses
 the current session's Claude Code transcript (the same source `ccusage` reads —

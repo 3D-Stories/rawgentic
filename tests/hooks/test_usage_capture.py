@@ -336,11 +336,29 @@ LIVE_PRICING_2026_08_01 = {
     "claude-opus-5":   {"input": 5.0,  "cache_write": 6.25,  "cache_read": 0.50, "output": 25.0},
     "claude-opus-4-8": {"input": 5.0,  "cache_write": 6.25,  "cache_read": 0.50, "output": 25.0},
     "claude-opus-4-7": {"input": 5.0,  "cache_write": 6.25,  "cache_read": 0.50, "output": 25.0},
-    "claude-sonnet-5": {"input": 2.0,  "cache_write": 2.50,  "cache_read": 0.20, "output": 10.0},
+    # sonnet-5 is date-dependent — see _expected_sonnet_5() below; the entry here is
+    # replaced at collection time so this table and the expiry guard can never disagree.
     "claude-haiku-4-5-20251001":
                        {"input": 1.0,  "cache_write": 1.25,  "cache_read": 0.10, "output": 5.0},
     "claude-fable-5":  {"input": 10.0, "cache_write": 12.50, "cache_read": 1.00, "output": 50.0},
 }
+
+
+def _expected_sonnet_5():
+    """Introductory $2/$10 THROUGH 2026-08-31; $3/$15 from 2026-09-01.
+
+    Derived in ONE place so the parametrized row and the expiry guard cannot demand
+    different values on the same day — an earlier draft pinned $2 unconditionally while
+    the expiry guard demanded $3 after the cutover, which would have been an unfixable
+    red on 2026-09-01.
+    """
+    import datetime
+    if datetime.date.today() <= uc.SONNET_5_INTRO_ENDS:
+        return {"input": 2.0, "cache_write": 2.50, "cache_read": 0.20, "output": 10.0}
+    return {"input": 3.0, "cache_write": 3.75, "cache_read": 0.30, "output": 15.0}
+
+
+LIVE_PRICING_2026_08_01["claude-sonnet-5"] = _expected_sonnet_5()
 
 
 @pytest.mark.parametrize("model", sorted(LIVE_PRICING_2026_08_01))
@@ -370,10 +388,9 @@ def test_sonnet_5_introductory_pricing_expiry_is_flagged():
     # $3/$15. This test fails once that date passes so the card cannot silently rot.
     import datetime
     assert uc.SONNET_5_INTRO_ENDS == datetime.date(2026, 8, 31)
-    if datetime.date.today() > uc.SONNET_5_INTRO_ENDS:
-        assert uc.RATE_CARD["claude-sonnet-5"]["input"] == 3.0, (
-            "Sonnet 5 introductory pricing ended 2026-08-31 — the card must move to "
-            "$3/$3.75/$0.30/$15")
+    assert uc.RATE_CARD["claude-sonnet-5"] == _expected_sonnet_5(), (
+        "Sonnet 5 introductory pricing ended 2026-08-31 — the card must move to "
+        "$3/$3.75/$0.30/$15")
 
 
 def test_pricing_source_and_retrieval_date_are_recorded():
