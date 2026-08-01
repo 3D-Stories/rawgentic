@@ -77,6 +77,15 @@ marker; this gate is only for the unprompted path.
 payload is what `clear-prep` produces — run it first, then come back with its resume-prompt file.
 Write the prompt to a file and pass the path; never inline a long prompt.
 
+**If your goal is armed, clear it before handing off — this is load-bearing, not hygiene (#802).**
+`clear-prep` runs `/goal clear` for you, which is the part the DEFAULT (teardown) path depends on.
+Hand-authoring the prompt instead of running `clear-prep` is fine; skipping the goal clear is not.
+Teardown validates the newest `goal_status` row fail-closed, and Stop-hook goal EVALUATIONS carry
+no sentinel — so once your goal has been evaluated even once, teardown REFUSES with exit 2 before
+any step runs. `/goal clear` appends a trusted row and teardown proceeds. (Measured 2026-08-01: 53
+of the 120 most recent transcripts were in the refusing state. Root cause of the writer asymmetry
+is #782.)
+
 Two hard rules about the prompt, both of which the command enforces by refusing:
 
 1. **It must NOT contain `/rawgentic:switch`.** The bind is sent as its own verified turn, so a
@@ -191,6 +200,7 @@ The JSON on stdout carries `results` and `failed_step`. Report what it says, not
 | `send_resume_nudge` | a herdr call failed outright | herdr-side problem, not a timing one |
 | `predecessor_goal_clear` | the handoff worked; clearing YOUR goal did not | your pane is left **open** on purpose — run `/goal clear` in it yourself |
 | `predecessor_goal_binding` | the goal state changed between validation and teardown (#758) | the successor runs with the VALIDATED goal; your pane is left **open** and untouched — read its goal before clearing or closing anything |
+| **`null`, exit 2, "the newest goal evidence … fails validation"** | NOT a step failure — the refusal fires BEFORE any step runs, so nothing was handed over at all. Your goal is armed and its newest row is a sentinel-less Stop-hook evaluation (#802; writer asymmetry is #782) | run `/goal clear` in this pane and retry — that appends a trusted row and teardown proceeds. To hand off WITHOUT retiring this pane, re-run with `--no-teardown` and relay the manual retirement steps yourself |
 
 If you had **already** cleared your goal before handing off — which is what `clear-prep` tells you to
 do — that is not a failure and never reports one: `results.predecessor_goal_clear` reads

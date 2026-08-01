@@ -935,7 +935,11 @@ def live_owner_goal(transcript_text: str, *, strict: bool = False) -> str | None
             f"the newest goal evidence in the transcript is {suspicious} — refusing to "
             "derive a live-goal verdict from ambiguous evidence on a destructive path "
             "(#758): a torn or malformed newest row must not read as 'no goal' or fall "
-            "back to a stale one")
+            "back to a stale one. REMEDY (#802): the usual cause is an armed goal whose "
+            "newest row is a Stop-hook evaluation, which carries no sentinel — run "
+            "'/goal clear' in this pane and retry, which appends a trusted row and lets "
+            "teardown proceed. To hand off WITHOUT retiring this pane, re-run with "
+            "'--no-teardown' and relay the manual retirement steps yourself")
     if last is None or last.get("met") is not False:
         return None
     return last["condition"]
