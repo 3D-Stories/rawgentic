@@ -33,6 +33,7 @@ import argparse
 import json
 import os
 import re
+import sys
 from datetime import date as _date
 from pathlib import Path
 from typing import Final, Optional
@@ -129,10 +130,14 @@ def parse_session_jsonl(path) -> dict:
     cache-read) — the tokens the model actually processed; ``output_tokens`` sums
     outputs. ``model_mix`` carries per-model {input,output} totals. ``cost_estimate_usd``
     applies per-category rates. ``wall_clock_s`` is left None (the orchestrator owns
-    wall-clock time). Malformed lines and lines without usage are skipped; a file
-    with zero usable usage blocks raises NoUsageData (non-vacuity)."""
+    wall-clock time). Repeated content-block rows are de-duplicated before
+    accumulation, keeping the first occurrence by ``message.id``, then row
+    ``requestId``, then row ``uuid``; rows with none of those identities are each
+    counted. Malformed lines and lines without usage are skipped; a file with zero
+    usable usage blocks raises NoUsageData (non-vacuity)."""
     mix: dict[str, dict[str, int]] = {}
     cost = 0.0
+    seen_usage: dict[tuple[str, object], tuple[int, int, int, int]] = {}
     # errors="replace": the current session's log may be read mid-write, so a
     # split multibyte char at EOF must degrade gracefully, never raise.
     with open(path, encoding="utf-8", errors="replace") as fh:
@@ -159,6 +164,16 @@ def parse_session_jsonl(path) -> dict:
             cwrite = _int(usage.get("cache_creation_input_tokens"))
             cread = _int(usage.get("cache_read_input_tokens"))
             out = _int(usage.get("output_tokens"))
+            usage_values = (fresh, cwrite, cread, out)
+            identity = _usage_identity(rec, msg)
+            if identity is not None:
+                prior_usage = seen_usage.get(identity)
+                if prior_usage is not None:
+                    if prior_usage != usage_values:
+                        print(f"usage_capture: duplicate {identity[0]} {identity[1]!r} "
+                              "has divergent usage; keeping first occurrence", file=sys.stderr)
+                    continue
+                seen_usage[identity] = usage_values
             in_total = fresh + cwrite + cread
             m = mix.setdefault(model, {"input_tokens": 0, "output_tokens": 0})
             m["input_tokens"] += in_total
@@ -183,6 +198,27 @@ def parse_session_jsonl(path) -> dict:
         "wall_clock_s": None,
         "model_mix": mix,
     }
+
+
+def _usage_identity(rec: dict, msg: dict) -> Optional[tuple[str, object]]:
+    """Return the billed-message identity, preferring message over transport ids."""
+    for name, value in (("message.id", msg.get("id")),
+                        ("requestId", rec.get("requestId")),
+                        ("uuid", rec.get("uuid"))):
+        if not value:
+            # Falsy (empty-string) ids are treated as ABSENT, not as a valid identity.
+            # An empty `message.id` would otherwise WIN over a perfectly good `requestId`
+            # and collapse two distinct messages into one — a silent UNDER-count, which is
+            # harder to notice than the over-count this function exists to fix.
+            continue
+        try:
+            hash(value)
+        except TypeError:
+            # JSON identities should be scalars, but retain malformed structured
+            # values without letting one bad row abort best-effort capture.
+            value = json.dumps(value, sort_keys=True, separators=(",", ":"))
+        return name, value
+    return None
 
 
 def _int(v) -> int:

@@ -135,6 +135,32 @@ can no longer be persisted. Rows we cannot fill are marked `unrecoverable`
 session file missing / no usage), never left as bare nulls; a drift-guard test
 fails on any `usage` object with null tokens and no marker.
 
+**Each assistant message is counted ONCE (#812).** Claude Code writes one transcript
+row per **content block** of a single assistant message, and every one of those rows
+repeats that message's **cumulative** usage — so a message emitting text plus two tool
+calls appears as three rows carrying identical usage. Before #812 `parse_session_jsonl`
+summed them all, inflating tokens and `cost_estimate_usd`; measured on a real transcript,
+390 usage rows collapsed to 137 distinct messages and output tokens fell 562,137 → 160,978
+(**3.49x**). The factor is not constant — it scales with tool-calls-per-message, so two
+runs' costs were partly comparing their tool-call density.
+
+Rows are now de-duplicated before accumulation, keeping the first occurrence per identity:
+
+| order | key | why |
+|---|---|---|
+| 1 | `message.id` | names the assistant message — the unit that is billed |
+| 2 | `requestId` | transport id; in principle reusable across a retry, so it does not lead |
+| 3 | row `uuid` | last resort |
+| 4 | *(none present)* | the row is counted — an unidentifiable row is its own event, never silently dropped |
+
+The same identity recurring with **divergent** usage keeps the first and emits a stderr
+warning naming it, rather than silently choosing one.
+
+> **Comparability caveat.** Records written before v3.115.1 carry the inflated values, so
+> pre/post comparisons of `input_tokens`, `output_tokens`, or `cost_estimate_usd` are
+> invalid. The store is append-only and was not rewritten; use the run-record's
+> `workflow_version` field to tell the two regimes apart.
+
 Populate `usage` at completion-step assembly time, **before** invoking
 `work_summary.py summarize` — the store is append-only, so re-running
 `summarize` to attach usage after the fact would append a duplicate line for
