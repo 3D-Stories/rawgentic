@@ -1801,7 +1801,10 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                         and live_condition is not None
                         and predecessor_goal_condition.strip() != live_condition.strip()):
                     record("clear_predecessor_goal", [], None,
-                           note=(f"note: the supplied --predecessor-goal-condition "
+                           # #730: flag-neutral — the value may have arrived via either
+                           # --predecessor-goal-condition or --predecessor-goal-condition-file,
+                           # and naming one of them would be wrong half the time.
+                           note=(f"note: the supplied predecessor goal condition "
                                  f"{predecessor_goal_condition!r} is not the newest guard "
                                  f"({live_condition!r}); the transcript won"))
 
@@ -3225,13 +3228,25 @@ def _read_optional_text_arg(inline: str | None, path: str | None, what: str) -> 
     The goal/prompt pairs are `required=True`, so exactly one of their two forms is always present.
     The predecessor condition is optional — it is only meaningful when tearing down — so the
     both-absent case must return None rather than reaching `open(None)`. Delegates to
-    `_read_text_arg` so there is ONE file reader, and so an unreadable path still fails loudly
-    naming the path instead of yielding an empty condition (which would hand the successor an
-    empty goal).
+    `_read_text_arg` so there is ONE file reader, and an unreadable path still fails loudly naming
+    the path.
+
+    A SUPPLIED-but-blank value is refused. Not for the reason an earlier draft of this claimed:
+    it does NOT hand the successor an empty goal — the successor's guard is the separate required
+    `--goal-condition` pair, blank guards are already refused by `build_goal_command`, and the
+    clear receipt binds to the transcript-derived `live_condition`, never to this string. This
+    value is assertion-only. Blank is refused because asserting "my armed guard is <nothing>" is
+    a caller mistake — almost always an empty file the caller meant to fill — and silently
+    accepting it would emit a misleading "not the newest guard" diagnostic instead of naming the
+    real problem.
     """
     if inline is None and path is None:
         return None
-    return _read_text_arg(inline, path, what)
+    text = _read_text_arg(inline, path, what)
+    if not text.strip():
+        source = f"file {path!r}" if path is not None else "the inline value"
+        raise LauncherError(f"the {what} from {source} is blank — refusing a blank assertion")
+    return text
 
 
 def _cmd_ad_hoc_handoff(args) -> int:

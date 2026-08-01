@@ -1130,13 +1130,38 @@ class TestPredecessorGoalConditionFile:
         assert proc.returncode == 2, proc.stdout
         assert "not allowed with" in proc.stderr, proc.stderr
 
-    def test_missing_file_names_the_path_and_never_yields_an_empty_condition(
-            self, tmp_path) -> None:
-        """AC3: a silent empty condition would hand the successor an empty goal."""
+    def test_missing_file_names_the_path(self, tmp_path) -> None:
+        """AC3: an unreadable path fails loudly naming the path.
+
+        The assertions deliberately reject `unrecognized arguments` too: without that, this test
+        passes on the PARENT commit for the wrong reason — the old parser rejects the unknown
+        option and echoes the path, satisfying a naive check without exercising file reading at
+        all. Step-11 review caught that and reproduced it against the parent.
+        """
         missing = tmp_path / "nope.txt"
         proc = _cli(*_argv(tmp_path, **{"--predecessor-goal-condition-file": str(missing)}))
+        out = proc.stdout + proc.stderr
         assert proc.returncode != 0
-        assert str(missing) in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+        assert "unrecognized arguments" not in out, "parser must RECOGNISE the flag"
+        assert "cannot read the predecessor goal condition" in out, out
+        assert str(missing) in out, out
+
+    def test_blank_file_is_refused_naming_the_path(self, tmp_path) -> None:
+        """A readable but blank file is a caller mistake, not a valid assertion.
+
+        NOTE the rationale, corrected after Step-11 review: a blank value here does NOT hand the
+        successor an empty goal. The successor's guard is the separate required `--goal-condition`
+        pair, blank guards are already refused by `build_goal_command`, and the clear receipt binds
+        to the transcript-derived `live_condition` — never to this string, which is assertion-only.
+        Blank is refused because it is almost always a file the caller meant to fill, and accepting
+        it would emit a misleading "not the newest guard" note instead of naming the real problem.
+        """
+        blank = tmp_path / "blank.txt"
+        blank.write_text("   \n", encoding="utf-8")
+        proc = _cli(*_argv(tmp_path, **{"--predecessor-goal-condition-file": str(blank)}))
+        out = proc.stdout + proc.stderr
+        assert proc.returncode != 0
+        assert "blank" in out and str(blank) in out, out
 
     def test_shell_hostile_condition_survives_the_round_trip_verbatim(
             self, tmp_path, monkeypatch) -> None:
