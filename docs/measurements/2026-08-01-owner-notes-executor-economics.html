@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The owner&#x27;s 16 notes on executor economics — answered</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#a16207;--defer-bg:#f8f2e2}
+@media(prefers-color-scheme:dark){:root{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}}
+:root[data-theme=dark]{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}
+:root[data-theme=light]{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#a16207;--defer-bg:#f8f2e2}
+.mstone{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:12px;padding:14px 16px;margin:14px 0}
+.mstone h3{margin:0 0 .4em;font-size:15px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.c-conf{color:var(--chip-c);background:var(--chip-c-bg)}
+.c-defer{color:var(--defer);background:var(--defer-bg)}
+.c-plan{color:var(--ink-2);background:var(--code)}
+
+.tpl-dashboard tbody tr:nth-child(even){background:var(--code)}
+.tpl-dashboard .mstone{padding:10px 14px;margin:10px 0}
+</style>
+</head>
+<body class="tpl-dashboard">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-31 21:09 MDT</div>
+<h1>The owner&#x27;s 16 notes on executor economics — answered</h1>
+<p class="sub">Analysis-seat root cause, cache economics, review pairing, and the plan for epic #756</p>
+</header>
+<main>
+<h1>The owner&#x27;s 16 notes on executor economics — answered</h1>
+<p><strong>Written 2026-08-01 in response to the owner&#x27;s review of the token-usage analysis (<code>https://rawgentic-analysis-executor-tokens.vercel.app</code>).</strong> Every answer below cites a recorded artifact — executor receipts under <code>.rawgentic/runs/wf2-762-ff40b6d5/</code>, the routing table, the run-record store, hook source at file:line, or the #762 retrospective (<code>https://rawgentic-analysis-762.vercel.app</code>). Claims that are inferred rather than checked say so, and name the spike that would confirm them.</p>
+<p><strong>Hosted:</strong> <code>https://rawgentic-analysis-owner-notes.vercel.app</code>. The committed <code>.html</code> beside this file is the source of truth.</p>
+<section class="mstone"><h3>The headline first <span class="chip c-plan">—</span></h3><p><strong>The owner&#x27;s top suspicion was right.</strong> The analysis-seat failures were budget-cap kills: 6 of the 8 failed Step-2 analysis dispatches in #762 died at the seat&#x27;s $2 <code>max_budget_usd</code> ceiling (&quot;Reached maximum budget ($2)&quot;, killed at $2.01–$2.28) with the output file <strong>empty</strong> — the spend was lost AND the partial work discarded, and the chain then re-paid cache warmup on the next model. The other 2 were HTTP 429 (org monthly spend limit). Receipts: <code>.rawgentic/runs/wf2-762-ff40b6d5/analysis/*/transport.stdout.txt</code>. The twist: the cap was already raised to $10 by the #762 T3 retune, but two structural defects remain even at $10 — a kill discards partials (no salvage), and the chain blind-retries the same oversized brief on all three models. Answer 8 has the full economics.</p>
+<p><strong>Verdict table</strong> — one row per note, so nothing gets lost:</p>
+<table>
+<thead><tr><th>Note</th><th>Topic</th><th>Verdict</th><th>Action</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Why build → codex</td><td>Containment constraint, not preference</td><td>Issue exists (#779 adjacent)</td></tr>
+<tr><td>2</td><td>Orchestrator vs seats</td><td>Route by PROVIDER, not by phase</td><td>Policy change, folded into plan</td></tr>
+<tr><td>3</td><td>New session, warm cache</td><td>Possible in principle, defeated in practice</td><td>New issue D (spike S3)</td></tr>
+<tr><td>4</td><td>Why not Opus-reviews-Fable</td><td>Rule is cross-VENDOR; relaxation proposed</td><td>Owner decision 2</td></tr>
+<tr><td>5</td><td>Where the +71% went</td><td>Five measured mechanisms</td><td>Levers listed; #777 + issue F</td></tr>
+<tr><td>6</td><td>Why cache writes/reads so heavy</td><td>Fresh session per dispatch</td><td>New issue D</td></tr>
+<tr><td>7</td><td>5-hour-window guard at 90%</td><td>Buildable today, two mechanisms confirmed</td><td>New issue B (spike S1)</td></tr>
+<tr><td>8</td><td>Why analysis caps exist</td><td>Runaway-spend brake; kill semantics are the bug</td><td>#778 (owner-deferred)</td></tr>
+<tr><td>9</td><td>Is the analysis trustworthy</td><td>Partly — token counts yes, dollars NO</td><td>New issue A (rate card)</td></tr>
+<tr><td>10</td><td>Per-dispatch telemetry</td><td>Already recorded; aggregation missing</td><td>#777 — owner decision 1</td></tr>
+<tr><td>11</td><td>Executor in herdr panes</td><td>Build seat already does; rest headless</td><td>New issue E</td></tr>
+<tr><td>12</td><td>Are 35/50 the right thresholds</td><td>Do not retune blind; fix re-read cost first</td><td>Sequenced in plan</td></tr>
+<tr><td>13</td><td>Fable vs Opus orchestrator burn</td><td>Volume, not price</td><td>Driver-bench A/B (spike S6)</td></tr>
+<tr><td>14</td><td>Prose we could script</td><td>Eight candidates ranked</td><td>New issue F</td></tr>
+<tr><td>15</td><td>Diff review cost</td><td>Real, measured, five research-backed fixes</td><td>New issue C (spike S5)</td></tr>
+<tr><td>16</td><td>Does the epic already cover this</td><td>Partly — map below</td><td>Issues A–F fill the gaps</td></tr>
+</tbody>
+</table></section>
+<section class="mstone"><h3>The 16 answers <span class="chip c-conf">DONE</span></h3><h3>1. Why is build going to codex?</h3>
+<p>Because mutating dispatch is codex-only by an explicit allowlist, not by routing preference. The build seat&#x27;s primary is claude-sonnet-5 with chain opus-5 → gpt-5.6-terra (<code>phase_executor/src/phase_executor/routing/rawgentic.routing-table.json</code>), but <code>MUTATING_FS_SANDBOXED = {codex}</code> (#470 §2a — &quot;until an FS-sandbox child ships&quot;) means the canary refuses any mutating Claude composition with exit 6 before a process starts. Build work is always mutating, so it always skips both Anthropic entries and lands on terra. This is a <strong>containment constraint</strong>: codex is the only engine we currently sandbox for filesystem writes. #779 is the adjacent issue. Confirmed at <code>phase_executor</code> canary source; the routing table names the chain.</p>
+<h3>2. How do we balance orchestrator-inline vs different models per phase?</h3>
+<p>Route by <strong>provider economics</strong>, not by phase symmetry. Two facts from the #762 data:</p>
+<ul>
+<li>Seats on the codex pool are nearly free with respect to the Claude 5-hour window — 132 of 135</li>
+</ul>
+<p>  review dispatches ran on sol, build on terra (token-usage doc). Dispatch those aggressively.</p>
+<ul>
+<li>Claude-LANE seats pay a fresh-session cache warmup on every dispatch (answer 6). The analysis</li>
+</ul>
+<p>  seat is the only mostly-Claude seat — and it is exactly the one that was failing.</p>
+<p>Recommendation: cross-provider phases (review, design, build) stay on seats; same-model reasoning (analysis) defaults to <strong>orchestrator-inline</strong>, with a seat only when isolation is genuinely needed. Inline analysis reuses the session&#x27;s already-warm cache instead of writing a new one. This also dissolves most of note 8&#x27;s cap problem: inline work has no per-dispatch budget to die against.</p>
+<h3>3. Can a new executor session still use the cache?</h3>
+<p>In principle yes, in practice no — and that gap is fixable. Anthropic prompt cache is org-scoped and keyed on exact prompt-prefix <strong>bytes</strong> plus model, not on session. But Claude Code injects per-session bytes early in the prompt (the scratchpad path contains the session id; gitStatus is volatile), so two dispatches never share a prefix and every fresh seat session re-writes its ~46k–132k token prompt at 1.25–2× price. Three levers, cheapest first: stabilize the seat prompt prefix (frozen system prompt, volatile content last), reuse a per-run seat session (resume instead of <code>session_policy: &quot;fresh&quot;</code>), or move Claude-lane analysis inline (answer 2). <strong>Spike S3 confirms or kills the first lever:</strong> dispatch two byte-identical briefs back-to-back and read <code>cache_read_input_tokens</code> on the second&#x27;s first turn. New issue D.</p>
+<h3>4. Why can&#x27;t Fable-designed work be reviewed by Opus?</h3>
+<p>Under the current rule it can&#x27;t because the rule is <strong>cross-vendor</strong>, not cross-model (D3, ratified this epic): Anthropic-authored work → only codex reviewers eligible; if codex fails twice, the review is reported NOT OBTAINED. The honest rationale: same-vendor models share training lineage, so their blind spots correlate more than cross-vendor pairs. But Opus-5-reviews-Fable-5 is far from self-review, and the current rule has a real cost — a single-point dependency on the codex pool. Also worth noting: build diffs are now terra-AUTHORED (answer 1), so Anthropic reviewers are <strong>already eligible for build diffs</strong> under the existing rule. Proposal for the owner (this amends a ratified decision, so it is presented, not self-decided — owner decision 2): the invariant becomes &quot;reviewer model ≠ author model&quot;, cross-vendor PREFERRED for design gates, same-vendor cross-model allowed elsewhere. That unlocks Opus review capacity and removes the single point of failure.</p>
+<h3>5. Where did the +71% orchestrator growth come from, and where do we cut?</h3>
+<p>Five measured mechanisms, from the #762 retrospective:</p>
+<table>
+<thead><tr><th>Mechanism</th><th>Measured cost</th><th>Lever</th></tr></thead>
+<tbody>
+<tr><td>Mid-child handoff re-read tax</td><td>~90M input tokens per child (~$40 nominal)</td><td>Rolling log summary; fewer handoffs</td></tr>
+<tr><td>Step-4 ceremony (3 passes to a foregone budget-exhausted close)</td><td>6 consecutive children, 7 identical owner answers</td><td><strong>Codify the close — biggest per-child saver</strong> (owner decision 3)</td></tr>
+<tr><td>Growing decision-log/notes re-read per leg</td><td>Grows with every leg</td><td>Rolling summary of the log</td></tr>
+<tr><td>13 stale pin-guards → red suite → extra full runs</td><td>2 extra full-suite cycles in #762</td><td>Derive pin-guard files into task allowlists mechanically (issue F)</td></tr>
+<tr><td>Fresh-session cache warmup per dispatch</td><td>46k–132k write + up to 3.1M read per dispatch</td><td>Answers 3 and 6 (issue D)</td></tr>
+</tbody>
+</table>
+<p>One correction to the number itself: +71% <strong>overstates</strong> effective burn, because the input column includes cache reads (charged ~0.1×). The dollar-true growth is smaller — but the window throughput cost is real, because reads count against the 5-hour window.</p>
+<h3>6. Why is one analysis attempt 132k cache tokens written and 3.0M read?</h3>
+<p>Because every dispatch is a brand-new CLI session (<code>session_policy: &quot;fresh&quot;</code>). Turn 1 writes the entire seat prompt to cache — observed 46k–132k tokens at 1.25–2× the base input price. Then the seat loops, and <strong>every subsequent turn re-reads the whole conversation so far from cache</strong> — observed 1.5M–3.1M cumulative reads per dispatch. Reads are cheap per token (~0.1×) but they are not free, and they all count against the 5-hour window. Inline work in the orchestrator would reuse the session&#x27;s warm cache instead of paying the write again. The fix set is answer 3&#x27;s three levers; new issue D.</p>
+<h3>7. Build a guard that stops dispatching at 90% of the 5-hour window.</h3>
+<p>Agreed, and it is buildable today. Two confirmed mechanisms:</p>
+<ul>
+<li><code>GET https://api.anthropic.com/api/oauth/usage</code> with the OAuth bearer token,</li>
+</ul>
+<p>  <code>anthropic-beta: oauth-2025-04-20</code>, and a <code>User-Agent: claude-code/&lt;version&gt;</code> header (without   the UA you hit a strict 429 bucket). Returns <code>five_hour.utilization</code> and <code>resets_at</code>, plus the   seven-day bucket.</p>
+<ul>
+<li>Claude Code ≥ 2.1.80 pipes <code>rate_limits.five_hour.used_percentage</code> and <code>resets_at</code> into the</li>
+</ul>
+<p>  statusline script&#x27;s stdin JSON — zero API calls. The herdr pane footer <strong>already renders these   percentages live</strong> (observed on a running pane: <code>💰 63.0%</code> and <code>📊 45.0%</code>) — that is the   scripted reader the owner remembered; the guard should reuse that exact read path.</p>
+<p>Prior art found on GitHub (owner&#x27;s clue 2): <code>shirley-xue-2025/usage-guard</code> (external daemon, pause file at 90%), <code>hiinaspace/claude-quota</code>, <code>minhvoio/ai-usage-monitors</code>, and anthropics/claude-code issues 34199 / 31637 / 30930 / 21943 documenting the endpoint and the statusline-stdin workaround. Design sketch: a pre-dispatch check in <code>executor_routing_lib.py dispatch</code> — when <code>five_hour.utilization ≥ 90</code>, refuse Claude-lane dispatches with exit 3 (<code>quota_wall</code>, retryable); codex lanes unaffected; plus a WF2 seam check so the orchestrator itself pauses at a clean boundary instead of mid-child. <strong>Spike S1</strong> (5 minutes, curl with this account&#x27;s token) unlocks it. New issue B.</p>
+<h3>8. Why do the analysis caps exist if they kill the work?</h3>
+<p>The cap is a runaway-spend brake — without one, a looping seat can burn without bound (the org 429s in the same receipt set show the monthly ceiling is real). The bug is not the cap&#x27;s existence; it is the <strong>kill semantics</strong>. Today a budget kill discards the partial output (<code>output.md</code> empty — spend lost AND work lost) and the chain blind-retries the same oversized brief on the next model at full price: opus → fable → sonnet, ~$12.6 wasted on one Step-2 in #762. Every seat has a budget in the routing table (analysis now 10.0 after the T3 retune, review 5.0, design 5.0, build 10.0), but budgets are only <strong>enforceable on Anthropic lanes</strong> — codex lanes enforce a timeout instead (<code>phase_executor/src/phase_executor/contract.py:366</code>). Analysis is the only all-Anthropic chain, which is why it is the only seat where the cap kills. The balance the owner asks for: keep the brake, fix the semantics — salvage partial output at the kill boundary, and on budget death re-scope the brief (or split it) instead of blind-retrying it 3×. That is exactly #778, which the owner deferred post-epic. The same correlation ids failed on all three models, proving the BRIEF outgrew the attempt — not a model fault.</p>
+<h3>9. Is the token analysis even trustworthy, given it measured us rebuilding ourselves?</h3>
+<p>The owner is right three times over:</p>
+<ul>
+<li><strong>Epic-children confound</strong> — every measured child was heavy framework work on the system</li>
+</ul>
+<p>  itself; normal feature children will look different.</p>
+<ul>
+<li><strong>Dogfood bias</strong> — the system being measured was the system being rebuilt mid-measurement.</li>
+<li><strong>The rate card is wrong in BOTH directions</strong> (found this session):</li>
+</ul>
+<p>  <code>hooks/usage_capture.py:53-60</code> prices claude-fable-5 at $3/$15 — Sonnet rates — versus $10/$50   actual (3.3× UNDER), and prices claude-opus-5 and claude-opus-4-8 at $15/$75 — Opus-4.1-era   rates — versus $5/$25 actual (3× OVER). Cache rows are wrong proportionally.</p>
+<p>Consequence: <strong>token counts are real</strong> (summed from transcripts); <strong>every dollar column in <code>run_records.jsonl</code> and the token-usage doc&#x27;s &quot;$220→$185, −16%&quot; claim is unreliable</strong>, and so is any cross-model dollar comparison. Fix order: rate card first (issue A, tiny — spike S2 verifies live pricing since the cached skill data is from 2026-06-24), then #777 aggregation, then re-run the comparison on post-epic, normal-shaped children.</p>
+<h3>10. Prioritize granular per-dispatch telemetry.</h3>
+<p>Mostly already there — the gap is aggregation. Every executor observation already records <code>usage</code>, <code>timing_ms</code>, and <code>queued_ms</code> per dispatch (that is what the retrospective was built from). What is missing is exactly what #777 describes: aggregating per-dispatch usage into run-records with per-PHASE attribution. #777 is filed but NOT epic-joined. Recommendation (owner decision 1): join #777 into the epic EARLY — it feeds notes 5, 9, 12, and 13, and every future comparison gets cheaper once it exists.</p>
+<h3>11. Launch executor deployments in herdr panes with live token tracking.</h3>
+<p>Partially exists already. The executor&#x27;s supervised/mutating path launches in a terminal backend, and this project&#x27;s config sets <code>executorTerminalBackend: {build: &quot;herdr&quot;}</code> (<code>projects/rawgentic/.rawgentic.json:14</code>) — <strong>build-seat dispatches already get herdr panes</strong> (#638 HerdrBackend). What is invisible: sync non-mutating dispatches (analysis, review) run headless. Proposal, per the owner&#x27;s instinct to reuse the pane-handoff machinery: an option to run supervised-with-pane for ALL seats, plus a live token ticker in the pane fed from the two sources we already have — statusline stdin <code>rate_limits</code> for the window, observation <code>usage</code> for the dispatch. New issue E.</p>
+<h3>12. Are 35% and 50% still the right handoff thresholds?</h3>
+<p>Thoughts, as asked — the trade is real and the answer is &quot;not yet, and not blind.&quot; The thresholds live at <code>hooks/context_meter.py:84-85</code> (<code>DEFAULT_CHECK_IN_PCT=35</code>, <code>DEFAULT_ACT_PCT=50</code>, env-tunable). With 1M-token windows, 35% = 350k tokens. Raising them saves handoffs — each mid-child handoff costs ~90M tokens of successor re-read — but two forces push back: per-turn cache reads grow with context size (a fuller window makes EVERY turn more expensive), and published research plus our own experience says instruction-following degrades at 60–80% fill. Sequencing recommendation: (1) fix the re-read cost itself first (rolling log summary — the tax shrinks no matter where the threshold sits), (2) land #777 so we can SEE per-phase burn against fill, (3) then experiment, e.g. 45/60. One more data point for urgency: today&#x27;s meter fired the directive tier at 69%, well past the 50% act line — meter reliability is #729/#734, both already in the epic.</p>
+<h3>13. Why does Fable burn so much more than Opus as the orchestrator?</h3>
+<p><strong>Volume, not price.</strong> It looked like price because the rate-card bug (answer 9) masked it — the card prices Fable BELOW opus-5 when it is really 2× opus-5 per token ($10/$50 vs $5/$25), and both have the same 1M window. The measured difference is behavioral: always-on thinking, longer turns, and more verification/tool calls per task → more turns, each paying a full-context cache read. Whether Fable pays for itself in fewer loop-backs (fewer review findings, fewer re-runs) is genuinely <strong>untested</strong> — that is a driver-bench A/B (spike S6; #430 already exists as the bench harness candidate).</p>
+<h3>14. What prose in WF2/WF3 could we script instead?</h3>
+<p>Eight candidates, ranked by pain observed this epic:</p>
+<table>
+<thead><tr><th>Rank</th><th>Candidate</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Version-bump ×4 + changelog scaffold verb</td><td>Every PR; 4 surfaces, one forgotten = red CI</td></tr>
+<tr><td>2</td><td>Pin-guard-allowlist derivation</td><td>13 stale pins slipped scoped verification in #762</td></tr>
+<tr><td>3</td><td>Step-12 PR-body asserts at AUTHORING time</td><td>The H1 slip on #781 fired only at end-of-run</td></tr>
+<tr><td>4</td><td>Merge-verification bundle (squash SHA + issue closed + box ticked)</td><td>Hand-done every child</td></tr>
+<tr><td>5</td><td>ci-wait verb on the check-runs API</td><td>Ad-hoc polling every PR</td></tr>
+<tr><td>6</td><td>usage-capture-legs verb (issue → registry legs → summed usage)</td><td>Hand-done for #762&#x27;s 5 legs</td></tr>
+<tr><td>7</td><td>D6 sweep table emitter</td><td>Owed at every resume</td></tr>
+<tr><td>8</td><td>Marker-writer verb for session notes</td><td>Every step of every child</td></tr>
+</tbody>
+</table>
+<p>Each is small; they batch into one issue (F).</p>
+<h3>15. Is the diff review eating tokens, and is there a better way?</h3>
+<p>Two separate things are being conflated, and the owner&#x27;s memory is half right. The code-review <strong>CI lane</strong> was removed 2026-07-30 (owner decision — it duplicated WF2&#x27;s own Step 11 and was the single biggest PR wall-clock item). What remains is the <strong>adversarial diff review</strong>: the opt-in cross-model (codex) layer at Step 11, configured via <code>adversarialReview</code>. On #762 it read the full 3316-line patch inline, took ~8–10 minutes, and then FAILED with <code>truncated: true</code> (correctly not counted as a pass — tokens spent, nothing gained). Research (exa, 2026-08-01: Cloudflare&#x27;s ai-code-review write-up plus five others) converges on five fixes:</p>
+<p>1. Write per-file patches to disk and let the reviewer read selectively — never inline the    whole diff. 2. Strip noise before review — lockfiles and generated files; OUR diffs carry regenerated    diagram snapshots, DATA blobs, and stubbed-baseline.json. 3. Risk-tier: docs-only diffs skip the adversarial layer entirely. 4. Detect truncation and RETRY with a lower findings cap or chunked input, instead of    terminal-failing. 5. Chunk per file with 3–8 context lines, then one aggregation pass.</p>
+<p>Concrete rework of <code>adversarial_review_lib</code> diff mode; medium effort. Spike S5 (strip generated files from the #762 patch, measure the residual) sizes it. New issue C.</p>
+<h3>16. Do future epic issues already solve any of this?</h3>
+<p>Partly. The honest map:</p>
+<table>
+<thead><tr><th>Covered already</th><th>By</th></tr></thead>
+<tbody>
+<tr><td>Notes 7/8 — caps and budget semantics</td><td>#778 (owner-deferred post-epic)</td></tr>
+<tr><td>Notes 5/9/10/12 — telemetry aggregation</td><td>#777 (filed, NOT epic-joined — decision 1)</td></tr>
+<tr><td>Note 12 — meter reliability</td><td>#729 / #734 (IN the epic)</td></tr>
+<tr><td>Design-phase economics</td><td>#775</td></tr>
+<tr><td>Notes 1/2 — build path</td><td>#779</td></tr>
+<tr><td>Audit hygiene</td><td>#766</td></tr>
+<tr><td>Note 4-adjacent verification</td><td>#764</td></tr>
+</tbody>
+</table>
+<table>
+<thead><tr><th>NOT covered anywhere — new issues to file</th><th>From</th></tr></thead>
+<tbody>
+<tr><td>A. Rate-card fix (tiny)</td><td>Answer 9</td></tr>
+<tr><td>B. 5-hour-window guard</td><td>Answer 7</td></tr>
+<tr><td>C. Adversarial-diff economics</td><td>Answer 15</td></tr>
+<tr><td>D. Seat cache-reuse</td><td>Answers 3/6</td></tr>
+<tr><td>E. Herdr pane live-visibility for all seats</td><td>Answer 11</td></tr>
+<tr><td>F. Prose→script batch</td><td>Answer 14</td></tr>
+</tbody>
+</table></section>
+<section class="mstone"><h3>Spikes — confirm before building <span class="chip c-conf">DONE</span></h3><table>
+<thead><tr><th>Spike</th><th>Effort</th><th>Unlocks</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>S1: curl <code>/api/oauth/usage</code> with this account&#x27;s token + UA header</td><td>5 min</td><td>Issue B</td><td>Pending</td></tr>
+<tr><td>S2: verify live fable-5/opus-5 pricing on platform.claude.com</td><td>10 min</td><td>Issue A</td><td>Pending</td></tr>
+<tr><td>S3: two byte-identical dispatches back-to-back, read <code>cache_read_input_tokens</code> on the 2nd</td><td>15 min</td><td>Issue D</td><td>Pending</td></tr>
+<tr><td>S4: read the 8 failed analysis receipts</td><td>—</td><td>Answer 8</td><td><strong>DONE</strong> (budget kill ×6, 429 ×2)</td></tr>
+<tr><td>S5: strip generated files from the #762 patch, measure residual size</td><td>30 min</td><td>Issue C</td><td>Pending</td></tr>
+<tr><td>S6: driver-bench Fable-vs-Opus-5 orchestrator A/B</td><td>larger</td><td>Answer 13</td><td>Pending (#430 exists)</td></tr>
+</tbody>
+</table></section>
+<section class="mstone"><h3>The plan — how this changes epic #756 <span class="chip c-conf">DONE</span></h3><p>The epic stays <strong>PAUSED</strong> (owner instruction, D35). Nothing below starts until the owner says resume. What changes at resume:</p>
+<p>1. <strong>File issues A–F now</strong> (they are review output, not epic work) — done in this same session,    each citing the evidence above. 2. <strong>Three owner decisions, presented together:</strong> join #777 into the epic early (answer 10)?    amend the review-pairing invariant to reviewer ≠ author (answer 4)? codify the Step-4    budget-exhausted close (answer 5&#x27;s biggest per-child saver)? 3. <strong>At resume, the owed D6 sweep runs first</strong> (#762 + #782 findings) and now ALSO triages    issues A–F for epic membership — the sweep&#x27;s queue-reassessment mandate covers them. 4. <strong>Sequencing principle from answer 12:</strong> cheap structural fixes (rate card, rolling log    summary, pin-guard derivation) land before any threshold retuning or model A/B, so the    expensive experiments measure a system that isn&#x27;t bleeding from known holes.</p></section>
+
+</main>
+<footer>Last updated: 2026-07-31 21:09 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
