@@ -137,6 +137,10 @@ GOAL_POLL_ATTEMPTS = 12
 # have landed inside that turn. Four rounds of {bare Enter, re-poll} is ~90 s worst case, past a
 # first turn of the observed length, and costs nothing on a handoff that submits normally.
 PROMPT_NUDGE_ROUNDS = 4
+# #835: the GOAL's Enter is eaten the same way, and for a stronger reason — SEND 3 delivers it
+# "deliberately while the successor is already working", so it always lands in a pane mid-turn
+# on the prompt that just submitted. Same bound, same reasoning as the prompt's.
+GOAL_NUDGE_ROUNDS = 4
 # A marker must be distinctive, not merely present in the prompt (#700 design review, High 1):
 # `transcript_has_marker` is a plain substring scan, so a short common word would match unrelated
 # tail content and pass `prompt_landed` before the prompt ever submitted. A length floor is a
@@ -1248,6 +1252,44 @@ def _tail(text: str, baseline: tuple[int, str]) -> str | None:
 _UNSET_GOAL_SNAPSHOT = object()
 
 
+def _nudge_unsubmitted_paste(*, landed, pane, runner, record, poll, rounds, step_name, issue):
+    """Bounded {check pane, bare Enter, re-poll} recovery for a paste that arrived INTACT BUT
+    UNSUBMITTED (#700, generalised for the goal by #835).
+
+    rc 0 on a send proves TRANSPORT, not arrival — the receiving pane may still be mid-turn and
+    swallow the Enter. This submits what is already in the buffer: never a re-paste (double
+    submission) and never a truncation (silent corruption), which is #696's rule.
+
+    Returns ``(landed, failed_step)``. An Enter accepts whatever is on screen, so the pane's state
+    is checked FIRST and anything other than a clear "safe" abandons the recovery — leaving exactly
+    the pre-recovery behaviour. A bounded count is not a bound on privilege.
+    """
+    for _ in range(rounds):
+        if landed:
+            break
+        read_argv = build_pane_read_argv(pane)
+        proc = runner(read_argv)
+        if getattr(proc, "returncode", 1) != 0:
+            record("pane_read", read_argv, proc,
+                   note="nudge SKIPPED: pane read failed, so the pane's state is unknown")
+            break
+        safe, why = pane_shows_unsubmitted_paste(getattr(proc, "stdout", "") or "")
+        record("pane_read", read_argv, proc,
+               note=f"nudge {'PERMITTED' if safe else 'SKIPPED'}: {why}")
+        if not safe:
+            break
+        nudge_argv = build_send_enter_argv(pane)
+        proc = runner(nudge_argv)
+        record(step_name, nudge_argv, proc,
+               note=f"bare Enter — submit the intact paste, never re-send it ({issue})")
+        if getattr(proc, "returncode", 1) != 0:
+            # Named distinctly: reporting this as the poll gate would blame the successor's
+            # timing for what is a failed herdr call.
+            return landed, step_name
+        landed = poll()
+    return landed, None
+
+
 def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     goal_condition: str, resume_prompt: str, registry_path: str,
                     transcript_dir: str, launch_mode: str = "fresh",
@@ -1624,34 +1666,14 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             # `prompt_landed` still has to pass on the same artifact, and a nudge can only let a
             # gate pass where the buffer was intact all along. Never a re-paste and never a
             # truncation (#696).
-            for _ in range(PROMPT_NUDGE_ROUNDS):
-                if landed:
-                    break
-                # An Enter accepts whatever is on screen, so the pane's state is checked FIRST and
-                # anything other than a clear "safe" abandons the recovery — which leaves exactly
-                # the pre-#700 behaviour.
-                read_argv = build_pane_read_argv(new_pane)
-                proc = runner(read_argv)
-                if getattr(proc, "returncode", 1) != 0:
-                    record("pane_read", read_argv, proc,
-                           note="nudge SKIPPED: pane read failed, so the pane's state is unknown")
-                    break
-                safe, why = pane_shows_unsubmitted_paste(getattr(proc, "stdout", "") or "")
-                record("pane_read", read_argv, proc,
-                       note=f"nudge {'PERMITTED' if safe else 'SKIPPED'}: {why}")
-                if not safe:
-                    break
-                nudge_argv = build_send_enter_argv(new_pane)
-                proc = runner(nudge_argv)
-                record("send_resume_nudge", nudge_argv, proc,
-                       note="bare Enter — submit the intact paste, never re-send it (#700)")
-                if getattr(proc, "returncode", 1) != 0:
-                    # Named distinctly (design review): reporting this as `prompt_landed` would
-                    # blame the successor's timing for what is a failed herdr call.
-                    out["failed_step"] = "send_resume_nudge"
-                    return out
-                landed = _poll_for(_prompt_landed, attempts=GOAL_POLL_ATTEMPTS,
-                                   delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
+            landed, nudge_fail = _nudge_unsubmitted_paste(
+                landed=landed, pane=new_pane, runner=runner, record=record,
+                poll=lambda: _poll_for(_prompt_landed, attempts=GOAL_POLL_ATTEMPTS,
+                                       delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper),
+                rounds=PROMPT_NUDGE_ROUNDS, step_name="send_resume_nudge", issue="#700")
+            if nudge_fail:
+                out["failed_step"] = nudge_fail
+                return out
 
             out["results"]["prompt_landed"] = landed
             if not landed:
@@ -1684,10 +1706,24 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             return tail is not None and transcript_has_unmet_goal(
                 tail, expected_condition=expected)
 
-        out["results"]["goal_armed"] = _poll_for(
-            _goal_is_armed,
-            attempts=GOAL_POLL_ATTEMPTS, delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
-        if not out["results"]["goal_armed"]:
+        def _poll_goal() -> bool:
+            return _poll_for(_goal_is_armed, attempts=GOAL_POLL_ATTEMPTS,
+                             delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
+
+        armed = _poll_goal()
+        # #835: rc 0 on the paired send-text/send-keys proves TRANSPORT, not arrival. This send is
+        # made "deliberately while the successor is already working" (see above), so its Enter is
+        # delivered into a pane that is ALWAYS mid-turn on the prompt that just submitted — the
+        # #700 collision, with more force. Recovery lives INSIDE send 3; the order and the gate are
+        # untouched, and a nudge can only let the gate pass where the buffer was intact all along.
+        armed, nudge_fail = _nudge_unsubmitted_paste(
+            landed=armed, pane=new_pane, runner=runner, record=record, poll=_poll_goal,
+            rounds=GOAL_NUDGE_ROUNDS, step_name="send_goal_nudge", issue="#835")
+        if nudge_fail:
+            out["failed_step"] = nudge_fail
+            return out
+        out["results"]["goal_armed"] = armed
+        if not armed:
             out["failed_step"] = "goal_armed"
             return out
 

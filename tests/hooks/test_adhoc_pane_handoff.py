@@ -125,10 +125,14 @@ class Artifacts:
     unsubmitted until something submits it.
     """
 
-    def __init__(self, runner, *, marker_after_nudges=0, goal_row=GOAL_ROW):
+    def __init__(self, runner, *, marker_after_nudges=0, goal_row=GOAL_ROW,
+                 goal_row_after_nudges=0):
         self.runner = runner
         self.marker_after_nudges = marker_after_nudges
         self.goal_row = goal_row
+        # #835: the goal's Enter is eaten the same way the prompt's is, so the goal row must be
+        # withholdable until N bare Enters have been sent — the prompt fixture's own trick.
+        self.goal_row_after_nudges = goal_row_after_nudges
         self.reads: dict[str, int] = {}
 
     def __call__(self, path):
@@ -141,6 +145,8 @@ class Artifacts:
         text = ""
         if len(self.runner.nudges()) >= self.marker_after_nudges:
             text += RESUME_PROMPT + "\n"
+        if len(self.runner.nudges()) < self.goal_row_after_nudges:
+            return text
         return text + self.goal_row + "\n"
 
 
@@ -1234,3 +1240,55 @@ class TestPredecessorGoalConditionFile:
         """AC6: the skill shows the pair where it documents the inline one."""
         text = (REPO_ROOT / "skills" / "pane-handoff" / "SKILL.md").read_text(encoding="utf-8")
         assert "--predecessor-goal-condition-file" in text
+
+
+class TestGoalNudge:
+    """#835 — the goal's Enter is eaten exactly as the prompt's was, and for a STRONGER reason.
+
+    SEND 3's own comment says `/goal` goes last "deliberately while the successor is already
+    working", so the goal's Enter is always delivered into a pane mid-turn on the prompt that just
+    landed. #700 fixed that collision for the prompt and was never extended here. Observed live
+    2026-08-01: successor `a02dcfc0` carried 3 occurrences of the prompt marker and ZERO of
+    `/goal`, and the whole handoff was rolled back at `goal_armed`.
+    """
+
+    def test_a_goal_that_arms_first_time_is_never_nudged(self) -> None:
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, goal_row_after_nudges=0)))
+        assert out["ok"] is True, out["failed_step"]
+        assert r.nudges() == []
+
+    def test_an_unsubmitted_goal_is_recovered_by_a_bare_enter(self) -> None:
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, goal_row_after_nudges=1)))
+        assert out["ok"] is True, out["failed_step"]
+        assert out["results"]["goal_armed"] is True
+        assert len(r.nudges()) == 1
+        assert r.nudges()[0] == ["herdr", "pane", "send-keys", "w1:pZZ", "Enter"]
+
+    def test_the_nudge_never_re_sends_the_goal_text(self) -> None:
+        """#696: a re-paste risks double submission; a truncation silently corrupts."""
+        r = Runner(_responses())
+        ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, goal_row_after_nudges=2)))
+        goals = [t for t in r.sent_text() if t.startswith("/goal")]
+        assert len(goals) == 1, "the goal text was sent more than once"
+
+    def test_goal_nudging_is_bounded_and_fails_closed(self) -> None:
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, goal_row_after_nudges=99)))
+        assert out["ok"] is False and out["failed_step"] == "goal_armed"
+        assert len(r.nudges()) <= ll.GOAL_NUDGE_ROUNDS
+        assert not any(c[:3] == ["herdr", "pane", "close"] and c[3] == "w1:p1"
+                       for c in r.calls), "the predecessor must survive a failed handoff"
+
+    def test_each_goal_nudge_is_recorded_as_its_own_step(self) -> None:
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, goal_row_after_nudges=1)))
+        assert [s for s in out["steps"] if s["kind"] == "send_goal_nudge"]
+
+    def test_no_nudge_when_the_pane_is_not_showing_an_unsubmitted_paste(self) -> None:
+        """An Enter accepts whatever is on screen — an unknown pane state must abandon recovery."""
+        r = Runner(_responses(pane_read=PANE_PERMISSION_DIALOG))
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, goal_row_after_nudges=99)))
+        assert out["ok"] is False and out["failed_step"] == "goal_armed"
+        assert r.nudges() == [], "must never Enter into a permission dialog"
