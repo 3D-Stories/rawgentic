@@ -4577,10 +4577,13 @@ _RC_REFERENCING = [
     "Review the attached design. Report findings only.",
     "Review the design document supplied as CONTEXT below (the full markdown).",
     "# Step 8a review\n\nReview the attached diff for silent failures.",
-    "Judge the diff below against the plan.",
     "The design is supplied as context below (the full markdown of the design doc).",
 ]
+# REVERSED by the Step-11 measurement: "the diff below" was in the flagged list on the first pass
+# and every historical dispatch it matched turned out to INLINE its diff (756 lines in one case).
+# `below` denotes material inside the brief, so it is now correctly self-contained.
 _RC_SELF_CONTAINED = [
+    "Judge the diff below against the plan.",
     "hi",
     "# WF2 Step 11 review\n\nHere is the complete diff, inlined:\n\n```\n--- a/x\n+++ b/x\n```\n",
     "Assess whether the plan's tasks each carry a riskLevel. Plan text follows inline.",
@@ -4642,4 +4645,62 @@ def test_review_self_contained_prompt_without_context_proceeds(tmp_path):
 def test_non_review_seat_attachment_prompt_without_context_unaffected(tmp_path):
     # scoped to the seat that has the defect; a plan-seat brief is untouched
     res, _ = _rc_dispatch(tmp_path, seat="plan", prompt="Review the attached design.")
+    assert res["ok"] is True, res
+
+
+# --- #826 redesign after the Step-11 findings ---------------------------------------------------
+# F4: the original phrase list flagged 10 historical dispatches and FIVE were false positives —
+# every one of them matched a `below`-family pattern while every true positive matched `attached`.
+# The `below` patterns denote material INSIDE the brief, which is the opposite of the signal wanted.
+# F2: `not context` tested cardinality, so an empty file yielded ("",) and slipped through while
+# still minting a context_hashes entry.
+_RC_INLINED_BRIEFS = [
+    "Apply the quality-bar rubric to the DESIGN DOCUMENT inlined below (the full text follows "
+    "after the rubric):\n\n# The design\n...",
+    "# Step 11 review\n\nJudge the diff below against the plan.\n\ndiff --git a/x b/x\n+y\n",
+    "Review the design supplied as context below? No — it is inlined here in full.",
+]
+_RC_NEGATED = [
+    "No files are attached; everything you need is in this brief.",
+    "The spec is attached to the issue for humans; the relevant excerpt is reproduced here.",
+]
+
+
+@pytest.mark.parametrize("prompt", _RC_INLINED_BRIEFS)
+def test_an_inlined_brief_is_not_treated_as_an_attachment_reference(prompt):
+    """The 5 historical false positives: long briefs that INLINE the artifact must not refuse."""
+    assert er.prompt_references_attachment(prompt) is False
+
+
+@pytest.mark.parametrize("prompt", _RC_NEGATED)
+def test_negated_or_provenance_mentions_do_not_count(prompt):
+    assert er.prompt_references_attachment(prompt) is False
+
+
+def test_the_explicit_marker_is_the_primary_signal():
+    """Prose sniffing is the backstop; the four WF sites emit a machine-readable requirement."""
+    assert er.prompt_requires_context(f"# Brief\n{er.CONTEXT_REQUIRED_MARKER}\nreview it") is True
+    assert er.prompt_requires_context("# Brief\nreview the attached design") is True   # backstop
+    assert er.prompt_requires_context("# Brief\neverything is inline here") is False
+
+
+def test_marker_with_no_context_is_refused(tmp_path):
+    res, audit = _rc_dispatch(
+        tmp_path, prompt=f"# Step 4 brief\n{er.CONTEXT_REQUIRED_MARKER}\nJudge it.")
+    assert res["ok"] is False and res["exit"] == er.EXIT_MALFORMED
+    assert res["error"]["code"] == "review_context_required"
+    assert audit.records() == []
+
+
+def test_a_whitespace_only_context_item_is_not_context(tmp_path):
+    """F2: an empty --context-file yields ("",) — cardinality is not content."""
+    for empty in ("", "   \n\t  \n"):
+        res, _ = _rc_dispatch(tmp_path, prompt="Review the attached design.", context=(empty,))
+        assert res["ok"] is False, f"empty context {empty!r} slipped through"
+        assert res["error"]["code"] == "review_context_required"
+
+
+def test_a_real_item_alongside_an_empty_one_is_accepted(tmp_path):
+    res, _ = _rc_dispatch(tmp_path, prompt="Review the attached design.",
+                          context=("", "# Design\nreal bytes\n"))
     assert res["ok"] is True, res
