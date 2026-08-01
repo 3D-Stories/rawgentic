@@ -700,3 +700,138 @@ class TestCloseIsVisibleInTheRenderedRunRecord:
             capture_output=True, text=True)
         assert proc.returncode != 0, "an empty findings file must not read as a clean close"
         assert not ledger.exists()
+
+
+# --- #796 candidate 3: the assert-pr-body CLI adapter -----------------------------------
+#
+# The two pure functions (`assert_pr_body_has_deferred_section`, `assert_deferrals_recorded`)
+# have shipped since #138 with NO production caller — they run only inside the end-of-run
+# completion gate, which is exactly why the #781 H1 slip fired AFTER merge. This adapter is
+# the caller, so Step 12 can execute the check instead of re-deriving it as prose.
+#
+# Two review findings from #796's design passes are asserted here because both are the
+# reason the candidate was not shippable as first drafted:
+#   1. a plan that parses to ZERO tasks must be rc 2 (caller error), never a vacuous pass;
+#   2. --plan-file must be bound to the gate's recorded plan_digest, so the gate cannot be
+#      satisfied against a plan revised after the gate was taken.
+
+import json as _json  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+_CLI = str(Path(__file__).resolve().parent.parent.parent / "hooks" / "plan_lib.py")
+
+
+def _apb_plan(tmp_path, *, deferred=False, tasks=True):
+    # Formats are the real ones parse_tasks enforces: a NUMERIC task id
+    # (_TASK_HEADER_RE = ^###\s+Task\s+([0-9.]+)), and a deferral expressed as
+    # `- verification: deferred-to-target (<reason>)` with a mandatory parenthesized reason.
+    body = ""
+    if tasks:
+        body = "### Task 1: do the thing\n- riskLevel: standard\n"
+        if deferred:
+            body += "- verification: deferred-to-target (needs the live target)\n"
+    p = tmp_path / "impl-plan.md"
+    p.write_text("# Plan\n\n" + body, encoding="utf-8")
+    return p
+
+
+def _apb_run(args):
+    return subprocess.run([sys.executable, _CLI, "assert-pr-body", *args],
+                          capture_output=True, text=True, check=False)
+
+
+def _apb_gate(tmp_path, plan_path, *, digest=True):
+    # HOOKS_DIR is already on sys.path at module import, so use the normal import rather than a
+    # second spec_from_file_location load (loading complexity_gate twice breaks its dataclasses).
+    # Deliberately NOT reimplementing the digest here: one helper, one home.
+    cg = importlib.import_module("complexity_gate")
+    snap = {"complexity": "standard", "file_count": 1, "lines": 10, "risk_level": "standard"}
+    if digest:
+        snap["plan_digest"] = cg.plan_content_digest(plan_path.read_text(encoding="utf-8"))
+    g = tmp_path / "gate.json"
+    g.write_text(_json.dumps(snap), encoding="utf-8")
+    return g
+
+
+class TestAssertPrBodyAdapter:
+    def test_a_plan_with_no_deferrals_passes(self, tmp_path) -> None:
+        plan = _apb_plan(tmp_path, deferred=False)
+        pr = tmp_path / "pr.md"; pr.write_text("## Summary\nnothing deferred\n", encoding="utf-8")
+        r = _apb_run(["--plan-file", str(plan), "--pr-body-file", str(pr),
+                  "--project-root", str(tmp_path)])
+        assert r.returncode == 0, r.stderr
+
+    def test_a_deferred_task_without_the_pr_section_FAILS_the_gate(self, tmp_path) -> None:
+        plan = _apb_plan(tmp_path, deferred=True)
+        pr = tmp_path / "pr.md"; pr.write_text("## Summary\nno section here\n", encoding="utf-8")
+        r = _apb_run(["--plan-file", str(plan), "--pr-body-file", str(pr),
+                  "--project-root", str(tmp_path)])
+        assert r.returncode == 1, f"expected a gate failure, got {r.returncode}: {r.stdout}{r.stderr}"
+        assert "Deferred verification" in (r.stdout + r.stderr)
+
+    def test_a_deferred_task_WITH_the_pr_section_passes(self, tmp_path) -> None:
+        plan = _apb_plan(tmp_path, deferred=True)
+        pr = tmp_path / "pr.md"
+        pr.write_text("## Summary\n\n## Deferred verification\n- T1: on the target\n", encoding="utf-8")
+        r = _apb_run(["--plan-file", str(plan), "--pr-body-file", str(pr),
+                  "--project-root", str(tmp_path)])
+        assert r.returncode == 0, r.stdout + r.stderr
+
+    def test_a_ZERO_TASK_plan_is_rc2_not_a_vacuous_pass(self, tmp_path) -> None:
+        """#796 review finding 1. `assert_pr_body_has_deferred_section` returns (True, []) on an
+        empty deferred list BY DESIGN — the section is omitted-when-empty. But a plan that parses
+        to no tasks AT ALL means a wrong path or a malformed plan, and letting that read as a gate
+        PASS is the vacuous pass the reviewers refused. It must be a caller error."""
+        plan = _apb_plan(tmp_path, tasks=False)
+        pr = tmp_path / "pr.md"; pr.write_text("## Summary\n", encoding="utf-8")
+        r = _apb_run(["--plan-file", str(plan), "--pr-body-file", str(pr),
+                  "--project-root", str(tmp_path)])
+        assert r.returncode == 2, f"expected rc 2 for a zero-task plan, got {r.returncode}"
+        assert "no tasks" in (r.stdout + r.stderr).lower()
+
+    def test_a_plan_revised_after_the_gate_is_REFUSED(self, tmp_path) -> None:
+        """#796 review finding 2. Binding --plan-file to the gate's recorded plan_digest is what
+        stops the gate being satisfied against a plan edited after the gate was taken — the same
+        staleness rule `executor_routing_lib` enforces as `gate_stale_for_plan`."""
+        plan = _apb_plan(tmp_path, deferred=True)
+        gate = _apb_gate(tmp_path, plan)
+        plan.write_text(plan.read_text(encoding="utf-8") + "\n### Task 2: snuck in\n"
+                        "- riskLevel: standard\n", encoding="utf-8")
+        pr = tmp_path / "pr.md"
+        pr.write_text("## Deferred verification\n- T1\n", encoding="utf-8")
+        r = _apb_run(["--plan-file", str(plan), "--pr-body-file", str(pr),
+                  "--gate-file", str(gate), "--project-root", str(tmp_path)])
+        assert r.returncode == 2, f"expected rc 2 for a stale plan, got {r.returncode}"
+        assert "stale" in (r.stdout + r.stderr).lower()
+
+    def test_an_unrevised_plan_passes_the_digest_binding(self, tmp_path) -> None:
+        plan = _apb_plan(tmp_path, deferred=True)
+        gate = _apb_gate(tmp_path, plan)
+        pr = tmp_path / "pr.md"
+        pr.write_text("## Deferred verification\n- T1\n", encoding="utf-8")
+        r = _apb_run(["--plan-file", str(plan), "--pr-body-file", str(pr),
+                  "--gate-file", str(gate), "--project-root", str(tmp_path)])
+        assert r.returncode == 0, r.stdout + r.stderr
+
+    def test_a_gate_with_no_recorded_digest_is_REFUSED(self, tmp_path) -> None:
+        """Mirrors `gate_missing_plan_digest`: a gate that recorded no digest cannot be used to
+        prove the plan is the one that was gated. Fail-closed, not fall-open."""
+        plan = _apb_plan(tmp_path, deferred=True)
+        gate = _apb_gate(tmp_path, plan, digest=False)
+        pr = tmp_path / "pr.md"
+        pr.write_text("## Deferred verification\n- T1\n", encoding="utf-8")
+        r = _apb_run(["--plan-file", str(plan), "--pr-body-file", str(pr),
+                  "--gate-file", str(gate), "--project-root", str(tmp_path)])
+        assert r.returncode == 2
+        assert "digest" in (r.stdout + r.stderr).lower()
+
+    def test_an_unreadable_plan_file_is_rc2(self, tmp_path) -> None:
+        pr = tmp_path / "pr.md"; pr.write_text("x\n", encoding="utf-8")
+        r = _apb_run(["--plan-file", str(tmp_path / "nope.md"), "--pr-body-file", str(pr),
+                  "--project-root", str(tmp_path)])
+        assert r.returncode == 2
+        # discriminating: before the verb existed this passed because argparse rejected an
+        # unknown subcommand with rc 2 (the #730 review trap). Require the real diagnosis.
+        assert "cannot read --plan-file" in r.stderr

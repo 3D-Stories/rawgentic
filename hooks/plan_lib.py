@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from typing import Final, Literal
 
 from atomic_write_lib import atomic_write_text
+from complexity_gate import plan_content_digest
 
 
 class PlanFormatError(ValueError):
@@ -2712,10 +2713,139 @@ def _cmd_close_design_gate(args) -> int:
     return 0
 
 
+def _cmd_assert_pr_body(args) -> int:
+    """#796 candidate 3 — execute the Step-12 deferral gate instead of re-deriving it as prose.
+
+    `assert_pr_body_has_deferred_section` and `assert_deferrals_recorded` have shipped since #138
+    with NO production caller: they run only inside the end-of-run completion gate, which is
+    precisely why the #781 H1 slip fired AFTER merge. This is that caller.
+
+    Exit codes, deliberately three-valued so a caller mistake can never read as a gate pass:
+    ``0`` the gate holds · ``1`` the gate FAILS (findings on stdout) · ``2`` caller/usage error.
+
+    Two #796 review findings are enforced here, and both are the reason the candidate was not
+    shippable as first drafted:
+
+    - **A plan that parses to ZERO tasks is rc 2, never a pass.** The pure function returns
+      ``(True, [])`` on an empty deferred list BY DESIGN (the section is omitted-when-empty), so a
+      wrong ``--plan-file`` path or a malformed plan would otherwise satisfy the gate vacuously.
+      "No tasks at all" is a different fact from "tasks, none deferred" and only the second is a pass.
+    - **``--plan-file`` binds to the gate's recorded ``plan_digest``** when ``--gate-file`` is given,
+      so the gate cannot be satisfied against a plan revised after it was taken. Same rule
+      ``executor_routing_lib`` enforces as ``gate_stale_for_plan`` / ``gate_missing_plan_digest``,
+      reusing ``complexity_gate.plan_content_digest`` rather than a second implementation.
+
+    Fail-CLOSED throughout: this is a security-adjacent completion gate, so anything it cannot
+    evaluate is refused rather than waved through (`CLAUDE.md` §3 decision guide).
+    """
+    root = os.path.realpath(args.project_root)
+    for label, target in (("--plan-file", args.plan_file),
+                          ("--pr-body-file", args.pr_body_file)):
+        if not _contained(target, root):
+            sys.stderr.write(f"assert-pr-body: REFUSED — {label} resolves outside "
+                             f"--project-root ({root})\n")
+            return 2
+    try:
+        with open(args.plan_file, encoding="utf-8") as fh:
+            plan_content = fh.read()
+    except OSError as e:
+        sys.stderr.write(f"assert-pr-body: cannot read --plan-file {args.plan_file!r}: {e}\n")
+        return 2
+    try:
+        tasks = parse_tasks(plan_content)
+    except PlanFormatError as e:
+        sys.stderr.write(f"assert-pr-body: --plan-file is not a parseable WF2 plan: {e}\n")
+        return 2
+    if not tasks:
+        # #796 finding 1 — the vacuous pass. Absence of TASKS is a caller error, not a clean gate.
+        sys.stderr.write(
+            f"assert-pr-body: REFUSED — --plan-file {args.plan_file!r} parsed to no tasks. "
+            "That is a wrong path or a malformed plan, not a plan with nothing deferred; "
+            "passing here would satisfy the gate vacuously\n")
+        return 2
+    if args.gate_file:
+        # #796 finding 2 — bind the plan to the gate that approved it.
+        if not _contained(args.gate_file, root):
+            sys.stderr.write("assert-pr-body: REFUSED — --gate-file resolves outside "
+                             f"--project-root ({root})\n")
+            return 2
+        try:
+            with open(args.gate_file, encoding="utf-8") as fh:
+                snapshot = _json.loads(fh.read())
+        except (OSError, ValueError) as e:
+            sys.stderr.write(f"assert-pr-body: cannot read --gate-file: {e}\n")
+            return 2
+        if not isinstance(snapshot, dict):
+            sys.stderr.write("assert-pr-body: --gate-file is not a JSON object\n")
+            return 2
+        recorded = snapshot.get("plan_digest")
+        if not _is_nonempty_str(recorded):
+            sys.stderr.write(
+                "assert-pr-body: REFUSED — the gate records no plan_digest, so it cannot prove "
+                "this plan is the one that was gated (mirrors gate_missing_plan_digest)\n")
+            return 2
+        live = plan_content_digest(plan_content)
+        if live != recorded:
+            sys.stderr.write(
+                "assert-pr-body: REFUSED — the plan is STALE for this gate: recorded plan_digest "
+                f"{recorded!r} != live {live!r}. The plan was revised after the gate was taken "
+                "(mirrors gate_stale_for_plan)\n")
+            return 2
+    try:
+        with open(args.pr_body_file, encoding="utf-8") as fh:
+            pr_body = fh.read()
+    except OSError as e:
+        sys.stderr.write(f"assert-pr-body: cannot read --pr-body-file: {e}\n")
+        return 2
+
+    deferred = deferred_tasks(tasks)
+    errors: list[str] = []
+    ok_section, section_errors = assert_pr_body_has_deferred_section(pr_body, deferred)
+    errors.extend(section_errors)
+
+    if args.record_file:
+        if not _contained(args.record_file, root):
+            sys.stderr.write("assert-pr-body: REFUSED — --record-file resolves outside "
+                             f"--project-root ({root})\n")
+            return 2
+        try:
+            with open(args.record_file, encoding="utf-8") as fh:
+                record = _json.loads(fh.read())
+        except (OSError, ValueError) as e:
+            sys.stderr.write(f"assert-pr-body: cannot read --record-file: {e}\n")
+            return 2
+        if not isinstance(record, dict):
+            sys.stderr.write("assert-pr-body: --record-file is not a JSON object\n")
+            return 2
+        _ok_rec, record_errors = assert_deferrals_recorded(
+            deferred, record.get("verification_deferred", []))
+        errors.extend(record_errors)
+
+    if errors:
+        sys.stdout.write(f"assert-pr-body: GATE FAILED ({len(errors)} finding(s))\n")
+        for e in errors:
+            sys.stdout.write(f"  - {e}\n")
+        return 1
+    sys.stdout.write(
+        f"assert-pr-body: OK — {len(tasks)} task(s), {len(deferred)} deferred\n")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
     parser = argparse.ArgumentParser(prog="plan_lib")
     sub = parser.add_subparsers(dest="cmd", required=True)
+    a = sub.add_parser("assert-pr-body",
+                       help="execute the Step-12 deferral gate: PR section + run-record (#796)")
+    a.add_argument("--plan-file", required=True, dest="plan_file")
+    a.add_argument("--pr-body-file", required=True, dest="pr_body_file")
+    a.add_argument("--gate-file", dest="gate_file", default=None,
+                   help="bind --plan-file to this gate's recorded plan_digest (#796)")
+    a.add_argument("--record-file", dest="record_file", default=None,
+                   help="also assert every deferral is recorded in the run-record")
+    a.add_argument("--project-root", default=".",
+                   help="every input path must resolve inside this root")
+    a.set_defaults(func=_cmd_assert_pr_body)
     c = sub.add_parser("close-design-gate",
                        help="record a budget-exhausted Step-4 design-gate close (#798)")
     c.add_argument("--issue", type=int, required=True)
