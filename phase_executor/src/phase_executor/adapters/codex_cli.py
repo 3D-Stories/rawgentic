@@ -20,7 +20,8 @@ from typing import Optional
 
 from .. import contract
 from ..capture import create_capture
-from .base import AdapterRequest, ParsedResult, build_observation, run_subprocess
+from .base import (AdapterRequest, ParsedResult, build_observation,
+                   compose_provider_input, run_subprocess)
 
 ENGINE = "codex"
 
@@ -172,9 +173,10 @@ def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, rout
     else:
         cmd = build_command(req.requested_model, work, effort=effective_effort)
     cap = create_capture(capture_root, run_id, req.seat, attempt_id)
-    cap.write_input(req.prompt)
+    payload = compose_provider_input(req.prompt, req.context)  # #829: context must REACH the provider
+    cap.write_input(payload)
     started = time.monotonic()
-    proc = run_subprocess(cmd, req.prompt, req.timeout)
+    proc = run_subprocess(cmd, payload, req.timeout)
     timing_ms = int((time.monotonic() - started) * 1000)
     cap.write_transport(proc.stdout)
     cap.write_stderr(proc.stderr)

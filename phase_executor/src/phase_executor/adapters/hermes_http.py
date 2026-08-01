@@ -49,7 +49,8 @@ from typing import Callable, Optional, Tuple
 
 from .. import contract
 from ..capture import create_capture
-from .base import AdapterRequest, ParsedResult, ProcOutcome, build_observation
+from .base import (AdapterRequest, ParsedResult, ProcOutcome, build_observation,
+                   compose_provider_input)
 
 ENGINE = "hermes"
 PLATFORM_IDENTITY = "hermes-agent"          # the routed model id the seat contracts on
@@ -252,7 +253,8 @@ def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root,
             for k, v in _load_env_file().items():
                 env.setdefault(k, v)
     cap = create_capture(capture_root, run_id, req.seat, attempt_id)
-    cap.write_input(req.prompt)
+    provider_input = compose_provider_input(req.prompt, req.context)  # #829: context must REACH the provider
+    cap.write_input(provider_input)
     started = clock()
     pre_to = min(req.timeout, _PREFLIGHT_TIMEOUT_S)  # short-bound preflight/submit (Opus-arch F4)
     proc = ProcOutcome(returncode=0, stdout="", stderr="", timed_out=False)
@@ -277,7 +279,7 @@ def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root,
                                     "allowlist (unsandboxed/unknown) — offload dispatch refused")
 
         # --- submit ---
-        submit_body = json.dumps({"input": req.prompt, "model": req.requested_model})
+        submit_body = json.dumps({"input": provider_input, "model": req.requested_model})
         sstatus, sbody = transport("POST", f"{base}/v1/runs", headers=auth,
                                    body=submit_body, timeout=pre_to)
         rid, serr = parse_submit(sstatus, sbody)

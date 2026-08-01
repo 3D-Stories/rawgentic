@@ -17,7 +17,8 @@ from typing import Optional, Union
 
 from .. import contract
 from ..capture import create_capture
-from .base import AdapterRequest, ParsedResult, ProcOutcome, build_observation, run_subprocess
+from .base import (AdapterRequest, ParsedResult, ProcOutcome, build_observation,
+                   compose_provider_input, run_subprocess)
 
 ENGINE = "claude"
 
@@ -165,14 +166,15 @@ def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, rout
         # could land in the canonical checkout. Shared helper, fail-closed.
         cwd = contract.canonical_contained_worktree(req.profile.worktree, req.containment_root)
     cap = create_capture(capture_root, run_id, req.seat, attempt_id)
-    cap.write_input(req.prompt)
+    payload = compose_provider_input(req.prompt, req.context)  # #829: context must REACH the provider
+    cap.write_input(payload)
     # #640: the claim lives inside THIS dispatch's own capture dir (already 0700, already
     # rooted under the dispatching project's `.rawgentic/runs/` tree) — its path is the
     # provenance wal-bind-guard trusts for an otherwise-unregistered subprocess.
     claim_path = str(cap.write_dispatch_claim(
         run_id=run_id, seat=req.seat, attempt_id=attempt_id).resolve())
     started = time.monotonic()
-    proc = run_subprocess(cmd, req.prompt, req.timeout,
+    proc = run_subprocess(cmd, payload, req.timeout,
                          env=_claude_env(req.credential_ref, claim_path), cwd=cwd)
     timing_ms = int((time.monotonic() - started) * 1000)
     cap.write_transport(proc.stdout)
