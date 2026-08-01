@@ -2530,3 +2530,111 @@ def consume_loopback(path: str, source: str) -> tuple[bool, dict]:
         state["total"] = sum(state[s] for s in _LOOPBACK_SOURCES)
         _write_loopback_state(path, state)
     return True, state
+
+
+# --- #798: the Step-4 budget-exhausted close, as an EXECUTABLE gate ----------
+#
+# Prose alone could not prove AC2/AC3: a helper unit test plus a "the prose names
+# the destination" guard both pass while a real exhausted run persists nothing.
+# This adapter gives Step 4 a real call site, and it ENFORCES eligibility rather
+# than merely persisting — a persist-only adapter would happily write a forbidden
+# close (global cap reached, or an ambiguous finding that must escalate).
+
+_BREAKER_RESULTS: Final[tuple[str, ...]] = ("clear", "ambiguous", "conflicting")
+
+
+def design_close_eligible(state: dict, breaker_result: str) -> tuple[bool, str]:
+    """Is a budget-exhausted self-close permitted? Returns (ok, reason).
+
+    Three conditions, all required:
+      * the `design` source cap is reached;
+      * the GLOBAL cap is NOT reached — `consume_loopback` tests the source cap first
+        and returns before ever reaching the global check, so a state where BOTH are
+        exhausted refuses for the source reason and would otherwise read as
+        design-cap-caused and close, when the global rule requires escalation;
+      * the ambiguity breaker completed `clear`.
+
+    Fail CLOSED: anything unrecognised is ineligible. Removing an owner escalation is
+    the dangerous direction, so an unreadable state must never license a close.
+    """
+    if breaker_result not in _BREAKER_RESULTS:
+        return (False, f"unrecognised breaker result {breaker_result!r}")
+    if breaker_result != "clear":
+        return (False, f"breaker returned {breaker_result} — must STOP and escalate")
+    design = state.get("design")
+    total = state.get("total")
+    if not isinstance(design, int) or not isinstance(total, int):
+        return (False, "counters unreadable")
+    if design < _LOOPBACK_SOURCE_MAX["design"]:
+        return (False, f"design cap not reached ({design}/"
+                       f"{_LOOPBACK_SOURCE_MAX['design']}) — not a budget-exhausted close")
+    if total >= GLOBAL_LOOPBACK_BUDGET:
+        return (False, f"global cap reached ({total}/{GLOBAL_LOOPBACK_BUDGET}) — "
+                       "escalate; the refusal is not attributable to the design source")
+    return (True, "eligible")
+
+
+def _cmd_close_design_gate(args) -> int:
+    import argparse as _a  # noqa: F401  (kept local; this module is a library first)
+    state = _read_loopback_state(args.counters)
+    ok, reason = design_close_eligible(state, args.breaker_result)
+    if not ok:
+        sys.stderr.write(f"close-design-gate: REFUSED — {reason}\n")
+        return 3
+    derived = state["design"] + 1          # loop-backs consumed + the initial pass
+    if args.passes is not None and args.passes != derived:
+        sys.stderr.write(
+            f"close-design-gate: REFUSED — --passes {args.passes} disagrees with the "
+            f"counters ({derived}); the pass count is the one number this close exists "
+            "to record, so a hand-supplied N is not trusted\n")
+        return 3
+    with open(args.findings_file, "r", encoding="utf-8") as f:
+        findings = _json.load(f)
+    if not isinstance(findings, list):
+        sys.stderr.write("close-design-gate: findings-file must hold a JSON list\n")
+        return 2
+    try:
+        result = budget_exhausted_close(
+            issue=args.issue, gate=args.gate, passes=derived, findings=findings,
+            ledger_path=args.ledger, date=args.date,
+            token_factory=lambda: hashlib.sha256(
+                os.urandom(8)).hexdigest()[:4],
+        )
+    except ValueError as exc:                      # all-or-nothing: nothing written yet
+        sys.stderr.write(f"close-design-gate: {exc}\n")
+        return 2
+    for entry in result.entries:                   # ledger -> record -> note
+        append_disposition(args.ledger, entry)
+    atomic_write_text(args.record_out,
+                      _json.dumps(result.run_record_extra, indent=2) + "\n")
+    os.makedirs(os.path.dirname(args.note_out) or ".", exist_ok=True)
+    with open(args.note_out, "a", encoding="utf-8") as f:   # APPEND — notes are append-only
+        f.write(result.session_note + "\n")
+    sys.stdout.write(_json.dumps(result.run_record_extra) + "\n")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    parser = argparse.ArgumentParser(prog="plan_lib")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("close-design-gate",
+                       help="record a budget-exhausted Step-4 design-gate close (#798)")
+    c.add_argument("--issue", type=int, required=True)
+    c.add_argument("--gate", default="4")
+    c.add_argument("--passes", type=int, default=None,
+                   help="optional cross-check; derived from --counters when omitted")
+    c.add_argument("--findings-file", required=True)
+    c.add_argument("--counters", required=True)
+    c.add_argument("--breaker-result", required=True, choices=list(_BREAKER_RESULTS))
+    c.add_argument("--ledger", required=True)
+    c.add_argument("--record-out", required=True)
+    c.add_argument("--note-out", required=True)
+    c.add_argument("--date", required=True)
+    c.set_defaults(func=_cmd_close_design_gate)
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

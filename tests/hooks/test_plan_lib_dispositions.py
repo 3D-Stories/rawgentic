@@ -446,3 +446,95 @@ class TestBudgetExhaustedClose:
         clean_record_extras = []
         assert res.run_record_extra not in clean_record_extras
         assert res.run_record_extra["label"] == "design_gate_close"
+
+
+# --- #798 T2: the close-design-gate CLI adapter ------------------------------
+#
+# The adapter exists so AC2/AC3 are provable by executing the real close rather than
+# by pinning prose. It ENFORCES eligibility (a persist-only adapter would happily
+# write a forbidden close) and is all-or-nothing.
+
+import subprocess  # noqa: E402
+
+CLI = str(HOOKS_DIR / "plan_lib.py")
+
+
+def _counters(tmp_path, design=2, total=2, **rest):
+    state = {"design": design, "tdd": 0, "review": 0, "review_design": 0,
+             "spec_tighten": 0, "total": total}
+    state.update(rest)
+    p = tmp_path / "loopback_counters.json"
+    p.write_text(json.dumps(state))
+    return p
+
+
+def _findings_file(tmp_path):
+    p = tmp_path / "f.json"
+    p.write_text(json.dumps([{"severity": "High", "category": "correctness",
+                              "description": "a flaw", "location": "d.md:1"}]))
+    return p
+
+
+def _run(tmp_path, *, breaker="clear", design=2, total=2, spec_tighten=0):
+    ledger = tmp_path / "dispositions.jsonl"
+    note = tmp_path / "notes.md"
+    rec = tmp_path / "extra.json"
+    proc = subprocess.run(
+        [sys.executable, CLI, "close-design-gate",
+         "--issue", "798", "--gate", "4", "--passes", "3",
+         "--findings-file", str(_findings_file(tmp_path)),
+         "--counters", str(_counters(tmp_path, design=design, total=total,
+                                     spec_tighten=spec_tighten)),
+         "--breaker-result", breaker,
+         "--ledger", str(ledger), "--record-out", str(rec), "--note-out", str(note),
+         "--date", "2026-08-01"],
+        capture_output=True, text=True)
+    return proc, ledger, rec, note
+
+
+class TestCloseDesignGateCLI:
+    def test_eligible_close_writes_all_three_artifacts(self, tmp_path):
+        proc, ledger, rec, note = _run(tmp_path)
+        assert proc.returncode == 0, proc.stderr
+        assert ledger.exists() and rec.exists() and note.exists()
+        extra = json.loads(rec.read_text())
+        assert extra["label"] == "design_gate_close"
+        assert "budget_exhausted" in extra["value"] and "passes=3" in extra["value"]
+        assert note.read_text().lstrip().startswith("### WF2 Step 4 — design gate CLOSED")
+
+    def test_global_cap_reached_refuses_and_writes_nothing(self, tmp_path):
+        # design cap reached AND global cap reached -> the global rule requires escalate.
+        # consume_loopback checks the source cap FIRST and returns, so this case would
+        # otherwise read as design-cap-caused and silently close. The state must be a
+        # REAL one: _read_loopback_state always recomputes total from the per-source
+        # values, so total is driven here by a spec_tighten consume (qbar-P3-F1's own
+        # example: design=2, spec_tighten=1, total=3).
+        proc, ledger, rec, note = _run(tmp_path, design=2, spec_tighten=1)
+        assert proc.returncode != 0
+        assert not ledger.exists() and not rec.exists() and not note.exists()
+
+    def test_design_cap_not_reached_refuses(self, tmp_path):
+        proc, ledger, rec, note = _run(tmp_path, design=1, total=2)
+        assert proc.returncode != 0
+        assert not ledger.exists()
+
+    def test_ambiguous_breaker_refuses(self, tmp_path):
+        # AC4: an ambiguous finding must STOP and escalate, never close.
+        proc, ledger, rec, note = _run(tmp_path, breaker="ambiguous")
+        assert proc.returncode != 0
+        assert not ledger.exists()
+
+    def test_conflicting_breaker_refuses(self, tmp_path):
+        proc, ledger, rec, note = _run(tmp_path, breaker="conflicting")
+        assert proc.returncode != 0
+        assert not ledger.exists()
+
+    def test_note_out_appends_never_truncates(self, tmp_path):
+        # Session notes are append-only (workspace rule).
+        proc, ledger, rec, note = _run(tmp_path)
+        assert proc.returncode == 0
+        first = note.read_text()
+        note.write_text("PRIOR ENTRY\n" + first)
+        proc2, *_ = _run(tmp_path)
+        assert proc2.returncode == 0
+        assert "PRIOR ENTRY" in note.read_text()
