@@ -34,8 +34,8 @@ from typing import Optional
 from . import contract
 
 # --- Pinned constants (re-pinned per release, drift-guarded by test_canary_digest_pin.py) ---
-POLICY_REVISION = 1
-EXPECTED_PLUGIN_VERSION = "3.116.1"
+POLICY_REVISION = 2  # #825: claude_mutating gained hook_health, so required_checks changed
+EXPECTED_PLUGIN_VERSION = "3.116.2"
 # Computed live over hooks/hooks.json + the scripts referenced in its command fields (the
 # canonical length-framed encoding below). test_canary_digest_pin.py asserts pin == live.
 EXPECTED_REGISTRATION_DIGEST = "sha256:bdeb9bcf2725911c7e5b385aef8cfe59be1bcf1c19653d3a791e3cc6aba8ab61"
@@ -60,7 +60,7 @@ _KNOWN_NONENFORCING_PRETOOL_GUARDS = frozenset({"wal-bind-guard", "wal-pre"})
 # (canary_policy_unknown); every required check returns pass or refuse (inapplicability of a
 # REQUIRED check is a refusal, never a pass).
 POLICIES = {
-    "claude_mutating": ["hooks_digest", "plugin_version", "lane_provisioned", "positive_deny", "bare_absent"],
+    "claude_mutating": ["hooks_digest", "plugin_version", "lane_provisioned", "hook_health", "positive_deny", "bare_absent"],
     "codex_mutating": ["codex_containment", "codex_behavioral", "bare_absent"],
 }
 
@@ -129,6 +129,9 @@ class CanaryEvidence:
     # (fail-closed: absent / not-both-true -> refuse). Composition-validation alone does not prove the
     # sandbox actually confines a write; this does.
     codex_behavioral: Optional[dict] = None
+    # hook_health (#825): the `hook_response` system events observed in the pre-spawn probe
+    # stream. Absent -> the owning check refuses, like every other field here.
+    hook_events: Optional[list] = None
     # bare_absent
     final_argv: Optional[list] = None
 
@@ -388,6 +391,53 @@ def _check_codex_behavioral(ev: CanaryEvidence) -> CheckResult:
     return CheckResult("codex_behavioral", PASS)
 
 
+def _check_hook_health(ev: CanaryEvidence) -> CheckResult:
+    """#825 — the hook layer must have RUN CLEANLY, not merely be registered and able to deny.
+
+    Spike #799 measured the gap: under a read-only ``$HOME`` all 7 SessionStart hooks fail
+    ``EROFS`` (``mkdir ~/.claude/session-env/<id>``) while the dispatch still returns exit 0 and the
+    agent still writes its file. The guards are dead and the work reports success — spike #454's
+    CRITICAL finding through a different door. ``positive_deny`` cannot catch it: those hooks were
+    never ASKED to deny, they failed at startup.
+
+    SCOPE, stated because it is narrower than the name suggests: the provider stream carries hook
+    telemetry for **SessionStart only** (measured on Claude Code 2.1.220 — a `Write` tool call
+    produced ZERO PreToolUse hook events although `hooks.json` matches `Write` against three
+    PreToolUse guards, and silent hooks DO emit an event with empty output, so the absence is real
+    rather than an output filter). This therefore proves SessionStart-layer health;
+    ``positive_deny`` remains the proof for the PreToolUse guards, and it proves the stronger
+    property that they actually deny.
+
+    ACCEPTED CEILING: a hook that fails internally and still exits 0 is invisible here. The #799
+    capture of the GOOD composition contains exactly that — ``exit_code: 0``, ``outcome: success``,
+    alongside ``mktemp: failed ... Read-only file system``. Keying on stderr content instead would
+    wrongly refuse the composition we want to allow, so ``exit_code``/``outcome`` is the right
+    discriminator and this gap is documented rather than solved.
+
+    Fail-closed on every path: absent, non-list, empty, malformed, or any entry not reporting a
+    clean exit refuses. Omission of evidence never means success.
+    """
+    events = ev.hook_events
+    if not isinstance(events, list) or not events:
+        # An EMPTY list is a refusal, not a vacuous pass: a probe stream carrying no hook events
+        # means the layer did not run or was not observed (the all([]) trap guarded at :439).
+        return CheckResult("hook_health", REFUSE, "hook_health_evidence_missing")
+    for item in events:
+        if not isinstance(item, dict):
+            return CheckResult("hook_health", REFUSE, "hook_health_malformed")
+    for item in events:
+        name = item.get("hook_name")
+        name = name if isinstance(name, str) and name else "unknown"
+        code = item.get("exit_code")
+        # A missing, non-int, bool, or non-zero exit code all refuse — absence of evidence never
+        # means success, and `True == 1` would otherwise slip a bool through an `== 0` test.
+        clean = (item.get("outcome") == "success"
+                 and isinstance(code, int) and not isinstance(code, bool) and code == 0)
+        if not clean:
+            return CheckResult("hook_health", REFUSE, f"hook_health_failed:{name}")
+    return CheckResult("hook_health", PASS)
+
+
 def _check_bare_absent(ev: CanaryEvidence) -> CheckResult:
     argv = ev.final_argv
     if not argv or not isinstance(argv, list) or not all(isinstance(a, str) for a in argv):
@@ -404,6 +454,7 @@ _CHECKS = {
     "positive_deny": _check_positive_deny,
     "codex_containment": _check_codex_containment,
     "codex_behavioral": _check_codex_behavioral,
+    "hook_health": _check_hook_health,
     "bare_absent": _check_bare_absent,
 }
 

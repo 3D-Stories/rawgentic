@@ -1536,6 +1536,13 @@ def _happy_probe_stream():
     live NAME-correlation is what binds them (Task-3 delta)."""
     return [
         {"type": "system", "subtype": "init", "plugins": [{"name": "rawgentic"}]},
+        # #825: hook_health is a REQUIRED claude_mutating check, so a healthy layer is part of the
+        # happy path now. Two clean SessionStart rows — the shape spike #799 measured on the good
+        # composition (7-of-7 exit_code 0 / outcome success once the session-env bind was added).
+        {"type": "system", "subtype": "hook_response", "hook_name": "SessionStart:startup",
+         "hook_event": "SessionStart", "exit_code": 0, "outcome": "success"},
+        {"type": "system", "subtype": "hook_response", "hook_name": "SessionStart:startup",
+         "hook_event": "SessionStart", "exit_code": 0, "outcome": "success"},
         {"type": "assistant", "message": {"content": [
             {"type": "tool_use", "id": "live-1", "name": "Bash", "input": {}}]}},
         {"type": "user", "message": {"content": [

@@ -45,6 +45,12 @@ def _claude_evidence(**over):
         registration_digest=canary.EXPECTED_REGISTRATION_DIGEST, registration_readable=True,
         plugin_version=canary.EXPECTED_PLUGIN_VERSION,
         init_plugins=["rawgentic@rawgentic"], hooks_registration=HOOKS, probes=_claude_probes(),
+        # #825: hook_health is a REQUIRED check, so the happy-path fixture must carry a healthy
+        # layer — 7 clean SessionStart responses, the shape spike #799 measured on the good
+        # composition. Absent evidence refuses by design, which is what the new tests pin.
+        hook_events=[{"type": "system", "subtype": "hook_response",
+                      "hook_name": "SessionStart:startup", "hook_event": "SessionStart",
+                      "exit_code": 0, "outcome": "success"} for _ in range(7)],
         final_argv=["claude", "-p", "--output-format", "stream-json"],
     )
     base.update(over)
@@ -76,7 +82,7 @@ def test_claude_full_pass():
     assert res.verdict == "pass", res.violations
     assert res.violations == ()
     assert res.required_checks == ("hooks_digest", "plugin_version", "lane_provisioned",
-                                   "positive_deny", "bare_absent")
+                                   "hook_health", "positive_deny", "bare_absent")
     assert [c.check_id for c in res.checks if c.verdict == "pass"] == list(res.required_checks)
 
 
@@ -250,7 +256,7 @@ def test_claude_composition_cannot_run_codex_policy(tmp_path):
     assert result.policy_id == "claude_mutating"
     assert "codex_containment" not in result.violations
     assert result.required_checks == ("hooks_digest", "plugin_version", "lane_provisioned",
-                                       "positive_deny", "bare_absent")
+                                       "hook_health", "positive_deny", "bare_absent")
 
 
 def test_require_canary_provider_mismatch():
@@ -446,3 +452,89 @@ def test_require_canary_codex_full_pass(tmp_path):
     result = canary.require_canary(comp, _codex_evidence(tmp_path))
     assert result.verdict == canary.PASS
     assert result.policy_id == "codex_mutating"
+
+
+# --- #825: hook-HEALTH — the guard layer must have RUN, not merely be registered ----------------
+# Spike #799 measured it: under a read-only $HOME all 7 SessionStart hooks fail EROFS while the
+# dispatch still returns exit 0 and the agent still writes its file. positive_deny cannot catch it —
+# those hooks were never asked to deny, they failed at startup. Adding a ~/.claude/session-env bind
+# took the same composition from 7-of-7 error to 7-of-7 success.
+def _hook_event(**over):
+    base = {"type": "system", "subtype": "hook_response", "hook_name": "SessionStart:startup",
+            "hook_event": "SessionStart", "output": "", "stdout": "", "stderr": "",
+            "exit_code": 0, "outcome": "success"}
+    base.update(over)
+    return base
+
+
+_EROFS = ("Failed to run: EROFS: read-only file system, "
+          "mkdir '/home/u/.claude/session-env/abc'")
+
+
+def test_hook_health_passes_when_every_hook_reports_success():
+    ev = _claude_evidence(hook_events=[_hook_event() for _ in range(7)])
+    assert canary._check_hook_health(ev).verdict == canary.PASS
+
+
+def test_hook_health_refuses_the_measured_erofs_case():
+    """The exact shape spike #799 captured: 7-of-7 failing while the dispatch returned exit 0."""
+    ev = _claude_evidence(hook_events=[
+        _hook_event(exit_code=1, outcome="error", stderr=_EROFS, output=_EROFS) for _ in range(7)])
+    res = canary._check_hook_health(ev)
+    assert res.verdict == canary.REFUSE
+    assert res.violation.startswith("hook_health_failed:")
+
+
+def test_hook_health_refuses_a_single_bad_hook_among_healthy_ones():
+    ev = _claude_evidence(hook_events=[_hook_event(), _hook_event(hook_name="Bad:hook", exit_code=1,
+                                                                 outcome="error"), _hook_event()])
+    res = canary._check_hook_health(ev)
+    assert res.verdict == canary.REFUSE
+    assert "Bad:hook" in res.violation
+
+
+@pytest.mark.parametrize("bad", [None, "not-a-list", 42, {}])
+def test_hook_health_fails_closed_on_absent_or_malformed_evidence(bad):
+    res = canary._check_hook_health(_claude_evidence(hook_events=bad))
+    assert res.verdict == canary.REFUSE
+    assert res.violation == "hook_health_evidence_missing"
+
+
+def test_hook_health_refuses_an_empty_list_rather_than_passing_vacuously():
+    """A stream carrying NO hook events means the layer did not run or was not observed. This is
+    the same all([]) fail-open trap evaluate_canary already guards at :439."""
+    res = canary._check_hook_health(_claude_evidence(hook_events=[]))
+    assert res.verdict == canary.REFUSE
+    assert res.violation == "hook_health_evidence_missing"
+
+
+def test_hook_health_refuses_a_non_dict_entry():
+    res = canary._check_hook_health(_claude_evidence(hook_events=[_hook_event(), "nope"]))
+    assert res.verdict == canary.REFUSE
+    assert res.violation == "hook_health_malformed"
+
+
+@pytest.mark.parametrize("over", [{"exit_code": None}, {"exit_code": "0"}, {"outcome": None}])
+def test_hook_health_refuses_missing_or_wrong_typed_status_fields(over):
+    """Absence of evidence never means success (canary.py's stated contract)."""
+    assert canary._check_hook_health(_claude_evidence(hook_events=[_hook_event(**over)])).verdict \
+        == canary.REFUSE
+
+
+def test_hook_health_is_required_by_the_claude_mutating_policy():
+    assert "hook_health" in canary.POLICIES["claude_mutating"]
+    # order is load-bearing: violations accumulate in policy order, and health sits between
+    # "the lane loaded" and "the guards deny"
+    order = canary.POLICIES["claude_mutating"]
+    assert order.index("lane_provisioned") < order.index("hook_health") < order.index("positive_deny")
+
+
+def test_policy_revision_was_bumped_for_the_new_required_check():
+    """required_checks changed, so a stamped pass_summary from rev 1 must not read as equivalent."""
+    assert canary.POLICY_REVISION >= 2
+
+
+def test_a_full_claude_pass_now_includes_hook_health():
+    res = canary.evaluate_canary("claude_mutating", _claude_evidence())
+    assert res.verdict == "pass", res.violations
+    assert "hook_health" in [c.check_id for c in res.checks if c.verdict == "pass"]

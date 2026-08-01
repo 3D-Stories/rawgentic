@@ -150,11 +150,17 @@ def _text_of(content) -> str:
 
 def _index_stream(events):
     """Single pass over the stream → (init_plugins, {tool_use_id: name}, {tool_use_id: (is_error,
-    reason_text)}). Every read is get-with-default."""
+    reason_text)}, hook_events). Every read is get-with-default."""
     init_plugins = None
     tool_names: dict = {}
     tool_results: dict = {}
+    hook_events: list = []
     for ev in events:
+        # #825: the hook-layer health rows. Collected in the SAME pass — a `hook_response` carries
+        # `exit_code`/`outcome`, which is how a guard layer that fired and then died on a read-only
+        # filesystem is told apart from one that ran clean.
+        if ev.get("type") == "system" and ev.get("subtype") == "hook_response":
+            hook_events.append(ev)
         if ev.get("type") == "system" and ev.get("subtype") == "init":
             plugins = ev.get("plugins")
             if isinstance(plugins, list):
@@ -176,7 +182,7 @@ def _index_stream(events):
                 if isinstance(tid, str):
                     tool_results[tid] = (bool(block.get("is_error", False)),
                                          _text_of(block.get("content")))
-    return init_plugins, tool_names, tool_results
+    return init_plugins, tool_names, tool_results, hook_events
 
 
 def _probe_for(spec, tool_names, tool_results) -> canary.ProbeOutcome:
@@ -219,9 +225,13 @@ def complete_evidence(*, evidence, stream, probe_plan) -> canary.CanaryEvidence:
     and ``probes`` filled — every phase-1 field (incl. the composition binding) preserved.
     ``probe_plan`` maps ``{matcher_class: {"issued_tool", "issued_correlation_id"}}`` (the issuance
     the trusted process scripted); the outcome is correlated to the stream by that issued id."""
-    init_plugins, tool_names, tool_results = _index_stream(_events(stream))
+    init_plugins, tool_names, tool_results, hook_events = _index_stream(_events(stream))
     probes = None
     if isinstance(probe_plan, dict):
         probes = {cls: _probe_for(spec, tool_names, tool_results)
                   for cls, spec in probe_plan.items()}
-    return dataclasses.replace(evidence, init_plugins=init_plugins, probes=probes)
+    # #825: an empty list is passed through as-is — `_check_hook_health` refuses it, because a
+    # stream with no hook rows means the layer did not run or was not observed. Fail-closed here
+    # would be indistinguishable; the CHECK owns the verdict, this only reports what was seen.
+    return dataclasses.replace(evidence, init_plugins=init_plugins, probes=probes,
+                               hook_events=hook_events)

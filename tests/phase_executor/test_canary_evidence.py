@@ -48,9 +48,17 @@ def _tool_result(cid, marker, is_error=True):
                                      "content": [{"type": "text", "text": f"{marker} probe denied"}]}]}}
 
 
+def _hook_ok(name="SessionStart:startup"):
+    """#825: a clean hook_response row — the shape spike #799 measured on the GOOD composition."""
+    return {"type": "system", "subtype": "hook_response", "hook_name": name,
+            "hook_event": "SessionStart", "output": "", "stdout": "", "stderr": "",
+            "exit_code": 0, "outcome": "success"}
+
+
 def _happy_stream():
     return [
         _init_event(),
+        _hook_ok(), _hook_ok(),
         _tool_use("cid-bash", "Bash"), _tool_result("cid-bash", "BLOCKED:"),
         _tool_use("cid-write", "Write"), _tool_result("cid-write", "SECURITY BLOCK:"),
     ]
