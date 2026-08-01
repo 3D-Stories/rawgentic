@@ -16,9 +16,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "hooks"))
 
 
 def test_render_helper_referenced_by_all_three_skills():
-    """AC1/AC2/AC3: every lifecycle-participating skill names the shared helper."""
+    """AC1/AC2/AC3: every lifecycle-participating skill names the renderer.
+
+    #807: the engine left this repo for the `design-doc-publish` add-on, so the thing
+    to look for is the add-on launcher, invoked by absolute path — not the departed
+    `render_artifact.py`.
+    """
     for skill in ("create-issue", "implement-feature", "fix-bug"):
-        assert "render_artifact.py" in skill_corpus(skill), f"{skill} must reference the render helper"
+        c = skill_corpus(skill)
+        assert "<render-addon>" in c, f"{skill} must carry the generated render block"
+        assert "design-doc-publish" in c, f"{skill} must name the add-on"
+        assert "render-doc" in c, f"{skill} must reach the add-on launcher"
 
 
 def test_wf1_renders_and_comments_artifact():
@@ -34,7 +42,7 @@ def test_wf2_wf3_create_or_update_artifact_before_pr():
     for skill in ("implement-feature", "fix-bug"):
         c = skill_corpus(skill)
         assert "design artifact" in c.lower(), f"{skill} missing design-artifact step"
-        assert "render_artifact.py" in c
+        assert "<render-addon>" in c and "render-doc" in c
         assert "before" in c.lower() and "gh pr create" in c
 
 
@@ -177,12 +185,30 @@ def test_style_invalid_value_falls_back_plain_with_warning(tmp_path, capsys):
     assert "sparkle" in capsys.readouterr().err
 
 
-def test_style_fallback_tuple_matches_render_artifact_templates():
-    """#344 drift guard: the literal fallback vocabulary used when render_artifact
-    can't be imported == the live render_artifact._TEMPLATES registry keys."""
+def test_style_vocabulary_is_the_local_contract(tmp_path):
+    """#807: this is NOT a drift guard, and must not pretend to be one.
+
+    Until #807 this asserted `_FALLBACK_TEMPLATE_STYLES == tuple(render_artifact._TEMPLATES)`
+    — a real guard, because the registry lived in this repo. The engine now lives in the
+    `design-doc-publish` add-on, so there is nothing local left to compare against, and
+    pinning the tuple to a copy of itself would prove only that nobody edited it while
+    upstream renamed a template underneath us.
+
+    So this asserts the LOCAL contract instead: every style this repo can hand to the
+    renderer is one `design_artifact_style` will actually return. Keeping the add-on's
+    list and this one in step is a cross-repo dependency that this repo's CI cannot
+    verify — that is documented at the constant, not faked here.
+    """
     import adversarial_review_lib as arl
-    import render_artifact
-    assert arl._FALLBACK_TEMPLATE_STYLES == tuple(render_artifact._TEMPLATES)
+    assert arl._TEMPLATE_STYLES, "the vocabulary must not be empty"
+    assert len(set(arl._TEMPLATE_STYLES)) == len(arl._TEMPLATE_STYLES), "no duplicates"
+    for style in arl._TEMPLATE_STYLES:
+        ws = tmp_path / f"ws-{style}.json"
+        ws.write_text(json.dumps({"projects": [
+            {"name": "p", "designArtifact": {"enabled": True, "style": style}}]}))
+        assert arl.design_artifact_style(str(ws), "p") == style, (
+            f"{style} is in the vocabulary but does not round-trip"
+        )
 
 
 def test_style_cross_module_import_works_via_subprocess(tmp_path):
@@ -242,7 +268,8 @@ def test_setup_asks_about_design_artifact_and_shared_doc():
     assert "designArtifact" in c
     assert "sharedDoc" in c
     assert "per-issue" in c.lower() and "shared-doc" in c.lower()
-    assert "render_artifact.py" in c
+    # #807: the engine left this repo; setup now names the add-on that renders.
+    assert "design-doc-publish" in c
 
 
 def test_style_non_list_projects_never_raises(tmp_path, capsys):

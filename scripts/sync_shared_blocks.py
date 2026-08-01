@@ -56,6 +56,15 @@ MANIFEST = {
     "loop-back-budget": {
         "loop-back-budget.md": ["implement-feature"],
     },
+    # #807: the add-on renderer's consumer block. Five call sites, two of which live in
+    # references/ — which is why MANIFEST entries may be skill-relative paths (see _skill_md).
+    "render-addon": {
+        "render-addon.md": [
+            "create-issue", "run-feedback", "session-mining",
+            "implement-feature/references/steps.md",
+            "fix-bug/references/steps.md",
+        ],
+    },
 }
 
 # Whole-FILE targets (#276): source filename in shared/blocks/ -> list of

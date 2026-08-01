@@ -20,7 +20,7 @@ Every claim below carries its evidence; when a doc and a test disagree, **the te
   via `python3 hooks/<lib>.py <subcmd>`. The most-called: `capabilities_lib.py derive`
   (the sanctioned way for a SKILL to read `.rawgentic.json` — never hand-derive the
   capabilities object, never probe the filesystem for config-level facts),
-  `adversarial_review_lib.py is-enabled`, `work_summary.py summarize`, `render_artifact.py`,
+  `adversarial_review_lib.py is-enabled`, `work_summary.py summarize`,
   `security_scan.py scan`.
   - **Narrow, real exception, so the rule stops contradicting the tree (#687):** a HOOK that needs
     its OWN single config block reads `.rawgentic.json` directly and fail-open. That is the
@@ -146,7 +146,9 @@ shows `Exchanging OIDC token for app token` → `Failed to parse JSON` = OAuth o
 finding. Triage by reading the failed log; check EVERY run on the PR.
 
 **Design/review docs** — render via
-`python3 hooks/render_artifact.py --md <doc>.md --out <doc>.html --title "..."` (never
+the generated `<render-addon>` block (single-sourced in `shared/blocks/render-addon.md`,
+synced into all 5 call sites), which invokes the **design-doc-publish add-on** by absolute
+path — the engine left this repo in #807 and the add-on is suggested, not required (never
 hand-roll HTML); planning docs → `docs/planning/`, review reports → `docs/reviews/`,
 measurements → `docs/measurements/`; the md+html pair is committed and rides the
 implementing PR. Diagram/HTML rendering is **DOM-builder only, no `innerHTML`**
@@ -194,7 +196,7 @@ load-bearing for resume. Never edit or truncate an existing entry.
   (`registry_prune.py:6-8`); repeated user-facing nag → record-before-emit
   (`security-guard-check.sh:49-55`).
 - **One helper, one home.** Before writing any new script, check `hooks/` — `plan_lib`,
-  `work_summary`, `capabilities_lib`, `render_artifact`, `security_scan`,
+  `work_summary`, `capabilities_lib`, `security_scan`,
   `registry_prune`, `driver_lib`, `resume_lib`, `headless_interaction` cover most needs.
 - **Timeout ≠ failure for mutating calls** (gh/API): check the resource's real state
   before retrying — the write may have landed; a blind retry double-creates.
@@ -257,8 +259,8 @@ load-bearing for resume. Never edit or truncate an existing entry.
     `.trivyignore` from process cwd — `security_scan.py:311` compensates with
     `--ignorefile`, and an ignore ID must match trivy's hyphenated form `DS-0002`.)
 12. **Writing a new helper the repo already has.** Rule: §3 "one helper, one home".
-13. **Hand-rolling artifact HTML or using `innerHTML`.** Rule: `render_artifact.py` for
-    docs; DOM-builder pattern in the diagram (test-enforced).
+13. **Hand-rolling artifact HTML or using `innerHTML`.** Rule: the `<render-addon>` block
+    (add-on renderer, absolute path) for docs; DOM-builder pattern in the diagram (test-enforced).
 14. **Editing a synced shared block inline.** The next `sync_shared_blocks.py --check`
     (in CI) fails, or worse your edit is overwritten by the next sync. Rule: edit
     `shared/blocks/<name>.md`, run the script; bespoke variants (create-issue's slim

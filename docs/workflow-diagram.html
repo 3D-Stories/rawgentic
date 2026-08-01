@@ -1517,7 +1517,7 @@ const DATA = {
       {id:"1",num:"01",name:"Gather Run Facts",kind:"step",mand:true,sum:"Run-record (--record | latest w/ sanity check) + session-note markers (acceptance boundaries) + loaded-cache-vs-main version; confirmed/inferred evidence ledger. Record absent → loud degraded mode.",rev:{delta:"New in 3.25.0 (#337).",refs:["#337"]},pending:true},
       {id:"2",num:"02",name:"Assess & Classify",kind:"step",mand:true,sum:"Six 1-5 dimensions vs anchored rubric v1 (evidence-quota caps, unscored allowed); every negative finding gets exactly one of 5 classes.",pending:true},
       {id:"2b",num:"2b",name:"Telemetry Audit",kind:"gate",mand:true,sum:"Field-by-field accuracy table vs session evidence; 6-way verdict vocabulary; standing weak spots (usage attribution, reviewer_kind, gate counts, store lag) checked every run.",pending:true},
-      {id:"3",num:"03",name:"Render Report",kind:"step",mand:true,sum:".md + .html via render_artifact.py under the rawgentic root; Artifact publish best-effort with required failure line; report-only.",pending:true},
+      {id:"3",num:"03",name:"Render Report",kind:"step",mand:true,sum:".md + .html via the design-doc-publish add-on renderer under the rawgentic root; Artifact publish best-effort with required failure line; report-only.",pending:true},
       {id:"4",num:"04",name:"Route Feedback",kind:"step",mand:true,sum:"Defects dup-checked, filed ALWAYS on 3D-Stories/rawgentic (wf-feedback label, cap 3, not-filed-cap preserved); telemetry lane cross-linked #329/#330/#333; friction → one mempalace memory (tri-state surface); clean run stated.",pending:true},
       {id:"5",num:"05",name:"Close",kind:"step",mand:true,sum:"Session-note DONE marker + fixed summary block. Never auto-fixes what it found.",pending:true}
     ]}}
@@ -1528,7 +1528,7 @@ const DATA = {
     versions: {"3.34.0": {superseded:false, steps:[
       {id:"1",num:"01",name:"Freshness + Detect",kind:"step",mand:true,sum:"session_index status/index refresh, then deterministic detectors (friction phrases, note commands, error proxies) append events to the candidates queue. No LLM in detect.",rev:{delta:"New in 3.34.0 (#376).",refs:["#376"]},pending:true},
       {id:"2",num:"02",name:"Propose",kind:"gate",mand:true,sum:"Recurrence >= 3 distinct sessions; dedup vs existing skills (Jaccard strong/borderline) and terminal queue states; queue corruption fails closed.",pending:true},
-      {id:"3",num:"03",name:"Render Report",kind:"step",mand:true,sum:".md + .html via render_artifact.py --style report to docs/reviews/; coverage-honesty sentence mandatory; Artifact publish best-effort.",pending:true},
+      {id:"3",num:"03",name:"Render Report",kind:"step",mand:true,sum:".md + .html via the design-doc-publish add-on renderer (--style report) to docs/reviews/; coverage-honesty sentence mandatory; Artifact publish best-effort.",pending:true},
       {id:"4",num:"04",name:"Human Gate",kind:"gate",mand:true,sum:"Per candidate: accept -> disposition accepted -> WF1 draft prompt -> filed; decline -> disposition declined (never re-proposed). Nothing auto-filed.",pending:true},
       {id:"5",num:"05",name:"Close",kind:"step",mand:true,sum:"Session-note DONE marker with proposed/accepted/declined/pending counts. Report-only termination.",pending:true}
     ]}}
