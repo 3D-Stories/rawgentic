@@ -1,10 +1,10 @@
 # Rawgentic artifact design language
 
-Every artifact `hooks/render_artifact.py` renders — a WF1 issue spec, a WF2/WF3 design
+Every artifact the design-doc-publish add-on renders — a WF1 issue spec, a WF2/WF3 design
 doc, a WF14 run-feedback report, a campaign dashboard, an adversarial-review report —
 shares ONE visual system: a single palette, one type scale, one set of component badges,
 and one human-first document skeleton. This doc is the reference for that system; the
-values below are read from `hooks/render_artifact.py` (the `_STYLE` and `_COMPONENT_STYLE`
+values below are read from the add-on's renderer (the `_STYLE` and `_COMPONENT_STYLE`
 blocks), never invented, and drift-guarded by `tests/hooks/test_render_artifact.py`.
 
 ## Tokens

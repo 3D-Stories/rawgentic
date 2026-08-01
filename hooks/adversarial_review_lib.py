@@ -371,17 +371,20 @@ def design_artifact_shared_doc(workspace_path: str, project_name: str):
     return None
 
 
-# Literal template-name vocabulary, used ONLY when render_artifact cannot be
-# imported (see design_artifact_style). Drift-guarded to equal
-# tuple(render_artifact._TEMPLATES) by test_artifact_lifecycle.py.
-_FALLBACK_TEMPLATE_STYLES: Final = (
+# The template-name vocabulary. Since #807 the render engine lives OUTSIDE this repo
+# (the `design-doc-publish` add-on), so this literal is the source of truth here, not a
+# fallback: there is no in-repo registry left to import or drift-guard against.
+# CROSS-REPO DEPENDENCY, DELIBERATELY UNVERIFIED: it must track the add-on's own
+# template list. Nothing in this repo's CI can prove that — a test pinning this tuple to
+# itself would only prove nobody edited it. Stated plainly rather than guarded falsely.
+_TEMPLATE_STYLES: Final = (
     "plain", "roadmap", "report", "design", "dashboard", "review", "spec")
 
 
 def design_artifact_style(workspace_path: str, project_name: str) -> str:
     """Return the project's `designArtifact.style` (#199, vocabulary expanded #344).
 
-    Valid values are the render_artifact `--style` template names (plain, roadmap,
+    Valid values are the add-on renderer's `--style` template names (plain, roadmap,
     report, design, dashboard, review, spec); the configured value is returned
     verbatim. Absent-vs-invalid semantics (#344):
 
@@ -397,15 +400,7 @@ def design_artifact_style(workspace_path: str, project_name: str) -> str:
 
     Never raises.
     """
-    try:
-        from render_artifact import _TEMPLATES  # noqa: PLC0415  (lazy: avoid import cost/cycle)
-        valid = tuple(_TEMPLATES)
-    except ModuleNotFoundError as e:
-        if e.name != "render_artifact":
-            raise
-        valid = _FALLBACK_TEMPLATE_STYLES
-        print("adversarial_review_lib: render_artifact unavailable; using literal "
-              "template-name fallback for design_artifact_style", file=sys.stderr)
+    valid = _TEMPLATE_STYLES
 
     try:
         with open(workspace_path, "r", encoding="utf-8") as f:

@@ -217,7 +217,8 @@ Mirror Step 2d. Check the project entry's `designArtifact` field.
 The design-artifact lifecycle gives each issue a browsable HTML design doc: WF1
 renders + publishes the issue spec and comments the URL; WF2/WF3 create-or-update
 the `.md`+`.html` (with this run's telemetry embedded) inside the feature PR before
-`gh pr create`. Rendering is `hooks/render_artifact.py` — self-contained, CSP-safe,
+`gh pr create`. Rendering is the design-doc-publish add-on (SUGGESTED, not required;
+with it absent rawgentic writes a plain fallback page and says so) — self-contained, CSP-safe,
 escape-first, with a mountain-time datetime stamp. The renderer ships seven
 design-language templates (plain, roadmap, report, design, dashboard, review, spec);
 see `docs/design-language.md`. Default OFF (byte-identical when declined).
@@ -237,7 +238,7 @@ see `docs/design-language.md`. Default OFF (byte-identical when declined).
        per-issue) and stage it as `"sharedDoc": "<docs/…․md>"` alongside the above.
 - **If `designArtifact` is already set** (re-configuration): show current status
   (enabled + per-issue vs `sharedDoc: <path>`) and allow changing. The standalone
-  `hooks/render_artifact.py` works regardless of this setting.
+  the add-on renderer works regardless of this setting.
 
 ## Step 2i: Phase-Executor Seat Table (#446) Integration
 
