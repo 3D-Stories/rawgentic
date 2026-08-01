@@ -158,8 +158,8 @@ warning naming it, rather than silently choosing one.
 
 > **Comparability caveat.** Records written before v3.115.1 carry the inflated values, so
 > pre/post comparisons of `input_tokens`, `output_tokens`, or `cost_estimate_usd` are
-> invalid. The store is append-only and was not rewritten; use the run-record's version
-> field to tell the two regimes apart.
+> invalid. The store is append-only and was not rewritten; use the run-record's
+> `workflow_version` field to tell the two regimes apart.
 
 Populate `usage` at completion-step assembly time, **before** invoking
 `work_summary.py summarize` — the store is append-only, so re-running

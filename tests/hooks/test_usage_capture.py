@@ -130,6 +130,28 @@ def test_parse_uses_uuid_when_message_and_request_ids_are_absent(tmp_path):
     assert u["output_tokens"] == 10
 
 
+def test_parse_empty_message_id_does_not_override_distinct_request_ids(tmp_path):
+    """#812 Step-9 review: an EMPTY `message.id` must not win over a good `requestId`.
+
+    Both reviewers independently caught this. Because tier 1 (`message.id`) is checked
+    before tier 2 (`requestId`), treating "" as a valid identity would collapse two
+    genuinely distinct messages into one — a SILENT UNDER-count, which is harder to
+    notice than the over-count this module exists to fix (the number just looks smaller
+    and entirely plausible, and no divergence warning fires when the usage happens to
+    match).
+    """
+    p = tmp_path / "empty-message-id.jsonl"
+    _write_rows(p, [_assistant_usage_row(message_id="", request_id="req-A",
+                                         output_tokens=100),
+                    _assistant_usage_row(message_id="", request_id="req-B",
+                                         output_tokens=100)])
+
+    u = uc.parse_session_jsonl(p)
+    # Two distinct requestIds => two distinct billed messages => both counted.
+    assert u["output_tokens"] == 200
+    assert u["input_tokens"] == 4
+
+
 def test_parse_distinct_message_ids_sum_even_with_same_request_id(tmp_path):
     p = tmp_path / "distinct-messages.jsonl"
     _write_rows(p, [_assistant_usage_row(message_id="message-1", request_id="request-1",

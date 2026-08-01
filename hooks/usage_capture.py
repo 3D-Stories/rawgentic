@@ -205,7 +205,11 @@ def _usage_identity(rec: dict, msg: dict) -> Optional[tuple[str, object]]:
     for name, value in (("message.id", msg.get("id")),
                         ("requestId", rec.get("requestId")),
                         ("uuid", rec.get("uuid"))):
-        if value is None:
+        if not value:
+            # Falsy (empty-string) ids are treated as ABSENT, not as a valid identity.
+            # An empty `message.id` would otherwise WIN over a perfectly good `requestId`
+            # and collapse two distinct messages into one — a silent UNDER-count, which is
+            # harder to notice than the over-count this function exists to fix.
             continue
         try:
             hash(value)
