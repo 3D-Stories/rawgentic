@@ -96,6 +96,20 @@ Two hard rules about the prompt, both of which the command enforces by refusing:
    would also match unrelated content in the successor's transcript and pass the check before the
    prompt had submitted at all.
 
+And one the command CANNOT enforce, so it is on you (#819):
+
+3. **The prompt must tell the successor to put the visible task list back up** — to check
+   `TaskList` first and **refresh** an existing list rather than create a second one, exactly as
+   `skills/epic-run/SKILL.md` requires of a resumed run. A successor inherits the work but not the
+   screen: it never reaches epic-run's own task-list step, because this prompt is its only
+   instruction. Measured 2026-08-01: a successor worked the epic #756 queue for ~40 minutes with
+   no list up until the owner asked where it had gone.
+   **Say it in PROSE, never as a bare `/tasklist`** — `validate_inserted_prompt` records the #718
+   measurement that a bare slash command is INERT inside a goal loop (`/tasklist` sat queued
+   through five goal-driven turns; prose was acted on in 17 seconds). It is not refused because a
+   purely additive `--no-teardown` helper handoff has no list worth keeping — which is exactly why
+   it needs saying here instead.
+
 **The goal condition.** The goal is OWNER-AUTHORED text and it carries VERBATIM (#758). Read this
 session's live goal with `read-goal-condition` and pass that text byte-for-byte — never retype,
 summarize, or extend it. Model state (STATE/MODE lines, progress, queue position) travels in the
