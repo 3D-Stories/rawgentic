@@ -31,15 +31,17 @@ def test_skill_dir_and_frontmatter_exist():
 def test_marketplace_registers_skill():
     mp = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text())
     skills = mp["plugins"][0]["skills"]
-    assert "./skills/admit-to-org-runners" in skills
-    # alphabetical placement: add-exception < admit-to-org-runners < adversarial-review
-    assert skills.index("./skills/admit-to-org-runners") == skills.index("./skills/add-exception") + 1
-    assert skills.index("./skills/adversarial-review") == skills.index("./skills/admit-to-org-runners") + 1
+    assert "./skills/adversarial-review" in skills
+    # alphabetical placement: add-exception < adversarial-review
+    # (admit-to-org-runners sat between them until #788 extracted it to the
+    # claude-skills repo; the whitelist must stay sorted regardless of membership)
+    assert skills.index("./skills/adversarial-review") == skills.index("./skills/add-exception") + 1
+    assert skills == sorted(skills)
 
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "3.112.1"
+    assert plugin["version"] == "3.113.0"
 
 
 def test_descriptions_consistent_count():
@@ -74,7 +76,7 @@ def test_readme_count_strings_updated():
         f"plugin description breakdown {breakdown} must sum to the "
         f"{n_skills} skills on disk"
     )
-    assert "All 9 config-driven skills" in readme
+    assert "All 8 config-driven skills" in readme
     # #271: computed from disk, never a hand-maintained literal. A skill
     # "has evals" iff evals.json exists in its own evals/ dir or its
     # -workspace evals/ dir.
@@ -105,7 +107,7 @@ def test_readme_count_strings_updated():
         f"{sorted(set(skills) - have - {'peer-consult'})} (peer-consult is "
         f"called out separately as a stub)"
     )
-    assert "10 workspace management" in readme  # #113 — README count must match plugin/marketplace descriptions
+    assert "8 workspace management" in readme  # #113 — README count must match plugin/marketplace descriptions
 
 
 def test_readme_changelog_has_no_spliced_headings():
