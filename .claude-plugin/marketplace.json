@@ -11,12 +11,11 @@
   "plugins": [
     {
       "name": "rawgentic",
-      "description": "9 SDLC workflow skills + 10 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code: project registration, setup, session binding, requirements interviewing, issue creation, feature implementation, bug fixing, adversarial review, epic auto-run, incident response, peer consultation, post-run workflow self-assessment, session-history mining with human-gated skill candidates, whole-tree security scanning, security pattern syncing, opt-in operating-charter installation, session-registry housekeeping, gated pane handoff to a fresh session, org self-hosted runner admission, full-text session-history recall, and dangerous pattern blocking with per-project exceptions.",
+      "description": "9 SDLC workflow skills + 8 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code: project registration, setup, session binding, requirements interviewing, issue creation, feature implementation, bug fixing, adversarial review, epic auto-run, incident response, peer consultation, post-run workflow self-assessment, session-history mining with human-gated skill candidates, whole-tree security scanning, security pattern syncing, session-registry housekeeping, gated pane handoff to a fresh session, full-text session-history recall, and dangerous pattern blocking with per-project exceptions.",
       "source": "./",
       "strict": true,
       "skills": [
         "./skills/add-exception",
-        "./skills/admit-to-org-runners",
         "./skills/adversarial-review",
         "./skills/create-issue",
         "./skills/epic-post-mortem",
@@ -25,7 +24,6 @@
         "./skills/housekeeping",
         "./skills/implement-feature",
         "./skills/incident",
-        "./skills/install-operating-charter",
         "./skills/interview",
         "./skills/new-project",
         "./skills/pane-handoff",
