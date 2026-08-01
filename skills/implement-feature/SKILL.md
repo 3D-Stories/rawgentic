@@ -514,10 +514,16 @@ Before declaring WF2 complete, verify the following. Items marked (conditional) 
 10. [ ] (conditional: adversarialReview opt-in for implement-feature) A "### WF2 Step 11 — Adversarial Diff Review:" 4-state marker exists in session notes — opt-in ⇒ marker, unconditionally (skipped (<reason>) is a legitimate marker; silent omission is not; no gate-time diff recompute — a post-merge recompute sees an empty diff and would waive the check exactly in the merge path)
 11. [ ] Security scan (Step 11.5) ran; all blocking findings resolved (or, if no scanners were installed, the skips are recorded in session notes + PR body)
 12. [ ] Completion summary rendered via `work_summary.py` (Step 16) and the run-record persisted (rc 0) — or, if validation failed (rc 1), the telemetry gap is recorded in session notes
-13. [ ] (conditional: any `plan_lib.deferred_tasks(tasks)` — verification deferred to target, #138) Every deferred task is recorded on BOTH surfaces, checked mechanically:
-    - `plan_lib.assert_deferrals_recorded(deferred_tasks(tasks), record["verification_deferred"])` returns `ok=True` — each recorded entry carries non-empty `task_id` + `reason` + `local_proxy` + `target_check` (an evidence-less entry fails, so a deferral can't be gate-satisfied without its local proxy), and the plan↔record task ids match exactly (missing/duplicate/foreign ⇒ fail).
-    - `plan_lib.assert_pr_body_has_deferred_section(pr_body, deferred_tasks(tasks))` returns `ok=True` — the PR body carries the canonical `## Deferred verification` section.
-    Both `ok=True` ⇒ gate satisfied-with-note. Any failure (an **unrecorded** deferral, evidence-less entry, or a missing PR section) ⇒ gate FAILURE — a deferral must never silently vanish into a pass.
+13. [ ] (conditional: any `plan_lib.deferred_tasks(tasks)` — verification deferred to target, #138) Every deferred task is recorded on BOTH surfaces. **RUN the check; do not re-derive it (#796):**
+    ```bash
+    python3 hooks/plan_lib.py assert-pr-body \
+      --plan-file <impl-plan.md> --pr-body-file <pr-body.md> \
+      [--gate-file <step8-gate.json>] [--record-file <run-record.json>] \
+      --project-root .
+    ```
+    `0` gate holds · `1` gate FAILS (findings on stdout) · `2` caller error. It executes both pure functions — `assert_pr_body_has_deferred_section` (the PR body carries the canonical `## Deferred verification` section) and, when `--record-file` is given, `assert_deferrals_recorded` (each recorded entry carries non-empty `task_id` + `reason` + `local_proxy` + `target_check`, and the plan↔record task ids match exactly: missing/duplicate/foreign ⇒ fail). Both were previously invoked NOWHERE in production, which is why the #781 H1 slip fired after merge.
+    Two refusals are caller errors rather than gate results, and both are deliberate: a plan that parses to **no tasks at all** is rc 2, never a vacuous pass (absence of tasks is a wrong path or a malformed plan, not a plan with nothing deferred); and with `--gate-file` the plan is bound to the gate's recorded `plan_digest`, so a plan revised after the gate was taken is refused — the same staleness rule `executor_routing_lib` enforces as `gate_stale_for_plan`.
+    rc 0 ⇒ gate satisfied-with-note. Any failure (an **unrecorded** deferral, evidence-less entry, or a missing PR section) ⇒ gate FAILURE — a deferral must never silently vanish into a pass.
 
 If ANY applicable item fails, complete it before declaring "WF2 complete."
 </completion-gate>
