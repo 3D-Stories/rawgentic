@@ -233,3 +233,29 @@ class TestVerbatimGoalCarryProse:
     def test_the_binding_refusal_row_is_documented(self, body) -> None:
         assert "predecessor_goal_binding" in body, \
             "the failed_step table must explain the strict-binding refusal"
+
+
+def test_the_prompt_must_re_establish_the_visible_task_list(body) -> None:
+    """#819 — a successor inherits the work but not the task list.
+
+    `skills/epic-run/SKILL.md` owns the run's task list and even handles the resumed case, but a
+    successor resumed by THIS skill never reaches epic-run's step, because the handoff prompt is
+    its only instruction. Measured live 2026-08-01: session 811192ca ran the epic #756 queue for
+    ~40 minutes with no list on screen until the owner asked for it.
+
+    Two-sided on purpose. Requiring the words alone would pass on a skill that told the successor
+    to paste a bare `/tasklist`, which `launcher_lib.validate_inserted_prompt` records as INERT
+    inside a goal loop (#718: queued through five goal-driven turns). So the skill must also carry
+    the refresh-not-duplicate rule, which is what makes a resumed list correct rather than doubled.
+    """
+    low = body.lower()
+    assert "task list" in low or "tasklist" in low, (
+        "the prompt contract must require the successor to re-establish the visible task list"
+    )
+    assert "TaskList" in body, (
+        "the requirement must name the TaskList tool, so the successor checks before creating"
+    )
+    assert "refresh" in low, (
+        "the requirement must say refresh-an-existing-list, not create a second one (the "
+        "epic-run rule this mirrors)"
+    )
