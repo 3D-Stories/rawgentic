@@ -65,7 +65,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body class="tpl-dashboard">
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-31 21:09 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-31 22:30 MDT</div>
 <h1>The owner&#x27;s 16 notes on executor economics — answered</h1>
 <p class="sub">Analysis-seat root cause, cache economics, review pairing, and the plan for epic #756</p>
 </header>
@@ -73,27 +73,28 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <h1>The owner&#x27;s 16 notes on executor economics — answered</h1>
 <p><strong>Written 2026-08-01 in response to the owner&#x27;s review of the token-usage analysis (<code>https://rawgentic-analysis-executor-tokens.vercel.app</code>).</strong> Every answer below cites a recorded artifact — executor receipts under <code>.rawgentic/runs/wf2-762-ff40b6d5/</code>, the routing table, the run-record store, hook source at file:line, or the #762 retrospective (<code>https://rawgentic-analysis-762.vercel.app</code>). Claims that are inferred rather than checked say so, and name the spike that would confirm them.</p>
 <p><strong>Hosted:</strong> <code>https://rawgentic-analysis-owner-notes.vercel.app</code>. The committed <code>.html</code> beside this file is the source of truth.</p>
-<section class="mstone"><h3>The headline first <span class="chip c-plan">—</span></h3><p><strong>The owner&#x27;s top suspicion was right.</strong> The analysis-seat failures were budget-cap kills: 6 of the 8 failed Step-2 analysis dispatches in #762 died at the seat&#x27;s $2 <code>max_budget_usd</code> ceiling (&quot;Reached maximum budget ($2)&quot;, killed at $2.01–$2.28) with the output file <strong>empty</strong> — the spend was lost AND the partial work discarded, and the chain then re-paid cache warmup on the next model. The other 2 were HTTP 429 (org monthly spend limit). Receipts: <code>.rawgentic/runs/wf2-762-ff40b6d5/analysis/*/transport.stdout.txt</code>. The twist: the cap was already raised to $10 by the #762 T3 retune, but two structural defects remain even at $10 — a kill discards partials (no salvage), and the chain blind-retries the same oversized brief on all three models. Answer 8 has the full economics.</p>
+<p><strong>UPDATED 2026-08-01 (second pass).</strong> The owner replied to all 16 answers. Their replies changed three of them and settled four decisions. <strong>Read &quot;The owner&#x27;s replies&quot; section at the bottom before acting on any answer above it</strong> — where the two disagree, the reply wins. Corrections that matter most: answer 2&#x27;s route-by-provider recommendation is REJECTED (route by phase); answer 6&#x27;s &quot;codex seats are nearly free&quot; is now FALSE (codex went weekly-only and the pool was exhausted); answer 9&#x27;s rate-card error is worse than filed (every row is wrong, verified against live pricing).</p>
+<section class="mstone"><h3>The headline first <span class="chip c-conf">DONE</span></h3><p><strong>The owner&#x27;s top suspicion was right.</strong> The analysis-seat failures were budget-cap kills: 6 of the 8 failed Step-2 analysis dispatches in #762 died at the seat&#x27;s $2 <code>max_budget_usd</code> ceiling (&quot;Reached maximum budget ($2)&quot;, killed at $2.01–$2.28) with the output file <strong>empty</strong> — the spend was lost AND the partial work discarded, and the chain then re-paid cache warmup on the next model. The other 2 were HTTP 429 (org monthly spend limit). Receipts: <code>.rawgentic/runs/wf2-762-ff40b6d5/analysis/*/transport.stdout.txt</code>. The twist: the cap was already raised to $10 by the #762 T3 retune, but two structural defects remain even at $10 — a kill discards partials (no salvage), and the chain blind-retries the same oversized brief on all three models. Answer 8 has the full economics.</p>
 <p><strong>Verdict table</strong> — one row per note, so nothing gets lost:</p>
 <table>
 <thead><tr><th>Note</th><th>Topic</th><th>Verdict</th><th>Action</th></tr></thead>
 <tbody>
-<tr><td>1</td><td>Why build → codex</td><td>Containment constraint, not preference</td><td>Issue exists (#779 adjacent)</td></tr>
-<tr><td>2</td><td>Orchestrator vs seats</td><td>Route by PROVIDER, not by phase</td><td>Policy change, folded into plan</td></tr>
+<tr><td>1</td><td>Why build → codex</td><td>Containment constraint — and now a single point of failure</td><td>#799 (urgent: codex quota gone)</td></tr>
+<tr><td>2</td><td>Orchestrator vs seats</td><td><strong>CORRECTED by owner: route by phase fit, not by provider</strong></td><td>Recommendation withdrawn</td></tr>
 <tr><td>3</td><td>New session, warm cache</td><td>Possible in principle, defeated in practice</td><td>New issue D (spike S3)</td></tr>
 <tr><td>4</td><td>Why not Opus-reviews-Fable</td><td>Rule is cross-VENDOR; relaxation proposed</td><td>Owner decision 2</td></tr>
 <tr><td>5</td><td>Where the +71% went</td><td>Five measured mechanisms</td><td>Levers listed; #777 + issue F</td></tr>
-<tr><td>6</td><td>Why cache writes/reads so heavy</td><td>Fresh session per dispatch</td><td>New issue D</td></tr>
-<tr><td>7</td><td>5-hour-window guard at 90%</td><td>Buildable today, two mechanisms confirmed</td><td>New issue B (spike S1)</td></tr>
-<tr><td>8</td><td>Why analysis caps exist</td><td>Runaway-spend brake; kill semantics are the bug</td><td>#778 (owner-deferred)</td></tr>
-<tr><td>9</td><td>Is the analysis trustworthy</td><td>Partly — token counts yes, dollars NO</td><td>New issue A (rate card)</td></tr>
-<tr><td>10</td><td>Per-dispatch telemetry</td><td>Already recorded; aggregation missing</td><td>#777 — owner decision 1</td></tr>
-<tr><td>11</td><td>Executor in herdr panes</td><td>Build seat already does; rest headless</td><td>New issue E</td></tr>
-<tr><td>12</td><td>Are 35/50 the right thresholds</td><td>Do not retune blind; fix re-read cost first</td><td>Sequenced in plan</td></tr>
-<tr><td>13</td><td>Fable vs Opus orchestrator burn</td><td>Volume, not price</td><td>Driver-bench A/B (spike S6)</td></tr>
-<tr><td>14</td><td>Prose we could script</td><td>Eight candidates ranked</td><td>New issue F</td></tr>
-<tr><td>15</td><td>Diff review cost</td><td>Real, measured, five research-backed fixes</td><td>New issue C (spike S5)</td></tr>
-<tr><td>16</td><td>Does the epic already cover this</td><td>Partly — map below</td><td>Issues A–F fill the gaps</td></tr>
+<tr><td>6</td><td>Why cache writes/reads so heavy</td><td>Fresh session per dispatch</td><td>#794 — now an architecture gate</td></tr>
+<tr><td>7</td><td>5-hour-window guard at 90%</td><td>Endpoint CONFIRMED working (S1 done)</td><td>#792 — widened to codex weekly</td></tr>
+<tr><td>8</td><td>Why analysis caps exist</td><td>Runaway brake, but only <strong>11 days old</strong> — kill semantics are the bug</td><td>#778 (tokens, not dollars)</td></tr>
+<tr><td>9</td><td>Is the analysis trustworthy</td><td>Token counts yes, dollars NO — <strong>every card row wrong</strong></td><td>#791 (S2 done)</td></tr>
+<tr><td>10</td><td>Per-dispatch telemetry</td><td>Already recorded; aggregation missing</td><td>#777 joined to the epic</td></tr>
+<tr><td>11</td><td>Executor in herdr panes</td><td>Panes DID spawn — transient splits that self-close</td><td>#795</td></tr>
+<tr><td>12</td><td>Are 35/50 the right thresholds</td><td>Owner set <strong>55/75</strong></td><td>#797</td></tr>
+<tr><td>13</td><td>Fable vs Opus orchestrator burn</td><td>Volume, not price — but Opus is also 2x cheaper</td><td>Decided on price; A/B not run</td></tr>
+<tr><td>14</td><td>Prose we could script</td><td>Eight candidates ranked</td><td>#796 — owner: &quot;script what we can&quot;</td></tr>
+<tr><td>15</td><td>Diff review cost</td><td>Five research-backed fixes</td><td>#793 — owner: &quot;do all that!&quot;</td></tr>
+<tr><td>16</td><td>Does the epic already cover this</td><td>Partly — map below</td><td>Nine issues now fill the gaps</td></tr>
 </tbody>
 </table></section>
 <section class="mstone"><h3>The 16 answers <span class="chip c-conf">DONE</span></h3><h3>1. Why is build going to codex?</h3>
@@ -219,9 +220,57 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 </table></section>
 <section class="mstone"><h3>The plan — how this changes epic #756 <span class="chip c-conf">DONE</span></h3><p>The epic stays <strong>PAUSED</strong> (owner instruction, D35). Nothing below starts until the owner says resume. What changes at resume:</p>
 <p>1. <strong>File issues A–F now</strong> (they are review output, not epic work) — done in this same session,    each citing the evidence above. 2. <strong>Three owner decisions, presented together:</strong> join #777 into the epic early (answer 10)?    amend the review-pairing invariant to reviewer ≠ author (answer 4)? codify the Step-4    budget-exhausted close (answer 5&#x27;s biggest per-child saver)? 3. <strong>At resume, the owed D6 sweep runs first</strong> (#762 + #782 findings) and now ALSO triages    issues A–F for epic membership — the sweep&#x27;s queue-reassessment mandate covers them. 4. <strong>Sequencing principle from answer 12:</strong> cheap structural fixes (rate card, rolling log    summary, pin-guard derivation) land before any threshold retuning or model A/B, so the    expensive experiments measure a system that isn&#x27;t bleeding from known holes.</p></section>
+<section class="mstone"><h3>The owner&#x27;s replies (2026-08-01, second pass) <span class="chip c-conf">DONE</span></h3><p>The owner read all 16 answers and replied to each. Their replies are authoritative: where a reply contradicts an answer above, the reply wins and the answer is marked corrected here.</p>
+<h3>Four decisions, settled</h3>
+<table>
+<thead><tr><th>Decision</th><th>Owner&#x27;s call</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>Join #777 into epic #756</td><td><strong>Yes, join early</strong></td><td>DONE — queued ahead of #766 in the epic body</td></tr>
+<tr><td>Review pairing invariant</td><td><strong>Amend to reviewer ≠ author</strong> (cross-model, not cross-vendor)</td><td>DONE — workspace manual updated, D3 superseded</td></tr>
+<tr><td>Codify the Step-4 budget-exhausted close</td><td><strong>Codify permanently</strong></td><td>Filed as #798</td></tr>
+<tr><td>Merge the findings PR</td><td><strong>Merge it</strong></td><td>DONE — squash 727cf81, v3.113.1</td></tr>
+</tbody>
+</table>
+<h3>Three answers CORRECTED by the owner</h3>
+<p><strong>Answer 2 is REJECTED.</strong> The recommendation was to route by provider economics. The owner: &quot;i dont want to route by providers, i want to route by what is best for each phase.&quot; The recommendation is withdrawn. Phase fit is the routing criterion; quota pressure is handled by a guard (#792), not by bending the routing philosophy around it.</p>
+<p><strong>Answer 6&#x27;s premise is now FALSE.</strong> &quot;Seats on the codex pool are nearly free with respect to the Claude window&quot; was true when written and is not true now. The owner: codex moved from a 5-hour plus weekly limit to <strong>weekly only</strong>, and &quot;it did today and used one of my free resets.&quot; Codex is a scarce pool with its own budget. Consequence: #792 must guard the codex weekly pool and the Claude 7-day window, not just the Claude 5-hour window; and the single-build-engine exposure (answer 1) became urgent enough to file separately as #799.</p>
+<p><strong>Answer 9 understated the damage.</strong> Spike S2 verified live pricing at platform.claude.com on 2026-08-01: <strong>every row of the rate card is wrong</strong>, not the three originally named. Fable 5 is $10/$50 (card said $3/$15); Opus 5, 4.8 and 4.7 are $5/$25 (card said $15/$75 — deprecated Opus-4.1 pricing); Sonnet 5 is $2/$10 on introductory pricing through 2026-08-31 (card said $3/$15); Haiku 4.5 is $1/$5 (card said $0.80/$4). Live pricing also has TWO cache-write tiers (5-minute at 1.25x, 1-hour at 2x) where the card models one. Two further traps for any comparison: the Sonnet introductory rate expires 2026-08-31, and Claude 4.7-and-later models use a newer tokenizer producing roughly 30 percent more tokens for the same text, so raw token counts are not comparable across model generations.</p>
+<h3>Two questions answered with evidence</h3>
+<p><strong>&quot;When did the caps get put in?&quot; (note 8).</strong> The owner&#x27;s memory was right: they are recent. Per-call caps arrived in commit <code>92fbb0d</code> on <strong>2026-07-21</strong> (<code>feat(executor): genuine quota detection + per-call caps + classifier persistence (H5)</code>, #558/#567). The routing table itself predates them by three days (<code>d8d6ae5</code>, #424/#432, 2026-07-18) and shipped without per-call budgets. So the caps are <strong>11 days old</strong>, against months of running without them. The runaway they defend against has no recorded instance in this repo&#x27;s history; the failure they caused is measured. The owner&#x27;s cost comparison — &quot;8/10 analysis phases failing is worse than 1/100 analysis sessions running away&quot; — stands on the evidence. Recorded on #778, which also carries the owner&#x27;s requirement that any surviving cap be <strong>token-denominated, never dollar-denominated</strong>.</p>
+<p><strong>&quot;I have never seen a pane spawn&quot; (note 11).</strong> They did spawn; they were invisible. Three confirmations: <code>capabilities_lib.derive_capabilities()</code> returns <code>executor_terminal_backend = herdr</code> for this project; <code>hooks/executor_routing_lib.py:485</code> routes the build seat to it; and <code>.rawgentic/runtime/registry/jobs.json</code> carries <code>&quot;terminal_backend&quot;: &quot;herdr&quot;</code> on four #762 build jobs. The reason nobody saw them: <code>HerdrBackend.new_session</code> uses <code>pane split --current</code>, which splits the <strong>calling process&#x27;s own pane</strong> and inherits its tab, then <code>_close_and_verify</code> closes the pane when the dispatch finishes. Some dispatches ran 18 seconds. A short-lived split in a tab you are not watching, that tidies itself away, looks exactly like nothing happening. #795 therefore needs durable pane labels and keep-open-on-completion, not just wider seat coverage.</p>
+<h3>Answer 3 is now an architecture decision gate</h3>
+<p>The owner: &quot;if we cant get cache working, we may need to abandon executor path and go back to orchastrator with sub-agents.&quot; Spike S3 is promoted to the first acceptance criterion of #794 and runs before any implementation. If the cache miss turns out to be caused by volatility inside Claude Code rather than by our own prompt bytes, that is the trigger to cost the orchestrator-with-subagents path honestly and put the architecture choice to the owner — not to keep optimizing around it. The negative result gets reported, not buried.</p>
+<h3>Note 13 resolved in practice</h3>
+<p>The owner: &quot;fable is hard to justify as the limits are soooo much lower,&quot; and they switched the orchestrator to Opus 5 mid-session. The pricing confirms the instinct: Opus 5 at $5/$25 is half Fable&#x27;s $10/$50 per token with the same 1M context window. The A/B (spike S6) would need <code>driver-bench</code>, which already shipped (#430, closed) — so if the data is ever wanted it is a run of existing machinery, not new construction. Not worth running to re-derive a decision already made on price.</p></section>
+<section class="mstone"><h3>Spike status (owner asked how these get tackled) <span class="chip c-conf">DONE</span></h3><table>
+<thead><tr><th>Spike</th><th>Status</th><th>Where it lives now</th></tr></thead>
+<tbody>
+<tr><td>S1 — OAuth usage endpoint</td><td><strong>DONE 2026-08-01</strong> — works; <code>five_hour</code> 19.0, <code>seven_day</code> 66.0, dollar fields null so the guard must key on <code>utilization</code></td><td>Result posted to #792</td></tr>
+<tr><td>S2 — live pricing</td><td><strong>DONE 2026-08-01</strong> — every card row wrong</td><td>Result posted to #791</td></tr>
+<tr><td>S3 — cache reuse on identical briefs</td><td>Promoted to <strong>AC1 of #794</strong>, runs first</td><td>#794</td></tr>
+<tr><td>S4 — read the failed analysis receipts</td><td><strong>DONE</strong> (previous session)</td><td>Answer 8 above</td></tr>
+<tr><td>S5 — strip generated files from the #762 patch</td><td><strong>AC1 of #793</strong>, sizes the rest</td><td>#793</td></tr>
+<tr><td>S6 — Fable vs Opus orchestrator A/B</td><td>Not scheduled — decision made on price; <code>driver-bench</code> exists if data is ever wanted</td><td>#430 (closed, shipped)</td></tr>
+</tbody>
+</table>
+<p>No spike is homeless: the two cheap ones are done, two are the first acceptance criterion of their issue, and one is deliberately not being run with the reason stated.</p></section>
+<section class="mstone"><h3>Issues filed from this review <span class="chip c-plan">—</span></h3><table>
+<thead><tr><th>Issue</th><th>Scope</th></tr></thead>
+<tbody>
+<tr><td>#791</td><td>Rate-card fix (every row)</td></tr>
+<tr><td>#792</td><td>Quota guard — Claude 5-hour and 7-day, plus the codex weekly pool</td></tr>
+<tr><td>#793</td><td>Adversarial-diff economics</td></tr>
+<tr><td>#794</td><td>Seat cache-reuse — and the executor-vs-subagents decision gate</td></tr>
+<tr><td>#795</td><td>Herdr pane visibility, durable labels, keep-open</td></tr>
+<tr><td>#796</td><td>Prose-to-script batch (eight verbs)</td></tr>
+<tr><td>#797</td><td>Context-meter thresholds to 55/75, rolling log summary, reload-vs-fill measured</td></tr>
+<tr><td>#798</td><td>Codify the Step-4 budget-exhausted close</td></tr>
+<tr><td>#799</td><td>Unblock Claude-lane mutating builds</td></tr>
+</tbody>
+</table></section>
 
 </main>
-<footer>Last updated: 2026-07-31 21:09 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-31 22:30 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
