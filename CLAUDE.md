@@ -54,13 +54,23 @@ Every claim below carries its evidence; when a doc and a test disagree, **the te
   SKILL.md + sorted `references/*.md`); location pins read the specific file. Know which
   kind you're touching before moving prose between SKILL.md and references/.
 - **Two structural systems people don't expect:**
-  - **Shared blocks:** installed plugins can't share files at runtime (cache blocks
-    cross-dir reads; `${CLAUDE_PLUGIN_ROOT}` doesn't expand in body text), so canonical
+  - **Shared blocks:** installed plugins can't share files at runtime (the cache blocks
+    cross-dir reads), so canonical
     prose lives in `shared/blocks/*.md` and is **generated into** each skill's inline
     block by `scripts/sync_shared_blocks.py` (XML-ish tags are the sync sentinels; the
     MANIFEST in the script maps blocks → skills). CI enforces via
     `tests/test_shared_block_drift.py`. Edit the source block, run the script, never the
     inline copies.
+  - **`${CLAUDE_PLUGIN_ROOT}` — the three facts, because conflating them cost a design
+    (#807, measured on Claude Code 2.1.220).** It **IS** substituted into a `SKILL.md`
+    *body* when Claude Code loads that file **as a skill**. It is **NOT** substituted when
+    any file is opened with the **Read tool** — so `references/*.md` never sees it, since
+    those are always Read. And it is **NOT** a shell environment variable (probe:
+    `(UNSET)`). Proof of the first two: `.../skills/pane-handoff/SKILL.md:152` yields an
+    absolute path when loaded as a skill and the literal `${CLAUDE_PLUGIN_ROOT}` when
+    Read. Consequence: it works in a SKILL.md body but is **not uniform** across a
+    skill's own files, so it cannot be the locator for anything a `references/` file also
+    invokes. Do not write the flat claim "it doesn't expand" — that was the error.
   - **Codex mirror:** `plugins/rawgentic/skills/<name>` are symlinks to
     `../../../skills/<name>`; `plugins/rawgentic/.codex-plugin/plugin.json` and
     `.agents/plugins/marketplace.json` are real files. The Codex manifest must NOT claim
