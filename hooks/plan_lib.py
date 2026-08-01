@@ -1417,6 +1417,113 @@ def _disposition_entry_error(entry: dict) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class CloseResult:
+    """The three persisted representations of a budget-exhausted design-gate close (#798).
+
+    Deliberately three separate fields rather than one summary string: the ledger, the run
+    record, and the session notes have three different formats, and an earlier revision that
+    returned a single string could not produce all three without caller-side reconstruction.
+    """
+    entries: tuple[dict, ...]
+    run_record_extra: dict
+    session_note: str
+
+
+# `passes` is the count of design passes actually run — `state["design"] + 1`, i.e. the
+# loop-backs consumed plus the initial pass. Callers derive it from the canonical counters
+# file, never by hand: a hand-counted N makes the ledger's own pass count untrustworthy,
+# which is the one number a budget-exhausted close exists to record.
+_CLOSE_LABEL: Final[str] = "design_gate_close"
+_CLOSE_REASON: Final[str] = (
+    "automatically adopted after budget exhaustion following passes={passes}"
+)
+
+
+def budget_exhausted_close(
+    *,
+    issue: int,
+    gate: str,
+    passes: int,
+    findings: list[dict],
+    ledger_path: str,
+    date: str,
+    token_factory,
+    decided_by: str = "orchestrator-adjudication",
+) -> CloseResult:
+    """Build the LOUD record of a budget-exhausted design-gate close (#798).
+
+    The gate closes instead of escalating the owner once the design source cap is reached
+    (measured basis: six consecutive epic-#756 children closed this way and all seven owner
+    answers were identical). The close must never be mistakable for a clean pass, so it emits
+    an `adopted` ledger entry per applied finding, a TOP-LEVEL run-record `extra` row, and a
+    canonical session-note marker.
+
+    `adopted`, not `declined`: the close APPLIES the final pass's findings, and `declined`
+    carries suppression semantics — reviewers are instructed not to re-raise declined findings
+    and the join auto-dissolves exact declined matches, so a declined security finding could be
+    buried even if its fix never landed. Recording the disposition is a separate act from
+    editing the design; the caller applies the findings FIRST, then calls this.
+
+    Pure: `token_factory` injects the ledger id's collision-safe token so the function stays
+    deterministic under test. Raises ValueError on invalid input — a malformed close must fail
+    at the boundary, not persist a half-record (`append_disposition`'s fail-closed precedent).
+    """
+    if not isinstance(passes, int) or isinstance(passes, bool) or passes < 1:
+        raise ValueError(f"passes must be an int >= 1, got {passes!r}")
+    if not isinstance(ledger_path, str) or not ledger_path:
+        raise ValueError("ledger_path must be a non-empty string")
+    if not isinstance(date, str) or not date:
+        raise ValueError("date must be a non-empty string")
+    if not isinstance(gate, str) or not gate:
+        raise ValueError("gate must be a non-empty string")
+
+    entries: list[dict] = []
+    seen: set[str] = set()
+    for finding in findings:
+        if not isinstance(finding, dict):
+            raise ValueError(f"finding must be a dict, got {type(finding).__name__}")
+        for field in ("severity", "category", "description"):
+            if not isinstance(finding.get(field), str) or not finding[field]:
+                raise ValueError(f"finding missing/mistyped field {field!r}")
+        key = compute_finding_key(finding)
+        if key in seen:            # first occurrence wins — stable, input-ordered
+            continue
+        seen.add(key)
+        entry = {
+            "schema_version": 1,
+            "id": f"d-{gate}-{passes}-{len(entries) + 1}-{token_factory()}",
+            "issue": issue,
+            "gate": gate,
+            "pass": passes,
+            "finding_key": key,
+            "finding": dict(finding),
+            "disposition": "adopted",
+            "reason": _CLOSE_REASON.format(passes=passes),
+            "decided_by": decided_by,
+            "date": date,
+        }
+        problem = _disposition_entry_error(entry)
+        if problem is not None:
+            raise ValueError(f"budget_exhausted_close: invalid entry ({problem})")
+        entries.append(entry)
+
+    ids = ",".join(e["id"] for e in entries)
+    return CloseResult(
+        entries=tuple(entries),
+        run_record_extra={
+            "label": _CLOSE_LABEL,
+            "value": (f"budget_exhausted passes={passes} "
+                      f"findings={ids} ledger={ledger_path}"),
+        },
+        session_note=(
+            f"### WF2 Step {gate} — design gate CLOSED budget-exhausted "
+            f"(#{issue}: passes={passes}, {len(entries)} findings adopted, "
+            f"ledger {ledger_path})"
+        ),
+    )
+
+
 def read_dispositions(ledger_path: str) -> tuple[list[dict], int]:
     """Tolerant ledger reader. Returns (valid_entries, skipped_count).
 

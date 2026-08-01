@@ -325,3 +325,124 @@ class TestStep11Adopts:
         with _pytest.raises(ValueError):
             mod.append_disposition(str(path), bad)
         assert not path.exists()  # nothing persisted
+
+
+# --- #798: the Step-4 budget-exhausted close ---------------------------------
+#
+# The design gate closes budget-exhausted instead of escalating the owner, but the
+# close must be LOUD: an `adopted` ledger entry per applied finding, a TOP-LEVEL
+# run-record `extra` row, and a canonical session-note marker. A close that renders
+# identically to a clean pass defeats the whole point (#798 AC2).
+
+def _finding(desc="design lacks a rollback path", sev="High", cat="correctness",
+             loc="design.md:12"):
+    return {"severity": sev, "category": cat, "description": desc, "location": loc}
+
+
+def _tokens(*vals):
+    """Deterministic token factory so ids are assertable."""
+    it = iter(vals)
+    return lambda: next(it)
+
+
+class TestBudgetExhaustedClose:
+    def _call(self, mod, **over):
+        kwargs = dict(
+            issue=798, gate="4", passes=3,
+            findings=[_finding()],
+            ledger_path="claude_docs/.wf2-state/798/dispositions.jsonl",
+            date="2026-08-01",
+            token_factory=_tokens("aa11", "bb22", "cc33"),
+        )
+        kwargs.update(over)
+        return mod.budget_exhausted_close(**kwargs)
+
+    def test_entries_are_adopted_not_declined(self):
+        # The close APPLIES the final findings, so recording them `declined` would be
+        # false — and `declined` carries suppression semantics (reviewers are told not
+        # to re-raise declined findings), which would bury an unfixed security finding.
+        mod = _reload_plan_lib()
+        res = self._call(mod)
+        assert [e["disposition"] for e in res.entries] == ["adopted"]
+
+    def test_every_entry_validates_against_the_ledger_writer(self, tmp_path):
+        # The helper's output must be directly appendable — append_disposition fails
+        # closed, so an entry that does not validate would blow up at gate close.
+        mod = _reload_plan_lib()
+        res = self._call(mod, findings=[_finding(), _finding("second flaw")])
+        path = tmp_path / "d.jsonl"
+        for e in res.entries:
+            mod.append_disposition(str(path), e)
+        assert len(path.read_text().strip().splitlines()) == 2
+
+    def test_reason_carries_the_pass_count(self):
+        # AC2: the pass count is what makes a budget-exhausted close self-describing.
+        mod = _reload_plan_lib()
+        res = self._call(mod, passes=3)
+        assert all("passes=3" in e["reason"] for e in res.entries)
+
+    def test_run_record_extra_is_a_top_level_label_value_row(self):
+        # A gate-row `extra` validates silently and renders NOTHING (work_summary
+        # renders only top-level extra); it must be the top-level {label,value} shape.
+        mod = _reload_plan_lib()
+        res = self._call(mod)
+        assert set(res.run_record_extra) == {"label", "value"}
+        assert res.run_record_extra["label"] == "design_gate_close"
+        v = res.run_record_extra["value"]
+        assert "budget_exhausted" in v and "passes=3" in v and "ledger=" in v
+
+    def test_session_note_is_the_canonical_marker(self):
+        mod = _reload_plan_lib()
+        res = self._call(mod)
+        assert res.session_note.startswith(
+            "### WF2 Step 4 — design gate CLOSED budget-exhausted (#798:")
+        assert "passes=3" in res.session_note
+
+    def test_duplicate_findings_collapse_by_finding_key_first_wins(self):
+        mod = _reload_plan_lib()
+        dup = _finding()
+        res = self._call(mod, findings=[dup, dict(dup)])
+        assert len(res.entries) == 1
+
+    def test_input_order_is_preserved(self):
+        mod = _reload_plan_lib()
+        res = self._call(mod,
+                         findings=[_finding("first"), _finding("second")],
+                         token_factory=_tokens("aa11", "bb22"))
+        descs = [e["finding"]["description"] for e in res.entries]
+        assert descs == ["first", "second"]
+
+    def test_empty_findings_still_reports_the_exhaustion(self):
+        # A close with nothing left to adopt is still a budget-exhausted close and
+        # must not render as a clean pass.
+        mod = _reload_plan_lib()
+        res = self._call(mod, findings=[])
+        assert res.entries == ()   # frozen dataclass -> immutable tuple
+        assert "budget_exhausted" in res.run_record_extra["value"]
+
+    def test_rejects_passes_below_one(self):
+        import pytest as _pytest
+        mod = _reload_plan_lib()
+        with _pytest.raises(ValueError):
+            self._call(mod, passes=0)
+
+    def test_rejects_empty_ledger_path(self):
+        import pytest as _pytest
+        mod = _reload_plan_lib()
+        with _pytest.raises(ValueError):
+            self._call(mod, ledger_path="")
+
+    def test_rejects_malformed_finding(self):
+        import pytest as _pytest
+        mod = _reload_plan_lib()
+        with _pytest.raises(ValueError):
+            self._call(mod, findings=[{"severity": "High"}])
+
+    def test_clean_close_and_exhausted_close_are_distinguishable(self):
+        # AC2's real requirement: the persisted evidence must differ. A clean close
+        # emits no design_gate_close row at all.
+        mod = _reload_plan_lib()
+        res = self._call(mod)
+        clean_record_extras = []
+        assert res.run_record_extra not in clean_record_extras
+        assert res.run_record_extra["label"] == "design_gate_close"
