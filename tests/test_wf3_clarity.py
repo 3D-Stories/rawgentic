@@ -306,13 +306,19 @@ class TestExecutorDispatchContractWF3:
             "the R4-D WF3 complexity-to-gate mapping must be present (#762)")
 
     def test_producer_sentence_present(self):
+        # #762 Step-11 r2-4/r1-3: WF3 dispatches BOTH seats since the build adoption — the
+        # producer type derives from the seat, never hardcodes executor:review.
         corpus = _norm(_text())
-        assert ("The producer is the executor result dict (`type=executor:review`, "
-                "`model=<actual_model>`, `resolution=primary`) on the primary tier, "
+        assert ("The producer is the executor result dict (`type=executor:<seat>` — "
+                "`executor:review` for review dispatches, `executor:build` for "
+                "implementation dispatches — `model=<actual_model>`, "
+                "`resolution=primary`) on the primary tier, "
                 "or — under the LEGACY architecture only — the Agent-tool dispatch "
                 "(`resolution=fallback`).") in corpus, (
-            "the WF3 DISPATCH producer sentence (executor result dict vs "
-            "legacy-architecture Agent-tool) must be present (#474)")
+            "the WF3 DISPATCH producer sentence (seat-derived executor type vs "
+            "legacy-architecture Agent-tool) must be present (#474, #762)")
+        assert "(`type=executor:review`, `model=<actual_model>`" not in corpus, (
+            "the pre-#762 hardcoded executor:review producer form must be gone")
 
     def test_per_run_tier_selection_present(self):
         corpus = _norm(_text())

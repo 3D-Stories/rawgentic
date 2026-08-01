@@ -441,6 +441,37 @@ def test_land_identity_conflict_refuses_at_append(repo, tmp_path):
     assert _git(repo, "rev-parse", "--verify", TEMP_REF)[0] == 0  # retained for forensics
 
 
+def test_land_same_nonce_different_new_sha_refuses_pre_merge(repo, tmp_path):
+    # #762 Step-11 r2-2: landing and reconcile must agree on the conflict identity — a
+    # landed_work_product for the SAME receipt nonce at a DIFFERENT new_sha is a conflicting
+    # identity (reconcile already calls it landing_conflict), refused BEFORE any git mutation,
+    # not silently ignored until post-merge reconciliation.
+    audit, base, new_sha = _setup(repo, tmp_path)
+    audit._write_locked({  # pylint: disable=protected-access
+        "kind": "landed_work_product", "landing_version": 1, "receipt_nonce": "rn1",
+        "feature_ref": FEAT, "pre_sha": base, "new_sha": "f" * 40,
+        "temp_ref": TEMP_REF, "landing_status": "landed", "run_id": "runI", "ts": 1})
+    res = er.land_work_product(repo=str(repo), expected_ref=FEAT, pre_sha=base,
+                               new_sha=new_sha, temp_ref=TEMP_REF, run_id="runI", audit=audit)
+    assert res["ok"] is False and res["error"]["code"] == "landing_identity_conflict"
+    # pre-mutation: the branch did NOT advance and the temp ref is retained
+    assert _git(repo, "rev-parse", "refs/heads/feat-x")[1].strip() == base
+    assert _git(repo, "rev-parse", "--verify", TEMP_REF)[0] == 0
+
+
+def test_land_path_unsafe_run_id_refuses(repo, tmp_path):
+    # #762 Step-11 r2-5: RoutingAuditLog sanitizes run_id ('a/b' and 'a_b' address the same
+    # audit directory), so a path-unsafe run_id could consume another run stream's
+    # authorization — refused at entry, before any audit read or git mutation.
+    audit, base, new_sha = _setup(repo, tmp_path)
+    res = er.land_work_product(repo=str(repo), expected_ref=FEAT, pre_sha=base,
+                               new_sha=new_sha, temp_ref=TEMP_REF, run_id="run/../I",
+                               audit=audit)
+    assert res["ok"] is False and res["error"]["code"] == "landing_invalid_input"
+    assert res["exit"] == 2
+    assert _git(repo, "rev-parse", "refs/heads/feat-x")[1].strip() == base
+
+
 def _write_workspace(tmp_path, project="canon"):
     ws = tmp_path / ".rawgentic_workspace.json"
     ws.write_text(json.dumps({"version": 1, "projects": [

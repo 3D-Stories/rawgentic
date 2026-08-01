@@ -2110,6 +2110,15 @@ def land_work_product(*, repo: Optional[str] = None, expected_ref: str, pre_sha:
                         "land-work-product: audited mode requires --run-id --workspace "
                         "--project (or pass --no-audit as the explicit unaudited opt-out)",
                         retryable=False, correlation_id=ce)
+        try:
+            # #762 Step-11 r2-5: RoutingAuditLog SANITIZES its run_id component ('a/b' and
+            # 'a_b' address the same audit directory), so a path-unsafe id could consume a
+            # foreign run stream's work-product authorization — refuse at entry, before any
+            # audit read or git mutation (the same validation every other entry point runs).
+            _safe_component(run_id, "run_id")
+        except MalformedConfig as e:
+            return _err(EXIT_MALFORMED, "landing_invalid_input",
+                        f"land-work-product: {e}", retryable=False, correlation_id=ce)
         if audit is None:
             try:
                 pe = _import_phase_executor()
@@ -2194,12 +2203,24 @@ def land_work_product(*, repo: Optional[str] = None, expected_ref: str, pre_sha:
         for r in records:
             if r.get("kind") != "landed_work_product":
                 continue
-            if r.get("receipt_nonce") != nonce or r.get("new_sha") != new_sha:
+            if r.get("receipt_nonce") != nonce:
                 continue
             if all(r.get(k) == ours[k] for k in _LANDING_IDENTITY_FIELDS):
                 has_matching_landing = True
             else:
+                # #762 Step-11 r2-2: index by receipt nonce ALONE — reconcile treats ANY two
+                # distinct identities for one nonce as landing_conflict, so a same-nonce
+                # record at a DIFFERENT new_sha (a poisoned or corrupt landing) must conflict
+                # here too, not slip past a (nonce, new_sha) filter until post-merge.
                 has_conflicting_landing = True
+        if has_conflicting_landing:
+            # Refuse BEFORE any git mutation (r2-2); _append_landing keeps the same guard as
+            # defense in depth. The temp ref is retained for forensics.
+            return _err(EXIT_INTERNAL, "landing_identity_conflict",
+                        f"land-work-product: an existing landed_work_product for receipt "
+                        f"{nonce!r} carries a DIFFERENT immutable identity — refusing before "
+                        f"any git mutation; reconcile manually", retryable=False,
+                        correlation_id=ce)
 
     def _append_landing(status: str):
         """R4-B: append (idempotent, conflict-refusing) — returns an error dict or None."""

@@ -264,3 +264,70 @@ def test_review_seat_row_names_no_review_fast_seat():
             f"{skill}: dispatch prose must not name review_fast as a seat"
     assert "--seat <review|review_fast>" not in _norm(skill_corpus("fix-bug")), \
         "fix-bug: the dispatch CLI template must use --seat review"
+
+
+# --- #762 Step-11 r1-2/r2-3: retune-pinned prose tracks the EXECUTABLE policy ---------------
+
+_MODEL_SHORT = {"gpt-5.6-sol": "sol", "claude-fable-5": "fable", "claude-opus-5": "opus",
+                "claude-sonnet-5": "sonnet", "gpt-5.6-terra": "terra"}
+
+
+def _short(model_id: str) -> str:
+    assert model_id in _MODEL_SHORT, (
+        f"model id {model_id!r} has no short prose name — extend _MODEL_SHORT so the "
+        f"retune-prose guards keep tracking the executable policy")
+    return _MODEL_SHORT[model_id]
+
+
+def _design_pairing() -> str:
+    sys.path.insert(0, str(REPO / "hooks"))
+    import bakeoff_policy  # noqa: E402  pylint: disable=import-outside-toplevel
+    a, b = bakeoff_policy.DESIGN_MODELS
+    return f"{_short(a)} vs {_short(b)}"
+
+
+def _review_chain() -> str:
+    import json  # pylint: disable=import-outside-toplevel
+    table = json.loads((REPO / "phase_executor" / "src" / "phase_executor" / "routing"
+                        / "rawgentic.routing-table.json").read_text(encoding="utf-8"))
+    seat = table["seats"]["review"]
+    order = [seat["primary"]["model"]] + [c["model"] for c in seat["chain"]
+                                          if c["model"] != seat["primary"]["model"]]
+    return " → ".join(_short(m) for m in order)
+
+
+def test_design_pairing_prose_tracks_design_models():
+    # A future retune of DESIGN_MODELS fails these until the prose moves with it (r1-2/r2-3).
+    pairing = _design_pairing()
+    for surface in (SHARED, REPO / "skills" / "implement-feature" / "SKILL.md"):
+        text = _norm(surface.read_text(encoding="utf-8"))
+        assert f"({pairing} concurrent, glm-5.2 judge)" in text, (
+            f"{surface.name}: the design-round pairing prose must state the executable "
+            f"DESIGN_MODELS pairing {pairing!r}")
+
+
+def test_design_pairing_current_diagram_rev_tracks_design_models():
+    # Only the CURRENT (non-superseded) diagram rev must track the live pairing; historical
+    # revs legitimately keep the models of their day.
+    pairing = _design_pairing()
+    html = (REPO / "docs" / "workflow-diagram.html").read_text(encoding="utf-8")
+    m = re.search(r'"([0-9.]+)": \{ superseded:false', html)
+    assert m, "no non-superseded wf2 rev found in the diagram data"
+    start = m.start()
+    nxt = re.search(r'"[0-9.]+": \{ superseded:"', html[start:])
+    block = html[start:start + nxt.start()] if nxt else html[start:]
+    assert f"· {pairing} ·" in block, (
+        f"the current diagram rev {m.group(1)} must state the executable pairing {pairing!r}")
+    others = set(re.findall(r"· (\w+ vs \w+) ·", block)) - {pairing}
+    assert not others, f"current diagram rev carries a non-executable pairing: {others}"
+
+
+def test_review_chain_prose_tracks_routing_table():
+    chain = _review_chain()
+    for surface, needle in (
+            (SHARED, f"the `review` chain {chain}"),
+            (REPO / "skills" / "implement-feature" / "SKILL.md", f"the `review` chain {chain}"),
+            (REPO / "skills" / "fix-bug" / "SKILL.md", f"the routing table, {chain}")):
+        text = _norm(surface.read_text(encoding="utf-8"))
+        assert needle in text, (
+            f"{surface}: the review-chain prose must state the executable order {chain!r}")
