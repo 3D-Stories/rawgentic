@@ -952,3 +952,25 @@ allowlist live in `hooks/plan_lib.py` and are referenced (not
 restated) by SKILL.md and this principle. The drift guard at
 `tests/test_skill_helpers.py` enforces the wiring between SKILL.md
 and `plan_lib.py`.
+
+## Why `MAX_DESIGN_LOOPBACK_ITERATIONS` stays 2 (#798, 2026-08-01)
+
+The Step-4 design gate closes budget-exhausted rather than escalating. The obvious alternative —
+raise the pass budget so the gate stops running out — was considered and rejected. The honest
+reasoning, because the data supports less than it first appears to:
+
+- **What was measured** (`docs/measurements/2026-08-01-762-retrospective.md:89-114`): six
+  consecutive epic-#756 children (#735, #733, #758, #767, #765, #762) closed Step 4 after three
+  passes with findings still folding to `design`. Seven owner answers, all identical: apply the
+  final fixes and proceed. On #762 alone that gate produced 24 unique findings and 1,470.7 s of
+  reviewer time across three dispatches.
+- **What the data does NOT establish.** The observations are **right-censored** — every measured
+  run *stopped* at three passes, so there is no evidence about what a fourth pass would find. Any
+  claim that a fourth pass "would also be foregone" is an extrapolation, not a measurement.
+- **What the change actually saves.** Not the 1,470.7 s — those three passes still run. It saves
+  the owner escalation at the end of them, which is what was repeatedly answered the same way.
+- **Why 2 is retained.** Owner decision 2026-08-01, offered "raise the budget" or "close
+  automatically" and choosing the close. The optimal cutoff remains empirically unknown.
+- **How it becomes knowable.** Every budget-exhausted close now records `passes=N` in the ledger
+  and the run record, so the distribution can be read off real runs instead of argued from
+  anecdote. Revisit this constant once that data exists.

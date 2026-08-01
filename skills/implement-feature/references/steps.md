@@ -658,7 +658,16 @@ The self-review produces findings in the shape the gate consumes:
      to the spec-tightening path — it stays unconditionally on the full `design` source (#223).
    - Check `design_loopback_count` and `global_loopback_total`
    - If within budget: increment counters, apply findings as constraints, return to Step 3
-   - If budget exhausted: STOP and escalate to user. **[Headless: ERROR — post error comment with findings summary, add rawgentic:ai-error label, exit.]**
+   - **If budget exhausted — the design gate CLOSES budget-exhausted; it does NOT escalate (#798).** Self-close only when the attempted source is `design` and `state["design"] >= _LOOPBACK_SOURCE_MAX["design"]` and the GLOBAL cap is not reached and the ambiguity breaker completed `clear`. A refusal caused by the global cap, or involving `spec_tighten`/`tdd`/`review`/`review_design`, or any ambiguous or conflicting finding, retains STOP/escalate. Before closing, WAIT for any enabled adversarial review (never discard it — a terminal close has no next pass to run the breaker on), merge its findings, and run the ambiguity breaker EXACTLY ONCE; an enabled review that failed, timed out, or returned malformed output is STOP/escalate, because a close is only justified by a *foregone* verdict and a verdict that could not be obtained is not foregone. Then APPLY the final pass's findings to the design, and only then record the close by running:
+     ```bash
+     python3 hooks/plan_lib.py close-design-gate --issue <n> --gate 4 \
+       --findings-file <json> --counters claude_docs/.wf2-state/<n>/loopback_counters.json \
+       --breaker-result clear --ledger claude_docs/.wf2-state/<n>/dispositions.jsonl \
+       --record-out <extra.json> --note-out claude_docs/session_notes.md --date <YYYY-MM-DD> \
+       --project-root .
+     ```
+     Splice the printed `{"label": "design_gate_close", ...}` object into the Step-16 run record's **TOP-LEVEL** `extra` list. All three write targets must resolve inside `--project-root` and must not be symlinks; `--gate` accepts only `4` (the carve-out is Step-4-only); a corrupt counters file, or any finding carrying an ambiguity/conflict marker, refuses the close even if `--breaker-result clear` was passed — the flag is cross-checked, never trusted.
+     The command re-checks eligibility itself via `plan_lib.design_close_eligible` (design source cap reached AND global cap NOT reached AND breaker `clear`), refuses a corrupt counters file via `plan_lib.counters_are_intact`, cross-checks the breaker flag against the findings via `plan_lib.findings_are_unambiguous`, builds the records via `plan_lib.budget_exhausted_close`, and writes the ledger all-or-nothing via `plan_lib.persist_close`; it exits non-zero writing nothing if the close is not permitted — never hand-write these artifacts and never call the helper directly to bypass the eligibility check. It emits one `adopted` ledger entry per applied finding, the TOP-LEVEL run-record `extra` row `{"label": "design_gate_close", ...}` (splice it into the Step-16 record's top-level `extra`, NOT into the gate row — a gate-row key validates silently and renders nothing), and the canonical session marker `### WF2 Step 4 — design gate CLOSED budget-exhausted (#<issue>: passes=N, <k> findings adopted, ledger <path>)`. Continue to Step 5. **[Headless: same — this is a legitimate close, NOT an ERROR; do not add the rawgentic:ai-error label.]**
    - **If the adversarial review sub-step (item 7) is enabled and still in flight when this loop-back fires:** do NOT wait for it and do NOT run the ambiguity breaker (thresholds did not pass). **Discard the in-flight adversarial result as stale** — it reviewed a design that is now being revised (this is the documented one-wasted-call tradeoff) — and log `### WF2 Step 4 — Adversarial Review (#<issue>, discarded: superseded by volume loop-back)`. Return to Step 3; the next Step 4 pass dispatches a fresh adversarial review against the revised design.
 
 6. **If thresholds pass:** Apply the ambiguity circuit breaker over the self-review findings — **unless** the adversarial review sub-step (item 7) is enabled for this run. When it is enabled, do NOT run the breaker here; **defer** it to the single merged-findings join barrier in item 7, so the breaker runs **exactly once** over the combined self-review + adversarial findings rather than twice. (The volume/loop-back checks in items 4–5 still run on the self-review findings as soon as the self-review returns; only the breaker is deferred.)
@@ -732,13 +741,16 @@ the single breaker runs over. It runs in exactly one row, never twice:
 
 | Volume loop-back fired (item 5)? | Adversarial sub-step (item 7) state | Breaker runs over |
 |---|---|---|
-| **yes** | (any) | **SKIP** — return to Step 3 now; discard any in-flight adversarial result as stale (item 5). The breaker runs on the *next* Step 4 pass. |
+| **yes**, budget REMAINS | (any) | **SKIP** — return to Step 3 now; discard any in-flight adversarial result as stale (item 5). The breaker runs on the *next* Step 4 pass. |
+| **yes**, budget EXHAUSTED (#798) | (any) | **RUNS — merged.** WAIT for an enabled adversarial review (never discard it), merge, run the breaker EXACTLY ONCE, then close-or-escalate. A terminal close has NO next pass, so deferring the breaker here would let an ambiguous finding close unescalated. |
 | no | disabled / not opted-in / fast-path | **self-review-only** findings |
 | no | enabled AND returned | **merged** self-review + adversarial (the join barrier, item 7) |
 | no | enabled BUT non-success (not installed / timeout / error / parse error) | **self-review-only** findings — skipping the adversarial layer must NOT skip the breaker, **else it runs zero times** (item 7) |
 
-The only path on which the breaker does not run is the volume-loop-back row, and that is
-because it returns to Step 3 *before* the breaker point — not because the breaker was skipped.
+The only path on which the breaker does not run is the volume-loop-back row **while budget
+remains**, and that is because it returns to Step 3 *before* the breaker point — not because
+the breaker was skipped. When that same row's budget is EXHAUSTED there is no next pass to
+defer to, so the breaker RUNS before the close (#798).
 
 **#223 fold note:** the Loopback-class fold runs **post-breaker only** — at the item-7
 consumption point (and its self-review-only analog), after the single breaker has

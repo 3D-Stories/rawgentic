@@ -1417,6 +1417,113 @@ def _disposition_entry_error(entry: dict) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class CloseResult:
+    """The three persisted representations of a budget-exhausted design-gate close (#798).
+
+    Deliberately three separate fields rather than one summary string: the ledger, the run
+    record, and the session notes have three different formats, and an earlier revision that
+    returned a single string could not produce all three without caller-side reconstruction.
+    """
+    entries: tuple[dict, ...]
+    run_record_extra: dict
+    session_note: str
+
+
+# `passes` is the count of design passes actually run — `state["design"] + 1`, i.e. the
+# loop-backs consumed plus the initial pass. Callers derive it from the canonical counters
+# file, never by hand: a hand-counted N makes the ledger's own pass count untrustworthy,
+# which is the one number a budget-exhausted close exists to record.
+_CLOSE_LABEL: Final[str] = "design_gate_close"
+_CLOSE_REASON: Final[str] = (
+    "automatically adopted after budget exhaustion following passes={passes}"
+)
+
+
+def budget_exhausted_close(
+    *,
+    issue: int,
+    gate: str,
+    passes: int,
+    findings: list[dict],
+    ledger_path: str,
+    date: str,
+    token_factory,
+    decided_by: str = "orchestrator-adjudication",
+) -> CloseResult:
+    """Build the LOUD record of a budget-exhausted design-gate close (#798).
+
+    The gate closes instead of escalating the owner once the design source cap is reached
+    (measured basis: six consecutive epic-#756 children closed this way and all seven owner
+    answers were identical). The close must never be mistakable for a clean pass, so it emits
+    an `adopted` ledger entry per applied finding, a TOP-LEVEL run-record `extra` row, and a
+    canonical session-note marker.
+
+    `adopted`, not `declined`: the close APPLIES the final pass's findings, and `declined`
+    carries suppression semantics — reviewers are instructed not to re-raise declined findings
+    and the join auto-dissolves exact declined matches, so a declined security finding could be
+    buried even if its fix never landed. Recording the disposition is a separate act from
+    editing the design; the caller applies the findings FIRST, then calls this.
+
+    Pure: `token_factory` injects the ledger id's collision-safe token so the function stays
+    deterministic under test. Raises ValueError on invalid input — a malformed close must fail
+    at the boundary, not persist a half-record (`append_disposition`'s fail-closed precedent).
+    """
+    if not isinstance(passes, int) or isinstance(passes, bool) or passes < 1:
+        raise ValueError(f"passes must be an int >= 1, got {passes!r}")
+    if not isinstance(ledger_path, str) or not ledger_path:
+        raise ValueError("ledger_path must be a non-empty string")
+    if not isinstance(date, str) or not date:
+        raise ValueError("date must be a non-empty string")
+    if not isinstance(gate, str) or not gate:
+        raise ValueError("gate must be a non-empty string")
+
+    entries: list[dict] = []
+    seen: set[str] = set()
+    for finding in findings:
+        if not isinstance(finding, dict):
+            raise ValueError(f"finding must be a dict, got {type(finding).__name__}")
+        for field in ("severity", "category", "description"):
+            if not isinstance(finding.get(field), str) or not finding[field]:
+                raise ValueError(f"finding missing/mistyped field {field!r}")
+        key = compute_finding_key(finding)
+        if key in seen:            # first occurrence wins — stable, input-ordered
+            continue
+        seen.add(key)
+        entry = {
+            "schema_version": 1,
+            "id": f"d-{gate}-{passes}-{len(entries) + 1}-{token_factory()}",
+            "issue": issue,
+            "gate": gate,
+            "pass": passes,
+            "finding_key": key,
+            "finding": dict(finding),
+            "disposition": "adopted",
+            "reason": _CLOSE_REASON.format(passes=passes),
+            "decided_by": decided_by,
+            "date": date,
+        }
+        problem = _disposition_entry_error(entry)
+        if problem is not None:
+            raise ValueError(f"budget_exhausted_close: invalid entry ({problem})")
+        entries.append(entry)
+
+    ids = ",".join(e["id"] for e in entries)
+    return CloseResult(
+        entries=tuple(entries),
+        run_record_extra={
+            "label": _CLOSE_LABEL,
+            "value": (f"budget_exhausted passes={passes} "
+                      f"findings={ids} ledger={ledger_path}"),
+        },
+        session_note=(
+            f"### WF2 Step {gate} — design gate CLOSED budget-exhausted "
+            f"(#{issue}: passes={passes}, {len(entries)} findings adopted, "
+            f"ledger {ledger_path})"
+        ),
+    )
+
+
 def read_dispositions(ledger_path: str) -> tuple[list[dict], int]:
     """Tolerant ledger reader. Returns (valid_entries, skipped_count).
 
@@ -2423,3 +2530,212 @@ def consume_loopback(path: str, source: str) -> tuple[bool, dict]:
         state["total"] = sum(state[s] for s in _LOOPBACK_SOURCES)
         _write_loopback_state(path, state)
     return True, state
+
+
+# --- #798: the Step-4 budget-exhausted close, as an EXECUTABLE gate ----------
+#
+# Prose alone could not prove AC2/AC3: a helper unit test plus a "the prose names
+# the destination" guard both pass while a real exhausted run persists nothing.
+# This adapter gives Step 4 a real call site, and it ENFORCES eligibility rather
+# than merely persisting — a persist-only adapter would happily write a forbidden
+# close (global cap reached, or an ambiguous finding that must escalate).
+
+_BREAKER_RESULTS: Final[tuple[str, ...]] = ("clear", "ambiguous", "conflicting")
+
+
+def design_close_eligible(state: dict, breaker_result: str) -> tuple[bool, str]:
+    """Is a budget-exhausted self-close permitted? Returns (ok, reason).
+
+    Three conditions, all required:
+      * the `design` source cap is reached;
+      * the GLOBAL cap is NOT reached — `consume_loopback` tests the source cap first
+        and returns before ever reaching the global check, so a state where BOTH are
+        exhausted refuses for the source reason and would otherwise read as
+        design-cap-caused and close, when the global rule requires escalation;
+      * the ambiguity breaker completed `clear`.
+
+    Fail CLOSED: anything unrecognised is ineligible. Removing an owner escalation is
+    the dangerous direction, so an unreadable state must never license a close.
+    """
+    if breaker_result not in _BREAKER_RESULTS:
+        return (False, f"unrecognised breaker result {breaker_result!r}")
+    if breaker_result != "clear":
+        return (False, f"breaker returned {breaker_result} — must STOP and escalate")
+    design = state.get("design")
+    total = state.get("total")
+    if not isinstance(design, int) or not isinstance(total, int):
+        return (False, "counters unreadable")
+    if design < _LOOPBACK_SOURCE_MAX["design"]:
+        return (False, f"design cap not reached ({design}/"
+                       f"{_LOOPBACK_SOURCE_MAX['design']}) — not a budget-exhausted close")
+    if total >= GLOBAL_LOOPBACK_BUDGET:
+        return (False, f"global cap reached ({total}/{GLOBAL_LOOPBACK_BUDGET}) — "
+                       "escalate; the refusal is not attributable to the design source")
+    return (True, "eligible")
+
+
+def counters_are_intact(raw: dict) -> tuple[bool, str]:
+    """Every per-source counter must be a real non-negative int (R1-H1).
+
+    `_read_loopback_state` deliberately RESETS a corrupt source to 0 and recomputes
+    `total` — correct for the tolerant read path, fatal here: `{design:2, tdd:"corrupt"}`
+    normalizes to `total=2`, which slips past the global-cap guard and approves a close
+    on a ledger nobody can trust. The close path therefore reads the file strictly and
+    refuses on ANY invalid counter rather than inheriting the normalization.
+    """
+    if not isinstance(raw, dict):
+        return (False, "counters file is not an object")
+    for src in _LOOPBACK_SOURCES:
+        v = raw.get(src, 0)
+        if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+            return (False, f"counter {src!r} is {v!r} — corrupt; refusing to close")
+    return (True, "intact")
+
+
+def findings_are_unambiguous(findings: list) -> tuple[bool, str]:
+    """No finding may carry an ambiguity/conflict marker (R2-H2).
+
+    The adapter used to trust `--breaker-result clear` outright, so a caller could pass
+    `clear` alongside an ambiguous finding and close successfully — the executable
+    boundary asserted a safety property it never checked. Cross-checking the findings
+    themselves makes the flag corroborated rather than believed.
+    """
+    for i, f in enumerate(findings):
+        if not isinstance(f, dict):
+            return (False, f"finding {i} is not an object")
+        flag = str(f.get("ambiguity_flag", "clear")).strip().lower()
+        if flag not in ("", "clear", "none", "false"):
+            return (False, f"finding {i} is {flag!r} — must STOP and escalate, not close")
+    return (True, "clear")
+
+
+def _contained(path: str, root: str) -> bool:
+    """Is `path` inside `root` after full symlink resolution? (R2-H4)"""
+    rp = os.path.realpath(root)
+    tp = os.path.realpath(path)
+    return tp == rp or tp.startswith(rp + os.sep)
+
+
+def persist_close(result: "CloseResult", *, ledger_path: str) -> None:
+    """Append every ledger entry, or leave the ledger byte-identical (R1-H2).
+
+    The first implementation appended entry-by-entry, so a failure on entry 2 of 3 left
+    entry 1 behind — a partially-recorded close is worse than none, because the ledger
+    then disagrees with the run record about what was adopted. Truncate back to the
+    pre-write length on any failure.
+    """
+    before = os.path.getsize(ledger_path) if os.path.exists(ledger_path) else 0
+    existed = os.path.exists(ledger_path)
+    try:
+        for entry in result.entries:
+            append_disposition(ledger_path, entry)
+    except Exception:
+        if existed:
+            with open(ledger_path, "r+", encoding="utf-8") as f:
+                f.truncate(before)
+        elif os.path.exists(ledger_path):
+            os.unlink(ledger_path)
+        raise
+
+
+def _cmd_close_design_gate(args) -> int:
+    root = os.path.realpath(args.project_root)
+    for label, target in (("--ledger", args.ledger), ("--record-out", args.record_out),
+                          ("--note-out", args.note_out)):
+        if not _contained(target, root):
+            sys.stderr.write(f"close-design-gate: REFUSED — {label} resolves outside "
+                             f"--project-root ({root})\n")
+            return 3
+        if os.path.islink(target):
+            sys.stderr.write(f"close-design-gate: REFUSED — {label} is a symlink\n")
+            return 3
+    if any(ch in args.ledger for ch in "\r\n"):
+        sys.stderr.write("close-design-gate: REFUSED — newline in --ledger\n")
+        return 2
+    try:
+        with open(args.counters, "r", encoding="utf-8") as f:
+            raw = _json.load(f)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write(f"close-design-gate: REFUSED — counters unreadable ({exc})\n")
+        return 3
+    intact, why = counters_are_intact(raw)
+    if not intact:
+        sys.stderr.write(f"close-design-gate: REFUSED — {why}\n")
+        return 3
+    state = _read_loopback_state(args.counters)
+    ok, reason = design_close_eligible(state, args.breaker_result)
+    if not ok:
+        sys.stderr.write(f"close-design-gate: REFUSED — {reason}\n")
+        return 3
+    derived = state["design"] + 1          # loop-backs consumed + the initial pass
+    if args.passes is not None and args.passes != derived:
+        sys.stderr.write(
+            f"close-design-gate: REFUSED — --passes {args.passes} disagrees with the "
+            f"counters ({derived}); the pass count is the one number this close exists "
+            "to record, so a hand-supplied N is not trusted\n")
+        return 3
+    with open(args.findings_file, "r", encoding="utf-8") as f:
+        findings = _json.load(f)
+    if not isinstance(findings, list):
+        sys.stderr.write("close-design-gate: findings-file must hold a JSON list\n")
+        return 2
+    if not findings:
+        # A budget-exhausted close happens BECAUSE findings kept arriving, so an empty
+        # list is far likelier to be a collection/merge/serialization bug than a genuine
+        # zero-finding close — and it would persist a close adopting nothing. The pure
+        # helper still permits it; the executable boundary does not.
+        sys.stderr.write("close-design-gate: REFUSED — findings-file is empty; a "
+                         "budget-exhausted close with nothing adopted is almost always "
+                         "a collection bug\n")
+        return 3
+    unambiguous, why = findings_are_unambiguous(findings)
+    if not unambiguous:
+        sys.stderr.write(f"close-design-gate: REFUSED — {why}\n")
+        return 3
+    try:
+        result = budget_exhausted_close(
+            issue=args.issue, gate=args.gate, passes=derived, findings=findings,
+            ledger_path=args.ledger, date=args.date,
+            token_factory=lambda: hashlib.sha256(
+                os.urandom(8)).hexdigest()[:4],
+        )
+    except ValueError as exc:                      # all-or-nothing: nothing written yet
+        sys.stderr.write(f"close-design-gate: {exc}\n")
+        return 2
+    persist_close(result, ledger_path=args.ledger)     # ledger -> record -> note
+    atomic_write_text(args.record_out,
+                      _json.dumps(result.run_record_extra, indent=2) + "\n")
+    os.makedirs(os.path.dirname(args.note_out) or ".", exist_ok=True)
+    with open(args.note_out, "a", encoding="utf-8") as f:   # APPEND — notes are append-only
+        f.write(result.session_note + "\n")
+    sys.stdout.write(_json.dumps(result.run_record_extra) + "\n")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    parser = argparse.ArgumentParser(prog="plan_lib")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("close-design-gate",
+                       help="record a budget-exhausted Step-4 design-gate close (#798)")
+    c.add_argument("--issue", type=int, required=True)
+    c.add_argument("--gate", default="4", choices=["4"],
+                   help="Step 4 only — the #798 carve-out is deliberately narrow")
+    c.add_argument("--passes", type=int, default=None,
+                   help="optional cross-check; derived from --counters when omitted")
+    c.add_argument("--findings-file", required=True)
+    c.add_argument("--counters", required=True)
+    c.add_argument("--breaker-result", required=True, choices=list(_BREAKER_RESULTS))
+    c.add_argument("--ledger", required=True)
+    c.add_argument("--record-out", required=True)
+    c.add_argument("--note-out", required=True)
+    c.add_argument("--date", required=True)
+    c.add_argument("--project-root", default=".",
+                   help="write targets must resolve inside this root")
+    c.set_defaults(func=_cmd_close_design_gate)
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

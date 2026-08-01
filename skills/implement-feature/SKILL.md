@@ -288,6 +288,15 @@ enforces both the per-source and the global cap; call it and act on its `(ok, st
 return rather than pre-checking the in-context mirror.
 If the global cap is reached, STOP and escalate to user with a full summary of all loop-back triggers. **[Headless: ERROR — post error comment with full loop-back summary, add rawgentic:ai-error label, exit.]**
 
+**One carve-out — the Step-4 design gate closes instead (#798).** When the `design` SOURCE cap is
+reached (and the global cap is NOT, and the ambiguity breaker returned `clear`), Step 4 closes
+budget-exhausted rather than escalating: six consecutive epic-#756 children hit that escalation and
+all seven owner answers were identical. The carve-out is deliberately narrow and does NOT
+generalize — exhaustion of `spec_tighten`, `tdd`, `review`, or `review_design`, a refusal caused by
+the GLOBAL cap (`consume_loopback` tests the source cap first and returns, so a state with both
+exhausted must not be read as design-cap-caused), and any ambiguous or conflicting finding all
+still STOP and escalate. Mechanics and the exact command: `references/steps.md` §4.
+
 Track loop-back state (mirror of the canonical counters file — one var per source):
 design_loopback_count = 0
 spec_tighten_loopback_count = 0
