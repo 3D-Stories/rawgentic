@@ -1801,7 +1801,10 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                         and live_condition is not None
                         and predecessor_goal_condition.strip() != live_condition.strip()):
                     record("clear_predecessor_goal", [], None,
-                           note=(f"note: the supplied --predecessor-goal-condition "
+                           # #730: flag-neutral — the value may have arrived via either
+                           # --predecessor-goal-condition or --predecessor-goal-condition-file,
+                           # and naming one of them would be wrong half the time.
+                           note=(f"note: the supplied predecessor goal condition "
                                  f"{predecessor_goal_condition!r} is not the newest guard "
                                  f"({live_condition!r}); the transcript won"))
 
@@ -3219,6 +3222,33 @@ def _read_text_arg(inline: str | None, path: str | None, what: str) -> str:
         raise LauncherError(f"cannot read the {what} from {path!r}: {exc}") from exc
 
 
+def _read_optional_text_arg(inline: str | None, path: str | None, what: str) -> str | None:
+    """`_read_text_arg` for an input that may legitimately be absent entirely (#730).
+
+    The goal/prompt pairs are `required=True`, so exactly one of their two forms is always present.
+    The predecessor condition is optional — it is only meaningful when tearing down — so the
+    both-absent case must return None rather than reaching `open(None)`. Delegates to
+    `_read_text_arg` so there is ONE file reader, and an unreadable path still fails loudly naming
+    the path.
+
+    A SUPPLIED-but-blank value is refused. Not for the reason an earlier draft of this claimed:
+    it does NOT hand the successor an empty goal — the successor's guard is the separate required
+    `--goal-condition` pair, blank guards are already refused by `build_goal_command`, and the
+    clear receipt binds to the transcript-derived `live_condition`, never to this string. This
+    value is assertion-only. Blank is refused because asserting "my armed guard is <nothing>" is
+    a caller mistake — almost always an empty file the caller meant to fill — and silently
+    accepting it would emit a misleading "not the newest guard" diagnostic instead of naming the
+    real problem.
+    """
+    if inline is None and path is None:
+        return None
+    text = _read_text_arg(inline, path, what)
+    if not text.strip():
+        source = f"file {path!r}" if path is not None else "the inline value"
+        raise LauncherError(f"the {what} from {source} is blank — refusing a blank assertion")
+    return text
+
+
 def _cmd_ad_hoc_handoff(args) -> int:
     """#700 — the ad-hoc handoff: `perform_handoff` with no campaign behind it.
 
@@ -3350,7 +3380,9 @@ def _cmd_ad_hoc_handoff(args) -> int:
         # CONFIRMED before the pane is closed. `own` is this session's own id, already required
         # above for the ownership proof.
         predecessor_session=(own if teardown else None),
-        predecessor_goal_condition=args.predecessor_goal_condition,
+        predecessor_goal_condition=_read_optional_text_arg(
+            args.predecessor_goal_condition, args.predecessor_goal_condition_file,
+            "predecessor goal condition"),
         strict_goal_binding=strict_binding,
         **({"expected_predecessor_goal": expected_goal} if strict_binding else {}))
     payload = {k: out[k] for k in
@@ -3666,10 +3698,21 @@ def main(argv: list[str] | None = None) -> int:
                       help="keep the anchor pane alive after a successful handoff. Your /goal stays "
                            "ARMED and the output says so — use this only for an additive handoff "
                            "where you keep working. Named to match the `handoff` subcommand")
-    p_ah.add_argument("--predecessor-goal-condition", default=None,
-                      help="your OWN currently-armed goal condition, used only with "
-                           "the default retirement to bind the clear receipt to the guard actually "
-                           "cleared. Read it with `read-goal-condition --transcript <own>.jsonl`")
+    # #730: the third condition flag was the only one WITHOUT a `-file` twin, while
+    # `--goal-condition` and `--resume-prompt` both have one. The asymmetry was invisible until
+    # argparse rejected the call, and it cost a real hand-off a wasted invocation at the moment it
+    # had the least context to spend. Not `required=True` — unlike the goal/prompt pairs this whole
+    # input is optional (it is only meaningful when tearing down).
+    ah_pred = p_ah.add_mutually_exclusive_group(required=False)
+    ah_pred.add_argument("--predecessor-goal-condition", default=None,
+                         help="your OWN currently-armed goal condition, used only with "
+                              "the default retirement to bind the clear receipt to the guard "
+                              "actually cleared. Read it with `read-goal-condition --transcript "
+                              "<own>.jsonl`")
+    ah_pred.add_argument("--predecessor-goal-condition-file", default=None,
+                         help="the same condition, read verbatim from a file (preferred: a real "
+                              "condition routinely carries backticks and $(...), which the repo "
+                              "answers with a file rather than a command line)")
     # #758 — a caller ASSERTION that the owner explicitly approved a goal text differing from
     # the predecessor's live goal (the verbatim-carry escape hatch). Takes the owner's verbatim
     # yes/no answer, never a bare boolean: the answer is recorded in the output JSON so the

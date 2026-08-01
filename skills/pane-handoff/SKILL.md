@@ -162,7 +162,11 @@ What comes with the default:
   anything launches, so a stale `$HERDR_PANE_ID` is a refusal rather than a stranger's pane being
   closed.
 - Pass your own live goal condition so the clear receipt is bound to the guard it clears:
-  `--predecessor-goal-condition '<your condition>'`. Read it rather than retyping it — and note
+  `--predecessor-goal-condition '<your condition>'`, or
+  `--predecessor-goal-condition-file <path>` (#730) — the two are mutually exclusive and behave
+  identically. **Prefer the file form**: a real condition routinely carries backticks and
+  `$(...)`, which is exactly the shell-quoting hazard this repo answers with a file rather than a
+  command line. Read it rather than retyping it — and note
   the flag is `--transcript <file>`, NOT the `--transcript-dir` + `--session-id` pair this command
   takes:
 
