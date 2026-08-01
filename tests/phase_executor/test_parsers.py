@@ -206,3 +206,46 @@ def test_733_output_without_usage_is_still_usage_unavailable():
     p = ParsedResult(text="real answer", actual_model="claude-opus-4-8", usage=None)
     st = resolve_parse_status(p, "claude-opus-4-8", timed_out=False, exit_code=0, launch_error=None)
     assert st == "usage_unavailable"
+
+
+# --- #794: cache WRITE tokens must be captured, not discarded -----------------
+#
+# Spike S3 established that byte-identical briefs DO hit the org-scoped prompt cache
+# (two dispatches, identical prompt_hash, 17,300 and 21,399 cache READ tokens against
+# 2 uncached input tokens). But the adapter mapped `cached` to cache_read_input_tokens
+# and threw cache_creation_input_tokens away, so #794's own AC2 — "a measured
+# before/after on cache_creation_input_tokens" — was literally unmeasurable. You cannot
+# optimise a cost you do not record.
+
+def _claude_env(**usage):
+    base = {"input_tokens": 2, "output_tokens": 20}
+    base.update(usage)
+    return json.dumps({
+        "result": '{"ok": true}',
+        "modelUsage": {"claude-opus-5": {}},
+        "usage": base,
+    })
+
+
+def test_cache_write_tokens_are_captured():
+    r = parse_claude(_claude_env(cache_creation_input_tokens=17300,
+                                 cache_read_input_tokens=99),
+                     requested_model="claude-opus-5")
+    assert r.usage["cache_write"] == 17300
+
+
+def test_cache_read_and_write_are_separate_fields():
+    # Conflating them is what made the spike unanswerable from telemetry alone.
+    r = parse_claude(_claude_env(cache_creation_input_tokens=500,
+                                 cache_read_input_tokens=21399),
+                     requested_model="claude-opus-5")
+    assert r.usage["cached"] == 21399
+    assert r.usage["cache_write"] == 500
+
+
+def test_cache_write_absent_reports_zero_not_missing():
+    # A provider that reports no creation counter must yield 0, so downstream
+    # arithmetic never has to special-case a missing key.
+    r = parse_claude(_claude_env(cache_read_input_tokens=10),
+                     requested_model="claude-opus-5")
+    assert r.usage["cache_write"] == 0
