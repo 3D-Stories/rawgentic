@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why #762 took so long — a telemetry retrospective</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-report blockquote{background:var(--code);border-left-color:var(--accent)}
+.tpl-report tbody tr:nth-child(even){background:var(--code)}
+</style>
+</head>
+<body class="tpl-report">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-31 20:30 MDT</div>
+<h1>Why #762 took so long — a telemetry retrospective</h1>
+<p class="sub">Epic #756 child 7/21 · rawgentic · 2026-08-01</p>
+</header>
+<main>
+<h1>Why #762 took so long — a telemetry retrospective</h1>
+<p><strong>Commissioned by the owner 2026-08-01 (decision log D32), written at the close of child 7/21 of epic #756.</strong> Every number below comes from a recorded artifact named at the point of use — <code>docs/measurements/run_records.jsonl</code>, <code>hooks/step_state.py timing</code>, the executor observation receipts under <code>.rawgentic/runs/wf2-762-*/</code>, the session transcripts under <code>~/.claude/projects/</code>, and the append-only decision log. Nothing here is estimated from memory. Where a figure could not be recovered, it says so.</p>
+<p><strong>Hosted:</strong> <code>https://rawgentic-analysis-762.vercel.app</code> (verified 200, cache-busted, real title). The committed <code>.html</code> beside this file is the source of truth.</p>
+<h2>The short answer</h2>
+<p>#762 was the most expensive child of this epic by a wide margin, and the reason is not one big stall — it is <strong>four structural taxes that each cost 20–60 minutes and stacked</strong>.</p>
+<table>
+<thead><tr><th></th><th>#762</th><th>next-worst child</th><th>ratio</th></tr></thead>
+<tbody>
+<tr><td>Cost</td><td><strong>$254.21</strong></td><td>$116.99 (#733)</td><td><strong>2.2×</strong></td></tr>
+<tr><td>Input tokens</td><td><strong>467.5M</strong></td><td>280.8M (#733)</td><td><strong>1.7×</strong></td></tr>
+<tr><td>Output tokens</td><td><strong>2.53M</strong></td><td>1.24M (#733)</td><td><strong>2.0×</strong></td></tr>
+<tr><td>Sessions (legs)</td><td><strong>5</strong></td><td>3 (#765)</td><td>—</td></tr>
+<tr><td>Active (non-idle) work</td><td><strong>3.08 h</strong></td><td>2.68 h (#765)</td><td>1.15×</td></tr>
+<tr><td>Files changed</td><td><strong>38</strong></td><td>27 (#765)</td><td>1.4×</td></tr>
+</tbody>
+</table>
+<p>The wall-clock number is the one that misleads. By raw wall clock #762 (6.74 h) reads <strong>shorter</strong> than #735 (12.13 h) and #767 (8.51 h) — but those two spent 83% and 69% of their clock <strong>idle</strong>, waiting on the owner or a quota pause. Strip idle out and #762 has the <strong>longest active working time of any child in the epic</strong>, and it cost more than twice the next child.</p>
+<p>So the honest framing is: #762 did not sit around waiting. It genuinely worked longer, and burned more tokens per unit of work, than anything else in this epic.</p>
+<h2>Where the clock actually went</h2>
+<p><code>hooks/step_state.py timing --project rawgentic --issue 762</code> — status <code>complete</code>, total 24,276 s (6.74 h), idle threshold 1,800 s:</p>
+<table>
+<thead><tr><th>phase</th><th>seconds</th><th>share of total</th><th>share of <strong>active</strong></th></tr></thead>
+<tbody>
+<tr><td>idle</td><td>13,186</td><td>54.3%</td><td>—</td></tr>
+<tr><td>design</td><td>3,817</td><td>15.7%</td><td>34.4%</td></tr>
+<tr><td>implement</td><td>2,340</td><td>9.6%</td><td>21.1%</td></tr>
+<tr><td>review</td><td>2,131</td><td>8.8%</td><td>19.2%</td></tr>
+<tr><td>plan</td><td>1,897</td><td>7.8%</td><td>17.1%</td></tr>
+<tr><td>pr_ci</td><td>893</td><td>3.7%</td><td>8.1%</td></tr>
+<tr><td>wrap</td><td>12</td><td>0.05%</td><td>0.1%</td></tr>
+<tr><td><strong>active total</strong></td><td><strong>11,090</strong></td><td><strong>45.7%</strong></td><td><strong>100%</strong></td></tr>
+</tbody>
+</table>
+<p>The 13,186 s of idle is three interval gaps that hit the 1,800 s cap — at Step 1, Step 3, and Step 6 — booked to <code>idle</code> rather than to the step they interrupted (owner-away and quota pauses). That accounting is correct and is not the story.</p>
+<p><strong>Design is the largest active phase at 34%.</strong> That is where the money went.</p>
+<p>Transcript spans corroborate the total independently: first event 2026-07-31T19:04:37Z (leg <code>ff40b6d5</code>), last 2026-08-01T02:10:30Z (leg <code>65a021d4</code>) — 7.10 h end to end, with the per-leg spans summing to 25,885 s (legs overlap ~1 min each at handoff).</p>
+<table>
+<thead><tr><th>leg</th><th>span</th><th>hours</th><th>transcript records</th></tr></thead>
+<tbody>
+<tr><td><code>ff40b6d5</code></td><td>19:04:37 → 21:14:11</td><td>2.16</td><td>1,058</td></tr>
+<tr><td><code>89f42f76</code></td><td>21:13:14 → 00:01:19</td><td>2.80</td><td>853</td></tr>
+<tr><td><code>3fecd708</code></td><td>00:00:27 → 00:44:17</td><td>0.73</td><td>868</td></tr>
+<tr><td><code>f0517473</code></td><td>00:43:04 → 01:48:19</td><td>1.09</td><td>937</td></tr>
+<tr><td><code>65a021d4</code></td><td>01:45:50 → 02:10:30</td><td>0.41</td><td>470</td></tr>
+</tbody>
+</table>
+<h2>The four taxes, measured</h2>
+<h3>Tax 1 — Five sessions, four mid-child handoffs (the largest single cost)</h3>
+<p>#762 ran across <strong>five sessions with four handoffs, every one of them mid-child</strong>. No other child in this epic needed more than three legs.</p>
+<p>The advisory context-meter tier fired at 45%, 36%, and 39% — always <strong>inside</strong> a child, never at a clean child boundary. Each handoff then paid a full state-reconstruction cost: the run contract, the handoff file, the decision log (D1→D34 by the end), and the relevant <code>session_notes.md</code> section, re-read from scratch before any work could resume.</p>
+<p>The measurable signature is the input-token count: <strong>467.5M input tokens across 5 legs</strong>, against #733&#x27;s 280.8M across 2 legs. Per-leg input is roughly flat (92M–123M) — which is exactly what a fixed re-read tax looks like, paid once per leg regardless of how much new work that leg did. Leg <code>3fecd708</code> did 0.73 h of work and still spent 92.4M input tokens.</p>
+<p>Cost of this tax: reconstruction is not separately clocked, but the token arithmetic puts it at roughly <strong>90M input tokens ≈ $40 of the $254</strong> in avoidable re-reading, and it is the direct cause of #762&#x27;s 2.2× cost ratio.</p>
+<h3>Tax 2 — The Step-4 design gate ran three passes and still closed budget-exhausted</h3>
+<p>Step 4 consumed <strong>both</strong> design loop-backs (2/2, global 2/3), produced <strong>24 unique findings</strong>, and then hit the wall with pass-3 findings still classified <code>fold=design</code> — so it closed budget-exhausted and self-resolved on precedent.</p>
+<p>Reviewer time alone, from the receipts:</p>
+<table>
+<thead><tr><th>dispatch</th><th>model</th><th>seconds</th></tr></thead>
+<tbody>
+<tr><td><code>762-s4-qbar</code></td><td>gpt-5.6-sol</td><td>608.0</td></tr>
+<tr><td><code>762-s4-verify2</code></td><td>gpt-5.6-sol</td><td>455.9</td></tr>
+<tr><td><code>762-s4-verify3</code></td><td>gpt-5.6-sol</td><td>406.8</td></tr>
+<tr><td><strong>total</strong></td><td></td><td><strong>1,470.7</strong> (24.5 min)</td></tr>
+</tbody>
+</table>
+<p>Plus the design rewrites between passes — rev 1 → rev 5 — which live inside the 3,817 s design phase.</p>
+<p><strong>This is not a #762 problem. It is the epic&#x27;s dominant pattern.</strong> Six consecutive children closed Step 4 the same way: #735 (D4), #733 (D11), #758 (D18), #767 (D22), #765 (D25), #762 (D30). Every single time the escalation asked the owner the same question, and every single time — now seven, counting today&#x27;s ratification — the answer was <strong>apply the final fixes, proceed, no further review pass</strong>.</p>
+<p><code>MAX_DESIGN_LOOPBACK_ITERATIONS = 2</code> is therefore not describing these designs. Three passes is what they actually take, and the third pass&#x27;s verdict is a foregone conclusion.</p>
+<h3>Tax 3 — The analysis seat wasted 78% of its time failing</h3>
+<p>Step 2&#x27;s analysis fan-out is the worst-performing seat in the run. From the observation receipts under <code>.rawgentic/runs/wf2-762-ff40b6d5/analysis/</code>:</p>
+<table>
+<thead><tr><th>model</th><th>attempts</th><th>ok</th><th>failed</th><th>failed seconds</th></tr></thead>
+<tbody>
+<tr><td>claude-opus-5</td><td>4</td><td>1</td><td>3</td><td>689.3</td></tr>
+<tr><td>claude-fable-5</td><td>3</td><td>0</td><td>3</td><td>228.4</td></tr>
+<tr><td>claude-sonnet-5</td><td>3</td><td>1</td><td>2</td><td>311.7</td></tr>
+<tr><td><strong>total</strong></td><td><strong>10</strong></td><td><strong>2</strong></td><td><strong>8</strong></td><td><strong>1,229.4</strong> (20.5 min)</td></tr>
+</tbody>
+</table>
+<p>Useful analysis-seat time: <strong>347 s</strong>. Wasted: <strong>1,229 s</strong> — the seat spent <strong>3.5× longer failing than succeeding</strong>, and burned every entry of its fallback chain. Every failure was <code>parse_status: nonzero_exit</code>, and the same correlation ids (<code>762-s2-deps</code>, <code>762-s2-surfaces</code>) failed across all three models — which points at the brief or the harness, not at any one model.</p>
+<p>By contrast the <code>build</code> seat went 6/6 (1,756 s, zero failures) and <code>review</code> went 7/7 (3,149 s, zero failures) on the same infrastructure in the same run.</p>
+<h3>Tax 4 — Thirteen stale pin-guards, found twice, the second time after the first lesson</h3>
+<p>Two implementation tasks changed a constant or a prose contract without their file allowlist carrying the guards that pin it:</p>
+<ul>
+<li><strong>T3</strong> (routing-table retune to the owner&#x27;s 8-seat matrix) omitted the driver-bench fixtures</li>
+</ul>
+<p>  (<code>f01</code>, <code>f09</code>, <code>f10</code>), <code>stubbed-baseline.json</code>, and <code>test_driver_bench.py</code>&#x27;s own wrong-value pin.</p>
+<ul>
+<li><strong>T5</strong> (WF3 build adoption widening <code>fix-bug</code> SKILL.md&#x27;s DISPATCH regex to</li>
+</ul>
+<p>  <code>role=(review|implementation)</code>) omitted <code>tests/test_wf2_clarity.py</code>&#x27;s <code>TestDispatchRegexIdentity</code>.</p>
+<p><strong>4 stale pins surfaced at Step 8a. Nine more surfaced at Step 9</strong> — as a red full suite (6,505 passed / 9 failed) that had to be root-caused before the gate could pass. Each full suite run is ~250 s, so this cost at minimum <strong>two extra full-suite runs (~500 s)</strong> plus the diagnosis.</p>
+<p>The second occurrence is the expensive part: T3&#x27;s lesson was already recorded at Step 8a (&quot;a retune task&#x27;s allowlist must carry its pin-guard files&quot;) and T5 repeated the same class of miss anyway, because the lesson was a note rather than a mechanism.</p>
+<h2>Three smaller costs, named for completeness</h2>
+<p><strong>The two-run epoch chain (~one reconcile&#x27;s worth of work).</strong> T3&#x27;s routing-table edit changed the config digest, which correctly ended run A&#x27;s dispatch epoch (<code>run_digest_conflict</code>, #474 working as designed). Run A had to be closed honestly with a non-reconciling final record, run B declared, and the reconcile performed twice. Lesson recorded at the time: <strong>sequence config-digest changes last</strong>.</p>
+<p><strong>The high-task/bake-off structural gap (16 min of owner round-trip, D31).</strong> Task 2 was <code>riskLevel: high</code>; a task-scoped gate decides bake-off on <code>risk_high</code> alone; <code>check_pre</code> refuses any bake-off outcome on a single dispatch; and the build bake-off has no workflow caller. So a HIGH task <strong>structurally cannot dispatch through the build seat today</strong>. No bypass exists (relabeling raises <code>GateTamperError</code>) — fail-closed working as designed, but it cost an <code>/ask-owner</code> round trip and forced Task 2 inline. Tracked in #779.</p>
+<p><strong>The concurrent-merge race (~10 min, at the very last step).</strong> PR #780 (v3.111.1, docs-only) merged to main at 01:49:14Z — <strong>9 minutes after #762&#x27;s CI went green</strong> and 6 minutes after the merge gate had read <code>mergeStateStatus: CLEAN</code>. The merge then failed on conflicts in all four version surfaces plus the README changelog. Resolution: merge commit <code>77a7a4f</code>, full suite re-run (251 s), CI re-run (~5 min).</p>
+<h2>What to change, ranked by measured payoff</h2>
+<h3>1. Codify the budget-exhausted Step-4 close. Stop asking.</h3>
+<p><strong>Evidence:</strong> 6 of 7 children, 7 identical owner answers. <strong>Cost today:</strong> a blocking escalation per child, plus a third reviewer pass whose verdict is already known (24.5 min of reviewer time on #762 alone). <strong>Change:</strong> either raise <code>MAX_DESIGN_LOOPBACK_ITERATIONS</code> to 3 so the budget matches reality, or make the budget-exhausted close an automatic <strong>apply-and-proceed with the decision logged</strong> rather than an owner stop. This is the single highest-value change available and it is prose plus a constant.</p>
+<h3>2. Root-cause the analysis seat&#x27;s <code>nonzero_exit</code>.</h3>
+<p><strong>Evidence:</strong> 8/10 attempts failed, all three chain entries exhausted, 1,229 s wasted, while <code>build</code> and <code>review</code> went 13/13 on the same infrastructure. <strong>Change:</strong> read the stderr on those eight receipts before the next analysis fan-out. A seat that fails 78% of the time is a bug, not a routing preference — and because it exhausts the whole chain, it also burns the fallback budget that exists for real availability failures.</p>
+<h3>3. Derive pin-guard surfaces into the task allowlist mechanically.</h3>
+<p><strong>Evidence:</strong> 13 stale pins in one child, across two gates, with the second batch landing <strong>after</strong> the lesson from the first was written down. <strong>Change:</strong> when a plan task changes a constant or a pinned sentence, compute the guard files that reference it and add them to that task&#x27;s allowlist at plan time. A note in a session file did not prevent the recurrence; a mechanism would.</p>
+<h3>4. Make a child fit one session, or make the handoff cheap.</h3>
+<p><strong>Evidence:</strong> 5 legs, 4 mid-child handoffs, ~90M input tokens (~$40) of re-read tax, flat per-leg input regardless of work done. <strong>Change:</strong> two independent options. (a) The advisory tier fires at 36–45%, always mid-child — if a child of this size cannot fit one session, the tier is firing too late to reach a boundary. (b) The re-read is dominated by the decision log, which is now 35 entries and grows every child; a rolling summary with the full log kept as an appendix would cut the per-leg fixed cost directly.</p>
+<h3>5. Sequence config-digest changes last within a plan.</h3>
+<p>Already recorded during the run; repeating it here so it survives the session.</p>
+<h2>One process defect this retrospective itself found</h2>
+<p>The completion gate&#x27;s item 13 keys on the exact string <code>## Deferred verification</code> (<code>hooks/plan_lib.py:342</code>). PR #781&#x27;s body carried that section as an <strong>H1</strong> — matching the body&#x27;s other headings — so the mechanical guard failed at the end of the run, <strong>after the PR had already merged</strong>. The shipped template is correct and even says &quot;do not reword it&quot; (<code>references/steps.md:1541</code>); this was an authoring slip.</p>
+<p>Nothing had actually vanished — the deferral was legible in the body throughout — but the guard is the guard, so the heading was corrected on the merged PR body rather than the check being waived. Two things worth carrying forward:</p>
+<ul>
+<li><strong>Call <code>assert_pr_body_has_deferred_section</code> at Step-12 authoring time</strong>, not only at the</li>
+</ul>
+<p>  end-of-run gate. Here it fired when the fix was maximally awkward.</p>
+<ul>
+<li><strong><code>gh pr edit</code> is unusable on this repo.</strong> It aborts on the Projects-classic GraphQL deprecation</li>
+</ul>
+<p>  (<code>repository.pullRequest.projectCards</code>) and the edit does <strong>not</strong> land. The working path is   <code>gh api -X PATCH repos/&lt;owner&gt;/&lt;repo&gt;/pulls/&lt;n&gt; --input &lt;json&gt;</code>.</p>
+<h2>Cross-child data, for the record</h2>
+<p>Recorded step-timing totals and usage, all seven merged children of epic #756:</p>
+<table>
+<thead><tr><th>issue</th><th>lane</th><th>wall (h)</th><th>idle %</th><th>active (h)</th><th>cost</th><th>in (M)</th><th>out (k)</th><th>files</th><th>tests+</th></tr></thead>
+<tbody>
+<tr><td>#735</td><td>full</td><td>12.13</td><td>83%</td><td>2.02</td><td>$76.80</td><td>184.3</td><td>776</td><td>15</td><td>4</td></tr>
+<tr><td>#733</td><td>full</td><td>3.84</td><td>40%</td><td>2.32</td><td>$116.99</td><td>280.8</td><td>1,243</td><td>23</td><td>79</td></tr>
+<tr><td>#732</td><td>small-standard</td><td>1.03</td><td>0%</td><td>1.03</td><td>$54.16</td><td>117.8</td><td>512</td><td>12</td><td>19</td></tr>
+<tr><td>#758</td><td>small-standard</td><td>1.87</td><td>0%</td><td>1.87</td><td>$63.65</td><td>147.8</td><td>609</td><td>11</td><td>56</td></tr>
+<tr><td>#767</td><td>small-standard</td><td>8.51</td><td>69%</td><td>2.65</td><td>$113.14</td><td>236.8</td><td>1,040</td><td>19</td><td>66</td></tr>
+<tr><td>#765</td><td>full</td><td>2.80</td><td>4%</td><td>2.68</td><td>$101.44</td><td>201.2</td><td>1,056</td><td>27</td><td>33</td></tr>
+<tr><td><strong>#762</strong></td><td><strong>full</strong></td><td><strong>6.74</strong></td><td><strong>54%</strong></td><td><strong>3.08</strong></td><td><strong>$254.21</strong></td><td><strong>467.5</strong></td><td><strong>2,533</strong></td><td><strong>38</strong></td><td><strong>77</strong></td></tr>
+</tbody>
+</table>
+<p>Related: the owner-commissioned before/after token-usage doc for the executor switch is live at <code>https://rawgentic-analysis-executor-tokens.vercel.app</code> (legacy alias: <code>token-usage-deploy.vercel.app</code>) (verified 200, cache-busted, title *&quot;Token usage: before vs after the executor switch (2026-07-31)&quot;*).</p>
+<p><strong>Not checked, and named as such:</strong> per-handoff reconstruction time is inferred from token counts, not separately clocked — no timer brackets the &quot;read the contract and the log&quot; phase, so the ~$40 figure in Tax 1 is arithmetic on flat per-leg input, not a measured interval. The eight <code>nonzero_exit</code> analysis receipts were counted and timed but their stderr was <strong>not</strong> read, so lever 2 names a symptom, not a root cause.</p>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#762 (feature, complex)</td></tr><tr><th>Lane</th><td>full</td></tr><tr><th>Tests</th><td>77 added · 6519/6540 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac</td></tr><tr><th>Outcome</th><td>PR 781 · merged: True · CI: passed</td></tr><tr><th>Usage</th><td>in 467486095 / out 2533389 tokens · 24276s wall</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>24</td><td>24</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>7</td><td>7</td><td>pass</td></tr><tr><td>8a</td><td>Per-task Review</td><td>3</td><td>3</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>9</td><td>9</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>5</td><td>5</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
+</main>
+<footer>Last updated: 2026-07-31 20:30 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
