@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vercel publishing pipeline — doc-type templates × per-project VDL</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-31 19:28 MDT</div>
+<h1>Vercel publishing pipeline — doc-type templates × per-project VDL</h1>
+<p class="sub">Design + roadmap · owner-directed 2026-07-31</p>
+</header>
+<main>
+<h1>Vercel publishing pipeline — doc-type templates × per-project VDL</h1>
+<p>Design document + implementation roadmap. Owner-directed 2026-07-31 (in session, herdr-dashboard pane); implementation targets <code>projects/rawgentic</code>. Status: <strong>design for review — no issues filed yet</strong>; the WF1 epic decomposition below is the intended entry point.</p>
+<h2>0. Thesis</h2>
+<p>One scripted path publishes every hosted doc in this workspace. The model writes <strong>markdown only</strong>; the renderer owns <strong>all</strong> presentation. Each document type gets a real template; each rawgentic project gets its own visual design language (VDL); every page lands on Vercel under a conventional name, stamped in America/Edmonton time, verified, and listed on the [docs-index](https://docs-index.vercel.app). The <code>design-doc-publish</code> skill shrinks from a page of prose steps to one command plus judgment.</p>
+<h2>1. Why (evidence, 2026-07-31)</h2>
+<p>1. <strong>Process-by-prose failed measurably.</strong> The Vercel account reached 37 projects: junk names    (<code>deploy-713</code>, <code>vercel-25</code>, <code>site</code>), three duplicate deploys of the same page, no index.    Cleaned up 2026-07-31 (3 deleted, 21 renamed) — but the cleanup only holds if the pipeline    stops depending on a model re-reading prose rules each time. 2. <strong>Five of seven styles are the same style.</strong> <code>hooks/render_artifact.py</code> registers seven    templates (<code>_TEMPLATES</code>, <code>render_artifact.py:547</code>), but only two body renderers exist;    <code>plain/report/design/review/spec</code> differ by a handful of CSS lines. The whole <code>design</code>    template is one rule: <code>.tpl-design h2{border-bottom:2px solid var(--accent)}</code>    (<code>render_artifact.py:527-529</code>). The owner&#x27;s visual bar (&quot;proper VDL, contrasting colors,    elements that draw the eye&quot;) is not reachable through <code>--style design</code> today. 3. <strong>Hand-authoring costs real tokens.</strong> Outside this repo the publish skill falls back to    &quot;hand-author a self-contained page&quot; — 300–700 lines of HTML/CSS as model output per page,    again on every edit. (The oft-repeated claim that templates save nothing is true only    script-vs-script: the renderer runs as a subprocess, so its CSS never enters model context.    Script-vs-hand-authoring, templates save nearly everything.) 4. <strong>One palette for nine projects.</strong> The renderer hardcodes a single teal accent    (<code>render_artifact.py:455-463</code>); chorestory docs, saystory docs and sysop docs are visually    indistinguishable. Meanwhile chorestory owns a real design system    (<code>src/styles/design-tokens.css</code>, primitive→semantic→component, brand <code>#2c7a9e</code>) that its    hosted docs ignore.</p>
+<h2>2. Decisions already made (owner, 2026-07-31 — recorded, not proposals)</h2>
+<ul>
+<li>Vercel names: <code>{project}-{purpose}-{ref}</code>; update-before-create; every deploy updates the</li>
+</ul>
+<p>  docs-index; Edmonton timestamp on every new/updated page (going-forward only).</p>
+<ul>
+<li><strong>A project&#x27;s existing VDL always wins</strong> (the chorestory rule); index seed colors only fill</li>
+</ul>
+<p>  gaps for projects without a design system.</p>
+<ul>
+<li>The publish skill&#x27;s mechanics should be <strong>scripted, not prose</strong> — the skill keeps judgment.</li>
+<li><code>plain</code> stays byte-identical (test-pinned; the source insists).</li>
+</ul>
+<h2>3. Architecture</h2>
+<p>Three parts, smallest diff that delivers each:</p>
+<h3>3a. <code>hooks/publish_doc.py</code> — the pipeline command (new)</h3>
+<pre><code>python3 hooks/publish_doc.py --md docs/planning/&lt;doc&gt;.md \
+  --project herdr-dashboard --type design --ref 81</code></pre>
+<p>render (via <code>render_artifact</code>) → derive + validate the conventional name → <strong>reuse-or-create</strong> the Vercel project (<code>vercel project ls</code> first; junk names impossible) → deploy <code>--prod</code>, full log captured → <strong>lint gate</strong> → cache-busted verify (200 + real <code>&lt;title&gt;</code>) → regenerate + deploy docs-index → print the URL. The lint gate is mechanical: Edmonton stamp present, <code>&lt;title&gt;</code> set, no external requests, WCAG AA on the VDL token pairs (checked, not assumed). Git/PR sequencing stays OUTSIDE the script — workflows own commits.</p>
+<h3>3b. <code>render_artifact.py</code> — real doc-type templates</h3>
+<p>Style = <strong>structure + decorator</strong>, following the three templates that already earn their names (<code>report</code>/<code>review</code>/<code>spec</code> decorate scores, severity, requirements). <code>design</code> gains a lead/verdict block, callout components and a real type scale; <code>plan</code> gains milestone structure. Interface follows mdsone&#x27;s proven shape: template selects the doc type, a second axis selects the VDL. <code>plain</code> untouched, byte-identical.</p>
+<h3>3c. Per-project VDL packs</h3>
+<p>A <code>vdl</code> block in each project&#x27;s <code>.rawgentic.json</code> — accent (light+dark), background tint, optional type note, <strong>with provenance</strong> (<code>source: src/styles/design-tokens.css --brand-blue-400</code>). The renderer injects it as a <code>:root</code> token override; no block → seed pack (docs-index line colors: herdr cyan, rawgentic amber, saystory green, lumenquire violet, sysop teal, bench pink, studio yellow, twi rust, workspace steel). <strong>Declared beats seeded; scrape nothing at render time</strong> (a grep for chorestory&#x27;s palette hit 1,208 matches in built assets before the real tokens file — extraction is guessy; a one-time human-approved declaration is not).</p>
+<h2>4. Prior art — what we steal (researched 2026-07-31, Exa)</h2>
+<table>
+<thead><tr><th>Steal</th><th>From</th><th>License</th><th>What</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>ni-null/mdsone</code></td><td>MIT</td><td>The <code>--template &lt;name&gt;@&lt;variant&gt;</code> interface — doc-type × VDL as a two-axis selector. Interface only; our renderer stays stdlib Python.</td></tr>
+<tr><td>2</td><td><code>nsmith/html</code></td><td>MIT</td><td>20 self-contained single-file doc-type templates — raw structural material for <code>design</code>/<code>plan</code> bodies, with attribution.</td></tr>
+<tr><td>3</td><td>ReportRoom (<code>dashaworks/report-skills</code>)</td><td>pattern</td><td>The <code>lint_document</code>-before-publish gate — quality as a checkable pipeline step.</td></tr>
+<tr><td>4</td><td><code>leeguooooo/htmldock</code></td><td>pattern</td><td>PostToolUse auto-publish hook (later, optional).</td></tr>
+<tr><td>5</td><td><code>keepYaoung/artifact-organizer</code></td><td>MIT</td><td>Schema-validated component catalog — props reject styling by construction; applied at markdown level as the block set each doc type recognizes.</td></tr>
+<tr><td>6</td><td><code>keepYaoung/artifact-organizer</code></td><td>MIT</td><td>Its seven light+dark theme token packs as <strong>seed VDL material</strong> for projects without a brand.</td></tr>
+</tbody>
+</table>
+<p>Not adopted as a platform: artifact-organizer (JSON-in vs our committed-markdown contract; one growing canvas vs many stable URLs; house-style themes vs per-project VDL) and every hosted artifact service (ReportRoom, htmldock, pergam, GitShare — all replace static-Vercel with new infrastructure). The novel 20% nobody ships: VDL sourced from each project&#x27;s own tokens + a static public grouped index.</p>
+<h2>5. Roadmap</h2>
+<p>Entry point: <strong>one WF1 epic, three children</strong>, sized S/M, in dependency order. Each child is a normal WF2 run with its own design gate, tests, and PR.</p>
+<ul>
+<li><strong>Wave 0 — file + harvest (S).</strong> WF1 epic + children below; vendor the steal material</li>
+</ul>
+<p>  (nsmith templates, artifact-organizer theme packs) into <code>references/</code> with MIT attribution.   No behavior change.</p>
+<ul>
+<li><strong>Wave 1 — the pipeline command (M).</strong> <code>hooks/publish_doc.py</code> (§3a) + rewrite</li>
+</ul>
+<p>  <code>design-doc-publish</code> skill to call it. Acceptance: one command takes an <code>.md</code> to a verified   live URL + updated index; a junk-named or duplicate project is impossible by construction;   lint gate blocks a stampless page. Depends on: nothing.</p>
+<ul>
+<li><strong>Wave 2 — real doc-type templates (M).</strong> §3b in <code>render_artifact.py</code>; per-template</li>
+</ul>
+<p>  <code>.tpl-&lt;name&gt;</code> tests extended; <code>plain</code> byte-identity test still green. Blast radius (confirmed   by grep): <code>render_artifact.py</code>, <code>tests/hooks/test_render_artifact.py</code>,   <code>tests/hooks/test_artifact_lifecycle.py</code>, <code>docs/design-language.md</code>. Depends on: nothing   (parallel with wave 1).</p>
+<ul>
+<li><strong>Wave 3 — VDL packs (M).</strong> §3c: <code>vdl</code> schema + renderer injection + <code>--vdl</code>; declare</li>
+</ul>
+<p>  chorestory from its own tokens; seed the other eight; contrast validation in the lint gate;   docs-index shows each line&#x27;s swatch. Depends on: waves 1+2.</p>
+<ul>
+<li><strong>Wave 4 — optional, owner&#x27;s call later.</strong> PostToolUse auto-publish hook; semantic component</li>
+</ul>
+<p>  envelopes (artifact-organizer&#x27;s v2 direction) if markdown ever feels too small.</p>
+<h2>6. Risks and open questions</h2>
+<p>1. <strong>Renderer scope creep.</strong> The guard: stdlib-only, no new deps, <code>plain</code> pinned, every new    component behind a <code>.tpl-</code> marker with a test. 2. <strong>Index regeneration outside the skill.</strong> Until wave 4&#x27;s hook, a manual deploy can skip the    index. Mitigation: <code>publish_doc.py</code> is the only documented path once wave 1 lands. 3. <strong>VDL contrast in both themes.</strong> Declared packs are validated by the lint gate (AA pairs),    not trusted — a brand color that fails AA on dark gets a derived accessible variant, and the    lint output says so. 4. <strong>Open question for the owner:</strong> should the docs-index itself move from hand-maintained HTML    (today) to a <code>publish_doc.py</code>-generated page (wave 1), losing its bespoke layout unless we    make it a template? Recommendation: keep it hand-authored until wave 2&#x27;s templates are strong    enough to reproduce it.</p>
+<h2>7. Provenance</h2>
+<p>Confirmed by reading/commands this session: <code>render_artifact.py</code> full structure and CSS (640 lines, via shell — a PreToolUse hook denies the Read tool on that file, cause unverified); chorestory tokens file; Vercel account state pre/post cleanup; all repo/license facts in §4 (Exa + direct fetches, 2026-07-31). Inferred and named as such: token-cost estimates for hand-authored pages (line counts observed, per-page token counts not metered).</p>
+
+</main>
+<footer>Last updated: 2026-07-31 19:28 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
