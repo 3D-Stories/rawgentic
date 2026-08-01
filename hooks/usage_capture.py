@@ -33,6 +33,7 @@ import argparse
 import json
 import os
 import re
+from datetime import date as _date
 from pathlib import Path
 from typing import Final, Optional
 
@@ -46,17 +47,39 @@ _SESSION_ID_RE: Final[re.Pattern] = re.compile(r"[A-Za-z0-9-]+")  # used with fu
 # both totals and model_mix.
 SYNTHETIC_MODEL: Final[str] = "<synthetic>"
 
-# Rate card — USD per 1,000,000 tokens, per category. These are rate-card
-# ESTIMATES as of 2026-07 for a cross-check figure, NOT authoritative billing;
-# update when Anthropic pricing changes. An unknown model contributes 0 to cost
-# (honest best-effort) while its tokens are still counted in model_mix/totals.
+# Rate card — USD per 1,000,000 tokens, per category. A cross-check figure, NOT
+# authoritative billing. An unknown model contributes 0 to cost (honest best-effort)
+# while its tokens are still counted in model_mix/totals.
+#
+# #791: every row here was wrong before 2026-08-01, in BOTH directions — fable-5 sat
+# at Sonnet rates (3.3x UNDER), opus-5/4.8/4.7 at deprecated Opus-4.1 rates (3x OVER),
+# sonnet-5 missed its introductory cut, and haiku-4.5 carried Haiku 3.5's prices. Every
+# `cost_estimate_usd` written before that date is unreliable; token counts were always
+# fine (they are summed from transcripts, not priced). The store is append-only, so
+# historical rows are NOT rewritten.
+RATE_CARD_SOURCE: Final[dict[str, str]] = {
+    "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "retrieved": "2026-08-01",
+    "note": "docs.claude.com/en/docs/about-claude/pricing 302-redirects here. Do NOT "
+            "source prices from the claude-api skill's model table — it is a cached "
+            "snapshot and is what let this card drift.",
+}
+
+# Sonnet 5 is on introductory pricing THROUGH this date; from 2026-09-01 it returns to
+# $3 / $3.75 / $0.30 / $15. A dated test fails once the date passes so the card cannot
+# rot silently.
+SONNET_5_INTRO_ENDS: Final[_date] = _date(2026, 8, 31)
+
+# `cache_write` is the 5-MINUTE tier (1.25x input). The transcript exposes a single
+# `cache_creation_input_tokens` with no tier discriminator, so a 1-hour write (2x input)
+# is under-counted. Stated rather than silently assumed.
 RATE_CARD: Final[dict[str, dict[str, float]]] = {
-    "claude-opus-5":     {"input": 15.0, "cache_write": 18.75, "cache_read": 1.50, "output": 75.0},
-    "claude-opus-4-8":   {"input": 15.0, "cache_write": 18.75, "cache_read": 1.50, "output": 75.0},
-    "claude-opus-4-7":   {"input": 15.0, "cache_write": 18.75, "cache_read": 1.50, "output": 75.0},
-    "claude-sonnet-5":   {"input": 3.0,  "cache_write": 3.75,  "cache_read": 0.30, "output": 15.0},
-    "claude-haiku-4-5-20251001": {"input": 0.80, "cache_write": 1.0, "cache_read": 0.08, "output": 4.0},
-    "claude-fable-5":    {"input": 3.0,  "cache_write": 3.75,  "cache_read": 0.30, "output": 15.0},
+    "claude-opus-5":     {"input": 5.0,  "cache_write": 6.25,  "cache_read": 0.50, "output": 25.0},
+    "claude-opus-4-8":   {"input": 5.0,  "cache_write": 6.25,  "cache_read": 0.50, "output": 25.0},
+    "claude-opus-4-7":   {"input": 5.0,  "cache_write": 6.25,  "cache_read": 0.50, "output": 25.0},
+    "claude-sonnet-5":   {"input": 2.0,  "cache_write": 2.50,  "cache_read": 0.20, "output": 10.0},
+    "claude-haiku-4-5-20251001": {"input": 1.0, "cache_write": 1.25, "cache_read": 0.10, "output": 5.0},
+    "claude-fable-5":    {"input": 10.0, "cache_write": 12.50, "cache_read": 1.00, "output": 50.0},
 }
 
 
