@@ -1001,6 +1001,48 @@ class TestStepElevenRegressions:
                                                     "condition": "goal B"}})])
         assert ll.live_owner_goal(bad) == "goal A"
 
+    # --- #802: the refusal must name the remedy, not only the invariant ---
+    # A Stop-hook EVALUATION row is trusted-origin but carries no sentinel, so any
+    # session that reached a handoff with its goal still armed refuses teardown.
+    # Measured 2026-08-01: 53 of the 120 most recent transcripts are in this state.
+    # The guard is correct; the message was undiagnosable — `failed_step` is null
+    # because the refusal happens before any handoff step runs.
+
+    def test_a_sentinelless_stop_hook_row_refuses_and_names_the_remedy(self) -> None:
+        transcript = "\n".join([
+            _goal_row(False, "goal A"),
+            json.dumps({"attachment": {"type": "goal_status", "met": False,
+                                       "reason": "not yet", "condition": "goal A"}}),
+        ])
+        with pytest.raises(ll.LauncherError) as excinfo:
+            ll.live_owner_goal(transcript, strict=True)
+        message = str(excinfo.value)
+        assert "/goal clear" in message, "the refusal must name the primary remedy"
+        assert "--no-teardown" in message, "the refusal must name the escape hatch"
+
+    def test_a_satisfied_stop_hook_row_also_refuses(self) -> None:
+        """met:true without the sentinel is still ambiguous — 'the goal is done'
+        is not an escape (observed live: session 160a9114)."""
+        transcript = "\n".join([
+            _goal_row(False, "goal A"),
+            json.dumps({"attachment": {"type": "goal_status", "met": True,
+                                       "reason": "satisfied", "condition": "goal A"}}),
+        ])
+        with pytest.raises(ll.LauncherError):
+            ll.live_owner_goal(transcript, strict=True)
+
+    def test_a_sentinel_clear_after_an_evaluation_rescues_teardown(self) -> None:
+        """The documented escape actually works: `/goal clear` appends a
+        sentinel-bearing met:true row, which resets the suspicion set by the
+        evaluation row (observed live: session 7abd6487, rows 40/148/162)."""
+        transcript = "\n".join([
+            _goal_row(False, "goal A"),
+            json.dumps({"attachment": {"type": "goal_status", "met": False,
+                                       "reason": "not yet", "condition": "goal A"}}),
+            _goal_row(True, "goal A"),
+        ])
+        assert ll.live_owner_goal(transcript, strict=True) is None
+
     # --- F-E: truncation makes verbatim unverifiable — differing raws refuse ---
 
     def test_two_overlong_goals_sharing_a_truncated_prefix_are_refused(self) -> None:
