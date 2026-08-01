@@ -875,6 +875,30 @@ def last_unmet_goal_condition(transcript_text: str) -> str | None:
     return found
 
 
+def _corroborates(row: dict, cond, last: dict | None) -> bool:
+    """#782 — is this sentinel-less trusted-origin row CORROBORATION of the goal we already trust?
+
+    True only when every one of these holds, which is what keeps both #758 forgery directions
+    dead while unblocking the ordinary post-evaluation teardown:
+
+    - `met` is literally `False` — so a sentinel-less `met: true` can still never spoof "already
+      cleared" (`test_a_forged_sentinelless_clear_cannot_spoof_already_cleared`).
+    - the condition is a non-blank string AND **byte-equal to the condition of the last row we
+      already trust** — so a sentinel-less row can never inject a goal of its own choosing
+      (`test_a_forged_sentinelless_unmet_row_cannot_inject_a_phantom_goal`, where no trusted row
+      exists at all, so `last` is None and this returns False).
+
+    Measured basis (2026-08-01, 25 most recent transcripts): of 122 trusted-origin goal_status
+    rows, 85 are exactly this shape — unstamped, `met: false`, carrying the armed condition
+    verbatim — because that is what the Stop hook's own evaluation writes. The repo contains no
+    writer of these rows (`grep -rln goal_status hooks/` is reader-only), so the shape cannot be
+    fixed at the source from here.
+    """
+    return (row.get("met") is False
+            and isinstance(cond, str) and bool(cond.strip())
+            and last is not None and cond == last.get("condition"))
+
+
 def live_owner_goal(transcript_text: str, *, strict: bool = False) -> str | None:
     """The predecessor's LIVE owner goal, from sentinel-bearing rows only (#758).
 
@@ -928,6 +952,17 @@ def live_owner_goal(transcript_text: str, *, strict: bool = False) -> str | None
         if valid:
             last = row
             suspicious = None
+        elif _corroborates(row, cond, last):
+            # #782 — a Stop-hook EVALUATION row is trusted-origin and sentinel-LESS, so the
+            # sentinel test alone classed it "fails validation" and strict mode refused every
+            # post-evaluation teardown (#802, hit three consecutive sessions). But an unstamped
+            # met:false row carrying the SAME condition as the row we already trust AGREES with
+            # the state we already hold: it is corroboration, not ambiguity. Neither forgery
+            # direction is opened — it cannot inject a phantom goal (the condition is one a
+            # sentinel row already established) and it cannot spoof a clear (met is False, so
+            # the goal stays live). Deliberately does NOT clear `suspicious`: corroboration is
+            # neutral, so a torn line earlier in the tail still refuses.
+            pass
         else:
             suspicious = "a trusted-origin goal_status row that fails validation"
     if strict and suspicious is not None:
@@ -935,11 +970,14 @@ def live_owner_goal(transcript_text: str, *, strict: bool = False) -> str | None
             f"the newest goal evidence in the transcript is {suspicious} — refusing to "
             "derive a live-goal verdict from ambiguous evidence on a destructive path "
             "(#758): a torn or malformed newest row must not read as 'no goal' or fall "
-            "back to a stale one. REMEDY (#802): the usual cause is an armed goal whose "
-            "newest row is a Stop-hook evaluation, which carries no sentinel — run "
-            "'/goal clear' in this pane and retry, which appends a trusted row and lets "
-            "teardown proceed. To hand off WITHOUT retiring this pane, re-run with "
-            "'--no-teardown' and relay the manual retirement steps yourself")
+            "back to a stale one. REMEDY: since #782 the ORDINARY case — an armed goal "
+            "whose newest row is a sentinel-less Stop-hook evaluation agreeing with it — "
+            "no longer reaches here, so this refusal now means the tail is genuinely "
+            "unreadable: a torn write, a malformed 'met', or a row proposing a DIFFERENT "
+            "condition. Inspect the last few goal_status lines of this transcript before "
+            "assuming otherwise. Running '/goal clear' in this pane and retrying appends a "
+            "trusted row and lets teardown proceed; to hand off WITHOUT retiring this pane, "
+            "re-run with '--no-teardown' and relay the manual retirement steps yourself")
     if last is None or last.get("met") is not False:
         return None
     return last["condition"]

@@ -636,6 +636,30 @@ class TestLiveOwnerGoal:
         text = _goal_row(False, "   ")
         assert ll.live_owner_goal(text) is None
 
+    def test_an_evaluator_row_agreeing_with_the_trusted_goal_is_not_ambiguous(self) -> None:
+        """#782 — a Stop-hook EVALUATION row carries no sentinel but does carry the genuine
+        condition, byte-identical to the armed row. Measured over the 25 most recent transcripts:
+        85 of 122 trusted-origin rows are exactly this shape (unstamped, met:false, with a
+        `reason`), which is why strict mode refused every post-evaluation teardown (#802 hit three
+        sessions running).
+
+        Such a row AGREES with the state we already trust, so it is corroboration, not ambiguity.
+        Strict mode must not raise on it, and the live goal must still be the armed condition."""
+        text = "\n".join([_goal_row(False, "goal A"),
+                           _goal_row(False, "goal A", sentinel=False)])
+        assert ll.live_owner_goal(text) == "goal A"
+        # the destructive path must NOT refuse over it
+        assert ll.live_owner_goal(text, strict=True) == "goal A"
+
+    def test_an_evaluator_row_for_a_DIFFERENT_condition_still_refuses(self) -> None:
+        """The narrowing is agreement-bound. An unstamped row whose condition differs from the
+        trusted one is NOT corroboration — it could be a forged goal or a torn tail hiding a real
+        change, so strict mode must still refuse."""
+        text = "\n".join([_goal_row(False, "goal A"),
+                           _goal_row(False, "attacker goal", sentinel=False)])
+        with pytest.raises(ll.LauncherError):
+            ll.live_owner_goal(text, strict=True)
+
 
 class TestValidateGoalCarry:
     """#758 — byte-exact carry on ARMED forms, one documented newline normalization."""
@@ -1001,18 +1025,45 @@ class TestStepElevenRegressions:
                                                     "condition": "goal B"}})])
         assert ll.live_owner_goal(bad) == "goal A"
 
-    # --- #802: the refusal must name the remedy, not only the invariant ---
-    # A Stop-hook EVALUATION row is trusted-origin but carries no sentinel, so any
-    # session that reached a handoff with its goal still armed refuses teardown.
-    # Measured 2026-08-01: 53 of the 120 most recent transcripts are in this state.
-    # The guard is correct; the message was undiagnosable — `failed_step` is null
-    # because the refusal happens before any handoff step runs.
+    # --- #802 → #782: this case no longer refuses at all ---
+    # HISTORY, because the sequence is the lesson. A Stop-hook EVALUATION row is
+    # trusted-origin but sentinel-LESS, so strict mode classed it "fails validation"
+    # and refused teardown for any session whose goal was still armed. Measured
+    # 2026-08-01: 53 of the 120 most recent transcripts were in that state, and the
+    # refusal fired three consecutive sessions (D47, D55, D65).
+    #
+    # #802 treated that as a MESSAGE defect and PR #803 only improved the wording —
+    # the guard still refused. #782 is the real fix: an unstamped met:false row whose
+    # condition is byte-equal to the row we already trust AGREES with the state we
+    # hold, so it is corroboration, not ambiguity (`launcher_lib._corroborates`).
+    #
+    # So this test now asserts the OPPOSITE of what it asserted under #803. The two
+    # forgery guards in `TestLiveOwnerGoal` are what keep that safe, and they are
+    # unchanged: a sentinel-less met:TRUE row still cannot spoof a clear, and a
+    # sentinel-less row proposing a DIFFERENT condition still cannot inject a goal.
 
-    def test_a_sentinelless_stop_hook_row_refuses_and_names_the_remedy(self) -> None:
+    def test_a_sentinelless_stop_hook_row_no_longer_refuses(self) -> None:
+        """#782 — the ordinary post-evaluation teardown case must proceed.
+
+        This is the exact shape measured 85 times out of 122 trusted-origin rows: no sentinel,
+        `met: false`, a `reason`, and the armed condition verbatim. Strict mode must return that
+        condition rather than raise, because refusing here is what left panes open."""
         transcript = "\n".join([
             _goal_row(False, "goal A"),
             json.dumps({"attachment": {"type": "goal_status", "met": False,
                                        "reason": "not yet", "condition": "goal A"}}),
+        ])
+        assert ll.live_owner_goal(transcript, strict=True) == "goal A"
+
+    def test_the_remedy_is_still_named_when_a_refusal_IS_correct(self) -> None:
+        """#803's contribution survives where it still applies. A genuinely ambiguous tail — here
+        a trusted-origin row whose `met` is malformed, which no evaluator ever writes — must still
+        refuse AND still name both ways out, because that message is the only diagnosis the caller
+        gets (`failed_step` is null: the refusal precedes every handoff step)."""
+        transcript = "\n".join([
+            _goal_row(False, "goal A"),
+            json.dumps({"attachment": {"type": "goal_status", "sentinel": True,
+                                       "met": "yes", "condition": "goal A"}}),
         ])
         with pytest.raises(ll.LauncherError) as excinfo:
             ll.live_owner_goal(transcript, strict=True)
