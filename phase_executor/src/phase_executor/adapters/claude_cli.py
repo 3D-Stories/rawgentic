@@ -90,7 +90,16 @@ def _usage_from(env: dict) -> Optional[dict]:
     out = u.get("output_tokens")
     if inp is None or out is None:
         return None
-    usage = {"input": int(inp), "output": int(out), "cached": int(u.get("cache_read_input_tokens", 0) or 0)}
+    # `cached` is READS only; `cache_write` is CREATION. #794: these were conflated into
+    # one field, which made "did dispatch N+1 avoid re-writing the prefix?" unanswerable
+    # from telemetry — you cannot optimise a cost you do not record. Anthropic is the only
+    # lane that reports a creation counter; the others report reads alone and yield 0.
+    usage = {
+        "input": int(inp),
+        "output": int(out),
+        "cached": int(u.get("cache_read_input_tokens", 0) or 0),
+        "cache_write": int(u.get("cache_creation_input_tokens", 0) or 0),
+    }
     cost = env.get("total_cost_usd")
     if isinstance(cost, (int, float)) and not isinstance(cost, bool):
         usage["cost_proxy"] = float(cost)

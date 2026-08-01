@@ -141,3 +141,40 @@ note below).
 Run from the rawgentic repo root: `pytest tests/phase_executor/`. The pure parsers are
 fixture-tested against real captured provider outputs (AC1); live seat/bake-off tests live under
 `tests/phase_executor/live/` (marked `live`, skipped in CI — they need real CLIs/SDK auth).
+
+## `session_policy` and prompt-cache behaviour (#794)
+
+Every seat dispatch defaults to `session_policy: "fresh"` — a new CLI session per dispatch
+(`contract.py:349`; the value is required and non-defaultable at the manifest boundary since
+#464). Resume is available (`"resume"`, composed as `--resume <id>` by the claude adapter,
+`adapters/base.py:38`) but is not what the seats use today.
+
+**Fresh does not mean cold.** Anthropic's prompt cache is org-scoped and keyed on exact
+prompt-prefix BYTES plus model — not on the session. A fresh session with an identical prefix
+still hits the cache. Measured 2026-08-01
+(`docs/measurements/2026-08-01-794-spike-s3-cache-reuse.md`): three byte-identical dispatches of
+the `analysis` seat produced `cache_write` of 49,106 → 46,825 → **0**, with reads rising to
+66,406. The warmup costs roughly two dispatches; after that the prefix is free to re-send.
+
+Two consequences worth knowing before optimising:
+
+- **The 5-minute TTL is the real constraint, not the session boundary.** WF2 phases are usually
+  minutes apart, so a seat dispatched less often than the TTL re-pays the write regardless of how
+  stable its bytes are. The zero above is the optimistic bound.
+- **Prefix stability is the lever, not `resume`.** Anything per-session injected early in the
+  prompt (a scratchpad path carrying the session id, volatile git status) breaks the prefix match
+  for every later dispatch. Freeze the seat prompt and push volatile content last.
+
+### Reading the usage fields
+
+`Observation.usage` separates the two cache counters, and the distinction is load-bearing:
+
+| field | meaning |
+|---|---|
+| `input` | tokens billed at full input price (neither cached nor cache-written) |
+| `cache_write` | cache CREATION tokens — the warmup cost being optimised (Anthropic lane; 0 elsewhere) |
+| `cached` | cache READ tokens — cheap in dollars but still counted against window throughput |
+
+Before #794 these last two were conflated into `cached` and the creation counter was discarded,
+which made the warmup cost invisible. Reading only the conflated field, the same spike data
+supports both "cache works" and "cache fails" depending on which two dispatches you look at.

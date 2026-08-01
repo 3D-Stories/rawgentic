@@ -108,6 +108,11 @@
             "null"
           ],
           "minimum": 0
+        },
+        "cache_write": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Cache CREATION tokens (Anthropic lane). Distinct from `cached`, which is cache reads. 0 when the provider reports no write counter."
         }
       },
       "additionalProperties": false
