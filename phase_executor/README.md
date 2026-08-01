@@ -145,28 +145,30 @@ fixture-tested against real captured provider outputs (AC1); live seat/bake-off 
 ## `session_policy` and prompt-cache behaviour (#794)
 
 Every seat dispatch defaults to `session_policy: "fresh"` — a new CLI session per dispatch
-(`contract.py:349`; the value is required and non-defaultable at the manifest boundary since
-#464). Resume is available (`"resume"`, composed as `--resume <id>` by the claude adapter,
-`adapters/base.py:38`) but is not what the seats use today.
+(`contract.py:349`; required and non-defaultable at the manifest boundary since #464). Resume
+exists (`"resume"`, composed as `--resume <id>`, `adapters/base.py:38`) but the seats do not use it.
 
-**Fresh does not mean cold in principle — but in practice the seat prefix misses.** Anthropic's
-prompt cache is org-scoped and keyed on exact prompt-prefix BYTES plus model, not on the session,
-so a fresh session with an identical prefix *should* hit. Measured 2026-08-01
-(`docs/measurements/2026-08-01-794-spike-s3-cache-reuse.md`): five byte-identical dispatches of
-the `analysis` seat produced `cache_write` of 49,106 / 46,825 / **0** / 50,941 / 45,013. **Four of
-five paid a full prefix write**; the single zero did not repeat. Byte-identical *briefs* are
-therefore not sufficient — Claude Code injects per-session bytes (scratchpad path carrying the
-session id, volatile git status) ahead of the brief, and the brief is the tail, not the prefix.
+**Whether fresh sessions reuse the prompt cache is an OPEN QUESTION.** Anthropic's cache is
+org-scoped and keyed on exact prompt-prefix bytes plus model, not on the session, so reuse is
+possible in principle. A 2026-08-01 spike
+(`docs/measurements/2026-08-01-794-spike-s3-cache-reuse.md`) observed one dispatch achieve a full
+hit (`cache_write: 0`) while four others paid a 45–51k write — but that spike is **inconclusive**
+and its own document explains why: the dispatches were not evenly spaced, and the provider input
+was not actually identical across them (`prompt_hash` covers only the brief; the cached prefix
+spans tools + system + messages).
 
-Two consequences worth knowing before optimising:
+Two things the spike DID establish, both of which correct earlier assumptions:
 
-- **The 5-minute TTL compounds the problem.** These five dispatches ran within ~40 s and still
-  mostly missed. Real WF2 phases are minutes apart, so TTL expiry is an *additional* cost on top
-  of the prefix mismatch, not the primary cause of it.
-- **Freezing the brief is not the lever.** The bytes under our control were already identical.
-  Per-run seat session reuse (`session_policy: "resume"`) is the more promising route precisely
-  because it does not require winning a byte-exact prefix match against injected per-session
-  content.
+- **Writes land in the 1-hour tier, not the 5-minute tier.** Raw transport shows the whole write
+  in `ephemeral_1h_input_tokens` with `ephemeral_5m_input_tokens: 0` on every dispatch. Any
+  reasoning that starts from a 5-minute TTL is wrong.
+- **The brief is the tail, not the prefix.** Making the brief byte-identical cannot rescue a
+  prefix that differs, and per-session content (scratchpad path carrying the session id, volatile
+  git status) sits ahead of it. This is a hypothesis for the misses, not a proven cause.
+
+Before optimising, re-run the spike controlled — fixed intervals, ≥3 dispatches per burst, ≥3
+bursts, full provider input captured, and a `resume` arm. Lever 2 (per-run seat session reuse) is
+the more promising route precisely because it does not require winning a byte-exact prefix match.
 
 ### Reading the usage fields
 
@@ -175,9 +177,9 @@ Two consequences worth knowing before optimising:
 | field | meaning |
 |---|---|
 | `input` | tokens billed at full input price (neither cached nor cache-written) |
-| `cache_write` | cache CREATION tokens — the warmup cost being optimised (Anthropic lane; 0 elsewhere) |
+| `cache_write` | cache CREATION tokens — the warmup cost being optimised. Sum of the 5m and 1h tiers (Anthropic lane; 0 elsewhere) |
 | `cached` | cache READ tokens — cheap in dollars but still counted against window throughput |
 
 Before #794 these last two were conflated into `cached` and the creation counter was discarded,
-which made the warmup cost invisible. Reading only the conflated field, the same spike data
-supports both "cache works" and "cache fails" depending on which two dispatches you look at.
+which made the warmup cost invisible. With only the conflated field, the same spike data supported
+three mutually contradictory conclusions on successive readings.

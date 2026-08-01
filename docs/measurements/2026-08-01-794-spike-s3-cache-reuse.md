@@ -1,71 +1,73 @@
 # Spike S3 — do byte-identical seat briefs hit the prompt cache? (#794)
 
-**Verdict: NO, not reliably.** Four of five byte-identical dispatches paid a full
-~45–51k-token prefix write. One dispatch hit fully and the next reverted. **This trips the
-epic-#756 hard gate: #799 and #795 must not start until the owner rules on it.**
+**Verdict: INCONCLUSIVE. The experiment was not controlled well enough to answer the question,
+and it must be re-run before #799 or #795 proceed.**
+
+What IS established: the mechanism can hit (one dispatch achieved `cache_write: 0`), and an
+identical *brief* did not produce reliable reuse across fresh sessions. What is NOT established:
+whether a properly-controlled setup would, and what causes the misses.
 
 Run 2026-08-01, seat `analysis` (Claude lane, `claude-opus-5`), `session_policy: fresh`,
 run id `wf2-794-cf9ff806`.
 
-## Method
-
-One brief with a unique nonce so dispatch 1 was a guaranteed cold miss, then the **same file**
-dispatched five times back-to-back over ~40 s. All five carried an identical
-`prompt_hash sha256:602bc8ce527d…`, the same `actual_model`, the same lane, and all returned
-`ok` with `parse_status: ok` — so the bytes are proven identical rather than assumed, and no
-dispatch took a different code path.
-
 ## Result
 
-| dispatch | uncached input | `cache_write` | `cache_read` |
+| dispatch | wall time | `cache_write` | `cache_read` |
 |---|---|---|---|
-| 1 (cold) | 2 | 49,106 | 17,300 |
-| 2 | 2 | 46,825 | 21,393 |
-| 3 | 2 | **0** | **66,406** |
-| 4 | 2 | 50,941 | 17,300 |
-| 5 | 2 | 45,013 | 21,416 |
+| 1 (cold) | 01:45:11 | 49,106 | 17,300 |
+| 2 | 01:45:18 | 46,825 | 21,393 |
+| 3 | 01:45:57 | **0** | 66,406 |
+| 4 | 01:54:28 | 50,941 | 17,300 |
+| 5 | 01:54:38 | 45,013 | 21,416 |
 
-**Dispatch 3 was an anomaly, not a steady state.** Dispatches 4 and 5 replicate 1 and 2 almost
-exactly — note `cache_read` is **17,300 on both D1 and D4** and ~21,4xx on both D2 and D5. That
-alternating pair is the CLI's own system prompt being read from the org cache; it is stable and
-**independent of the seat brief**. The brief's own ~45–51k prefix is re-written nearly every time.
+## Why this does not answer the question
 
-## Why this was misread three times before n=5
+Three defects in the experiment, all found at Step-11 review rather than by me:
 
-This spike produced three successive wrong answers, and the sequence is the actual finding:
+1. **The dispatches were not back-to-back.** D1–D3 ran within 46 s; **D4 came 8 m 31 s later**.
+   An earlier draft of this document asserted "five dispatches back-to-back over ~40 s", which is
+   simply false. Read with the real timing, the data is two bursts — `write, write, HIT` then
+   `write, write, (never reached a third)` — which is *consistent* with a warmup hypothesis rather
+   than refuting it. Neither reading is supported.
 
-1. **Two single-turn probes** showed large reads and `input: 2` → read as "cache works". Wrong:
-   the reads were the system prompt, and the conflated field hid the writes entirely.
-2. **n=2 with the split** showed writes persisting → read as "cache fails". Premature.
-3. **n=3** showed a zero write → read as "works, with a two-dispatch warmup". Wrong: it was one
-   anomalous dispatch, and the changelog nearly shipped saying so.
-4. **n=5** shows the real shape: mostly miss, occasional hit.
+2. **The provider inputs were NOT identical, even though the brief was.** `prompt_hash` covers
+   only `req.prompt`; Anthropic's cached prefix spans tools + system + messages. Total provider
+   input varied across the calls (~66.4k vs ~68.2k on alternating dispatches), so "byte-identical
+   dispatch" was never actually achieved at the layer that matters. The stable
+   17,300 / ~21,4xx alternation in `cache_read` is that variation showing through.
 
-Two lessons, both worth more than the number:
+3. **Every write was the 1-hour tier, not the 5-minute tier.** The raw transport shows
+   `ephemeral_1h_input_tokens` carrying the whole write on every dispatch and
+   `ephemeral_5m_input_tokens: 0` throughout. An earlier draft of this document, the adapter
+   comment, and `phase_executor/README.md` all reasoned from a 5-minute TTL. That reasoning was
+   wrong, and with a 1-hour TTL an 8.5-minute gap should not have expired anything — so TTL does
+   not explain D4's miss either.
 
-- **The conflated field made every early reading unfalsifiable.** `adapters/claude_cli.py`
-  mapped `cached` to `cache_read_input_tokens` and **discarded `cache_creation_input_tokens`**,
-  and the observation schema was `additionalProperties: false` so nothing downstream could add
-  it. #794's own AC2 — "a measured before/after on `cache_creation_input_tokens`" — was
-  unmeasurable against the shipped code. That is why the telemetry is the first lever.
-- **n=3 was not enough to unblock two downstream issues.** The stakes (whether the executor path
-  survives) demanded replication, and replication reversed the verdict.
+## Four successive wrong answers, recorded deliberately
 
-## What this means for #794's levers
+n=1 read as "cache works". n=2 as "cache fails". n=3 as "works after a two-dispatch warmup" — a
+verdict that reached a commit and would have unblocked #799 and #795 on one anomalous data point.
+n=5 read as "does not work", which was also over-claimed. Only the review caught that the
+experiment could not support any of them.
 
-- **Lever 1 (stabilize the prefix) is NOT confirmed by this spike.** Byte-identical *briefs* are
-  not sufficient. Something outside the brief still varies per dispatch — Claude Code injects
-  per-session bytes early in the prompt (the scratchpad path carries the session id; git status
-  is volatile), which is the mechanism #794 already suspected. The brief is the tail, not the
-  prefix, so making the tail identical cannot fix a prefix mismatch.
-- **Lever 2 (per-run seat session reuse)** is now the more promising route, precisely because it
-  does not depend on winning a byte-exact prefix match against injected per-session content.
-- **Lever 3 (move Claude-lane analysis inline)** is unaffected by this result and remains open.
+The root cause of the first three is mechanical: `adapters/claude_cli.py` mapped `cached` to
+`cache_read_input_tokens` and **discarded `cache_creation_input_tokens`**, with the observation
+schema `additionalProperties: false` so nothing downstream could add it. #794's own AC2 — a
+measured before/after on `cache_creation_input_tokens` — was unmeasurable against shipped code.
+**That telemetry is what this PR lands.** The verdict is explicitly not shipped with it.
 
-## Open question for the owner (the hard gate)
+## What a controlled re-run needs
 
-The epic contract says: if byte-identical briefs cannot hit cache, the executor path itself is in
-question. This spike says they cannot, *reliably*. But it also shows the failure is plausibly
-**fixable** (per-session injected bytes ahead of the brief) rather than fundamental — D3 proves
-the mechanism can work. The decision is whether to invest in lever 2 or step back to the
-orchestrator-with-subagents approach, and that is the owner's call, not this run's.
+- Fixed inter-dispatch interval, recorded, and varied deliberately (e.g. 10 s / 2 min / 10 min).
+- At least 3 dispatches per burst and ≥3 bursts, so a warmup pattern is distinguishable from noise.
+- The **full provider input** captured per dispatch, not just `prompt_hash` — the prefix that
+  matters includes tools and system, which the current hash does not cover.
+- Tier-split writes recorded (`ephemeral_5m` vs `ephemeral_1h`) now that they are known to differ.
+- A `session_policy: "resume"` arm, since lever 2 does not depend on winning a byte-exact match.
+
+## Consequence for the epic
+
+The epic-#756 hard gate asks whether byte-identical briefs can hit cache. **This spike cannot
+answer it**, so the gate is not passed and **#799 and #795 remain blocked pending the owner's
+ruling** — an inconclusive gate is not a pass. The observed hit on D3 is a reason to re-run the
+spike properly, not a reason to retire the executor path.

@@ -90,7 +90,9 @@ def _usage_from(env: dict) -> Optional[dict]:
     out = u.get("output_tokens")
     if inp is None or out is None:
         return None
-    # `cached` is READS only; `cache_write` is CREATION. #794: these were conflated into
+    # `cached` is READS only; `cache_write` is CREATION (the sum of the 5m and 1h tiers —
+    # measured 2026-08-01, real dispatches put the whole write in `ephemeral_1h`, so do NOT
+    # assume the 5m tier). #794: these were conflated into
     # one field, which made "did dispatch N+1 avoid re-writing the prefix?" unanswerable
     # from telemetry — you cannot optimise a cost you do not record. Anthropic is the only
     # lane that reports a creation counter; the others report reads alone and yield 0.
