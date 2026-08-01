@@ -2,15 +2,23 @@
 """Single-source shared SKILL.md prose blocks across skills.
 
 WHY: Claude Code marketplace plugins copy each plugin to a cache and block any path
-outside a skill's own directory — `../shared/...` won't resolve at runtime and
-`${CLAUDE_PLUGIN_ROOT}` does not expand inside SKILL.md *body* text. So a block that
-several skills share (e.g. <config-loading>) cannot be a single file they all read at
-runtime; the only way to single-source it is to keep the canonical copy in
+outside a skill's own directory — `../shared/...` won't resolve at runtime. So a block
+that several skills share (e.g. <config-loading>) cannot be a single file they all read
+at runtime; the only way to single-source it is to keep the canonical copy in
 shared/blocks/ and GENERATE each skill's inline copy here, guarded against drift by
 tests/test_shared_block_drift.py. (Before this, the copies silently diverged — an
 em-dash in two skills.)
 
-The block in each SKILL.md is delimited by its XML-ish tags (e.g. `<config-loading>`
+A NOTE ON `${CLAUDE_PLUGIN_ROOT}`, because an earlier version of this docstring got it
+wrong and the error propagated into a design (#807). Measured on Claude Code 2.1.220:
+it IS substituted into a SKILL.md *body* when Claude Code loads that file as a skill;
+it is NOT substituted when any file is opened with the Read tool (so `references/*.md`
+never sees it, since those are always Read); and it is NOT a shell environment variable.
+That makes it useless as a uniform locator across a skill's own files — which is a real
+constraint, just not the one this docstring used to claim. The cache path-blocking above
+is the actual reason this generator exists.
+
+The block in each target file is delimited by its XML-ish tags (e.g. `<config-loading>`
 ... `</config-loading>`), each on its own line; those tags ARE the sync sentinels, so
 no extra markers are introduced. Only the text BETWEEN the tags is replaced.
 
@@ -64,7 +72,14 @@ FILE_MANIFEST = {
 
 
 def _skill_md(skill: str) -> Path:
-    return SKILLS / skill / "SKILL.md"
+    """Resolve a MANIFEST target to the file the block is generated into.
+
+    A bare skill name means that skill's SKILL.md (the original and still the
+    common case). A value containing "/" is a skill-relative PATH, e.g.
+    "fix-bug/references/steps.md" — needed because not every shared block lives
+    in a SKILL.md (#807: two of the five render call sites are in references/).
+    """
+    return SKILLS / skill if "/" in skill else SKILLS / skill / "SKILL.md"
 
 
 def _marker_span(lines: list[str], tag: str):

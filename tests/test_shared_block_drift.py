@@ -1,7 +1,7 @@
 """Drift guard for shared SKILL.md blocks single-sourced under shared/blocks/.
 
-Marketplace plugins cannot share a file across skills at runtime (path traversal is
-blocked; ${CLAUDE_PLUGIN_ROOT} does not expand in SKILL.md body), so duplicated prose
+Marketplace plugins cannot share a file across skills at runtime (path traversal outside
+a skill's own directory is blocked), so duplicated prose
 is single-sourced by keeping the source in shared/blocks/ and generating each skill's
 inline copy via scripts/sync_shared_blocks.py. This guard fails if any copy drifts from
 its source — the exact failure that let config-loading silently diverge (an em-dash) before.
@@ -102,3 +102,49 @@ def test_file_manifest_detects_and_repairs_drift(tmp_path):
     assert victim.read_text() == src
     r3 = _run_in(tmp_path, "--check")
     assert r3.returncode == 0
+
+
+def _sandbox_with_probe_target(tmp_path, target: str):
+    """Copy the tree and register a `<probe-block>` tag aimed at `target`.
+
+    `target` is whatever goes in MANIFEST's skill list — a bare skill name or a
+    skill-relative path. Returns the resolved destination file.
+    """
+    for d in ("scripts", "shared", "skills"):
+        shutil.copytree(REPO_ROOT / d, tmp_path / d)
+    (tmp_path / "shared" / "blocks" / "probe-block.md").write_text("PROBE SOURCE LINE\n")
+    script = tmp_path / "scripts" / "sync_shared_blocks.py"
+    script.write_text(script.read_text().replace(
+        "MANIFEST = {",
+        'MANIFEST = {\n    "probe-block": {"probe-block.md": ["%s"]},' % target,
+        1,
+    ))
+    dest = tmp_path / "skills" / (target if "/" in target else f"{target}/SKILL.md")
+    dest.write_text(dest.read_text() + "\n<probe-block>\nstale\n</probe-block>\n")
+    return dest
+
+
+def test_manifest_supports_skill_relative_targets(tmp_path):
+    """#807: two of the five render call sites live in `references/steps.md`, not
+    SKILL.md, so a shared block must be able to target a skill-relative PATH.
+
+    Before this change `_skill_md` appended `/SKILL.md` to every MANIFEST entry, so
+    a `references/` target resolved to a directory-shaped path that does not exist
+    and the sync could never reach it. Bare skill names must keep working.
+    """
+    dest = _sandbox_with_probe_target(tmp_path, "fix-bug/references/steps.md")
+    r = _run_in(tmp_path)
+    assert r.returncode == 0, f"sync failed for a skill-relative target:\n{r.stderr}"
+    body = dest.read_text().split("<probe-block>", 1)[1].split("</probe-block>", 1)[0]
+    assert body.strip() == "PROBE SOURCE LINE"
+    assert _run_in(tmp_path, "--check").returncode == 0
+
+
+def test_manifest_bare_skill_name_still_targets_skill_md(tmp_path):
+    """The skill-relative extension must not break the existing bare-name form."""
+    dest = _sandbox_with_probe_target(tmp_path, "fix-bug")
+    assert dest.name == "SKILL.md"
+    r = _run_in(tmp_path)
+    assert r.returncode == 0, r.stderr
+    body = dest.read_text().split("<probe-block>", 1)[1].split("</probe-block>", 1)[0]
+    assert body.strip() == "PROBE SOURCE LINE"
