@@ -149,21 +149,24 @@ Every seat dispatch defaults to `session_policy: "fresh"` — a new CLI session 
 #464). Resume is available (`"resume"`, composed as `--resume <id>` by the claude adapter,
 `adapters/base.py:38`) but is not what the seats use today.
 
-**Fresh does not mean cold.** Anthropic's prompt cache is org-scoped and keyed on exact
-prompt-prefix BYTES plus model — not on the session. A fresh session with an identical prefix
-still hits the cache. Measured 2026-08-01
-(`docs/measurements/2026-08-01-794-spike-s3-cache-reuse.md`): three byte-identical dispatches of
-the `analysis` seat produced `cache_write` of 49,106 → 46,825 → **0**, with reads rising to
-66,406. The warmup costs roughly two dispatches; after that the prefix is free to re-send.
+**Fresh does not mean cold in principle — but in practice the seat prefix misses.** Anthropic's
+prompt cache is org-scoped and keyed on exact prompt-prefix BYTES plus model, not on the session,
+so a fresh session with an identical prefix *should* hit. Measured 2026-08-01
+(`docs/measurements/2026-08-01-794-spike-s3-cache-reuse.md`): five byte-identical dispatches of
+the `analysis` seat produced `cache_write` of 49,106 / 46,825 / **0** / 50,941 / 45,013. **Four of
+five paid a full prefix write**; the single zero did not repeat. Byte-identical *briefs* are
+therefore not sufficient — Claude Code injects per-session bytes (scratchpad path carrying the
+session id, volatile git status) ahead of the brief, and the brief is the tail, not the prefix.
 
 Two consequences worth knowing before optimising:
 
-- **The 5-minute TTL is the real constraint, not the session boundary.** WF2 phases are usually
-  minutes apart, so a seat dispatched less often than the TTL re-pays the write regardless of how
-  stable its bytes are. The zero above is the optimistic bound.
-- **Prefix stability is the lever, not `resume`.** Anything per-session injected early in the
-  prompt (a scratchpad path carrying the session id, volatile git status) breaks the prefix match
-  for every later dispatch. Freeze the seat prompt and push volatile content last.
+- **The 5-minute TTL compounds the problem.** These five dispatches ran within ~40 s and still
+  mostly missed. Real WF2 phases are minutes apart, so TTL expiry is an *additional* cost on top
+  of the prefix mismatch, not the primary cause of it.
+- **Freezing the brief is not the lever.** The bytes under our control were already identical.
+  Per-run seat session reuse (`session_policy: "resume"`) is the more promising route precisely
+  because it does not require winning a byte-exact prefix match against injected per-session
+  content.
 
 ### Reading the usage fields
 

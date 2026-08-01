@@ -1,17 +1,19 @@
 # Spike S3 — do byte-identical seat briefs hit the prompt cache? (#794)
 
-**Verdict: YES, after a warmup of roughly two dispatches.** `cache_creation_input_tokens`
-falls to **zero** on the third byte-identical dispatch. The executor path is **not** in
-question; #799 and #795 are unblocked.
+**Verdict: NO, not reliably.** Four of five byte-identical dispatches paid a full
+~45–51k-token prefix write. One dispatch hit fully and the next reverted. **This trips the
+epic-#756 hard gate: #799 and #795 must not start until the owner rules on it.**
 
 Run 2026-08-01, seat `analysis` (Claude lane, `claude-opus-5`), `session_policy: fresh`,
 run id `wf2-794-cf9ff806`.
 
 ## Method
 
-One brief with a unique nonce so dispatch 1 is a guaranteed cold miss, then the **same file**
-dispatched three times back-to-back. All three carried the identical
-`prompt_hash sha256:602bc8ce527da…`, so the bytes are proven identical rather than assumed.
+One brief with a unique nonce so dispatch 1 was a guaranteed cold miss, then the **same file**
+dispatched five times back-to-back over ~40 s. All five carried an identical
+`prompt_hash sha256:602bc8ce527d…`, the same `actual_model`, the same lane, and all returned
+`ok` with `parse_status: ok` — so the bytes are proven identical rather than assumed, and no
+dispatch took a different code path.
 
 ## Result
 
@@ -20,34 +22,50 @@ dispatched three times back-to-back. All three carried the identical
 | 1 (cold) | 2 | 49,106 | 17,300 |
 | 2 | 2 | 46,825 | 21,393 |
 | 3 | 2 | **0** | **66,406** |
+| 4 | 2 | 50,941 | 17,300 |
+| 5 | 2 | 45,013 | 21,416 |
 
-`cache_write` 49,106 → 0 across identical dispatches: a **100% reduction** in warmup cost once
-the entry is live. The ~17–21k reads present from dispatch 1 are the CLI's own system prompt,
-already org-cached — not the seat brief. That is what made the early readings ambiguous.
+**Dispatch 3 was an anomaly, not a steady state.** Dispatches 4 and 5 replicate 1 and 2 almost
+exactly — note `cache_read` is **17,300 on both D1 and D4** and ~21,4xx on both D2 and D5. That
+alternating pair is the CLI's own system prompt being read from the org cache; it is stable and
+**independent of the seat brief**. The brief's own ~45–51k prefix is re-written nearly every time.
 
-## The finding that had to come first
+## Why this was misread three times before n=5
 
-**The measurement was impossible before this change.** `adapters/claude_cli.py` mapped `cached`
-to `cache_read_input_tokens` and **discarded `cache_creation_input_tokens` entirely**, and the
-observation schema was `additionalProperties: false`, so the field could not even be added
-downstream. #794's own AC2 — "a measured before/after on `cache_creation_input_tokens`" — was
-literally unmeasurable against the shipped code.
+This spike produced three successive wrong answers, and the sequence is the actual finding:
 
-This is not a small point. Reading only the conflated field, the first two dispatches look like
-a cache **failure** (large writes persisting), and the first single-turn probes look like a
-cache **success** (large reads, 2 uncached input). Both readings were wrong. Only the split
-plus a third data point shows the real shape: a two-dispatch warmup, then a clean hit.
+1. **Two single-turn probes** showed large reads and `input: 2` → read as "cache works". Wrong:
+   the reads were the system prompt, and the conflated field hid the writes entirely.
+2. **n=2 with the split** showed writes persisting → read as "cache fails". Premature.
+3. **n=3** showed a zero write → read as "works, with a two-dispatch warmup". Wrong: it was one
+   anomalous dispatch, and the changelog nearly shipped saying so.
+4. **n=5** shows the real shape: mostly miss, occasional hit.
 
-**You cannot optimise a cost you do not record** — so the telemetry is the first lever, and the
-other levers are now measurable rather than argued.
+Two lessons, both worth more than the number:
 
-## What this does NOT establish
+- **The conflated field made every early reading unfalsifiable.** `adapters/claude_cli.py`
+  mapped `cached` to `cache_read_input_tokens` and **discarded `cache_creation_input_tokens`**,
+  and the observation schema was `additionalProperties: false` so nothing downstream could add
+  it. #794's own AC2 — "a measured before/after on `cache_creation_input_tokens`" — was
+  unmeasurable against the shipped code. That is why the telemetry is the first lever.
+- **n=3 was not enough to unblock two downstream issues.** The stakes (whether the executor path
+  survives) demanded replication, and replication reversed the verdict.
 
-- **Cross-run reuse over time.** All three dispatches ran within ~30 s. Anthropic's 5-minute
-  cache TTL means a seat dispatched less often than every 5 minutes re-pays the write. Real WF2
-  phases are minutes apart, so the steady state above is the optimistic bound, not the typical one.
-- **Why dispatch 2 still wrote.** Propagation delay is the plausible explanation, but it was not
-  isolated. A dispatch-2 write is a real cost that a naive "identical bytes ⇒ free" model misses.
-- **That the seat prompt prefix is stable in normal runs.** These briefs were fixed by
-  construction. Lever 1 (freeze the prefix, volatile content last) still has to be done and
-  measured; this spike only proves the mechanism pays off once the prefix IS stable.
+## What this means for #794's levers
+
+- **Lever 1 (stabilize the prefix) is NOT confirmed by this spike.** Byte-identical *briefs* are
+  not sufficient. Something outside the brief still varies per dispatch — Claude Code injects
+  per-session bytes early in the prompt (the scratchpad path carries the session id; git status
+  is volatile), which is the mechanism #794 already suspected. The brief is the tail, not the
+  prefix, so making the tail identical cannot fix a prefix mismatch.
+- **Lever 2 (per-run seat session reuse)** is now the more promising route, precisely because it
+  does not depend on winning a byte-exact prefix match against injected per-session content.
+- **Lever 3 (move Claude-lane analysis inline)** is unaffected by this result and remains open.
+
+## Open question for the owner (the hard gate)
+
+The epic contract says: if byte-identical briefs cannot hit cache, the executor path itself is in
+question. This spike says they cannot, *reliably*. But it also shows the failure is plausibly
+**fixable** (per-session injected bytes ahead of the brief) rather than fundamental — D3 proves
+the mechanism can work. The decision is whether to invest in lever 2 or step back to the
+orchestrator-with-subagents approach, and that is the owner's call, not this run's.
