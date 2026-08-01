@@ -1557,3 +1557,64 @@ class TestTimingAssembly:
         doc = " ".join((REFERENCES / "run-record.md").read_text().split())
         assert "**`timing` (OPTIONAL, #506):**" in doc, (
             "run-record.md must document the timing key (#506 AC5)")
+
+
+class TestStep4BudgetExhaustedClose:
+    """#798 — the Step-4 design gate closes budget-exhausted instead of escalating.
+
+    Two MUTUALLY EXCLUSIVE path assertions, not a banned phrase. Banning
+    "STOP and escalate" from the exhausted branch would contradict AC4, which
+    REQUIRES that outcome inside the same branch when findings are ambiguous.
+    """
+
+    def _step4(self) -> str:
+        text = _text()
+        return text[text.index("## Step 4: Quality Gate"):text.index("## Step 5:")]
+
+    def test_clear_findings_path_closes_without_escalation(self):
+        # AC1/AC3: exhausted + clear => close, explicitly stated as NOT an escalation.
+        s4 = " ".join(self._step4().split())
+        assert "the design gate CLOSES budget-exhausted; it does NOT escalate" in s4
+
+    def test_ambiguous_findings_path_still_escalates(self):
+        # AC4: the breaker's outcome survives inside the very branch that closes.
+        s4 = " ".join(self._step4().split())
+        assert "any ambiguous or conflicting finding, retains STOP/escalate" in s4
+
+    def test_global_cap_refusal_is_not_a_design_close(self):
+        # consume_loopback checks the source cap first and returns, so a both-caps
+        # state must not be read as design-cap-caused.
+        s4 = " ".join(self._step4().split())
+        assert "A refusal caused by the global cap" in s4
+
+    def test_breaker_runs_before_the_close(self):
+        # A terminal close has no next pass, so the breaker cannot be deferred to one.
+        s4 = " ".join(self._step4().split())
+        assert "run the ambiguity breaker EXACTLY ONCE" in s4
+        assert "WAIT for any enabled adversarial review" in s4
+
+    def test_failed_review_escalates_rather_than_closing(self):
+        s4 = " ".join(self._step4().split())
+        assert "a verdict that could not be obtained is not foregone" in s4
+
+    def test_close_is_recorded_by_the_executable_adapter(self):
+        # AC2: prose must name the command, not narrate the persistence.
+        s4 = self._step4()
+        assert "plan_lib.py close-design-gate" in s4
+        assert "--breaker-result" in s4 and "--counters" in s4
+
+    def test_run_record_extra_is_top_level_not_gate_row(self):
+        # A gate-row key validates silently and renders nothing — indistinguishable
+        # from a clean pass, which defeats the whole LOUD requirement.
+        s4 = " ".join(self._step4().split())
+        assert "TOP-LEVEL run-record `extra`" in s4
+        assert "NOT into the gate row" in s4
+
+    def test_headless_close_is_not_an_error(self):
+        s4 = " ".join(self._step4().split())
+        assert "this is a legitimate close, NOT an ERROR" in s4
+
+    def test_skill_carveout_does_not_generalize(self):
+        # The SKILL.md carve-out must fence itself to the design source.
+        text = " ".join(_text().split())
+        assert "The carve-out is deliberately narrow and does NOT generalize" in text
