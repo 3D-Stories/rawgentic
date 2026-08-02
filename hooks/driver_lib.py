@@ -169,6 +169,123 @@ class DependencyCycleError(DriverStateError):
     """Raised (fail-closed) when the dependency graph contains a cycle."""
 
 
+class QueueRevalidationRequired(DriverStateError):
+    """Raised when the remaining queue has not been revalidated against the current head.
+
+    **Defined here in PR 1; nothing raises it until PR 2.** That split is deliberate: the
+    design gate refused an earlier plan that shipped the refusal before the mechanism that
+    clears it, which would have jammed a live campaign between two PRs.
+
+    It subclasses `DriverStateError` so every existing `except DriverStateError` caller stays
+    correct, and it is a distinct type so callers can tell "the queue is stale" from "nothing
+    is ready". That distinction is the whole reason selection RAISES rather than returning
+    `None`: `resume_prompt_for_state` collapses every non-ready outcome into `None` and reports
+    it as "complete or blocked", so a stale queue would otherwise be announced to the operator
+    as *the epic finished*.
+    """
+
+
+# --------------------------------------------------------------------------- #
+# #840: fail-closed validators for revalidation provenance
+# --------------------------------------------------------------------------- #
+# These RAISE rather than accumulating errors, unlike `validate_driver_state`. The reason is
+# specific, not stylistic: `validate_driver_state` is permissive (it inspects only
+# number/status/depends_on and has no unknown-key branch) and `queue.schema.json` sets
+# `additionalProperties: true` at both levels, so a malformed stamp would otherwise pass every
+# existing check in silence. Provenance that can be garbage is not provenance.
+_SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")
+_CLAIM_KINDS = frozenset({"citation", "cause", "ac"})
+_CLAIM_VERDICTS = frozenset({"holds", "broken"})
+_CLAIM_REQUIRED = ("kind", "quoted_from_body", "checked_against", "evidence", "verdict")
+_EXTRACTIONS = frozenset({"paths", "none", "ambiguous"})
+_DEPTHS = frozenset({"deep", "quick"})
+# `issue_obsolete` is deliberately ABSENT: it is not an outcome a stamped child may carry,
+# because a stamped child is selectable. It lives only in `pending_disposition`.
+_OUTCOMES = frozenset({"still_valid", "body_corrected"})
+_PENDING_DISPOSITIONS = frozenset({"issue_obsolete"})
+
+
+def validate_validated_against(value):
+    """Return ``value`` if it is a full 40-char lowercase sha, else raise.
+
+    `bool` is rejected explicitly. `isinstance(True, int)` is True in Python and this module
+    already carries `_is_int` for that exact trap; a `True` stamp reading as provenance would
+    mark a child validated against nothing.
+    """
+    if isinstance(value, bool) or not isinstance(value, str) or not _SHA_RE.match(value):
+        raise DriverStateError(
+            f"validated_against must be a 40-character lowercase sha, got {value!r} — an "
+            "abbreviated or malformed stamp cannot be compared against an observed head")
+    return value
+
+
+def validate_claims(claims) -> int:
+    """Validate a child's evidence records; return how many there are.
+
+    **An empty or absent list is REFUSED**, which is the mechanical half of the owner's
+    2026-08-02 ruling on what a "look" is. Without it, an agent could stamp every remaining
+    child `still_valid` having checked nothing, and the gate would report a fully validated
+    queue — the exact vacuous pass this whole issue exists to eliminate.
+    """
+    if not isinstance(claims, list) or not claims:
+        raise DriverStateError(
+            "claims must be a non-empty list — a stamp with no evidence asserts a check that "
+            "did not happen")
+    for index, claim in enumerate(claims):
+        if not isinstance(claim, dict):
+            raise DriverStateError(f"claims[{index}] must be an object, got {type(claim).__name__}")
+        for field in _CLAIM_REQUIRED:
+            if field not in claim:
+                raise DriverStateError(f"claims[{index}].{field} is required")
+        if claim["kind"] not in _CLAIM_KINDS:
+            raise DriverStateError(
+                f"claims[{index}].kind must be one of {sorted(_CLAIM_KINDS)}, got {claim['kind']!r}")
+        if claim["verdict"] not in _CLAIM_VERDICTS:
+            raise DriverStateError(
+                f"claims[{index}].verdict must be one of {sorted(_CLAIM_VERDICTS)}, "
+                f"got {claim['verdict']!r}")
+        # A present-but-blank evidence field is the cheapest possible fake.
+        for field in ("quoted_from_body", "checked_against", "evidence"):
+            value = claim[field]
+            if not isinstance(value, str) or not value.strip():
+                raise DriverStateError(
+                    f"claims[{index}].{field} must be a non-empty string — a blank field is an "
+                    "assertion that something was checked, with nothing to show for it")
+    return len(claims)
+
+
+def validate_revalidation_child(record) -> bool:
+    """Fail-closed structural check of one `queue_revalidation.children[<n>]` record."""
+    if not isinstance(record, dict):
+        raise DriverStateError("a revalidation child record must be a JSON object")
+    for field in ("body_hash", "from_sha", "to_sha", "extraction", "depth", "outcome",
+                  "claims", "validated_at"):
+        if field not in record:
+            raise DriverStateError(f"revalidation child record is missing {field!r}")
+    if record["extraction"] not in _EXTRACTIONS:
+        raise DriverStateError(
+            f"extraction must be one of {sorted(_EXTRACTIONS)}, got {record['extraction']!r}")
+    if record["depth"] not in _DEPTHS:
+        raise DriverStateError(
+            f"depth must be one of {sorted(_DEPTHS)}, got {record['depth']!r}")
+    if record["outcome"] not in _OUTCOMES:
+        raise DriverStateError(
+            f"outcome must be one of {sorted(_OUTCOMES)}, got {record['outcome']!r} — note that "
+            "'issue_obsolete' is NOT an outcome: a stamped child is selectable, so an obsolete "
+            "child must stay unstamped and carry pending_disposition instead")
+    pending = record.get("pending_disposition")
+    if pending is not None and pending not in _PENDING_DISPOSITIONS:
+        raise DriverStateError(
+            f"pending_disposition must be null or one of {sorted(_PENDING_DISPOSITIONS)}, "
+            f"got {pending!r}")
+    validate_validated_against(record["from_sha"])
+    validate_validated_against(record["to_sha"])
+    validate_claims(record["claims"])
+    if not _is_int(record["validated_at"]):
+        raise DriverStateError("validated_at must be an int epoch")
+    return True
+
+
 def parse_depends_on(body: str) -> list[int]:
     """Return the sorted, de-duplicated issue numbers this body depends on.
 
