@@ -1036,7 +1036,13 @@ class TestFinding5NoGenerationIsSpentOnAnUncheckedQueue:
              "--cwd", str(work), "--registry", str(tmp_path / "reg.jsonl"),
              "--transcript-dir", str(tmp_path), "--issue", "1", "--step", "8",
              "--branch", "feat/x", "--test-baseline", "1/0",
-             "--goal-condition-from", str(own), "--repo-root", str(work)],
+             "--goal-condition-from", str(own), "--repo-root", str(work),
+             # Explicit, NOT inherited from the environment. CI has no
+             # CLAUDE_CODE_SESSION_ID, so without this the command refused with rc 2
+             # ("refusing to guess which session is handing over") before ever reaching
+             # the queue check — green locally, red in CI. A test that depends on the
+             # developer's ambient env is testing the developer.
+             "--predecessor-session", "pred-1"],
             capture_output=True, text=True, check=False)
         assert proc.returncode == 6, (proc.returncode, proc.stdout, proc.stderr)
         written = json.loads(path.read_text(encoding="utf-8"))
