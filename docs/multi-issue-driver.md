@@ -171,6 +171,67 @@ pr_open → { merged | deferred | abandoned }   # headless stops at pr_open
 dependency) for both schema versions; the committed `queue.schema.json` is the
 fuller contract, validated against the examples in the test suite.
 
+## Queue revalidation (#840)
+
+Every merge moves `main` underneath every child that has not started, so their file:line
+citations, root-cause claims and acceptance criteria rot silently. The 2026-08-02 audit of epic
+#756 found **14 of 23** open children carrying claims that no longer held, three of which had
+already caused wasted work. This machinery makes that a gate rather than a habit.
+
+**Per-child provenance.** An `issues[]` entry may carry
+`"validated_against": "<40-char sha>"` — the `main` SHA that child's claims were last checked
+against. Absent means *never validated*, which is treated as outstanding, never as fine.
+
+**Campaign-level receipt.** `queue_revalidation` records the evidence:
+
+```json
+{"queue_revalidation": {
+  "version": 1, "extractor_version": 1,
+  "validated_head": "<sha>",
+  "children": {"840": {
+    "body_hash": "<sha256>", "from_sha": "<sha>", "to_sha": "<sha>",
+    "extraction": "paths|none|ambiguous", "depth": "deep|quick",
+    "outcome": "still_valid|body_corrected",
+    "pending_disposition": null,
+    "claims": [{"kind": "citation|cause|ac", "quoted_from_body": "…",
+                "checked_against": "<path>@<sha>", "evidence": "…",
+                "verdict": "holds|broken"}],
+    "correction_comment": null, "validated_at": 0}}}}
+```
+
+Both keys are additive: `validate_driver_state` ignores them and
+`queue.schema.json` sets `additionalProperties: true`, so **no `schema_version` bump is
+required** and every pre-#840 campaign file validates unchanged. That permissiveness is also
+why the dedicated validators (`validate_validated_against`, `validate_claims`,
+`validate_revalidation_child`) RAISE rather than accumulate errors — a malformed stamp would
+otherwise pass every existing check in silence.
+
+**The intersection sets DEPTH, never whether to look** (owner ruling 2026-08-02).
+`revalidation_worklist(state, observed_head, extractions, changed_by_child)` returns one item
+per *effective*-status-`queued` child not stamped at the observed head. A child whose cited
+files the merge did not touch is still looked at — it is merely `quick` rather than `deep`.
+Nothing is auto-cleared. An earlier design did auto-clear such children and was refuted: a
+merge can invalidate a root-cause claim through a file the child never cites, which is exactly
+how #835's body came to name the wrong cause.
+
+**A stamp requires evidence.** `claims` must be non-empty, and each record names the claim, what
+it was checked against, and the quote that settles it. Without that, an agent could mark every
+remaining child valid having checked nothing, and the gate would report a fully validated queue.
+
+**`issue_obsolete` is not an `outcome`.** A stamped child is selectable, so an obsolete child
+stays *unstamped* and carries `pending_disposition: "issue_obsolete"` until an owner moves it to
+`deferred` or `abandoned`.
+
+**Corrections are COMMENTS, never body edits.** A child's body is its author's statement of the
+problem; the run annotates it, it does not rewrite it underneath them.
+
+> **Status: the machinery above is INERT.** It computes and validates; nothing refuses anything
+> yet. `QueueRevalidationRequired` is defined but never raised, and `next_ready_issue` is
+> unchanged. The enforcement — the head-and-provenance gate, the `queue_revalidated` rung on the
+> pane-handoff ladder, and `handoff_pending.queue` — lands in the follow-up PR, deliberately as
+> one atomic change. Shipping the refusal before the mechanism that clears it would jam a live
+> campaign between two PRs.
+
 ## DEFER taxonomy
 
 An issue hits a wall mid-build → park it with a typed reason and **continue the
