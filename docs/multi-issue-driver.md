@@ -219,7 +219,11 @@ otherwise pass every existing check in silence.
 
 **The intersection sets DEPTH, never whether to look** (owner ruling 2026-08-02).
 `revalidation_worklist(state, observed_head, extractions, changed_by_child)` returns one item
-per *effective*-status-`queued` child not stamped at the observed head. A child whose cited
+per *effective*-status-`queued` child **not ATTESTED at the observed head** — and attested means a
+stamp AND a current receipt entry covering that child, never a stamp alone (round-7 finding 2; the
+caller must build its extraction/diff inputs from that same trust-aware candidate set, or the
+function raises `no extraction supplied for child #N` on exactly the child it now re-audits).
+A child whose cited
 files the merge did not touch is still looked at — it is merely `quick` rather than `deep`.
 Nothing is auto-cleared. An earlier design did auto-clear such children and was refuted: a
 merge can invalidate a root-cause claim through a file the child never cites, which is exactly
@@ -242,7 +246,8 @@ Three layers, in increasing order of authority.
 
 **1. Selection.** `next_ready_issue(state, ..., observed_head=<sha>)` raises
 `QueueRevalidationRequired` when the receipt's `validated_head` differs from the observed head, when
-any eligible child's `validated_against` differs from it, or when any eligible child carries a
+any eligible child's `validated_against` differs from it, or when any DURABLY-UNDISPOSED child
+(not merely an eligible one — round-7 finding 2) carries a
 `pending_disposition`. It **raises** rather than returning `None`, because `None` already means
 "nothing ready" and is reported as *the epic finished* — announcing completion over a stale queue is
 strictly worse than refusing. `fresh_session_handoff` surfaces it as an explicit

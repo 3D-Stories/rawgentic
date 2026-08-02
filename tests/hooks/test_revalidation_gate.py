@@ -1182,6 +1182,107 @@ class TestRound2Finding1TheFirstArmIsAlwaysPossible:
         assert dl.next_ready_issue(armed, observed_head=HEAD) == 1
 
 
+class TestRound7TheRefusalMustPrescribeTheRemedyThatWORKS:
+    """**Round 7, High 3 and Medium 1.** Round 6 made the gate refuse the right things; round 7
+    found that it then told the operator to do the wrong thing about them.
+
+    Two separate failures, both of which only appear if you EXECUTE the printed remedy:
+
+    * A child the probe confirms merged was offered `deferred|abandoned` only. Recording
+      `abandoned` opens the gate and then PARKS every dependent, because an abandoned
+      prerequisite satisfies nothing — so the message invited the operator to falsify durable
+      state and stall a legitimate dependent. Recording the truth, `merged`, opens the gate AND
+      releases the dependent.
+    * Every refusal ended with "Run the revalidate-children skill … then retry", including a
+      pending-only one whose own text had just explained that revalidation cannot clear it. The
+      message contradicted itself and its final instruction was a no-op.
+    """
+
+    def _obsolete_with_dependent(self, **iss1):
+        entry = dict({"number": 1, "status": "queued"}, **iss1)
+        state = _state(entry, _iss(2, depends_on=[1], validated_against=HEAD),
+                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete"),
+                                           "2": _receipt_child()}))
+        return state
+
+    def test_a_probe_confirmed_merged_child_is_told_to_record_MERGED(self):
+        state = self._obsolete_with_dependent()
+        probe = (lambda n: "confirmed_merged" if n == 1 else "unknown")
+        with pytest.raises(dl.QueueRevalidationRequired) as exc:
+            dl.next_ready_issue(state, observed_head=HEAD, issue_state_probe=probe)
+        assert "--status merged" in str(exc.value), str(exc.value)
+
+    def test_and_executing_that_remedy_actually_releases_the_dependent(self):
+        """The half that matters. A remedy is only correct if running it reaches a good state —
+        this whole PR has now shipped five refusals whose remedy did nothing."""
+        state = self._obsolete_with_dependent()
+        probe = (lambda n: "confirmed_merged" if n == 1 else "unknown")
+        assert dl.next_ready_issue(dl.record_child_outcome(state, 1, "merged"),
+                                   observed_head=HEAD, issue_state_probe=probe) == 2
+
+    def test_an_unmerged_obsolete_child_still_gets_the_owner_choice(self):
+        """The negative twin — the probe-merged branch must not swallow the ordinary case, where
+        choosing between deferred and abandoned is deliberately a human's call."""
+        state = self._obsolete_with_dependent()
+        with pytest.raises(dl.QueueRevalidationRequired) as exc:
+            dl.next_ready_issue(state, observed_head=HEAD)
+        assert "deferred|abandoned" in str(exc.value)
+        assert "--status merged" not in str(exc.value), str(exc.value)
+
+    def test_a_pending_only_refusal_does_not_end_by_prescribing_revalidation(self):
+        state = _state(_iss(1), reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
+        with pytest.raises(dl.QueueRevalidationRequired) as exc:
+            dl.next_ready_issue(state, observed_head=HEAD)
+        text = str(exc.value)
+        assert "CANNOT" in text and "re-running it will change nothing" in text, text
+        assert "Run the revalidate-children skill, post any corrections, then retry." not in text
+
+    def test_a_stale_provenance_refusal_still_prescribes_revalidation(self):
+        """The negative twin for the suffix — the common case must keep its instruction."""
+        state = _state(_iss(1), _iss(2, validated_against=HEAD),
+                       reval=_reval(HEAD, {"2": _receipt_child()}))
+        with pytest.raises(dl.QueueRevalidationRequired) as exc:
+            dl.next_ready_issue(state, observed_head=HEAD)
+        assert "Run the revalidate-children skill" in str(exc.value)
+
+    def test_a_MIXED_refusal_names_both_remedies(self):
+        state = _state(_iss(1), _iss(2), _iss(3, validated_against=HEAD),
+                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete"),
+                                           "3": _receipt_child()}))
+        with pytest.raises(dl.QueueRevalidationRequired) as exc:
+            dl.next_ready_issue(state, observed_head=HEAD)
+        assert "Two different remedies are needed" in str(exc.value), str(exc.value)
+
+
+class TestRound7Low1OneUnattestedStampMustNotPoisonTheOthers:
+    """**Low.** `base` is loop-invariant, and the round-6 fix set it to `None` inside the loop for
+    an unattested current-stamped child — so every LATER unstamped child silently lost the valid
+    campaign base and got `head..head`/`deep`/`unavailable` too. It fails toward more scrutiny so
+    it was never unsafe, but it records provenance that is simply untrue, and cross-child
+    contamination through a loop variable is close to invisible in review. Mine."""
+
+    def test_a_later_child_keeps_the_campaign_base(self):
+        state = _state(_iss(1, validated_against=HEAD),          # stamped, unattested
+                       _iss(2),                                   # unstamped -> must use base
+                       base_default_branch_sha=OLD)
+        work = dl.revalidation_worklist(
+            state, HEAD, extractions={1: ([], "none"), 2: ([], "none")},
+            changed_by_child={1: set(), 2: set()})
+        by = {w["number"]: w for w in work}
+        assert by[1]["baseline"] == "unavailable", by[1]
+        assert by[2]["baseline"] == "base" and by[2]["from_sha"] == OLD, by[2]
+
+    def test_order_does_not_matter(self):
+        """Asserted explicitly because the bug was order-dependent: it only bit children that
+        came AFTER the unattested one, so a one-child or fortunately-ordered fixture hides it."""
+        state = _state(_iss(2), _iss(1, validated_against=HEAD),
+                       base_default_branch_sha=OLD)
+        work = dl.revalidation_worklist(
+            state, HEAD, extractions={1: ([], "none"), 2: ([], "none")},
+            changed_by_child={1: set(), 2: set()})
+        assert {w["number"]: w["baseline"] for w in work} == {1: "unavailable", 2: "base"}
+
+
 class TestRound6Finding3AStaleReceiptMustLeaveTheSkillSomethingToDo:
     """**High — the fifth unrecoverable jam in this PR, and the one nobody had looked for.**
     The head clause refuses whenever the receipt does not attest the observed head, and tells the

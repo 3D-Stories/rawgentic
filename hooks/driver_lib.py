@@ -654,12 +654,17 @@ def revalidation_worklist(state: dict, observed_head: str, extractions: dict,
         covered = _receipt_covers_child(state, number, observed_head)
         if stamped == observed_head and covered:
             continue                           # validated at this head, and attested
-        if stamped == observed_head:
-            # Audited again, and its stamp is NOT a baseline: there is no range to diff and
-            # nothing attesting it, so it must fall through to unavailable/deep below rather than
-            # produce an empty range that would buy `quick`.
-            stamped = None
-            base = None
+        # Audited again, and its stamp is NOT a baseline: there is no range to diff and nothing
+        # attesting it, so it falls through to unavailable/deep rather than producing an empty
+        # range that would buy `quick`.
+        #
+        # **A per-child LOCAL, not a mutation of `base` (round-7 Low 1).** The first version set
+        # `base = None` here, and `base` is loop-invariant — so one unattested stamp silently
+        # downgraded every LATER unstamped child to `head..head`/`deep` even where the campaign
+        # base was perfectly good. It fails toward more scrutiny, so it was never unsafe, but it
+        # is provenance the receipt then records wrongly, and it is the sort of quiet
+        # cross-contamination that is very hard to see later.
+        force_unavailable = stamped == observed_head and not covered
         # A malformed stamp used to RAISE here (round-3 High 1). `observed_head` is validated
         # above, so the equality check needs no validation of its own, and an unusable stamp is
         # now a baseline problem — handled with the campaign base below — not a hard error.
@@ -708,7 +713,10 @@ def revalidation_worklist(state: dict, observed_head: str, extractions: dict,
         # from an unusable stamp to the base would date the range from a commit this child was
         # never validated at, and a wider-but-wrong range can buy `quick` on a real change.
         # A child with no stamp uses the campaign base; that is the first arm.
-        candidate, provenance = (stamped, "stamp") if stamped is not None else (base, "base")
+        if force_unavailable:
+            candidate, provenance = None, "stamp"
+        else:
+            candidate, provenance = (stamped, "stamp") if stamped is not None else (base, "base")
         if _baseline_usable(candidate, unresolvable):
             from_sha = candidate
         else:
@@ -1021,15 +1029,31 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
         record = children.get(str(issue["number"]))
         pending = record.get("pending_disposition") if isinstance(record, dict) else None
         if pending is not None:
-            pending_flagged.add(issue["number"])
+            number = issue["number"]
+            pending_flagged.add(number)
+            # **Prescribe the remedy that actually works for THIS child (round-7 High 3).**
+            # Reading DURABLE status for the gate is right — an overlay must not launder an
+            # undisposed marker — but the REMEDY has to account for what the probe saw. For a
+            # child the probe confirms merged, offering only `deferred|abandoned` invites the
+            # operator to falsify durable state: recording `abandoned` opens the gate and then
+            # PARKS every dependent, because an abandoned prerequisite satisfies nothing.
+            # Recording the truth, `merged`, opens the gate AND releases the dependents.
+            # Reproduced both ways before this was written.
+            if effective.get(number) == "merged":
+                remedy = (f"the issue is already MERGED (confirmed by probe), so record what "
+                          f"actually happened: python3 hooks/launcher_lib.py "
+                          f"record-child-outcome --issue {number} --status merged. Do NOT record "
+                          "'abandoned' here — it would open the gate but park every dependent")
+            else:
+                remedy = ("needs an OWNER decision between 'deferred' and 'abandoned'; a machine "
+                          "may not close a child. Run: python3 hooks/launcher_lib.py "
+                          f"record-child-outcome --issue {number} --status deferred|abandoned")
             outstanding.append({
-                "number": issue["number"],
+                "number": number,
                 "validated_against": issue.get("validated_against"),
-                "reason": f"marked {pending} — needs an OWNER decision between 'deferred' and "
-                          "'abandoned'; a machine may not close a child, and re-running "
-                          "revalidate-children cannot clear this. Run: python3 "
-                          "hooks/launcher_lib.py record-child-outcome --issue "
-                          f"{issue['number']} --status deferred|abandoned"})
+                "kind": "pending_disposition",
+                "reason": f"marked {pending} — re-running revalidate-children cannot clear "
+                          f"this; {remedy}"})
     for issue in eligible:
         number = issue["number"]
         if number in pending_flagged:
@@ -1046,10 +1070,26 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
             continue
     reasons.extend(f"#{item['number']}: {item['reason']}" for item in outstanding)
     if reasons:
+        # **The closing instruction is CONDITIONAL (round-7 Medium 1).** It used to append "Run
+        # the revalidate-children skill … then retry" to every refusal, including a pending-only
+        # one whose own text had just explained that revalidation cannot clear it — so the
+        # message contradicted itself and its last line was a no-op. The suffix now names only
+        # the remedies that apply: revalidation for stale provenance, the owner's write-back for
+        # a pending marker, and both only when both are genuinely outstanding.
+        needs_revalidation = any(i.get("kind") != "pending_disposition" for i in outstanding)
+        needs_owner = any(i.get("kind") == "pending_disposition" for i in outstanding)
+        if needs_revalidation and needs_owner:
+            suffix = (". Two different remedies are needed: run the revalidate-children skill for "
+                      "the stale-provenance children above, AND record the owner's outcome for "
+                      "the pending-disposition ones. Then retry.")
+        elif needs_owner:
+            suffix = (". Record the outcome named above — the revalidate-children skill CANNOT "
+                      "clear a pending disposition, so re-running it will change nothing.")
+        else:
+            suffix = ". Run the revalidate-children skill, post any corrections, then retry."
         error = QueueRevalidationRequired(
             "refusing to hand out the next child: the remaining queue has not been revalidated "
-            f"against {observed_head}. " + "; ".join(reasons) +
-            ". Run the revalidate-children skill, post any corrections, then retry.")
+            f"against {observed_head}. " + "; ".join(reasons) + suffix)
         # Carried on the exception so `fresh_session_handoff` can surface a worklist without
         # re-deriving it — and so the refusal is never reduced to an opaque string the caller has
         # to parse.
@@ -1692,6 +1732,26 @@ def handoff_claim_is_live(state: dict, *, now_ts: int, lease_s: int) -> bool:
         return False
     return bool(claim.get("started")) or not handoff_reclaimable(
         state, now_ts=now_ts, lease_s=lease_s)
+
+
+def handoff_claim_completion_unprovable(state: dict) -> bool:
+    """Is there a STARTED claim on another generation whose completion cannot be proven? PURE.
+
+    #840 Step-11 round 7, High 1. Completion is inferred from `claim.generation !=
+    state.generation`, never recorded (#846), so "an older started claim" and "a successor that
+    finished cleanly" are indistinguishable from durable state. That ambiguity is tolerable for
+    deciding who may claim — the generation fence handles it — but NOT for the advice printed on
+    a refusal: telling an operator to open yet another generation while a started claimant may
+    still be running is how a competitor gets spawned, and that instruction is emitted by code
+    this PR added. So the PR owns making it safe even though the lifecycle gap predates it.
+
+    Returns True only for the genuinely ambiguous shape. A claim on the CURRENT generation is
+    handled by `handoff_claim_is_live`; a never-started claim was never a takeover.
+    """
+    claim = state.get("handoff_claim")
+    if not isinstance(claim, dict) or not claim.get("started"):
+        return False
+    return claim.get("generation") != state.get("generation")
 
 
 def handoff_claim_blocked_by_live_claim(state: dict, generation: int, *, now_ts: int,

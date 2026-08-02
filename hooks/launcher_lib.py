@@ -2640,6 +2640,10 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             claim_state["live_claim"] = driver_lib.handoff_claim_is_live(
                 s, now_ts=now, lease_s=lease_s)
             claim_state["queue_current"] = driver_lib.handoff_queue_is_current(s)
+            # Round 7, High 1: a STARTED claim on another generation is ambiguous, not absent —
+            # completion is inferred rather than recorded (#846), so durable state cannot tell a
+            # finished successor from a running one.
+            claim_state["unprovable"] = driver_lib.handoff_claim_completion_unprovable(s)
             return None
 
         _locked_state_update(driver_state_path, _claim)
@@ -2655,7 +2659,26 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             # is still somebody working. "No claim was ever created, open a new generation" is
             # the one instruction that can put a competitor beside them, so it is gated on the
             # strongest available evidence that nobody is in there.
-            if not claim_state.get("live_claim") and not claim_state.get("queue_current", True):
+            #
+            # Round 7, High 1: "no live claim" is not the same as "nobody is in there". A
+            # STARTED claim on another generation is AMBIGUOUS, because completion is inferred
+            # and never recorded (#846) — durable state cannot distinguish a successor that
+            # finished from one still running. The lifecycle gap predates this PR, but the
+            # instruction below is emitted by code this PR added, so the PR owns making it safe:
+            # an unprovable claim gets its own honest verdict rather than either confident one.
+            if claim_state.get("unprovable") and not claim_state.get("live_claim"):
+                out["claim_state_ambiguous"] = True
+                out["reason"] = (
+                    f"could not claim generation {generation}, and the campaign's state is "
+                    "AMBIGUOUS: a claim on an earlier generation is marked started, and this "
+                    "system records when a claim BEGINS but not when it ends (#846) — so it "
+                    "cannot be told apart from a successor that is still working. The "
+                    "predecessor stays alive and guarded and nothing has been torn down. "
+                    "RECONCILE BY HAND before doing anything else: confirm whether that earlier "
+                    "successor is still running (its pane, its transcript). Only once it is "
+                    "proven finished may a new generation be opened — doing so blind can put a "
+                    "competitor beside a live claimant")
+            elif not claim_state.get("live_claim") and not claim_state.get("queue_current", True):
                 out["queue_changed"] = True
                 out["reason"] = (
                     f"could not claim generation {generation} — the campaign queue changed after "

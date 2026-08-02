@@ -626,9 +626,43 @@ class TestRetireRefusesBeforeAnythingDestructive:
             pend_over={"queue": None})
         out = _retire(state, world, tmp_path)
         assert out["outcome"] == "claim_refused"
-        assert out["queue_changed"] is True, out["reason"]
-        assert "new generation" in out["reason"], \
-            "opening a new generation IS the recovery for a payload mismatch"
+        # **INVERTED at round 7 (High 1).** This originally demanded `queue_changed` and the
+        # "open a new generation" instruction, because round 5's complaint was that a finished
+        # claim BLOCKED the only recovery. Round 7 showed the opposite branch is worse: that
+        # instruction can spawn a competitor beside a successor that is still running, and
+        # durable state cannot tell the two apart because completion is never recorded (#846).
+        #
+        # Neither confident answer is honest, so the contract is now the third one — say the
+        # state is ambiguous and require reconciliation. Round 5's real requirement survives:
+        # the operator is NOT told "do not open another generation" and left stuck; they are
+        # told exactly what to check to become unstuck.
+        assert out.get("claim_state_ambiguous") is True, out["reason"]
+        assert "RECONCILE BY HAND" in out["reason"]
+        assert out.get("queue_changed") is not True, out["reason"]
+
+    def test_a_started_claim_on_an_OLDER_generation_gets_an_ambiguous_verdict(self, tmp_path):
+        """**Round-7 High 1.** Round 6 scoped liveness to the current generation, which fixed the
+        masking problem and left a worse one: a STARTED claim on an older generation then read as
+        "nobody is there", and a stale payload sent the operator to open yet another generation —
+        beside a claimant that may still be running.
+
+        Completion is INFERRED from `claim.generation != state.generation`, never recorded
+        (#846), so durable state genuinely cannot tell a finished successor from a live one. The
+        honest answer is neither confident branch: say the state is ambiguous and require manual
+        reconciliation. The lifecycle gap predates this PR; the dangerous INSTRUCTION does not,
+        which is why it is fixed here rather than deferred with it."""
+        world = _world(tmp_path)
+        state = _write_state(
+            tmp_path, world,
+            claim={"generation": GEN - 1, "claimant": "maybe-still-running",
+                   "claimed_at": 1, "started": True},
+            pend_over={"queue": None})
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "claim_refused"
+        assert out.get("claim_state_ambiguous") is True, out["reason"]
+        assert out.get("queue_changed") is not True, out["reason"]
+        assert "RECONCILE BY HAND" in out["reason"]
+        self._assert_nothing_destructive(world)
 
     def test_an_expired_unstarted_claim_is_NOT_treated_as_live(self, tmp_path):
         """The other side of the boundary, or the fix would report every stale record as a live

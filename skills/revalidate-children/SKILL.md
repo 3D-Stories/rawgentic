@@ -26,7 +26,11 @@ issue. A successor then implements from a body that is quietly wrong.
 
 - the campaign receipt's `validated_head` equals a **freshly observed** `origin/main`, AND
 - every eligible child carries `validated_against == that head`, AND
-- no eligible child carries a `pending_disposition`.
+- **no durably-undisposed child carries a `pending_disposition`** — note the scope difference,
+  corrected at round-7 finding 2. Stamp freshness is checked on ELIGIBLE children only; the
+  pending marker is checked on EVERY child whose durable status is not `deferred`,
+  `abandoned` or `merged`. A `pr_open` child cannot be selected but can still SATISFY a
+  dependency, so an obsolete one would otherwise hand out somebody else's work.
 
 **This skill clears the first two; it CANNOT clear the third** (corrected at round-5 finding 4 —
 this line used to read "only this skill clears that", contradicting the skill's own step 6 below).
@@ -55,8 +59,22 @@ That wrapper runs `git -C . fetch origin` then `git -C . rev-parse origin/main` 
 return codes. Do not substitute a cached SHA, `HEAD`, or `validated_head` — a stale value compares
 equal to itself and opens the gate on a moved main.
 
-**3. Build the worklist.** For each eligible child (effective status `queued`) whose
-`validated_against` is absent or != the observed head, compute:
+**3. Build the worklist.** The candidate set is every eligible child (effective status `queued`)
+that is **not already attested at the observed head** — and "attested" means BOTH a stamp and a
+current receipt covering it, not a stamp alone. Concretely, include a child when its
+`validated_against` is absent, differs from the observed head, **or** equals it while
+`queue_revalidation.validated_head != observed_head` or the receipt carries no entry for that
+child.
+
+> **Round-7 finding 2 — this step used to say "absent or != the observed head", and that made the
+> gate unclearable.** A child stamped at the head under a stale or absent receipt was excluded
+> here, so you produced empty `extractions`/`changed_by_child`, and `revalidation_worklist` — which
+> since round 6 correctly re-audits exactly that child — raised
+> `DriverStateError: no extraction supplied for child #N`. The Python was right and the procedure
+> could not feed it. Compute the candidate set the same trust-aware way the code does, or the
+> refusal has no remedy.
+
+For each candidate, compute:
 
 - its cited paths, via `driver_lib.cited_paths(body, resolves)` — you supply `resolves`, the set of
   paths that exist in either endpoint tree, probed with
