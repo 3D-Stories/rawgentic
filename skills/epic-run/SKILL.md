@@ -152,12 +152,14 @@ put a list up by hand).
   BEFORE ACTING** (round-6 finding 4 — this used to say "run the skill and retry"
   unconditionally, which is a no-op for one of the two reasons):
   - **stale provenance** (a child never revalidated, or stamped against an older head) → run
-    `/rawgentic:revalidate-children`, post any corrections, then retry the disposition;
-  - **a `pending_disposition`** (revalidation concluded a child is obsolete) → this is an OWNER
-    decision and the skill CANNOT clear it. The refusal names the exact command:
-    `python3 hooks/launcher_lib.py record-child-outcome --issue <n> --status deferred|abandoned`.
-    Re-running the revalidation skill rediscovers the same marker for ever.
-  Either way this is neither `complete` nor `blocked` and must never be reported as either.
+    `/rawgentic:revalidate-children`, post any corrections, then retry the disposition.
+
+  That is the ONLY reason the gate produces today. A `pending_disposition` used to be a second,
+  owner-only reason; the owner gate was cut from #840 and is being rebuilt in #848, so a marker
+  currently refuses nothing. When #848 lands, this list grows a second bullet whose remedy is an
+  owner write-back that the revalidation skill can never clear.
+
+  This is neither `complete` nor `blocked` and must never be reported as either.
 - **Selecting the next child in the IN-SESSION loop goes through
   `python3 hooks/launcher_lib.py next-child --driver-state <f> --project-root <r>`** (#840),
   never by reading the state file and picking. That command observes `origin/main` itself and

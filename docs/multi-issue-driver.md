@@ -84,11 +84,9 @@ For each issue the campaign advances to:
    ever observing `origin/main` — bypassing the #840 gate — and on an armed one it raises
    `QueueRevalidationRequired` instead of selecting. `next-child` is the caller that observes the
    head first and then selects. rc 0 → build that child; rc 3 → the campaign is done or every
-   remaining issue is parked/blocked; rc 6 → **read the reason before choosing a remedy** — a
-   stale-provenance refusal is cleared by `/rawgentic:revalidate-children`, but one naming a
-   `pending_disposition` is an OWNER decision that only
-   `record-child-outcome --status deferred|abandoned` clears, and re-running the skill for it
-   changes nothing (the refusal text names the exact command);
+   remaining issue is parked/blocked; rc 6 → stale provenance, cleared by
+   `/rawgentic:revalidate-children` (the refusal names the remedy; while #848 is open that is the
+   only reason this rc carries);
    rc 5 → stop, the head could not be observed; rc 2 → read stdout before deciding (see the
    table).
 2. **Run WF2 fresh** — invoke `/rawgentic:implement-feature <number>` as a brand
@@ -233,9 +231,12 @@ how #835's body came to name the wrong cause.
 it was checked against, and the quote that settles it. Without that, an agent could mark every
 remaining child valid having checked nothing, and the gate would report a fully validated queue.
 
-**`issue_obsolete` is not an `outcome`.** A stamped child is selectable, so an obsolete child
-stays *unstamped* and carries `pending_disposition: "issue_obsolete"` until an owner moves it to
-`deferred` or `abandoned`.
+**`issue_obsolete` is not an `outcome`.** An obsolete child carries
+`pending_disposition: "issue_obsolete"` until an owner moves it to `deferred` or `abandoned`.
+**That marker currently gates NOTHING** — the owner gate was cut from #840 and is being rebuilt in
+#848, so it is recorded as evidence for an owner and nothing refuses on it. The child is stamped
+like any other; withholding the stamp only mattered while a stamped child could be selected past
+the gate, and with the gate out it jammed the queue instead.
 
 **Corrections are COMMENTS, never body edits.** A child's body is its author's statement of the
 problem; the run annotates it, it does not rewrite it underneath them.
@@ -246,9 +247,9 @@ Three layers, in increasing order of authority.
 
 **1. Selection.** `next_ready_issue(state, ..., observed_head=<sha>)` raises
 `QueueRevalidationRequired` when the receipt's `validated_head` differs from the observed head, when
-any eligible child's `validated_against` differs from it, or when any DURABLY-UNDISPOSED child
-(not merely an eligible one — round-7 finding 2) carries a
-`pending_disposition`. It **raises** rather than returning `None`, because `None` already means
+any eligible child's `validated_against` differs from it. (A third clause on
+`pending_disposition` was cut — see #848.) It **raises** rather than returning `None`, because
+`None` already means
 "nothing ready" and is reported as *the epic finished* — announcing completion over a stale queue is
 strictly worse than refusing. `fresh_session_handoff` surfaces it as an explicit
 `revalidation_required` disposition carrying the outstanding worklist; `launcher_lib handoff` exits

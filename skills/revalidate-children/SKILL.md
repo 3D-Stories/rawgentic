@@ -25,20 +25,17 @@ issue. A successor then implements from a body that is quietly wrong.
 `driver_lib.next_ready_issue` therefore refuses to hand out the next child unless:
 
 - the campaign receipt's `validated_head` equals a **freshly observed** `origin/main`, AND
-- every eligible child carries `validated_against == that head`, AND
-- **no durably-undisposed child carries a `pending_disposition`** — note the scope difference,
-  corrected at round-7 finding 2. Stamp freshness is checked on ELIGIBLE children only; the
-  pending marker is checked on EVERY child whose durable status is not `deferred`,
-  `abandoned` or `merged`. A `pr_open` child cannot be selected but can still SATISFY a
-  dependency, so an obsolete one would otherwise hand out somebody else's work.
+- every eligible child carries `validated_against == that head`.
 
-**This skill clears the first two; it CANNOT clear the third** (corrected at round-5 finding 4 —
-this line used to read "only this skill clears that", contradicting the skill's own step 6 below).
-A `pending_disposition` is an OWNER decision by design: re-running this skill rediscovers the same
-marker and changes nothing, because choosing between `deferred` and `abandoned` is deliberately not
-a machine's call. Only
-`python3 hooks/launcher_lib.py record-child-outcome --issue <n> --status deferred|abandoned`
-clears it. Say so when you report a refusal, or the operator re-runs this skill for ever.
+There is no third clause today. **A `pending_disposition` gates NOTHING — the owner gate was cut
+from #840 and is being rebuilt in #848** (owner decision 2026-08-02, after it broke in four
+consecutive review rounds). You still RECORD the marker when an audit concludes a child is
+obsolete: it is the evidence an owner acts on, and #848 is what will make it refuse. Until then,
+say plainly in your report that an obsolete child is NOT yet blocked from satisfying a
+dependent's dependency.
+
+**This skill clears both clauses above.** Every refusal it can meet is cleared by re-running it
+and rebuilding the receipt.
 
 It is also the producer for the `queue_revalidated` rung on the
 pane-handoff ladder — `teardown_allowed` refuses to retire a predecessor until the receipt is current.
@@ -153,7 +150,7 @@ is not evidence.
 |---|---|
 | `holds` | `still_valid` |
 | any `broken`, and the issue is still worth doing | `body_corrected` — **post a correction COMMENT** and record its URL |
-| any `broken`, and the issue no longer makes sense | leave it UNSTAMPED and set `pending_disposition: "issue_obsolete"` |
+| any `broken`, and the issue no longer makes sense | set `pending_disposition: "issue_obsolete"` and report it to the owner — it does NOT block anything yet (#848) |
 
 **Corrections are comments. Never edit an issue body.** The body stays as filed; the comment is the
 authority. State that in the comment.
@@ -178,8 +175,7 @@ python3 hooks/launcher_lib.py rebuild-receipt \
 `audited.json` holds `{"<issue number>": <record>}` for the children you actually looked at —
 omit the flag entirely when nothing needed auditing, which is legitimate and still arms the
 campaign. Exit 0 prints the validated head; **6** means the rebuild was refused (the message
-names the remedy — a live `pending_disposition` needs the owner FIRST); **5** means the head
-could not be observed.
+names the remedy); **5** means the head could not be observed.
 
 Build each record with the constructor, never by hand — the validator requires eight fields and
 a `body_hash` over a specific normalization, which is why hand-built records failed:
@@ -201,11 +197,11 @@ makes the gate recoverable:
   worklist does not audit (it audits eligible children only);
 - a stamp whose evidence was dropped, or that names no usable commit, is **cleared** — the stamp
   is the claim and the record is the evidence, so the claim must never outlive it;
-- a child whose record carries a `pending_disposition` is recorded but **never stamped**;
-- a child whose durable status is undisposed and that carries a live `pending_disposition`
-  **BLOCKS the rebuild entirely** (exit 6). Rebuilding would destroy an owner obligation nobody
-  has discharged, and dropping a marker is how a dependent got handed out with no decision. Get
-  the owner's outcome first, then rebuild — the refusal prints the exact command;
+- a `pending_disposition` is carried forward as EVIDENCE of what the audit found, and the child
+  is still STAMPED. It withheld the stamp while the owner gate existed, because a stamped child is
+  selectable; with nothing gating on the marker that rule stopped protecting anything and started
+  jamming the queue instead — the child was never stamped, so the provenance clause refused for
+  ever. #848 restores both together;
 - an EMPTY `audited` still advances `validated_head`. That is correct, not a shortcut: a campaign
   whose children are all merged or in flight has nothing to audit, and the head clause refuses it
   regardless — so if this could not arm it, the gate would be shut for good on the mid-child

@@ -121,25 +121,18 @@ def _apply_remedy(state, exc, observed_head, probe):
     """
     message = str(exc)
     declared = getattr(exc, "remedy", None)
-    if declared not in {"owner", "revalidate", "both"}:
+    if declared not in {"revalidate"}:
         raise AssertionError(
             f"the refusal declares no structural remedy ({declared!r}), so an operator has "
             f"nothing to act on:\n  {message}")
-    actions = set()
-    new = state
-    if declared in {"owner", "both"}:
-        outcomes = _STATUS_RE.findall(message)
-        if not outcomes:
-            raise AssertionError(
-                f"remedy {declared!r} promises an owner write-back but the message prints no "
-                f"record-child-outcome command:\n  {message}")
-        for number, status in outcomes:
-            new = dl.record_child_outcome(new, int(number), status.split("|")[0])
-        actions.add("owner")
-    if declared in {"revalidate", "both"}:
-        new = _simulate_revalidate_children(new, observed_head, probe)
-        actions.add("revalidate")
-    return new, actions
+    # While the owner gate is out (#848) `revalidate` is the ONLY remedy any clause produces.
+    # The owner branch was removed with it rather than left unreachable — a harness arm no
+    # refusal can reach is the same vacuous-guard class this file exists to catch.
+    if declared != "revalidate":
+        raise AssertionError(
+            f"unexpected remedy {declared!r}; the only gate clauses left are head freshness and "
+            f"per-child stamps, both cleared by revalidation:\n  {message}")
+    return _simulate_revalidate_children(state, observed_head, probe), {"revalidate"}
 
 
 def drive_to_open(state, observed_head=HEAD, probe=None, max_steps=3):
@@ -305,17 +298,6 @@ class TestTheMatrixIsNotVacuous:
         dl.next_ready_issue(armed, observed_head=HEAD)
 
 
-class TestTheOwnerChoiceIsRealOnBothBranches:
-    """`deferred|abandoned` is presented as a genuine choice, so BOTH must clear the gate. The
-    matrix executes only the first; this covers the other."""
-
-    @pytest.mark.parametrize("chosen", ["deferred", "abandoned"])
-    def test_either_owner_choice_clears_the_gate(self, chosen):
-        state = _build("queued", None, "pending_current", HEAD)
-        cleared = dl.record_child_outcome(state, 1, chosen)
-        dl.next_ready_issue(cleared, observed_head=HEAD)
-
-
 class TestTwoChildStatesWhereOneChildUnblocksAnother:
     """The round-6 High 2 question, made systematic: *what does this object let SOMEBODY ELSE do?*
 
@@ -348,169 +330,66 @@ class TestTwoChildStatesWhereOneChildUnblocksAnother:
         callable_probe = (lambda _n: probe) if probe else None
         drive_to_open(state, HEAD, callable_probe)
 
-    def test_a_stamped_obsolete_prerequisite_is_never_silently_selectable(self):
-        """The safety twin of the whole file. Recoverability must never be bought by letting an
-        obsolete child through — round 8's High 2 fix swallows a validator refusal, and this is
-        what proves the swallow did not open a hole."""
-        state = self._pair("queued", "pending")
-        state["issues"][0]["validated_against"] = HEAD
-        with pytest.raises(dl.QueueRevalidationRequired):
-            dl.next_ready_issue(state, observed_head=HEAD)
 
+class TestTheOwnerGateIsInert:
+    """**The `pending_disposition` owner gate is CUT from this PR and must stay inert (#848).**
 
-class TestTheSwallowedValidatorRefusalOpensNoHole:
-    """**The invariant behind round 8's High 2 fix, pinned directly.**
+    Owner decision 2026-08-02, after ten review rounds. The clause was added in round 6 and broke
+    in rounds 7, 8, 9 and 10 — four of round 10's six findings lived entirely inside it — while
+    head freshness and per-child stamps had been stable since round 5. So the stable half ships
+    and the owner gate is rebuilt in #848 behind ONE function that owns "what is wrong and what
+    clears it".
 
-    `_refuse_unrevalidated_queue` swallows the `QueueRevalidationRequired` that
-    `validate_queue_revalidation` raises for the stamped-plus-pending shape, so that the
-    probe-aware owner-gate remedy below it can be reached. That is safe ONLY IF the owner-gate
-    pass reports a superset of the shapes the validator fires on — otherwise the swallow would
-    make an obsolete stamped child selectable, which is the single outcome this gate exists to
-    prevent.
+    This guard is the inverse of the one #848 will write. It is deliberately INVERTED rather than
+    deleted, the same way PR 1's inertness pin was: a guard that no longer describes the code is
+    worse than none, and silently re-enabling this clause is exactly how the defect returns.
 
-    The code carries a `preempted` re-raise as a backstop, and that line is deliberately
-    UNREACHABLE while the superset holds — sabotaging it does not turn the suite red, which under
-    this repo's own rules makes it a guard keyed to a shape that cannot occur. So the superset
-    claim is proved HERE instead, by sweep, rather than left as a comment asserting itself."""
+    **What is knowingly open until #848 lands** — asserted here so it cannot be forgotten: an
+    obsolete child can still satisfy a dependent's dependency. That is PRE-EXISTING, not a
+    regression; nothing enforced it before #840 either.
+    """
 
-    def test_every_state_the_validator_refuses_is_also_refused_by_the_gate(self):
-        checked = leaks = 0
-        examples = []
-        for label, state, probe in _every_state():
-            try:
-                dl.validate_queue_revalidation(state)
-                continue                       # the validator is happy; nothing to prove here
-            except dl.QueueRevalidationRequired:
-                pass
-            except dl.DriverStateError:
-                continue                       # structural errors propagate; not the swallowed kind
-            checked += 1
-            callable_probe = (lambda _n, _p=probe: _p) if probe else None
-            try:
-                dl.next_ready_issue(state, observed_head=HEAD, issue_state_probe=callable_probe)
-            except dl.DriverStateError as exc:
-                # **The refusal must come from the OWNER-GATE pass, not from the `preempted`
-                # re-raise (round-9 Medium 2).** The first version of this test accepted any
-                # `DriverStateError`, and a reviewer proved it passed against a surrogate gate
-                # that only re-ran the validator and never executed the superset pass at all —
-                # so the test asserting the invariant did not test the invariant. The owner-gate
-                # pass is identified by the structured `outstanding` list it attaches; the
-                # validator's own refusal carries none.
-                if getattr(exc, "outstanding", None) is None:
-                    leaks += 1
-                    examples.append(f"{label} (refused by the PREEMPTED validator, not the "
-                                    f"owner-gate pass)")
-                continue
-            leaks += 1
-            examples.append(f"{label} (SELECTABLE)")
-        assert checked > 0, "no state reached the swallowed branch — this sweep proves nothing"
-        assert not leaks, (f"{leaks}/{checked} states are refused by the receipt validator but "
-                           f"SELECTABLE through the gate: {examples[:10]}")
-
-
-def _live_owner_gate(state):
-    """Issue numbers whose durable status is undisposed AND whose receipt carries a pending
-    marker under ANY key spelling. Deliberately does NOT use `children.get(str(n))` — that is
-    the lookup round-9 H2 proved unreliable, so a safety property must not inherit it."""
-    reval = state.get("queue_revalidation")
-    children = reval.get("children") if isinstance(reval, dict) else None
-    if not isinstance(children, dict):
-        return set()
-    marked = {}
-    for key, record in children.items():
-        if not isinstance(record, dict):
-            continue
-        pending = record.get("pending_disposition")
-        if not (isinstance(pending, str) and pending):
-            continue
-        try:
-            marked[int(str(key))] = pending
-        except (TypeError, ValueError):
-            continue
-    return {issue["number"] for issue in state.get("issues", [])
-            if issue["number"] in marked
-            and issue.get("status") not in dl._DISPOSED_STATUSES}
-
-
-class TestTheGateNeverOpensOverALiveOwnerDecision:
-    """**The SAFETY half of the sweep — round 9 H1 exists because this was missing.**
-
-    The recoverability sweep asks only "does the gate OPEN?". Round 9 found a fix that opened it
-    by DESTROYING the owner's obligation: `rebuild_receipt` dropped a `pending_disposition` and
-    the dependent was released with nobody having decided anything. The recoverability sweep
-    scored that as a PASS, because the gate did open.
-
-    A recoverability property with no safety counterpart actively rewards laundering. Two lenses
-    found this independently and the sweep found neither, which is a design error in the sweep.
-
-    The property: while a durably-undisposed child carries a pending marker, NOTHING an operator
-    can run — least of all the prescribed remedy — may make the queue selectable. Only a durable
-    owner outcome retires it."""
-
-    def _marked(self, first_status="pr_open", record_head=HEAD, malformed=False, key="1"):
-        record = _record(to_sha=record_head, pending="issue_obsolete", malformed=malformed)
+    def _marked(self, status="pr_open"):
         return {"version": 1, "campaign": "c", "epic": 756, "project": "p", "generation": 1,
                 "base_default_branch_sha": OLD,
-                "issues": [{"number": 1, "status": first_status},
+                "issues": [{"number": 1, "status": status},
                            {"number": 2, "status": "queued", "validated_against": HEAD,
                             "depends_on": [1]}],
-                "queue_revalidation": {"version": 1, "extractor_version": 1,
-                                       "validated_head": HEAD,
-                                       "children": {key: record, "2": _record()}}}
+                "queue_revalidation": {
+                    "version": 1, "extractor_version": 1, "validated_head": HEAD,
+                    "children": {"1": _record(pending="issue_obsolete"), "2": _record()}}}
+
+    def test_a_pending_disposition_does_not_refuse_selection(self):
+        """#848 INVERTS this: it must then raise `QueueRevalidationRequired`.
+
+        #1 is STAMPED and attested here so the per-child provenance clause — which is still
+        enforced — cannot be what refuses. The marker is then the only thing left that could,
+        and it does not."""
+        state = self._marked(status="queued")
+        state["issues"][0]["validated_against"] = HEAD
+        assert dl.next_ready_issue(state, observed_head=HEAD) == 1
 
     @pytest.mark.parametrize("policy", ["merged", "pr_open"])
-    @pytest.mark.parametrize("record_head,malformed,label", [
-        (HEAD, False, "valid current marker"),
-        (OLD, False, "marker on a stale-head record"),
-        (HEAD, True, "marker on a malformed record"),
-    ])
-    def test_only_an_owner_write_back_may_retire_the_obligation(
-            self, policy, record_head, malformed, label):
-        """Recording an outcome legitimately retires the marker — that IS the remedy. What must
-        never retire it is the revalidation skill, which is a machine auditing bodies. So the
-        chain is walked and each step is judged by WHICH remedy it ran."""
-        state = self._marked(record_head=record_head, malformed=malformed)
-        assert _live_owner_gate(state) == {1}, label
-        for _ in range(3):
-            try:
-                dl.next_ready_issue(state, deps_satisfied_by=policy, observed_head=HEAD)
-            except dl.DriverStateError as exc:
-                message = str(exc)
-                owner_write_back = bool(_STATUS_RE.search(message))
-                try:
-                    state, _actions = _apply_remedy(state, exc, HEAD, None)
-                except (AssertionError, dl.DriverStateError):
-                    return                     # refused to launder: correct
-                if owner_write_back:
-                    return                     # the owner decided; the obligation is properly gone
-                assert _live_owner_gate(state) == {1}, (
-                    f"{label} under {policy}: the revalidation remedy RETIRED a live owner "
-                    f"decision — no owner recorded an outcome for #1")
-                continue
-            raise AssertionError(
-                f"{label} under {policy}: the queue became selectable while #1 still carries a "
-                f"live pending_disposition and its durable status is undisposed")
+    def test_the_known_open_hole_is_pinned_not_forgotten(self, policy):
+        """An obsolete `pr_open` child still satisfies its dependent under `pr_open`. #848 closes
+        this; until then it is recorded here rather than discovered later."""
+        selected = dl.next_ready_issue(self._marked(), deps_satisfied_by=policy,
+                                       observed_head=HEAD)
+        assert selected == (2 if policy == "pr_open" else None)
 
-    @pytest.mark.parametrize("key", ["1", "01", "001"])
-    def test_the_marker_holds_however_its_receipt_key_is_spelled(self, key):
-        """Round 9 H2: `"01"` passed validation but every consumer looked up `"1"`."""
-        state = self._marked(key=key)
+    def test_the_receipt_still_VALIDATES_a_pending_marker(self):
+        """The field and its record-level coherence rules are untouched — only the GATE went.
+        `validate_revalidation_child` still refuses a record carrying both a marker and an
+        outcome, because that is record coherence rather than gating."""
+        assert dl.validate_queue_revalidation(self._marked()) is True
+        bad = _record(pending="issue_obsolete")
+        bad["outcome"] = "still_valid"
         with pytest.raises(dl.DriverStateError):
-            dl.next_ready_issue(state, deps_satisfied_by="pr_open", observed_head=HEAD)
+            dl.validate_revalidation_child(bad)
 
-    def test_an_audit_cannot_stand_in_for_the_owners_decision(self):
-        """A clean audited record must not overwrite a live marker — that is a machine closing a
-        child, which this design forbids everywhere else."""
-        state = self._marked()
-        try:
-            rebuilt = dl.rebuild_receipt(state, HEAD, {1: _record()})
-        except dl.DriverStateError:
-            return                             # refused: correct
-        assert _live_owner_gate(rebuilt) == {1}, \
-            "an audited record replaced a live pending_disposition"
-
-    def test_recording_the_outcome_IS_what_retires_it(self):
-        """The negative twin — the gate must not become impossible to clear."""
-        cleared = dl.record_child_outcome(self._marked(), 1, "deferred")
-        assert _live_owner_gate(cleared) == set()
-        dl.next_ready_issue(cleared, deps_satisfied_by="pr_open", observed_head=HEAD)
+    def test_a_stamped_pending_child_is_no_longer_a_receipt_error(self):
+        """The stamped-plus-pending invariant existed only to protect the owner gate, so it went
+        with it. #848 restores it together with the clause it serves."""
+        state = self._marked(status="queued")
+        state["issues"][0]["validated_against"] = HEAD
+        assert dl.validate_queue_revalidation(state) is True

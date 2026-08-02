@@ -144,30 +144,6 @@ class TestHeadComparisonInIsolation:
         assert eligible and all(i["validated_against"] == HEAD for i in eligible)
 
 
-class TestObsoleteChildIsNeverSelected:
-    """`pending_disposition` non-null ⇒ outstanding, regardless of stamps.
-
-    Isolation per the design's own correction: the child is otherwise FULLY stamped and current,
-    differing ONLY by `pending_disposition`. The r4 version of this test was blind — the
-    unstamped-provenance refusal blocked it anyway, so deleting the obsolete check left it green.
-    """
-
-    def test_an_obsolete_marked_child_refuses_the_queue(self):
-        state = _state(
-            _iss(1, validated_against=HEAD),
-            reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
-        with pytest.raises(dl.QueueRevalidationRequired):
-            dl.next_ready_issue(state, observed_head=HEAD)
-
-    def test_the_identical_state_without_the_marker_is_selectable(self):
-        """The other half of the isolation: same state, marker removed, child comes back. Without
-        this, a gate that refused everything would pass the test above."""
-        state = _state(
-            _iss(1, validated_against=HEAD),
-            reval=_reval(HEAD, {"1": _receipt_child()}))
-        assert dl.next_ready_issue(state, observed_head=HEAD) == 1
-
-
 class TestTheLegacyContractIsExplicitNeverSilent:
     """An optional enforcement input is a bypass — this repo has shipped that defect once
     already (`tests/hooks/test_driver_state_write_back.py:304-306`)."""
@@ -1182,78 +1158,6 @@ class TestRound2Finding1TheFirstArmIsAlwaysPossible:
         assert dl.next_ready_issue(armed, observed_head=HEAD) == 1
 
 
-class TestRound7TheRefusalMustPrescribeTheRemedyThatWORKS:
-    """**Round 7, High 3 and Medium 1.** Round 6 made the gate refuse the right things; round 7
-    found that it then told the operator to do the wrong thing about them.
-
-    Two separate failures, both of which only appear if you EXECUTE the printed remedy:
-
-    * A child the probe confirms merged was offered `deferred|abandoned` only. Recording
-      `abandoned` opens the gate and then PARKS every dependent, because an abandoned
-      prerequisite satisfies nothing — so the message invited the operator to falsify durable
-      state and stall a legitimate dependent. Recording the truth, `merged`, opens the gate AND
-      releases the dependent.
-    * Every refusal ended with "Run the revalidate-children skill … then retry", including a
-      pending-only one whose own text had just explained that revalidation cannot clear it. The
-      message contradicted itself and its final instruction was a no-op.
-    """
-
-    def _obsolete_with_dependent(self, **iss1):
-        entry = dict({"number": 1, "status": "queued"}, **iss1)
-        state = _state(entry, _iss(2, depends_on=[1], validated_against=HEAD),
-                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete"),
-                                           "2": _receipt_child()}))
-        return state
-
-    def test_a_probe_confirmed_merged_child_is_told_to_record_MERGED(self):
-        state = self._obsolete_with_dependent()
-        probe = (lambda n: "confirmed_merged" if n == 1 else "unknown")
-        with pytest.raises(dl.QueueRevalidationRequired) as exc:
-            dl.next_ready_issue(state, observed_head=HEAD, issue_state_probe=probe)
-        assert "--status merged" in str(exc.value), str(exc.value)
-
-    def test_and_executing_that_remedy_actually_releases_the_dependent(self):
-        """The half that matters. A remedy is only correct if running it reaches a good state —
-        this whole PR has now shipped five refusals whose remedy did nothing."""
-        state = self._obsolete_with_dependent()
-        probe = (lambda n: "confirmed_merged" if n == 1 else "unknown")
-        assert dl.next_ready_issue(dl.record_child_outcome(state, 1, "merged"),
-                                   observed_head=HEAD, issue_state_probe=probe) == 2
-
-    def test_an_unmerged_obsolete_child_still_gets_the_owner_choice(self):
-        """The negative twin — the probe-merged branch must not swallow the ordinary case, where
-        choosing between deferred and abandoned is deliberately a human's call."""
-        state = self._obsolete_with_dependent()
-        with pytest.raises(dl.QueueRevalidationRequired) as exc:
-            dl.next_ready_issue(state, observed_head=HEAD)
-        assert "deferred|abandoned" in str(exc.value)
-        assert "--status merged" not in str(exc.value), str(exc.value)
-
-    def test_a_pending_only_refusal_does_not_end_by_prescribing_revalidation(self):
-        state = _state(_iss(1), reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
-        with pytest.raises(dl.QueueRevalidationRequired) as exc:
-            dl.next_ready_issue(state, observed_head=HEAD)
-        text = str(exc.value)
-        assert "CANNOT" in text and "re-running it will change nothing" in text, text
-        assert "Run the revalidate-children skill, post any corrections, then retry." not in text
-
-    def test_a_stale_provenance_refusal_still_prescribes_revalidation(self):
-        """The negative twin for the suffix — the common case must keep its instruction."""
-        state = _state(_iss(1), _iss(2, validated_against=HEAD),
-                       reval=_reval(HEAD, {"2": _receipt_child()}))
-        with pytest.raises(dl.QueueRevalidationRequired) as exc:
-            dl.next_ready_issue(state, observed_head=HEAD)
-        assert "Run the revalidate-children skill" in str(exc.value)
-
-    def test_a_MIXED_refusal_names_both_remedies(self):
-        state = _state(_iss(1), _iss(2), _iss(3, validated_against=HEAD),
-                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete"),
-                                           "3": _receipt_child()}))
-        with pytest.raises(dl.QueueRevalidationRequired) as exc:
-            dl.next_ready_issue(state, observed_head=HEAD)
-        assert "Two different remedies are needed" in str(exc.value), str(exc.value)
-
-
 class TestRound7Low1OneUnattestedStampMustNotPoisonTheOthers:
     """**Low.** `base` is loop-invariant, and the round-6 fix set it to `None` inside the loop for
     an unattested current-stamped child — so every LATER unstamped child silently lost the valid
@@ -1405,223 +1309,6 @@ class TestRound4Finding1ThePolicyKnobReachesSelection:
             capture_output=True, text=True, check=False)
         assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
         assert json.loads(proc.stdout)["next_issue"] == 2, proc.stdout
-
-
-class TestRound3Finding5AStampedObsoleteChildIsNotValidatorValid:
-    """**Medium.** `validate_revalidation_child` already refuses `pending_disposition` together
-    with an `outcome`, because a stamped child is selectable and an obsolete child must stay
-    unstamped. But the ISSUE-level stamp was never checked against it: the linkage clause only
-    asks whether a receipt entry EXISTS, so a queued child carrying both `validated_against ==
-    validated_head` and a receipt record marked `issue_obsolete` passed `validate_queue_revalidation`
-    whole.
-
-    Selection still refuses it on the pending marker, so this is an invariant violation rather
-    than a bypass — but the invariant is the thing the receipt is FOR, and README claimed this
-    defect was already closed. The half-enforced version is the dangerous kind: it reads as
-    protection at the only place a reader checks.
-    """
-
-    def _armed(self, **child_kw):
-        state = _state(_iss(1, validated_against=HEAD),
-                       reval=_reval(HEAD, {"1": _receipt_child(**child_kw)}))
-        return state
-
-    def test_a_stamp_whose_receipt_carries_a_pending_disposition_is_refused(self):
-        with pytest.raises(dl.DriverStateError):
-            dl.validate_queue_revalidation(self._armed(pending="issue_obsolete"))
-
-    def test_the_refusal_is_RECOVERABLE_not_a_corrupt_state_error(self):
-        """The near-miss that a literal reading of the finding produces, and it is not academic —
-        the first version of this fix raised the base `DriverStateError` and broke
-        `TestObsoleteChildIsNeverSelected`. `_refuse_unrevalidated_queue` already refuses this
-        shape as the OWNER GATE: a machine may not choose between `deferred` and `abandoned`, so
-        the operator must be told to dispose of the child (rc 6), not that their state file is
-        unusable (rc 2). Enforcing an invariant must not downgrade a designed recovery path."""
-        with pytest.raises(dl.QueueRevalidationRequired):
-            dl.validate_queue_revalidation(self._armed(pending="issue_obsolete"))
-        assert issubclass(dl.QueueRevalidationRequired, dl.DriverStateError), \
-            "structural callers must keep catching it"
-
-    @pytest.mark.parametrize(
-        "pending", sorted(dl._PENDING_DISPOSITIONS))       # pylint: disable=protected-access
-    def test_every_pending_disposition_is_refused_not_just_the_obsolete_one(self, pending):
-        """Driven from the vocabulary itself, so a disposition added later is covered the day it
-        is added rather than the day someone remembers this test. (A hand-written second value
-        would have to be skipped when absent, and a permanently-skipped case proves nothing.)"""
-        with pytest.raises(dl.DriverStateError):
-            dl.validate_queue_revalidation(self._armed(pending=pending))
-
-    def test_an_UNSTAMPED_child_with_a_pending_disposition_is_still_fine(self):
-        """The negative twin, and the whole point of `pending_disposition`: recording that a child
-        is obsolete must remain legal — it is the STAMP that may not coexist with it."""
-        state = _state(_iss(1), reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
-        assert dl.validate_queue_revalidation(state) is True
-
-    def test_an_ordinary_stamped_child_is_still_fine(self):
-        """The other twin — without it the fix could refuse every stamp and still pass above."""
-        assert dl.validate_queue_revalidation(self._armed()) is True
-
-    def test_the_OWNER_DISPOSITION_actually_clears_it(self):
-        """**Round-4 High 4 — the defect my own round-3 fix created.** The refusal tells the owner
-        to record `deferred` or `abandoned`. `record_child_outcome` changes only the issue STATUS
-        and leaves the stamp in place, so the invariant kept firing afterwards and the campaign was
-        jammed for good: receipt validation runs before eligibility, and the revalidation skill
-        skips a child that is no longer eligible, so re-running it repaired nothing either.
-
-        A refusal whose own documented remedy does not clear it is not a guard, it is a trap — the
-        same unrecoverable-migration class as round-2 finding 1 and round-3 finding 1. Asserting
-        the exception type alone could never have caught this; only driving the whole
-        `queued -> owner disposition -> gate opens` round trip does."""
-        jammed = _state(_iss(1, validated_against=HEAD),
-                        reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
-        with pytest.raises(dl.QueueRevalidationRequired):
-            dl.next_ready_issue(jammed, observed_head=HEAD)
-        disposed = dl.record_child_outcome(jammed, 1, "abandoned")
-        # The receipt itself must now validate — the child is no longer selectable, so a stamp
-        # beside its pending marker is no longer a contradiction.
-        assert dl.validate_queue_revalidation(disposed) is True
-        # And selection must reach a real verdict instead of raising for ever.
-        assert dl.next_ready_issue(disposed, observed_head=HEAD) is None
-
-    @pytest.mark.parametrize("disposition", ["deferred", "abandoned"])
-    def test_both_documented_dispositions_clear_it(self, disposition):
-        """The refusal names both; both must work, or the message is half true."""
-        jammed = _state(_iss(1, validated_against=HEAD),
-                        reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
-        assert dl.validate_queue_revalidation(
-            dl.record_child_outcome(jammed, 1, disposition)) is True
-
-    @pytest.mark.parametrize("status", ["merged", "deferred", "abandoned"])
-    def test_only_genuinely_DISPOSING_statuses_are_exempt(self, status):
-        """**Round-5 High 2 corrected my round-4 fix.** I exempted every non-`queued` status,
-        reasoning that a non-queued child is not selectable. That was true and beside the point:
-        the reviewer found that a `pr_open` child SATISFIES A DEPENDENCY under
-        `deps_satisfied_by: "pr_open"`, so a stamped child the receipt calls obsolete could
-        unblock a different child and that one got selected. My own enumeration test missed it
-        exactly because it asked "is THIS child selectable" and never "what does this child let
-        somebody else do".
-
-        The exemption is now the statuses that genuinely settle the pending owner decision:
-        `deferred` and `abandoned` are the documented dispositions, and `merged` is a stronger
-        outcome than either. Everything else must still be refused."""
-        state = _state(_iss(1, status, validated_against=HEAD),
-                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
-        assert dl.validate_queue_revalidation(state) is True
-
-    @pytest.mark.parametrize("status", ["queued", "pr_open", "in_progress"])
-    def test_an_UNDISPOSED_status_is_still_refused(self, status):
-        """The other half: these leave the owner decision outstanding, so the contradiction
-        stands. Each is recoverable — the owner records a disposition, or the PR merges."""
-        state = _state(_iss(1, status, validated_against=HEAD),
-                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
-        with pytest.raises(dl.QueueRevalidationRequired):
-            dl.validate_queue_revalidation(state)
-
-    def test_an_obsolete_child_can_never_UNBLOCK_a_dependent(self):
-        """The round-5 High 2 failure itself, pinned. Child #1 is stamped, its receipt says
-        obsolete, and its status is `pr_open`; child #2 is queued and depends on it under the
-        `pr_open` policy. Before the fix the receipt validated and #2 was handed out — work
-        unblocked by a child a human had already been asked to write off."""
-        state = _state(_iss(1, "pr_open", validated_against=HEAD),
-                       _iss(2, depends_on=[1], validated_against=HEAD),
-                       policy={"deps_satisfied_by": "pr_open"},
-                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete"),
-                                           "2": _receipt_child()}))
-        with pytest.raises(dl.QueueRevalidationRequired):
-            dl.next_ready_issue(state, "pr_open", observed_head=HEAD)
-
-    def test_an_UNSTAMPED_obsolete_child_also_cannot_unblock_a_dependent(self):
-        """**Round-6 High 2 — my round-5 fix caught only the shape that cannot legitimately
-        occur.** I keyed the guard on `stamped == head`, i.e. the internally contradictory
-        stamped-plus-pending record. But the skill's own contract says an obsolete child stays
-        UNSTAMPED, so the legitimate shape is exactly the one the guard skipped: unstamped,
-        `pending_disposition`, status `pr_open`. It sailed through validation and satisfied its
-        dependent's dependency, and the test I wrote to prove the effect-on-others behaviour
-        pinned the impossible fixture instead of the real one.
-
-        The pending marker now refuses for any durably-undisposed child whether or not it is
-        stamped, and whether or not it is itself eligible — because eligibility governs what may
-        be SELECTED, and this is about what a child lets somebody else do."""
-        state = _state(_iss(1, "pr_open"),                        # no stamp: the LEGITIMATE shape
-                       _iss(2, depends_on=[1], validated_against=HEAD),
-                       policy={"deps_satisfied_by": "pr_open"},
-                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete"),
-                                           "2": _receipt_child()}))
-        with pytest.raises(dl.QueueRevalidationRequired):
-            dl.next_ready_issue(state, "pr_open", observed_head=HEAD)
-        # The owner's disposition opens the GATE — the refusal is gone. #2 is then correctly
-        # PARKED rather than selected, because an `abandoned` prerequisite does not satisfy a
-        # dependency (docs/multi-issue-driver.md, advance rule). My first draft asserted #2 was
-        # selected; the suite caught it. Both halves matter: an obsolete child must not unblock
-        # its dependent, and disposing of it must not silently unblock it either.
-        disposed = dl.record_child_outcome(state, 1, "abandoned")
-        assert dl.next_ready_issue(disposed, "pr_open", observed_head=HEAD) is None
-
-    def test_a_probe_overlay_cannot_launder_an_undisposed_obsolete_child(self):
-        """Round-6 High 2, second half. Effective status is what selection filters on, so an
-        overlay that reports a `queued` obsolete child as merged used to remove it from the
-        eligible set and with it the pending check. The marker is read from DURABLE status, so
-        the overlay cannot launder an owner decision that has not been made."""
-        state = _state(_iss(1), _iss(2, depends_on=[1], validated_against=HEAD),
-                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete"),
-                                           "2": _receipt_child()}))
-        with pytest.raises(dl.QueueRevalidationRequired):
-            dl.next_ready_issue(state, observed_head=HEAD,
-                                issue_state_probe=lambda n: "confirmed_merged" if n == 1 else "unknown")
-
-    def test_MERGED_may_unblock_a_dependent_but_pr_open_may_not(self):
-        """Why `merged` is in the exemption and `pr_open` is not — the distinction the round-5
-        fix turns on, and the one I flagged as most likely to be wrong before checking it.
-
-        Both statuses satisfy a dependency under the `pr_open` policy, so the mechanical shape is
-        identical. The difference is what the status MEANS. A merged child has landed: its change
-        is in `main`, so its dependent's prerequisite is genuinely met and the stale obsolete
-        marker is bookkeeping about a decision events overtook. An open PR the owner was asked to
-        write off may never land at all, so treating it as satisfied hands out work built on
-        something that might be abandoned.
-
-        Exempting `merged` is therefore not the same hole as exempting `pr_open`, and this test
-        exists so nobody 'tidies' them into one rule in either direction."""
-        def _state_with(status):
-            return _state(_iss(1, status, validated_against=HEAD),
-                          _iss(2, depends_on=[1], validated_against=HEAD),
-                          policy={"deps_satisfied_by": "pr_open"},
-                          reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete"),
-                                              "2": _receipt_child()}))
-        merged = _state_with("merged")
-        assert dl.validate_queue_revalidation(merged) is True
-        assert dl.next_ready_issue(merged, "pr_open", observed_head=HEAD) == 2, \
-            "a child that actually landed really does satisfy its dependent"
-        with pytest.raises(dl.QueueRevalidationRequired):
-            dl.next_ready_issue(_state_with("pr_open"), "pr_open", observed_head=HEAD)
-
-    @pytest.mark.parametrize("status", ["queued", "pr_open", "in_progress"])
-    def test_every_refusing_status_has_a_way_out(self, status):
-        """No refusal without an exit — the rule this PR has now broken three times. Whichever
-        undisposed status a child sits in, recording a disposition must open the gate."""
-        state = _state(_iss(1, status, validated_against=HEAD),
-                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
-        assert dl.validate_queue_revalidation(
-            dl.record_child_outcome(state, 1, "abandoned")) is True
-
-    def test_the_probe_overlay_case_is_refused_but_still_recoverable(self):
-        """The one shape where durable and effective status genuinely disagree: the file says
-        `queued`, the issue is really merged. The invariant fires on the durable value, so the
-        campaign IS refused — and that is acceptable only because recording the real outcome
-        clears it. Checked, not assumed: an unrecoverable refusal here would be the fourth jam."""
-        state = _state(_iss(1, validated_against=HEAD),
-                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
-        with pytest.raises(dl.QueueRevalidationRequired):
-            dl.next_ready_issue(state, observed_head=HEAD,
-                                issue_state_probe=lambda _n: "confirmed_merged")
-        assert dl.validate_queue_revalidation(
-            dl.record_child_outcome(state, 1, "merged")) is True
-
-    def test_a_QUEUED_child_is_still_refused(self):
-        """The negative twin. Narrowing the invariant to selectable children must not narrow it
-        to nothing — a `queued` child carrying both is the case the invariant exists for."""
-        with pytest.raises(dl.QueueRevalidationRequired):
-            dl.validate_queue_revalidation(self._armed(pending="issue_obsolete"))
 
 
 class TestRound3Finding1UnusableBaselinesAreAlsoRecoverable:
@@ -1907,47 +1594,6 @@ class TestRound8H1TheProducerMustSeeWhatSelectionSees:
         assert [item["number"] for item in work] == [2], work
 
 
-class TestRound8H2TheValidatorMustNotPreemptTheWorkingRemedy:
-    """**Round 8, High 2 — round 7's High 3 was only half fixed.** The probe-aware remedy lives in
-    `_refuse_unrevalidated_queue`, but `validate_queue_revalidation` runs FIRST and raises its own
-    `QueueRevalidationRequired` for the STAMPED-plus-pending shape, carrying the `deferred |
-    abandoned` text round 7 proved unsafe. Round 7's fixture left #1 unstamped, so the validator
-    never fired and the bug stayed hidden.
-
-    Recording `abandoned` here opens the gate and PARKS #2; recording the truth releases it."""
-
-    def _stamped_obsolete_with_dependent(self):
-        return _state(_iss(1, validated_against=HEAD),
-                      _iss(2, validated_against=HEAD, depends_on=[1]),
-                      reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete"),
-                                          "2": _receipt_child()}))
-
-    def test_a_stamped_probe_merged_child_is_told_to_record_MERGED(self):
-        probe = (lambda n: "confirmed_merged" if n == 1 else "unknown")
-        with pytest.raises(dl.QueueRevalidationRequired) as exc:
-            dl.next_ready_issue(self._stamped_obsolete_with_dependent(),
-                                observed_head=HEAD, issue_state_probe=probe)
-        assert "--status merged" in str(exc.value), str(exc.value)
-
-    def test_and_executing_that_remedy_releases_the_dependent(self):
-        probe = (lambda n: "confirmed_merged" if n == 1 else "unknown")
-        cleared = dl.record_child_outcome(self._stamped_obsolete_with_dependent(), 1, "merged")
-        assert dl.next_ready_issue(cleared, observed_head=HEAD, issue_state_probe=probe) == 2
-
-    def test_the_stamped_shape_is_still_REFUSED_when_nothing_corroborates_it(self):
-        """The negative twin. Swallowing the validator's refusal must not make the shape
-        selectable — an obsolete stamped child is exactly what must never be handed out."""
-        with pytest.raises(dl.QueueRevalidationRequired) as exc:
-            dl.next_ready_issue(self._stamped_obsolete_with_dependent(), observed_head=HEAD)
-        assert "deferred|abandoned" in str(exc.value), str(exc.value)
-
-    def test_the_standalone_validator_keeps_its_own_invariant(self):
-        """`validate_queue_revalidation` is a public receipt validator with its own contract: a
-        stamped child carrying a pending marker is an incoherent receipt however it is reached."""
-        with pytest.raises(dl.QueueRevalidationRequired):
-            dl.validate_queue_revalidation(self._stamped_obsolete_with_dependent())
-
-
 class TestRound8H3AMalformedReceiptEntryIsNotEvidence:
     """**Round 8, High 3.** `_receipt_covers_child` equated KEY PRESENCE with attestation, so a
     structurally invalid current record counted as covering its child: selection refused with a
@@ -1989,43 +1635,6 @@ class TestRound8H3AMalformedReceiptEntryIsNotEvidence:
         """The negative twin — the round-6 fix must not become 'nothing is ever covered'."""
         state = _state(_iss(1, validated_against=HEAD), reval=_reval(HEAD, {"1": _receipt_child()}))
         assert dl._receipt_covers_child(state, 1, HEAD) is True
-
-
-class TestRound8M1AStaleHeadStillNeedsRevalidation:
-    """**Round 8, Medium 1.** Round 7 made the closing instruction conditional, but derived
-    `needs_revalidation` from the per-child `outstanding` list only. A STALE receipt head with a
-    pending-only outstanding set therefore printed "re-running it will change nothing" — while
-    the stale head is precisely what re-running fixes. Executing the printed remedy left the gate
-    refusing, and only then did it ask for revalidation."""
-
-    def _stale_head_pending_only(self):
-        return _state(_iss(1), reval=_reval(OLD, {"1": _receipt_child(to_sha=OLD,
-                                                                     pending="issue_obsolete")}))
-
-    def test_the_refusal_names_BOTH_remedies(self):
-        with pytest.raises(dl.QueueRevalidationRequired) as exc:
-            dl.next_ready_issue(self._stale_head_pending_only(), observed_head=HEAD)
-        text = str(exc.value)
-        assert "Two different remedies are needed" in text, text
-        assert "re-running it will change nothing" not in text, text
-
-    def test_the_owner_write_back_is_prescribed_BEFORE_revalidation(self):
-        """Order is load-bearing: disposing a child changes what the queue contains, so
-        revalidating first would stamp a child the owner is about to close."""
-        with pytest.raises(dl.QueueRevalidationRequired) as exc:
-            dl.next_ready_issue(self._stale_head_pending_only(), observed_head=HEAD)
-        text = str(exc.value)
-        suffix = text[text.index("Two different remedies are needed"):]
-        assert suffix.index("record the owner's outcome") \
-            < suffix.index("run the revalidate-children skill"), suffix
-
-    def test_a_pending_only_refusal_at_a_CURRENT_head_keeps_its_round7_wording(self):
-        """The negative twin — round 7's fix must survive. Here the receipt head IS current, so
-        revalidation genuinely would change nothing."""
-        state = _state(_iss(1), reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
-        with pytest.raises(dl.QueueRevalidationRequired) as exc:
-            dl.next_ready_issue(state, observed_head=HEAD)
-        assert "re-running it will change nothing" in str(exc.value), str(exc.value)
 
 
 class TestRound8RebuildReceiptIsTheArmingProcedure:
@@ -2084,14 +1693,18 @@ class TestRound8RebuildReceiptIsTheArmingProcedure:
         assert rebuilt["issues"][0]["validated_against"] == HEAD
         assert dl.next_ready_issue(rebuilt, observed_head=HEAD) == 1
 
-    def test_a_pending_child_is_recorded_but_NEVER_stamped(self):
-        """A stamped child is selectable, so one awaiting an owner decision must stay unstamped —
-        and stamping it would trip the receipt's own coherence invariant."""
+    def test_a_pending_child_IS_stamped_while_the_owner_gate_is_out(self):
+        """**Inverted with the owner gate (#848).** The "an obsolete child stays unstamped" rule
+        existed only to keep it un-selectable; with nothing gating on the marker the rule stopped
+        protecting anything and started jamming the queue instead — the child was never stamped,
+        so the per-child provenance clause refused for ever and re-running the skill changed
+        nothing. Found by the jam sweep after the cut. #848 restores both together."""
         state = _state(_iss(1))
         rebuilt = dl.rebuild_receipt(
             state, HEAD, {1: _receipt_child(pending="issue_obsolete")})
-        assert "validated_against" not in rebuilt["issues"][0]
+        assert rebuilt["issues"][0]["validated_against"] == HEAD
         assert dl.validate_queue_revalidation(rebuilt) is True
+        assert dl.next_ready_issue(rebuilt, observed_head=HEAD) == 1
 
     def test_it_never_mutates_the_state_it_was_given(self):
         state = _state(_iss(1, validated_against=OLD), reval=_reval(OLD, {}))
@@ -2140,14 +1753,6 @@ class TestRound8EveryReceiptRefusalNamesItsRemedy:
             dl.validate_queue_revalidation(state)
         assert "revalidate-children" in str(exc.value), f"{label}: {exc.value}"
 
-    def test_the_owner_gate_refusal_is_NOT_rewritten(self):
-        """The negative twin. `QueueRevalidationRequired` already carries the remedy that works
-        for it — an owner write-back — and must not be told to run the skill instead."""
-        state = _state(_iss(1, validated_against=HEAD),
-                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
-        with pytest.raises(dl.QueueRevalidationRequired) as exc:
-            dl.validate_queue_revalidation(state)
-        assert "revalidate-children" not in str(exc.value), str(exc.value)
 
     def test_a_valid_receipt_still_passes(self):
         state = _state(_iss(1, validated_against=HEAD), reval=_reval(HEAD, {"1": _receipt_child()}))
