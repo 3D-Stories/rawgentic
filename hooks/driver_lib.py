@@ -1218,9 +1218,50 @@ def fresh_session_handoff(state: dict, *, mode: str, project=None,
         generation = (state.get("generation") if _is_int(state.get("generation")) else 0) + 1
         return {"outcome": "ready", "next_issue": nxt, "generation": generation,
                 "campaign": state.get("campaign", ""),
+                # #840 AC4a — one of the two producers. Built here, next to the disposition it
+                # rides, so it is the same snapshot the gate just approved rather than a second
+                # read that could disagree with it.
+                "queue": revalidated_queue_payload(state),
                 "resume_prompt": _build_resume_prompt(state, nxt, chosen,
                                                       include_bind=include_bind)}
     return {"outcome": "blocked"}
+
+
+def revalidated_queue_payload(state: dict) -> dict:
+    """The ORDERED snapshot of the queue a successor is about to inherit, plus the head it was
+    attested against. PURE.
+
+    Order is load-bearing (`docs/multi-issue-driver.md`), so this is a LIST in `issues` order and
+    never a dict keyed by number: a reordered queue hands children out in the wrong dependency
+    order, and a set-membership check cannot see that. r2 proposed validating "head and
+    membership", which a reviewer refuted for exactly this reason — membership admits a reordered
+    queue and falsified per-child fields.
+
+    EVERY child is included, not only the eligible ones. Two reasons: `handoff_claim` has no issue
+    probe, so it can only re-derive what durable state alone determines; and a child whose status
+    changed between the handoff being written and claimed means the queue moved under the
+    successor, which SHOULD invalidate the claim rather than be tolerated.
+
+    Per-child fields come from the receipt (`extraction`, `depth`, `outcome`,
+    `correction_comment`) and from the queue entry (`number`, `status`, `validated_against`), so
+    the successor consumes the revalidation result rather than re-deriving it — AC4a.
+    """
+    reval = state.get("queue_revalidation") or {}
+    children = reval.get("children") or {}
+    payload = []
+    for issue in state.get("issues", []):
+        record = children.get(str(issue["number"]))
+        record = record if isinstance(record, dict) else {}
+        payload.append({
+            "number": issue["number"],
+            "status": issue.get("status"),
+            "validated_against": issue.get("validated_against"),
+            "extraction": record.get("extraction"),
+            "depth": record.get("depth"),
+            "outcome": record.get("outcome"),
+            "correction_comment": record.get("correction_comment"),
+        })
+    return {"validated_head": reval.get("validated_head"), "children": payload}
 
 
 def open_handoff(state: dict, disposition: dict, *, now_ts: int) -> dict:
@@ -1244,6 +1285,26 @@ def open_handoff(state: dict, disposition: dict, *, now_ts: int) -> dict:
     position = disposition.get("position")
     if position is not None:
         pending["position"] = dict(position) if isinstance(position, dict) else position
+    # #840 — `queue` is MANDATORY for a revalidation campaign and ABSENT otherwise.
+    #
+    # The discriminator is the state's own `queue_revalidation`, NOT the disposition's `kind`.
+    # r4 keyed it on `kind` and the verifier caught it: `fresh_session_handoff`'s ready
+    # disposition carries no `kind` at all (only `mid_child_handoff` sets one) yet IS a campaign
+    # producer, so keying on `kind` would either break the two tests that pin exactly three
+    # persisted keys on that very path, or silently drop the campaign queue and bypass claim-time
+    # validation. Both are wrong.
+    #
+    # Optional propagation was also refused (pass-3): a producer that dropped `queue` would have
+    # `open_handoff` quietly write the legacy three-key shape, bypassing ordered-payload
+    # validation. So it RAISES.
+    if state.get("queue_revalidation") is not None:
+        queue = disposition.get("queue")
+        if queue is None:
+            raise DriverStateError(
+                "a revalidation campaign's handoff disposition must carry `queue` — writing the "
+                "legacy record for it would leave the successor's claim with nothing to validate "
+                "and silently bypass the ordered-payload check")
+        pending["queue"] = queue
     new["handoff_pending"] = pending
     return new
 
@@ -1320,6 +1381,19 @@ def handoff_claim(state: dict, generation: int, *, claimant: str, now_ts: int,
     if isinstance(claim, dict) and claim.get("generation") == generation:
         if claim.get("started") or not handoff_reclaimable(state, now_ts=now_ts, lease_s=lease_s):
             return (False, state)  # already taken over, or a live in-progress claim
+    # #840 AC4a's consumer — validated HERE, under the generation fence this function already
+    # enforces, because this is the moment the successor takes ownership of the queue.
+    #
+    # The comparison is EXACT and whole-payload: it covers the order, `validated_head`, and every
+    # declared per-child field against durable state. r2 proposed "head and membership", which a
+    # reviewer refuted — membership admits a reordered queue (order decides which child runs next)
+    # and cannot see a falsified `outcome`, `depth` or `correction_comment`. Re-deriving the
+    # expected payload from state and comparing wholesale is both stricter and simpler than
+    # field-by-field checks, and it cannot drift from the producer because both call the same
+    # function.
+    if state.get("queue_revalidation") is not None:
+        if pend.get("queue") != revalidated_queue_payload(state):
+            return (False, state)
     new = dict(state)
     new["handoff_claim"] = {"generation": generation, "claimant": claimant,
                             "claimed_at": now_ts, "started": False}
@@ -1453,6 +1527,9 @@ def mid_child_handoff(state: dict, *, position, include_bind: bool = True) -> di
     return {"outcome": "ready", "next_issue": active[0], "generation": generation,
             "campaign": state.get("campaign", ""), "kind": MID_CHILD_HANDOFF_KIND,
             "position": dict(position),
+            # #840 AC4a — the second producer. A mid-child successor inherits the same queue and
+            # must consume the same attested snapshot.
+            "queue": revalidated_queue_payload(state),
             "resume_prompt": _build_mid_child_resume_prompt(state, position, generation,
                                                             include_bind=include_bind)}
 

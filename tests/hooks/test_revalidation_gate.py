@@ -568,3 +568,133 @@ class TestPerformHandoffRefusesBeforeAnyEffect:
                 teardown=False, on_successor=lambda _p, _s: True,
                 campaign_context={"driver_state_path": str(state_path),
                                   "repo_root": str(work)})
+
+
+# --------------------------------------------------------------------------- #
+# §8 — `handoff_pending.queue`: two producers, one exact claim-time consumer
+# --------------------------------------------------------------------------- #
+
+def _current_campaign():
+    """A campaign that is fully revalidated at HEAD, so the gate opens and a handoff can be
+    written. Two children, so ORDER is observable."""
+    return _state(
+        _iss(1, validated_against=HEAD),
+        _iss(2, validated_against=HEAD),
+        reval=_reval(HEAD, {"1": _receipt_child(),
+                            "2": _receipt_child(extraction="ambiguous", depth="deep")}))
+
+
+class TestTheQueuePayloadProducers:
+    def test_the_fresh_session_disposition_carries_the_ordered_queue(self):
+        disp = dl.fresh_session_handoff(_current_campaign(), mode=dl.FRESH_SESSION_MODE,
+                                        project="rawgentic", observed_head=HEAD)
+        assert disp["outcome"] == "ready", disp
+        assert disp["queue"]["validated_head"] == HEAD
+        assert [c["number"] for c in disp["queue"]["children"]] == [1, 2]
+
+    def test_the_payload_carries_the_revalidation_result_not_just_the_stamp(self):
+        """The successor must CONSUME the revalidation rather than re-derive it (AC4a), so the
+        per-child depth/extraction/outcome ride along."""
+        payload = dl.revalidated_queue_payload(_current_campaign())
+        second = payload["children"][1]
+        assert second["extraction"] == "ambiguous" and second["depth"] == "deep"
+        assert second["outcome"] == "still_valid"
+
+    def test_the_mid_child_disposition_carries_it_too(self):
+        state = _state(_iss(1, "in_progress", validated_against=HEAD),
+                       reval=_reval(HEAD, {"1": _receipt_child()}))
+        position = {"issue": 1, "step": "8", "branch": "feat/x", "test_baseline": "1/0",
+                    "predecessor_pane": "w1:p1", "predecessor_session": "s1",
+                    "goal_condition": "keep going", "project": "rawgentic",
+                    "project_path": "/p", "repo_root": "/p"}
+        disp = dl.mid_child_handoff(state, position=position)
+        assert disp["outcome"] == "ready", disp
+        assert disp["queue"]["validated_head"] == HEAD
+
+
+class TestOpenHandoffMandatoryQueue:
+    def test_a_revalidation_campaign_missing_queue_raises(self):
+        """Optional propagation was refused: a producer that dropped `queue` would have
+        `open_handoff` quietly write the legacy record and bypass claim-time validation."""
+        state = _current_campaign()
+        disp = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE, project="rawgentic",
+                                        observed_head=HEAD)
+        del disp["queue"]
+        with pytest.raises(dl.DriverStateError, match="must carry"):
+            dl.open_handoff(state, disp, now_ts=1000)
+
+    def test_a_pre_840_state_still_writes_exactly_three_keys(self):
+        """The #569 contract, pinned by `test_driver_lib.py:618`/`:791`. The discriminator is the
+        STATE's receipt, not the disposition's `kind` — `fresh_session_handoff`'s ready
+        disposition has no `kind` at all yet is a campaign producer, so keying on `kind` would
+        have broken this."""
+        state = _state(_iss(1, "merged"), _iss(2), session_mode=dl.FRESH_SESSION_MODE)
+        disp = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE, project="rawgentic")
+        new = dl.open_handoff(state, disp, now_ts=1000)
+        assert set(new["handoff_pending"]) == {"generation", "next_issue", "written_ts"}
+
+    def test_a_revalidation_campaign_writes_the_queue(self):
+        state = _current_campaign()
+        disp = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE, project="rawgentic",
+                                        observed_head=HEAD)
+        new = dl.open_handoff(state, disp, now_ts=1000)
+        assert new["handoff_pending"]["queue"]["validated_head"] == HEAD
+
+
+class TestTheClaimTimeConsumer:
+    """`handoff_claim` validates the COMPLETE ORDERED payload. "Head and membership" was refuted:
+    membership admits a reordered queue — and order decides which child runs next."""
+
+    def _pending(self, mutate=None):
+        state = _current_campaign()
+        disp = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE, project="rawgentic",
+                                        observed_head=HEAD)
+        new = dl.open_handoff(state, disp, now_ts=1000)
+        if mutate is not None:
+            mutate(new["handoff_pending"]["queue"])
+        return new
+
+    def test_a_faithful_payload_claims_successfully(self):
+        ok, _new = dl.handoff_claim(self._pending(), 2, claimant="succ", now_ts=1)
+        assert ok is True
+
+    def test_a_reordered_queue_fails_the_claim(self):
+        def reorder(queue):
+            queue["children"].reverse()
+        ok, _new = dl.handoff_claim(self._pending(reorder), 2, claimant="succ", now_ts=1)
+        assert ok is False, "a reordered queue hands children out in the wrong dependency order"
+
+    @pytest.mark.parametrize("field,value", [
+        ("status", "merged"),
+        ("validated_against", OLD),
+        ("depth", "quick"),
+        ("outcome", "body_corrected"),
+        ("extraction", "none"),
+        ("correction_comment", "https://example.invalid/fake"),
+    ])
+    def test_a_falsified_per_child_field_fails_the_claim(self, field, value):
+        def falsify(queue):
+            queue["children"][1][field] = value
+        ok, _new = dl.handoff_claim(self._pending(falsify), 2, claimant="succ", now_ts=1)
+        assert ok is False, f"a falsified {field} was accepted"
+
+    def test_a_falsified_validated_head_fails_the_claim(self):
+        def falsify(queue):
+            queue["validated_head"] = OLD
+        ok, _new = dl.handoff_claim(self._pending(falsify), 2, claimant="succ", now_ts=1)
+        assert ok is False
+
+    def test_a_dropped_child_fails_the_claim(self):
+        def drop(queue):
+            queue["children"].pop()
+        ok, _new = dl.handoff_claim(self._pending(drop), 2, claimant="succ", now_ts=1)
+        assert ok is False
+
+    def test_a_pre_840_claim_is_unaffected(self):
+        """Every existing campaign claims exactly as it did — the consumer only engages when the
+        state carries a receipt."""
+        state = _state(_iss(1, "merged"), _iss(2), session_mode=dl.FRESH_SESSION_MODE)
+        disp = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE, project="rawgentic")
+        new = dl.open_handoff(state, disp, now_ts=1000)
+        ok, _new = dl.handoff_claim(new, 2, claimant="succ", now_ts=1)
+        assert ok is True
