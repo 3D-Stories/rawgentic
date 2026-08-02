@@ -77,9 +77,18 @@ retroactively repair.
 
 For each issue the campaign advances to:
 
-1. **Pick the next issue** — `next_ready_issue(state, deps_satisfied_by)` (see
-   *Dependency ordering*). If it returns `None`, the campaign is done or every
-   remaining issue is parked/blocked.
+1. **Pick the next issue** — `python3 hooks/launcher_lib.py next-child --driver-state <file>
+   --project-root <root> [--project <name>]`, and branch on its exit code (full contract under
+   *Selection in the IN-SESSION loop*, below). **Never call `next_ready_issue` directly here.**
+   That is the pure function; it cannot fetch, so on a receipt-less campaign it selects without
+   ever observing `origin/main` — bypassing the #840 gate — and on an armed one it raises
+   `QueueRevalidationRequired` instead of selecting. `next-child` is the caller that observes the
+   head first and then selects. rc 0 → build that child; rc 3 → the campaign is done or every
+   remaining issue is parked/blocked; rc 6 → stale provenance, cleared by
+   `/rawgentic:revalidate-children` (the refusal names the remedy; while #848 is open that is the
+   only reason this rc carries);
+   rc 5 → stop, the head could not be observed; rc 2 → read stdout before deciding (see the
+   table).
 2. **Run WF2 fresh** — invoke `/rawgentic:implement-feature <number>` as a brand
    new run. It goes through all 16 steps and **terminates at Step 16** exactly as
    it does standalone. The driver observes the *outcome*; it never reaches inside
@@ -208,7 +217,11 @@ otherwise pass every existing check in silence.
 
 **The intersection sets DEPTH, never whether to look** (owner ruling 2026-08-02).
 `revalidation_worklist(state, observed_head, extractions, changed_by_child)` returns one item
-per *effective*-status-`queued` child not stamped at the observed head. A child whose cited
+per *effective*-status-`queued` child **not ATTESTED at the observed head** — and attested means a
+stamp AND a current receipt entry covering that child, never a stamp alone (round-7 finding 2; the
+caller must build its extraction/diff inputs from that same trust-aware candidate set, or the
+function raises `no extraction supplied for child #N` on exactly the child it now re-audits).
+A child whose cited
 files the merge did not touch is still looked at — it is merely `quick` rather than `deep`.
 Nothing is auto-cleared. An earlier design did auto-clear such children and was refuted: a
 merge can invalidate a root-cause claim through a file the child never cites, which is exactly
@@ -218,19 +231,105 @@ how #835's body came to name the wrong cause.
 it was checked against, and the quote that settles it. Without that, an agent could mark every
 remaining child valid having checked nothing, and the gate would report a fully validated queue.
 
-**`issue_obsolete` is not an `outcome`.** A stamped child is selectable, so an obsolete child
-stays *unstamped* and carries `pending_disposition: "issue_obsolete"` until an owner moves it to
-`deferred` or `abandoned`.
+**`issue_obsolete` is not an `outcome`.** An obsolete child carries
+`pending_disposition: "issue_obsolete"` until an owner moves it to `deferred` or `abandoned`.
+**That marker currently gates NOTHING** — the owner gate was cut from #840 and is being rebuilt in
+#848, so it is recorded as evidence for an owner and nothing refuses on it. The child is stamped
+like any other; withholding the stamp only mattered while a stamped child could be selected past
+the gate, and with the gate out it jammed the queue instead.
 
 **Corrections are COMMENTS, never body edits.** A child's body is its author's statement of the
 problem; the run annotates it, it does not rewrite it underneath them.
 
-> **Status: the machinery above is INERT.** It computes and validates; nothing refuses anything
-> yet. `QueueRevalidationRequired` is defined but never raised, and `next_ready_issue` is
-> unchanged. The enforcement — the head-and-provenance gate, the `queue_revalidated` rung on the
-> pane-handoff ladder, and `handoff_pending.queue` — lands in the follow-up PR, deliberately as
-> one atomic change. Shipping the refusal before the mechanism that clears it would jam a live
-> campaign between two PRs.
+### The gate is LIVE (#840 PR 2)
+
+Three layers, in increasing order of authority.
+
+**1. Selection.** `next_ready_issue(state, ..., observed_head=<sha>)` raises
+`QueueRevalidationRequired` when the receipt's `validated_head` differs from the observed head, when
+any eligible child's `validated_against` differs from it. (A third clause on
+`pending_disposition` was cut — see #848.) It **raises** rather than returning `None`, because
+`None` already means
+"nothing ready" and is reported as *the epic finished* — announcing completion over a stale queue is
+strictly worse than refusing. `fresh_session_handoff` surfaces it as an explicit
+`revalidation_required` disposition carrying the outstanding worklist; `launcher_lib handoff` exits
+**6** for it, distinct from a clean `complete`.
+
+**2. `observed_head` must be FRESHLY OBSERVED.** `launcher_lib.observe_head(repo_root)` runs
+`git -C <root> fetch origin` then `git -C <root> rev-parse origin/main`, checks BOTH return codes,
+and validates the output is a full 40-character SHA. It is the only permitted source. A cached SHA —
+or `validated_head` itself — would satisfy both refusal clauses after `main` had moved, and would
+silently defeat the abrupt-death recovery, since a crashed predecessor's stale head compares equal to
+itself. `launcher_lib handoff` exits **5** when the head cannot be observed.
+
+**3. The handoff ladder.** `queue_revalidated` is the FIRST rung of the mid-child ladder — the queue
+must be revalidated before a successor is spawned to inherit it. Its result is produced by the
+launcher reading the durable receipt (`produce_queue_revalidated`), never supplied by a caller: an
+agent asserting its own homework is the vacuous pass this whole mechanism exists to prevent. Because
+`evaluate_verifications` treats an unreported step as FAILED, a missing or stale receipt means the
+handoff produces **no successor** and the predecessor stays alive and guarded.
+
+`handoff_pending.queue` carries the ordered child list plus `validated_head`, and `handoff_claim`
+validates the **complete ordered payload** against durable state at claim time — order included,
+because order decides which child runs next.
+
+**Recovery from abrupt death.** A session killed abruptly runs neither `perform_handoff` nor
+`retire_predecessor`, so the rung never fires for that case. It is covered at layer 1 instead: the
+successor's FIRST `next_ready_issue` refuses, because a crashed predecessor left `validated_head`
+behind the head it died at.
+
+**What clears it depends on WHY it refused** — a distinction round-5 finding 4 caught this
+document getting wrong, having previously said "`/rawgentic:revalidate-children`, and nothing
+else":
+
+- **Stale provenance** (the receipt attests an older head, or an eligible child is unstamped) →
+  `/rawgentic:revalidate-children`, and nothing else. Re-running it is the whole remedy, and while
+  #848 is open it is the ONLY reason this gate refuses.
+- **A pending disposition** used to be a second, owner-only reason. That clause was CUT (#848) —
+  a marker now gates nothing and this gate never refuses because of one. When #848 lands, this
+  bullet returns: only the owner clears it, and re-running the revalidation skill rediscovers the
+  same marker for ever, because choosing between `deferred` and `abandoned` is deliberately not a
+  machine's decision.
+
+Neither bullet covers a CALLER or ENVIRONMENT failure — an absent `campaign_context`, an unreadable
+state file, an unobservable head. Those are refusals of the rung's producer rather than of the
+queue, and no amount of revalidation repairs them; the message says which one it is.
+
+**Selection in the IN-SESSION loop goes through `launcher_lib next-child`.** The driver's default
+mode is `single-session`, which never crosses a process boundary and so never calls `handoff`. Before
+#840's review round that loop had no gated way to pick a child — the skill read state itself, and
+`fresh_session_handoff` returned `single_session` before selection, so an armed campaign with a stale
+receipt advanced anyway. Moving the gate above the mode check was necessary but not sufficient: a
+pure function cannot fetch. `next-child` is the caller that observes. Exit codes match `handoff`:
+
+| rc | meaning |
+|---|---|
+| 0 | a child is ready; `next_issue` on stdout |
+| 2 | **caller/data error — parse stdout before deciding** (see below) |
+| 3 | nothing ready (`complete` / `blocked`) |
+| 5 | the head could not be observed — fail-closed |
+| 6 | the queue needs revalidation; the worklist is on stdout |
+
+**rc 2 covers three situations and the number alone cannot separate them** (round-3 finding 6):
+unreadable or invalid state JSON, any `DriverStateError`, and — the one that is not a failure —
+a SUCCESSFUL selection whose campaign carries no valid `project`. So an automated caller must
+read stdout on rc 2: **a `next_issue` key means selection worked and only the project binding is
+missing** (supply `--project` or add the field, then re-run), while no `next_issue` means the
+state itself could not be used and the run stops. rc 2 is deliberately NOT rc 3: folding a
+config error into "nothing ready" once stopped a live campaign for good, which is round-2
+finding 2.
+
+**The gate is UNIVERSAL — a campaign with no receipt is refused, not waved through.** An earlier
+revision activated enforcement per campaign, once a receipt existed. The Step-11 cross-model review
+called that opt-in theatre and it was right: nothing in the code created the first receipt or produced
+the refusal that would prompt anyone to, so every pre-#840 campaign and every new one stayed
+ungated. Owner decision 2026-08-02 closed it. A refusal is recoverable by one command; silent
+selection is the one failure direction this design forbids.
+
+Consequence, stated rather than discovered: **an existing campaign refuses until
+`/rawgentic:revalidate-children` has run against it once.** That is the migration, and it is
+deliberate. `handoff_pending` still keeps its exact three-key legacy shape for a campaign with no
+receipt, so nothing about the persisted record changes until a campaign is armed.
 
 ## DEFER taxonomy
 
@@ -310,8 +409,13 @@ When `order: dependency`, the queue is a DAG.
    `#1 -> #2 -> #1`) — the campaign stops loudly rather than silently
    mis-ordering. External dependencies (not in the queue) impose no ordering
    edge.
-3. **Advance rule** — `next_ready_issue(state, deps_satisfied_by)` returns the
-   first `queued` issue whose in-queue dependencies are satisfied. A dependency
+3. **Advance rule** — the ordering law `next-child` enforces underneath. `next_ready_issue(state,
+   deps_satisfied_by)` returns the
+   first `queued` issue whose in-queue dependencies are satisfied. **This states the ordering law,
+   not the call to make: never invoke `next_ready_issue` directly — drive it through
+   `python3 hooks/launcher_lib.py next-child`** (see *The loop*), which observes `origin/main`
+   first. Calling it directly bypasses the #840 gate on a receipt-less campaign and raises
+   `QueueRevalidationRequired` on an armed one. A dependency
    counts as satisfied per the `deps_satisfied_by` policy knob:
    `merged` (default) → only `merged`; `pr_open` → `merged` or `pr_open`. A
    dependency that is `deferred`/`abandoned` is **not** satisfied, so its
@@ -432,10 +536,21 @@ durable state alone.
 
 **The boundary.** After a child reaches ANY terminal outcome — `merged` or a blocker's
 `deferred`/`abandoned` — the session ENDS (a blocked child's context must not bleed into an
-independent successor). The driver calls `driver_lib.fresh_session_handoff(state, mode=...)`,
-which returns an explicit disposition — never a `None` sentinel:
+independent successor). The driver gets the disposition from `launcher_lib handoff`,
+which calls `driver_lib.fresh_session_handoff(state, mode=..., observed_head=...)` with a head it
+observed itself (#840 — an armed campaign refuses a disposition computed without one).
+It computes an explicit disposition — never a `None` sentinel:
 
-- `ready` → write `handoff_pending` (`generation` id + `next_issue`) to `.driver-state` and end.
+- `ready` → **the command performs the boundary itself**: it splits the pane, launches the
+  successor and (unless `--no-teardown`) retires the predecessor, then prints an `ok` report.
+  It does **not** return the disposition and does **not** call `open_handoff`, so there is
+  nothing for a caller to persist afterwards. *(Corrected at Step-11 round 4, High 2 — this
+  document and `skills/epic-run/SKILL.md` both described a two-step "get the disposition, then
+  `open_handoff` it" flow that production never implemented. Following it launched the successor
+  before anything durable was written and then looked for a `disp` that does not exist.)*
+  **Known gap:** because nothing is persisted here, this boundary has no generation/claim fence —
+  that belongs to `mid-child-handoff`, which does call `open_handoff`. Two `handoff` invocations
+  for one boundary can each launch a successor. Tracked as #845.
 - `complete` (ONLY when every child is `merged`) → run the wrap-up (close the epic).
 - `blocked` (unmerged children remain but none is ready — all deferred/abandoned/dep-blocked) →
   leave the epic OPEN with an honest summary and end. **`blocked` is never conflated with
@@ -451,7 +566,15 @@ plugin repo — a deferred owner-attended follow-up, mirroring the #568 Phase-1 
 until it lands, fresh-session mode's pre-launch check degrades to single-session, so nothing
 regresses.)
 
-**Generation counter (monotonic).** On a `ready` disposition the driver persists the handoff via
+> **Scope of the two sections below: the MID-CHILD boundary only** (`mid-child-handoff`, #665).
+> Round-5 High 3: they read as though they also covered the child boundary described above, which
+> flatly contradicts it — that boundary's `handoff` command never calls `open_handoff`, writes no
+> `handoff_pending`, and offers a successor nothing to claim. Until **#845** lands, there is no
+> generation counter and no exactly-one-successor fence at the child boundary. Everything from
+> here to the end of this subsection describes `mid-child-handoff`.
+
+**Generation counter (monotonic).** On a `ready` mid-child disposition the driver persists the
+handoff via
 `driver_lib.open_handoff(state, disposition, now_ts=)`, which bumps the top-level `generation`
 counter AND writes `handoff_pending = {generation, next_issue, written_ts}` atomically — the bump
 is required so a later handoff can never reuse a generation (a reused generation would let a stale
@@ -532,7 +655,7 @@ builds its own list. Its resume prompt is built by `driver_lib._build_mid_child_
 next to #569's `_build_resume_prompt` for the same reason: two copies of that wording would
 drift.
 
-**Teardown is successor-driven and verified against six on-disk artifacts**, and on every refusal BEFORE the clear the
+**Teardown is successor-driven and verified against seven on-disk artifacts**, and on every refusal BEFORE the clear the
 predecessor is left alive AND still guarded. After a confirmed clear the honest statement is narrower: a
 refusal leaves it alive but possibly unguarded, and a re-armed predecessor is never closed. `.driver-state` writes on this path go through
 one locked read-modify-write helper (`plan_lib.file_lock` on a stable sidecar). The full ladder,

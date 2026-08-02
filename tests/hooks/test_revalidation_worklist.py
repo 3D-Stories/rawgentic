@@ -59,11 +59,32 @@ class TestWhichChildrenAppear:
             state, HEAD, extractions={840: ([], "none")}, changed_by_child={840: set()})
         assert _by_number(items)[840]["from_sha"] == OLD
 
-    def test_a_child_stamped_at_the_current_head_does_NOT_appear(self):
+    def test_a_child_stamped_at_the_current_head_does_NOT_appear_WHEN_A_RECEIPT_ATTESTS_IT(self):
+        """**Tightened at Step-11 round 6 (High 3).** This used to skip on the stamp alone. That
+        made the gate's own refusal unclearable: a child stamped at the observed head under a
+        STALE or ABSENT receipt was skipped, the worklist came back empty, and the skill the
+        refusal names had nothing to audit and no way to advance the receipt. A stamp is a claim;
+        the receipt is the evidence behind it, and only evidence earns the skip."""
         state = _state([_iss(840, validated=HEAD)])
+        state["queue_revalidation"] = {
+            "version": 1, "extractor_version": 1, "validated_head": HEAD,
+            "children": {"840": {"body_hash": "9" * 64, "from_sha": BASE, "to_sha": HEAD,
+                                 "extraction": "paths", "depth": "quick",
+                                 "outcome": "still_valid",
+                                 "claims": [{"kind": "cause", "quoted_from_body": "x",
+                                             "checked_against": "y", "evidence": "z",
+                                             "verdict": "holds"}],
+                                 "validated_at": 1}}}
+        assert dl.revalidation_worklist(
+            state, HEAD, extractions={}, changed_by_child={}) == []
+
+    def test_the_same_stamp_with_NO_receipt_is_audited_again(self):
+        """The half that was missing, and the reason the old contract produced a dead end."""
         items = dl.revalidation_worklist(
-            state, HEAD, extractions={}, changed_by_child={})
-        assert items == []
+            _state([_iss(840, validated=HEAD)]), HEAD,
+            extractions={840: ([], "none")}, changed_by_child={840: set()})
+        assert [i["number"] for i in items] == [840]
+        assert items[0]["depth"] == "deep" and items[0]["baseline"] == "unavailable", items[0]
 
     def test_nothing_is_auto_cleared_even_when_no_cited_path_was_touched(self):
         """The owner ruling, asserted directly. Under the refuted design this child would have
@@ -169,11 +190,22 @@ class TestFailClosed:
             dl.revalidation_worklist(state, "not-a-sha", extractions={840: ([], "none")},
                                      changed_by_child={840: set()})
 
-    def test_a_malformed_existing_stamp_raises(self):
+    def test_a_malformed_existing_stamp_no_longer_raises_it_falls_back(self):
+        """**INVERTED at Step-11 round 3 (High 1), deliberately.** This asserted that a corrupt
+        stamp raises. That WAS the jam: once the gate became universal, a campaign carrying one
+        was refused by the gate while the clearing skill could not build the worklist that would
+        clear it. The contract now is fail-toward-MORE-scrutiny instead of fail-shut — the range
+        collapses to the observed head and depth is forced `deep`, so nothing is waved through.
+
+        Inverted rather than deleted: a guard that no longer describes the code is worse than no
+        guard, and this one has to keep saying that a corrupt stamp is never merely ignored."""
         state = _state([_iss(840, validated="short")])
-        with pytest.raises(dl.DriverStateError):
-            dl.revalidation_worklist(state, HEAD, extractions={840: ([], "none")},
-                                     changed_by_child={840: set()})
+        items = dl.revalidation_worklist(state, HEAD, extractions={840: ([], "none")},
+                                         changed_by_child={840: set()})
+        assert [i["number"] for i in items] == [840], "the child must still be looked at"
+        assert items[0]["from_sha"] == HEAD and items[0]["to_sha"] == HEAD, items[0]
+        assert items[0]["depth"] == "deep", items[0]
+        assert items[0]["baseline"] == "unavailable", items[0]
 
 
 class TestReviewFindingsValueValidation:

@@ -209,16 +209,18 @@ _VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
                  "attachment with met:false whose condition is the one we armed"},
 )
 
-# The mid-child ladder (#665). Six checks, still CAUSAL, and every artifact is a file on disk or
-# live git state — none of them reads scraped terminal output, which is why a handoff can be
-# verified at all.
+# The mid-child ladder (#665, extended by #840). SEVEN checks, still CAUSAL, and every artifact is
+# a file on disk or live git state — none of them reads scraped terminal output, which is why a
+# handoff can be verified at all.
 #
 # `owner` records which side can produce each piece of evidence, and it is load-bearing rather
-# than documentation: the predecessor can prove the first four about the successor it just
-# launched, but the last two are the SUCCESSOR's own (a rebuild receipt and its claim). A
-# predecessor-side gate that demanded all six could never pass, and — worse — a six-step ladder
+# than documentation: the predecessor can prove the first FIVE about the successor it just
+# launched — four before #840, which inserted the predecessor-owned `queue_revalidated` at
+# position 1 — but the last two are the SUCCESSOR's own (a rebuild receipt and its claim). A
+# predecessor-side gate that demanded all seven could never pass, and — worse — a full ladder
 # handed to `teardown_allowed` on the predecessor side would authorise a predecessor to retire
-# ITSELF after four checks, which is precisely the ownership inversion approach C was rejected
+# ITSELF after the five checks it owns, which is precisely the ownership inversion approach C
+# was rejected
 # for (design §2).
 #
 # #694 reordered the four predecessor-owned rungs to `project_switched -> prompt_landed ->
@@ -226,7 +228,27 @@ _VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
 # now its own send, and `/goal` goes last). Order here is not cosmetic: `evaluate_verifications`
 # walks it and stops at the FIRST failure, so a ladder listing rungs out of send order reports the
 # wrong step as the thing that broke.
+#
+# #840 puts `queue_revalidated` FIRST. The queue must be revalidated BEFORE a successor is spawned
+# to inherit it — a successor handed a stale queue has already read the wrong issue bodies by the
+# time any later rung could object. It is predecessor-owned because the predecessor is what just
+# merged the child that moved `main`.
+#
+# **The rung and its producer must ship together.** A rung with no producer is not inert: it is a
+# landmine. `perform_handoff` gates on `_predecessor_steps(ladder)` at `:1699` and `:1722`,
+# `retire_predecessor` gates at `:2501`, and `evaluate_verifications` treats an UNREPORTED step as
+# failed (`:1139`) — so adding the rung alone fail-closes every mid-child handoff and every
+# teardown the moment it lands.
 _MID_CHILD_VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
+    {"step": "queue_revalidated", "owner": "predecessor",
+     "artifact": ".driver-state -> a queue_revalidation receipt whose validated_head equals a "
+                 "FRESHLY observed origin/main (launcher_lib.observe_head), with every eligible "
+                 "child stamped at that head and no DURABLY-UNDISPOSED child carrying a "
+                 "pending_disposition (the marker is checked wider than eligibility, because a "
+                 "pr_open child cannot be selected but can still satisfy a dependency). Produced by "
+                 "the launcher reading the receipt — never satisfied by a caller-supplied rung "
+                 "result, because an agent asserting its own homework is the vacuous pass this "
+                 "whole issue exists to eliminate"},
     {"step": "spawned", "owner": "predecessor",
      "artifact": "herdr pane get <new> -> a non-empty agent_session.value, recorded into "
                  "handoff_pending.successor so the successor can later bind its own session id "
@@ -1094,10 +1116,101 @@ def handoff_verification_steps() -> list[dict[str, str]]:
 
 
 def mid_child_verification_steps() -> list[dict[str, str]]:
-    """The six-step mid-child ladder (#665). A SEPARATE tuple, not a mutation of #611's three:
-    that contract is pinned by its own test and a launch handoff still has exactly three checks
-    to make."""
+    """The seven-step mid-child ladder (#665, `queue_revalidated` added by #840). A SEPARATE tuple,
+    not a mutation of #611's three: that contract is pinned by its own test and a launch handoff
+    still has exactly three checks to make."""
     return [dict(s) for s in _MID_CHILD_VERIFICATION_STEPS]
+
+
+QUEUE_REVALIDATED_STEP = "queue_revalidated"
+
+
+# "Nobody passed one, so derive the production probe" — distinct from an explicit `None`, which
+# means "run WITHOUT corroboration". A plain `None` default cannot tell those apart, and the
+# difference decides whether a stale-file sibling jams the rung. Defined above its use because a
+# default argument is evaluated at definition time (the same trap `runner` documents below).
+# Canonical decimal ASCII, matching the receipt validator. `"01"`, `"001"` and the Unicode
+# digit `"١"` all pass `str.isdigit()` and all `int()` to the same number.
+_CANONICAL_ISSUE_KEY_RE = re.compile(r"\A(?:0|[1-9][0-9]*)\Z")
+
+
+_DERIVE_PROBE = object()
+
+
+def produce_queue_revalidated(campaign_context, *, runner=None,
+                              issue_state_probe=_DERIVE_PROBE) -> tuple[bool, str]:
+    """The `queue_revalidated` rung's PRODUCER. Reads the receipt; returns ``(passed, reason)``.
+
+    This is deliberately launcher-owned rather than caller-supplied, which was the peer consult's
+    sharpest point: *agent-provided verification JSON must not satisfy this rung.* The launcher
+    reads the durable receipt and compares it against a head it observes itself, so the evidence
+    cannot be the assertion of the thing being checked.
+
+    ``campaign_context`` is ``{driver_state_path, repo_root}`` (``generation`` is accepted and
+    ignored here — it is the caller's own bookkeeping). ``None`` means "not a campaign", which is
+    the ad-hoc handoff: that path uses the three-rung launch ladder and never carries this rung at
+    all, so there is nothing to produce. If the rung were somehow in the ladder with no context,
+    the result stays UNREPORTED and `evaluate_verifications` fail-closes — safe by construction.
+
+    **A campaign with no receipt FAILS** (Step-11 finding 1, owner decision 2026-08-02). An earlier
+    revision of this function passed it with the reason recorded, on a compatibility argument: every
+    campaign predating #840 has no receipt, so failing them refuses every existing mid-child
+    handoff. The reviewer refuted that and the refutation is decisive — a refusal is RECOVERABLE by
+    running `revalidate-children`, whereas silent passage is the one failure direction this design
+    forbids, and nothing in the code would ever have created that first receipt or produced the
+    refusal that prompts someone to. Arming a campaign is one command; a gate that never fires is
+    not a gate.
+
+    Fail-CLOSED on everything it cannot read: an unobservable head, an unreadable state file, or a
+    malformed receipt all refuse. What this gates is an irreversible teardown.
+    """
+    # `runner` defaults inside rather than in the signature: this function is defined next to the
+    # ladder it serves, which is ABOVE `_default_runner`, and a default argument is evaluated at
+    # definition time.
+    runner = _default_runner if runner is None else runner
+    if not isinstance(campaign_context, dict):
+        return (False, "no campaign context supplied, so the receipt could not be read")
+    state_path = campaign_context.get("driver_state_path")
+    repo_root = campaign_context.get("repo_root")
+    if not state_path or not repo_root:
+        return (False, "campaign context needs both driver_state_path and repo_root; got "
+                       f"{campaign_context!r}")
+    driver_lib = _driver_lib()
+    try:
+        state = _locked_state_read(state_path)
+    except (OSError, ValueError) as exc:
+        return (False, f"could not read {state_path}: {type(exc).__name__}: {exc}")
+    if not isinstance(state, dict):
+        return (False, f"{state_path} does not hold a JSON object")
+    # #840 Step-11 finding 1 (Critical, reproduced): this used to return `(True, "enforcement is
+    # OFF")` for a campaign with no receipt, which made all three layers opt-in — nothing in the
+    # code created the first receipt or produced the refusal that would prompt anyone to. Owner
+    # decision 2026-08-02 closed it: a campaign with no receipt now FAILS the rung, with an
+    # actionable reason. A refusal is recoverable by the skill this ships; silent passage is not.
+    try:
+        head = observe_head(repo_root, runner=runner)
+    except LauncherError as exc:
+        return (False, str(exc))
+    # #840 round-8 High 1. The rung and the selection it gates must see the SAME queue. Without
+    # the probe this call disagreed with `fresh_session_handoff` about which children are still
+    # open: a durably `queued` sibling the probe confirms merged is eligible here and not there,
+    # so the rung refused `#N: never revalidated` on a child nobody can revalidate — the skill's
+    # worklist correctly returns nothing for it. Sixth unrecoverable jam, and the first one caused
+    # by two callers of the same function being given different evidence.
+    #
+    # DERIVED here rather than required from callers: #695's own finding is that an optional
+    # corroboration nobody threads in ships dead, and this producer has two production call sites
+    # (`perform_handoff`, `retire_predecessor`) that would each have to remember. The parameter
+    # exists for tests, which cannot reach a real `gh`; the default is the production path.
+    probe = (_issue_state_probe_for(repo_root)
+             if issue_state_probe is _DERIVE_PROBE else issue_state_probe)
+    try:
+        driver_lib.next_ready_issue(state, observed_head=head, issue_state_probe=probe)
+    except driver_lib.QueueRevalidationRequired as exc:
+        return (False, str(exc))
+    except driver_lib.DriverStateError as exc:
+        return (False, f"driver state refused the freshness check: {exc}")
+    return (True, f"the queue is revalidated against {head}")
 
 
 def _predecessor_steps(steps) -> list[dict[str, str]]:
@@ -1160,6 +1273,75 @@ def _default_runner(argv: list[str], timeout: int = 180):
 
 def herdr_available(which=shutil.which) -> bool:
     return which("herdr") is not None
+
+
+# #840 — the ONLY permitted source of `observed_head`.
+_OBSERVED_HEAD_RE = re.compile(r"\A[0-9a-f]{40}\Z")
+
+
+def observe_head(repo_root: str, *, runner=_default_runner,
+                 remote_ref: str = "origin/main") -> str:
+    """Freshly observe the campaign's tracking head. The ONE source of `observed_head`.
+
+    It lives HERE and not in `driver_lib` because `driver_lib` promises no I/O, and that promise
+    is enforced by a source grep for `import subprocess`/`subprocess.run`
+    (`tests/hooks/test_driver_state_write_back.py:295-301`). The design named the wrapper
+    `driver_state.observe_head`; there is no such module, and putting it in `driver_lib` would
+    fail that grep. `launcher_lib` already owns the I/O and the injected-`runner` pattern.
+
+    **Why a wrapper at all, rather than letting callers pass a SHA.** Both pass-3 reviewers
+    found independently that requiring the argument without binding it to a live observation is
+    no guard: a caller could pass a cached SHA — or `validated_head` itself — and satisfy both
+    refusal clauses after `main` had moved. That also silently defeated the abrupt-death
+    recovery, since a crashed predecessor's stale head compares equal to itself.
+
+    **Both return codes are checked, and `-C <repo_root>` is on BOTH commands.** r2 omitted
+    `-C` on the fetch; a reviewer correctly flagged that as able to update a different checkout,
+    or to fail outside a repository, while leaving the target stale. A rc-0 `rev-parse` whose
+    stdout is not a full 40-char SHA is also refused — provenance that cannot be read is not
+    provenance.
+
+    Fail-CLOSED, deliberately against this module's usual convenience-fails-open rule (§3 of the
+    repo manual): what this feeds is a gate on handing out work, so a fetch outage must refuse
+    rather than return a head it could not confirm. The caller reports the refusal; nothing
+    proceeds on a guess.
+    """
+    if not isinstance(repo_root, str) or not repo_root.strip():
+        raise LauncherError("observe_head needs a repository root; got "
+                            f"{repo_root!r}")
+    # #840 round-13: the fetch MUST name the refspec it intends to update. A bare
+    # `git fetch origin` obeys the repo's configured `remote.<name>.fetch`; a narrow or
+    # filtered configuration that excludes this branch returns rc 0 WITHOUT advancing the
+    # tracking ref, and the rev-parse below then hands back a STALE sha that satisfies the
+    # freshness clause this function exists to enforce. rc 0 is only freshness evidence when
+    # the command was told exactly which ref to advance. Found by the neutral-brief review
+    # probe; the three adversarial lenses had all cleared this clause.
+    remote, _, branch = (remote_ref or "").partition("/")
+    if not remote or not branch or "/" in branch:
+        raise LauncherError(
+            f"refusing to observe the head: remote_ref {remote_ref!r} does not split into "
+            "exactly <remote>/<branch>, so no explicit refspec can be derived — and guessing "
+            "one would silently restore the unqualified fetch this refuses")
+    refspec = f"+refs/heads/{branch}:refs/remotes/{remote}/{branch}"
+    fetch = runner(["git", "-C", repo_root, "fetch", remote, refspec])
+    if getattr(fetch, "returncode", 1) != 0:
+        raise LauncherError(
+            f"refusing to observe the head: `git -C {repo_root} fetch {remote} {refspec}` "
+            f"exited {getattr(fetch, 'returncode', 'unknown')} — a stale head would make every "
+            "freshness comparison compare equal to itself and open the gate on a moved main: "
+            f"{(getattr(fetch, 'stderr', '') or '').strip()[:400]}")
+    rev = runner(["git", "-C", repo_root, "rev-parse", remote_ref])
+    if getattr(rev, "returncode", 1) != 0:
+        raise LauncherError(
+            f"refusing to observe the head: `git -C {repo_root} rev-parse {remote_ref}` exited "
+            f"{getattr(rev, 'returncode', 'unknown')}: "
+            f"{(getattr(rev, 'stderr', '') or '').strip()[:400]}")
+    head = (getattr(rev, "stdout", "") or "").strip()
+    if not _OBSERVED_HEAD_RE.match(head):
+        raise LauncherError(
+            f"refusing to observe the head: `rev-parse {remote_ref}` succeeded but printed "
+            f"{head!r}, which is not a full 40-character lowercase SHA")
+    return head
 
 
 def _poll_for(check, *, attempts: int, delay_s: float, sleeper,
@@ -1260,7 +1442,8 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     predecessor_session: str | None = None,
                     predecessor_goal_condition: str | None = None,
                     strict_goal_binding: bool = False,
-                    expected_predecessor_goal=_UNSET_GOAL_SNAPSHOT) -> dict:
+                    expected_predecessor_goal=_UNSET_GOAL_SNAPSHOT,
+                    campaign_context=None) -> dict:
     """Execute the ordered handoff. Effects are injected so tests drive the whole sequence.
 
     THE ORDER, and why each position is load-bearing:
@@ -1321,7 +1504,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
 
     A ladder carrying successor-owned checks forces `teardown` OFF. For a mid-child handoff the
     predecessor is the thing being retired, and retirement is the SUCCESSOR's call — letting the
-    predecessor close its own pane after the four checks it can make is the ownership inversion
+    predecessor close its own pane after the five checks it can make is the ownership inversion
     approach C was rejected for, and it is how "the predecessor cannot observe whether the
     successor really took over" becomes unrecoverable.
 
@@ -1432,6 +1615,26 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     if not os.path.isdir(transcript_dir):
         raise LauncherError(f"transcript directory {transcript_dir!r} does not exist — the "
                             "goal_armed check could never read anything")
+
+    # #840 — the FIRST rung, produced here: after every caller-mismatch validation (so a bad
+    # argument still RAISES rather than being masked by a queue refusal) and before any pane,
+    # session or state effect exists. A successor handed a stale queue has already read the wrong
+    # issue bodies by the time a later rung could object, so this cannot wait for the post-launch
+    # checks.
+    #
+    # `campaign_context` is an EXPLICIT parameter rather than something inferred, because
+    # `perform_handoff` is deliberately shared with `_cmd_ad_hoc_handoff`, which has no campaign
+    # state at all. Present => the check runs, fail-closed. Absent => the ad-hoc case, whose
+    # three-rung launch ladder carries no such rung, so there is nothing to produce.
+    if any(s.get("step") == QUEUE_REVALIDATED_STEP for s in ladder):
+        revalidated, revalidation_reason = produce_queue_revalidated(campaign_context,
+                                                                     runner=runner)
+        out["results"][QUEUE_REVALIDATED_STEP] = revalidated
+        record("queue_revalidated", ["<driver-state receipt>"], note=revalidation_reason)
+        if not revalidated:
+            out["failed_step"] = QUEUE_REVALIDATED_STEP
+            out["reason"] = revalidation_reason
+            return out
 
     # Captured BEFORE the split so nothing already on disk can be mistaken for this launch's
     # evidence (#611 Step-11 Medium 4). A registry that exists but cannot be read yields no
@@ -2080,11 +2283,44 @@ def _atomic_write(path: str, text: str) -> None:
     atomic_write_lib.atomic_write_text(path, text)
 
 
+def _no_duplicate_keys(pairs):
+    """Refuse a JSON object carrying the same property twice.
+
+    `json.load` keeps the LAST of two identical properties and silently discards the first.
+    For a campaign receipt that means two contradictory records for one child collapse to
+    whichever happened to be written last, and the gate then opens on the survivor at rc 0
+    with the other's evidence — a correction, a broken claim — simply gone.
+
+    Round 12 installed this on the `--audited` decode only. Round 13 (all six reviewers,
+    adversarial and neutral, each by executed reproduction) found the four DURABLE driver-state
+    decodes still on plain `json.load`, which is where selection and teardown actually read.
+    One hardened path out of five is not a guard. This is now the single definition."""
+    seen = set()
+    for key, _value in pairs:
+        if key in seen:
+            raise ValueError(f"duplicate property {key!r} — two records cannot both be "
+                             "the evidence for one child")
+        seen.add(key)
+    return dict(pairs)
+
+
+def _load_state_strict(fh, *, source: str = "driver state") -> dict:
+    """The ONE decoder for driver state and audit evidence. Duplicate properties and a
+    non-object document are both DATA refusals (`ValueError`), never a traceback: every
+    caller already maps `ValueError` to its documented rc-2 refusal."""
+    doc = json.load(fh, object_pairs_hook=_no_duplicate_keys)
+    if not isinstance(doc, dict):
+        raise ValueError(
+            f"{source} must be a JSON object mapping the campaign's fields; got "
+            f"{type(doc).__name__}")
+    return doc
+
+
 def _locked_state_read(path: str) -> dict:
     """Read driver state while holding the same lock every writer here takes."""
     with _plan_lib().file_lock(path):
         with open(path, encoding="utf-8") as fh:
-            return json.load(fh)
+            return _load_state_strict(fh)
 
 
 def _locked_state_update(path: str, mutate):
@@ -2103,7 +2339,7 @@ def _locked_state_update(path: str, mutate):
     """
     with _plan_lib().file_lock(path):
         with open(path, encoding="utf-8") as fh:
-            state = json.load(fh)
+            state = _load_state_strict(fh)
         new = mutate(state)
         if new is None:
             return None
@@ -2359,7 +2595,7 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
          one failed teardown would block its own retry for the whole 1800 s lease.
     4.   verify the four launch checks from the successor's OWN artifacts (never a report handed
          to it), then `position_rebuilt` from live git state in the recorded repository.
-    5-6. ack, then gate on all six. Not allowed returns now, predecessor alive AND still guarded.
+    5-6. ack, then gate on all seven. Not allowed returns now, predecessor alive AND still guarded.
     7.   prove the target's identity: `pane get` must still return the recorded predecessor
          session. A pane id is a reusable handle and syntax validation cannot detect a recycled one.
     8.   re-check that OUR guard is still in force. Step 4's `goal_armed` proves a guard existed at
@@ -2471,14 +2707,68 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
                 claim_state["verdict"] = "already_ours"
                 return None
             claim_state["verdict"] = "refused"
+            # #840 Step-11 rounds 3 and 4: the COMPLETE refusal reason, decided from this one
+            # locked snapshot. Round 3 asked only about the caller's own generation and re-read
+            # the state afterwards for the queue half; round 4 showed both were wrong. A live
+            # claimant on a SUPERSEDED generation was invisible, and the second read could
+            # observe a claim that appeared or expired in between. Both halves now come from `s`.
+            claim_state["live_claim"] = driver_lib.handoff_claim_is_live(
+                s, now_ts=now, lease_s=lease_s)
+            claim_state["queue_current"] = driver_lib.handoff_queue_is_current(s)
+            # Round 7, High 1: a STARTED claim on another generation is ambiguous, not absent —
+            # completion is inferred rather than recorded (#846), so durable state cannot tell a
+            # finished successor from a running one.
+            claim_state["unprovable"] = driver_lib.handoff_claim_completion_unprovable(s)
             return None
 
         _locked_state_update(driver_state_path, _claim)
         if claim_state.get("verdict") == "refused":
             out["outcome"] = "claim_refused"
-            out["reason"] = ("could not claim generation "
-                             f"{generation} — a foreign or live claim holds it; the run continues "
-                             "in place and the predecessor stays alive and guarded")
+            # #840 Step-11 finding 4: a queue mismatch and a foreign claim are different
+            # situations with different remedies, and reporting both as "a foreign or live claim"
+            # sent the operator looking for a competing session that does not exist.
+            #
+            # Rounds 3 and 4, High 3: the payload diagnostic may speak ONLY when no live claim
+            # caused the refusal — on ANY generation, not merely this caller's. `handoff_claim`
+            # tests the claim before the payload, and a live claimant on a SUPERSEDED generation
+            # is still somebody working. "No claim was ever created, open a new generation" is
+            # the one instruction that can put a competitor beside them, so it is gated on the
+            # strongest available evidence that nobody is in there.
+            #
+            # Round 7, High 1: "no live claim" is not the same as "nobody is in there". A
+            # STARTED claim on another generation is AMBIGUOUS, because completion is inferred
+            # and never recorded (#846) — durable state cannot distinguish a successor that
+            # finished from one still running. The lifecycle gap predates this PR, but the
+            # instruction below is emitted by code this PR added, so the PR owns making it safe:
+            # an unprovable claim gets its own honest verdict rather than either confident one.
+            if claim_state.get("unprovable") and not claim_state.get("live_claim"):
+                out["claim_state_ambiguous"] = True
+                out["reason"] = (
+                    f"could not claim generation {generation}, and the campaign's state is "
+                    "AMBIGUOUS: a claim on an earlier generation is marked started, and this "
+                    "system records when a claim BEGINS but not when it ends (#846) — so it "
+                    "cannot be told apart from a successor that is still working. The "
+                    "predecessor stays alive and guarded and nothing has been torn down. "
+                    "RECONCILE BY HAND before doing anything else: confirm whether that earlier "
+                    "successor is still running (its pane, its transcript). Only once it is "
+                    "proven finished may a new generation be opened — doing so blind can put a "
+                    "competitor beside a live claimant")
+            elif not claim_state.get("live_claim") and not claim_state.get("queue_current", True):
+                out["queue_changed"] = True
+                out["reason"] = (
+                    f"could not claim generation {generation} — the campaign queue changed after "
+                    "this handoff was written (a child's status moved), so the recorded payload no "
+                    "longer matches durable state. Nothing is wrong with this session: the "
+                    "predecessor stays alive and guarded. Re-run the handoff so a new generation "
+                    "is opened from current state; retrying THIS generation can never succeed and "
+                    "the claim lease does not apply, because no claim was ever created")
+            else:
+                out["reason"] = ("could not claim generation "
+                                 f"{generation} — a live or foreign claim holds this campaign "
+                                 "(possibly on a later generation than the one this session "
+                                 "captured); the run continues in place and the predecessor "
+                                 "stays alive and guarded. Do NOT open another generation — "
+                                 "a claimant may be working right now")
             return out
 
         # --- 4. verify from the SUCCESSOR's own artifacts ---
@@ -2496,6 +2786,15 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             read_or_empty(registry_path), session_id,
             expected_project=position["project"],
             expected_project_path=position["project_path"])
+        # #840 — the same launcher-owned producer as `perform_handoff`, recomputed here rather
+        # than trusted from the predecessor's run. This is the LAST gate before an irreversible
+        # teardown, and the predecessor may have merged another child since it reported. Both
+        # inputs are already in scope, so there is no signature change.
+        revalidated, revalidation_reason = produce_queue_revalidated(
+            {"driver_state_path": driver_state_path, "repo_root": position["repo_root"]},
+            runner=runner)
+        out["results"][QUEUE_REVALIDATED_STEP] = revalidated
+        record("queue_revalidated", ["<driver-state receipt>"], note=revalidation_reason)
 
         launch_ladder = _predecessor_steps(mid_child_verification_steps())
         ok_early, failed_early, _ = evaluate_verifications(out["results"], steps=launch_ladder)
@@ -2505,6 +2804,15 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             out["reason"] = (f"refusing teardown: verification {failed_early!r} has not passed — "
                              "the predecessor stays alive and still guarded, and no claim is "
                              "acked so a later generation can still take over cleanly")
+            # **Carry the ACTIONABLE reason into the caller-visible field (round-9 Medium 2).**
+            # `produce_queue_revalidated` returns a reason that names the exact remedy, and it
+            # was being filed only into `steps[].note` — which `_cmd_retire_predecessor` does not
+            # project into its JSON. So the operator saw `queue_revalidated: false` and no way to
+            # clear it, and retrying reproduced the same opaque refusal. The predecessor was
+            # never in danger; the person holding it just had nothing to do.
+            if failed_early == QUEUE_REVALIDATED_STEP and revalidation_reason:
+                out["reason"] += f". {revalidation_reason}"
+                out["revalidation_reason"] = revalidation_reason
             return out
 
         def _git(*rev_args) -> str | None:
@@ -2567,7 +2875,7 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
         out["results"]["state_claimed"] = _locked_state_update(driver_state_path,
                                                                _ack) is not None
 
-        # --- 6. gate on all six ---
+        # --- 6. gate on all seven ---
         allowed, reason = teardown_allowed(out["results"],
                                           steps=mid_child_verification_steps())
         if not allowed:
@@ -3043,20 +3351,210 @@ def _driver_lib():
     return driver_lib
 
 
-def resume_prompt_for_state(state: dict, project: str | None = None) -> str | None:
-    """The canonical resume prompt for the next ready child, or None when nothing is ready.
+def resume_prompt_for_state(state: dict, project: str | None = None, *,
+                            repo_root: str | None = None) -> dict:
+    """The canonical resume decision for the next ready child, as a RESULT OBJECT.
 
-    Deliberately delegated to `driver_lib._build_resume_prompt` via `fresh_session_handoff`
-    rather than written here: the successor must rebuild from durable state, and two copies of
-    that wording would drift. `None` means the campaign is complete or blocked — there is
-    nothing to hand off, and the caller must not spawn a successor with no work.
+    Returns ``{"outcome": <disposition outcome>, "prompt": str | None, ...}``. `prompt` is
+    non-None only for ``ready``.
+
+    **#840 changed the return type, and the reason is the whole point of the gate.** This used to
+    return ``str | None`` and collapse EVERY non-ready disposition into ``None``, with a docstring
+    saying `None` meant "complete or blocked". A revalidation refusal returning `None` would
+    therefore have been reported to the operator as *the epic finished* while the queue was stale
+    — announcing completion is strictly worse than refusing, so `revalidation_required` has to be
+    representable here rather than flattened.
+
+    ``repo_root`` (#840) is what makes the head FRESHLY OBSERVED rather than merely supplied:
+    `observe_head` runs the fetch and the rev-parse itself. A campaign carrying a
+    `queue_revalidation` receipt REFUSES without it — an optional enforcement input is a bypass.
+
+    The prompt wording stays delegated to `driver_lib._build_resume_prompt` via
+    `fresh_session_handoff`: the successor must rebuild from durable state, and two copies of that
+    wording would drift.
     """
     driver_lib = _driver_lib()
+    observed_head = None
+    if repo_root is not None:
+        # Module-global lookup on purpose — the dataflow test patches `observe_head` to a sentinel
+        # and proves the sentinel is what reaches the comparison, which a locally-bound reference
+        # would defeat.
+        observed_head = observe_head(repo_root)
+    elif state.get("queue_revalidation") is not None:
+        raise LauncherError(
+            "this campaign carries a queue_revalidation receipt, so a resume decision needs a "
+            "repo_root to freshly observe the head; refusing to decide without one")
     disposition = driver_lib.fresh_session_handoff(
-        state, mode=driver_lib.FRESH_SESSION_MODE, project=project)
-    if disposition.get("outcome") != "ready":
-        return None
-    return disposition["resume_prompt"]
+        state, mode=driver_lib.FRESH_SESSION_MODE, project=project,
+        observed_head=observed_head)
+    outcome = disposition.get("outcome")
+    result: dict = {"outcome": outcome,
+                    "prompt": disposition.get("resume_prompt") if outcome == "ready" else None}
+    if outcome == "revalidation_required":
+        result["worklist"] = disposition.get("worklist", [])
+        result["observed_head"] = disposition.get("observed_head")
+        result["validated_head"] = disposition.get("validated_head")
+        result["reason"] = disposition.get("reason")
+    return result
+
+
+def _cmd_next_child(args) -> int:
+    """#840 Step-11 finding 2 — the gated selection path for the IN-SESSION loop.
+
+    The epic driver's default mode is `single-session`: it loops child-by-child in one session and
+    never crosses a process boundary, so it never calls `handoff`. Before this command existed the
+    in-session loop had no gated way to pick the next child — the skill read driver state itself —
+    and `fresh_session_handoff` returned `single_session` before selection, so an armed campaign
+    with a STALE receipt advanced anyway. That was the main path, not a corner.
+
+    Moving the gate above the mode check in `driver_lib` was necessary but not sufficient: the loop
+    still needed a caller that makes a REAL observation, because a pure function cannot fetch. This
+    is that caller. Exit codes match `handoff`'s so the two surfaces cannot drift:
+
+    - **0** — a child is ready; its number is on stdout as JSON.
+    - **3** — nothing ready (`complete` / `blocked`), with the outcome named.
+    - **5** — the head could not be observed (fail-closed).
+    - **6** — the queue needs revalidation; the worklist is on stdout.
+    """
+    driver_lib = _driver_lib()
+    try:
+        with open(args.driver_state, encoding="utf-8") as fh:
+            state = _load_state_strict(fh, source=args.driver_state)
+    except (OSError, ValueError) as exc:
+        print(f"refusing: cannot read {args.driver_state}: {exc}", file=sys.stderr)
+        return 2
+    try:
+        observed_head = observe_head(getattr(args, "project_root", None) or ".")
+    except LauncherError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 5
+    probe = _issue_state_probe_for(getattr(args, "project_root", ".")) \
+        if not getattr(args, "no_probe", False) else None
+    try:
+        # `mode=FRESH_SESSION_MODE` is passed deliberately even for an in-session loop: it is what
+        # makes the disposition compute `complete`/`ready`/`blocked` instead of short-circuiting to
+        # `single_session`. This command answers "which child may I start", not "should I hand off",
+        # and the caller does not act on the process-boundary part of the verdict.
+        disposition = driver_lib.fresh_session_handoff(
+            state, mode=driver_lib.FRESH_SESSION_MODE,
+            project=getattr(args, "project", None), issue_state_probe=probe,
+            observed_head=observed_head)
+    except driver_lib.DriverStateError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 2
+    outcome = disposition.get("outcome")
+    if outcome == "revalidation_required":
+        print(json.dumps({"outcome": outcome, "observed_head": observed_head,
+                          "validated_head": disposition.get("validated_head"),
+                          "worklist": disposition.get("worklist", []),
+                          "reason": disposition.get("reason")}, indent=2))
+        return 6
+    if outcome == "no_project":
+        # #840 Step-11 round 2, finding 2 (High, reproduced): this used to fold into rc 3, which
+        # this command documents as "nothing ready" — so a perfectly ready campaign whose state
+        # omits the optional `project` field reported as complete-or-blocked and the loop could
+        # stop. `project` is not required by queue.schema.json, and a default single-session
+        # campaign historically never needed one, because only a successor BIND needs it.
+        #
+        # It is a configuration error, not a queue verdict, so it gets its own rc and says what to
+        # do. Selection itself already succeeded: the gate passed and a child is ready.
+        print(json.dumps({"outcome": outcome, "observed_head": observed_head,
+                          "next_issue": disposition.get("next_issue"),
+                          "errors": disposition.get("errors", [])}, indent=2))
+        print("refusing: the queue is fresh and a child IS ready, but this campaign has no valid "
+              "`project` for the resume-prompt bind. Pass --project, or add `project` to the "
+              "driver-state file. This is a config error, NOT 'nothing ready' (#840)",
+              file=sys.stderr)
+        return 2
+    if outcome != "ready":
+        print(json.dumps({"outcome": outcome, "observed_head": observed_head}, indent=2))
+        return 3
+    print(json.dumps({"outcome": "ready", "next_issue": disposition["next_issue"],
+                      "observed_head": observed_head}, indent=2))
+    return 0
+
+
+def _cmd_rebuild_receipt(args) -> int:
+    """Persist a rebuilt `queue_revalidation` receipt, under the lock, against a FRESH head.
+
+    Round-9 High 4 and B3. `driver_lib.rebuild_receipt` is pure and returns a new state; the skill
+    documented `new_state = rebuild_receipt(state, head, audited)` and then never said how to
+    write it, so the prescribed remedy could not be followed to the end — the file was untouched,
+    the skill's own validation command validated the unchanged (receipt-less) file and printed
+    `receipt OK`, and selection still refused. Worse, the obvious way to write it — rebuild from
+    the snapshot read at step 1, then replace the file — is a lost update: a concurrent
+    `record-child-outcome` committed during the audit is erased by the atomic replace, and the
+    lock cannot repair a read taken before it.
+
+    So the rebuild happens INSIDE `_locked_state_update`, against the state read under that lock,
+    not against whatever the caller last saw. The caller supplies EVIDENCE (`--audited`, a JSON
+    object of `{issue number: record}`), never a replacement state.
+
+    The head is observed here too, for the reason the whole gate exists: a caller-supplied head
+    can be stale, and a receipt attesting a head nobody confirmed is the vacuous pass this
+    feature was built to remove.
+    """
+    driver = _driver_lib()
+    try:
+        head = observe_head(getattr(args, "project_root", None) or ".")
+    except LauncherError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 5
+    audited: dict = {}
+    if args.audited:
+        # **Duplicate PROPERTIES are refused at decode time (round 12).** The canonical-key check
+        # below catches `"1"` versus `"01"`, but `json.load` silently keeps the LAST of two
+        # identical `"1"` properties before any check can see either — so evidence was discarded
+        # while the command reported success and opened the gate. A Python dict cannot express
+        # that shape, which is exactly why the round-11 test missed it.
+        # The duplicate-property and non-object checks are the module-level
+        # `_load_state_strict` (#840 round 13) — this used to carry its own nested copy, which
+        # is how four other decode paths were left unprotected.
+        try:
+            with open(args.audited, encoding="utf-8") as fh:
+                raw = _load_state_strict(fh, source=args.audited)
+        except (OSError, ValueError) as exc:
+            print(f"refusing: cannot read {args.audited}: {exc}", file=sys.stderr)
+            return 2
+        # **Canonical keys, and collisions REFUSED (round-11).** `{int(key): value}` mapped
+        # `"1"` and `"01"` to the same integer, so one record silently won, the command returned
+        # rc 0, and the gate then selected that child on evidence the operator never intended to
+        # supply. Losing audit evidence while REPORTING SUCCESS is the worst failure mode this
+        # command has, and it is the same non-canonical-key defect the receipt validator already
+        # refuses — this path simply had its own conversion.
+        audited = {}
+        for key, value in raw.items():
+            if not (isinstance(key, str) and _CANONICAL_ISSUE_KEY_RE.match(key)):
+                print(f"refusing: {args.audited} key {key!r} is not a canonical issue number "
+                      "(ASCII decimal, no leading zeros)", file=sys.stderr)
+                return 2
+            number = int(key)
+            if number in audited:
+                print(f"refusing: {args.audited} names issue #{number} more than once; two "
+                      "records cannot both be the evidence for one child", file=sys.stderr)
+                return 2
+            audited[number] = value
+
+    def _mutate(state):
+        return driver.rebuild_receipt(state, head, audited)
+
+    try:
+        _locked_state_update(args.driver_state, _mutate)
+    except driver.DriverStateError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 6
+    except (OSError, ValueError) as exc:
+        print(f"refusing: cannot update {args.driver_state}: {exc}", file=sys.stderr)
+        return 2
+    # Re-read from DISK and validate what actually landed. "It returned a good object" is not
+    # "the file on disk is good", and this command exists precisely because that gap was real.
+    try:
+        driver.validate_queue_revalidation(_locked_state_read(args.driver_state))
+    except driver.DriverStateError as exc:
+        print(f"refusing: the persisted receipt does not validate: {exc}", file=sys.stderr)
+        return 6
+    print(json.dumps({"validated_head": head, "audited": sorted(audited)}))
+    return 0
 
 
 def _cmd_record_child_outcome(args) -> int:
@@ -3127,7 +3625,7 @@ def _cmd_handoff(args) -> int:
     """
     driver_lib = _driver_lib()
     with open(args.driver_state, encoding="utf-8") as fh:
-        state = json.load(fh)
+        state = _load_state_strict(fh, source=args.driver_state)
 
     # #665 — the `kind` discriminator is a CLOSED allowlist, checked FIRST.
     #
@@ -3193,10 +3691,36 @@ def _cmd_handoff(args) -> int:
     if probe is None:
         print("note: issue-state corroboration is OFF — the driver-state file's own status is "
               "being trusted (#695)", file=sys.stderr)
+    # #840 — the freshly observed head, supplied HERE for the same reason #695's probe is: an
+    # enforcement input that no caller threads in ships dead.
+    #
+    # Observed UNCONDITIONALLY (Step-11 finding 1, owner decision 2026-08-02). An earlier revision
+    # observed only when the state already carried a receipt, which made the whole gate opt-in: a
+    # never-armed campaign skipped the observation, then `next_ready_issue` saw neither an
+    # observation nor a receipt and selected work normally. Observing always means an un-armed
+    # campaign is REFUSED with an actionable reason instead of quietly advanced.
+    try:
+        observed_head = observe_head(getattr(args, "project_root", None) or ".")
+    except LauncherError as exc:
+        # Fail-CLOSED. Without a confirmed head every freshness comparison would compare a stale
+        # value against itself and open the gate on a moved main.
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 5
     disposition = driver_lib.fresh_session_handoff(state, mode=mode,
                                                   project=getattr(args, "project", None),
                                                   include_bind=False,
-                                                  issue_state_probe=probe)
+                                                  issue_state_probe=probe,
+                                                  observed_head=observed_head)
+    if disposition.get("outcome") == "revalidation_required":
+        # Its OWN rc, distinct from a clean `complete` (design §6). A refusal reported through the
+        # generic "no handoff" branch below would be indistinguishable from a finished epic, which
+        # is the single failure this gate exists to prevent.
+        print(json.dumps({"outcome": "revalidation_required",
+                          "observed_head": disposition.get("observed_head"),
+                          "validated_head": disposition.get("validated_head"),
+                          "worklist": disposition.get("worklist", []),
+                          "reason": disposition.get("reason")}, indent=2))
+        return 6
     if disposition.get("outcome") != "ready":
         print(f"no handoff: campaign disposition is {disposition.get('outcome')!r} "
               f"(session_mode {mode!r})")
@@ -3542,6 +4066,30 @@ def _cmd_mid_child_handoff(args) -> int:
                 "project": args.project, "project_path": args.project_path,
                 "repo_root": repo_root}
 
+    # #840 Step-11 finding 5 (Medium): the queue check used to run only inside `perform_handoff`,
+    # i.e. AFTER `open_handoff` had bumped `generation` and written `handoff_pending`, and after the
+    # cancelling `try/finally` had been entered. An abrupt death between that write and the block
+    # left an UNCANCELLED generation for a queue nobody had checked. Checking before anything
+    # durable is written means a stale queue costs no generation at all. `perform_handoff` still
+    # checks: defence in depth, and it is the only check the `retire-predecessor` side gets.
+    #
+    # It runs on an UNLOCKED pre-read, deliberately, for two reasons. Ordering: a bad position or
+    # "no active child" is a caller error and must keep its own exit code rather than being masked
+    # by a queue refusal, so the plausibility check has to come first. And the freshness probe does
+    # a `git fetch` — holding the campaign lock across a network call would block every concurrent
+    # reader for its duration. The locked `_open` below stays authoritative; this only decides
+    # whether to get that far.
+    pre_disposition = driver_lib.mid_child_handoff(
+        _locked_state_read(args.driver_state), position=position, include_bind=False)
+    if pre_disposition.get("outcome") == "ready":
+        revalidated, revalidation_reason = produce_queue_revalidated(
+            {"driver_state_path": args.driver_state, "repo_root": position["repo_root"]})
+        if not revalidated:
+            print(json.dumps({"ok": False, "failed_step": QUEUE_REVALIDATED_STEP,
+                              "reason": revalidation_reason}, indent=2))
+            print(f"refusing mid-child handoff: {revalidation_reason}", file=sys.stderr)
+            return 6
+
     # The disposition is computed INSIDE the lock so the generation it bumps is derived from the
     # state actually being written, not from a copy read earlier.
     held: dict = {}
@@ -3612,7 +4160,14 @@ def _cmd_mid_child_handoff(args) -> int:
             prompt_marker=driver_lib.mid_child_marker(position["issue"], generation),
             expected_project=args.project, expected_project_path=args.project_path,
             steps=mid_child_verification_steps(), teardown=False,
-            on_successor=_record_successor)
+            on_successor=_record_successor,
+            # #840 — MANDATORY on this call site. The mid-child ladder carries the
+            # `queue_revalidated` rung, and `evaluate_verifications` fail-closes on an unreported
+            # step, so omitting this would refuse every mid-child handoff. Pinned by a
+            # source-level call-site test.
+            campaign_context={"driver_state_path": args.driver_state,
+                              "repo_root": position["repo_root"],
+                              "generation": generation})
     except Exception as exc:  # pylint: disable=broad-except
         # Broad on purpose: a narrow tuple let `UnicodeDecodeError` from
         # `subprocess.run(text=True)` and `JSONDecodeError` from a state read escape. Reported,
@@ -3810,6 +4365,32 @@ def main(argv: list[str] | None = None) -> int:
     # #695 — the ONE owner of a child's terminal status write-back. Invoked at each authoritative
     # terminal event: WF2 Step 14 right after the merge is confirmed, and Step 16 as idempotent
     # reconciliation. Step 16 alone was the first design and it is NOT atomic with the merge.
+    # #840 — the gated selection path for the in-session loop (Step-11 finding 2). Without this the
+    # default single-session mode had no way to select a child through a freshly observed head.
+    p_nc = sub.add_parser("next-child",
+                          help="which child may be started now, gated on a freshly observed "
+                               "origin/main (rc 0 ready, 2 caller/data error — PARSE STDOUT: a "
+                               "`next_issue` key means selection succeeded and only `project` is "
+                               "missing, otherwise the state is unusable; 3 nothing ready, "
+                               "5 head unobservable, 6 revalidation required)")
+    p_nc.add_argument("--driver-state", required=True)
+    p_nc.add_argument("--project-root", default=".",
+                      help="repository root; the head is observed with `git -C <root>`")
+    p_nc.add_argument("--project", help="project name, for the resume-prompt bind")
+    p_nc.add_argument("--no-probe", action="store_true",
+                      help="skip the GitHub issue-state corroboration (#695); the driver-state "
+                           "file's own statuses are then trusted")
+
+    p_rr = sub.add_parser("rebuild-receipt",
+                          help="rebuild and PERSIST the queue_revalidation receipt under the "
+                               "state lock, against a freshly observed origin/main")
+    p_rr.add_argument("--driver-state", required=True)
+    p_rr.add_argument("--project-root", default=".",
+                      help="repo whose origin/main is observed for the head")
+    p_rr.add_argument("--audited",
+                      help="JSON file holding {issue number: record} for the children audited "
+                           "this pass; omit when nothing needed auditing")
+
     p_rco = sub.add_parser("record-child-outcome",
                            help="write a child's terminal status back to its campaign queue")
     p_rco.add_argument("--issue", type=int, required=True)
@@ -3864,6 +4445,10 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_mid_child_handoff(args)
         if args.cmd == "retire-predecessor":
             return _cmd_retire_predecessor(args)
+        if args.cmd == "next-child":
+            return _cmd_next_child(args)
+        if args.cmd == "rebuild-receipt":
+            return _cmd_rebuild_receipt(args)
         if args.cmd == "record-child-outcome":
             return _cmd_record_child_outcome(args)
         if args.cmd == "read-goal-condition":

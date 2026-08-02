@@ -147,10 +147,84 @@ def test_doc_documents_queue_revalidation_840():
     # must trip here, because the whole gate collapses to theatre without it.
     assert "The intersection sets DEPTH, never whether to look" in text
     assert "Nothing is auto-cleared." in text
-    # The inert-status warning: a reader must not conclude the guard is live.
-    assert "the machinery above is INERT" in text
-    assert "`QueueRevalidationRequired` is defined but never raised" in text
+    # PR 2 INVERTS this pair. PR 1's pins required the doc to say the machinery was inert and that
+    # `QueueRevalidationRequired` is never raised; both are now false, so keeping them passing
+    # would make the doc lie in the one place a reader checks whether the guard is real. The
+    # replacement pins the live contract, and specifically the three facts a reader could get
+    # wrong: that selection RAISES rather than returning None, that the head must be freshly
+    # observed, and that only one skill clears the gate.
+    assert "### The gate is LIVE (#840 PR 2)" in text
+    assert "It **raises** rather than returning `None`" in text
+    assert "must be FRESHLY OBSERVED" in text
+    # INVERTED at round-5 finding 4. This pinned the sentence "**What clears it:**
+    # `/rawgentic:revalidate-children`, and nothing else." — which is FALSE for a pending
+    # disposition: re-running the skill rediscovers the same marker, and only the owner's
+    # `record-child-outcome --status deferred|abandoned` clears it. A drift guard that pins a
+    # false sentence actively defends the error, which is worse than having no guard.
+    assert "**What clears it depends on WHY it refused**" in text
+    # INVERTED with the owner-gate cut (#848). The doc used to pin an owner-only remedy for a
+    # `pending_disposition`; that clause is gone, so the doc must now say so rather than
+    # keep prescribing a remedy for a refusal the gate can no longer make.
+    assert "That clause was CUT (#848)" in text, "the driver doc must record the cut"
+    assert "record-child-outcome" in text, "the command is still named for when #848 lands"
+    assert "and nothing else" in text, "the stale-provenance half is still absolute"
+    # The review round INVERTED this pin. It previously required the doc to state the
+    # per-campaign activation limit; the Step-11 review called that limit opt-in theatre and the
+    # owner closed it, so the doc must now state that the gate is universal AND name the migration
+    # consequence, which is the thing an operator will actually hit.
+    assert "The gate is UNIVERSAL" in text
+    assert "refuses until\n`/rawgentic:revalidate-children` has run against it once" in text
+    # The in-session loop's gated selection path must be documented, or the default mode silently
+    # keeps selecting unguarded (Step-11 finding 2).
+    assert "`launcher_lib next-child`" in text
     # An obsolete child must not read as a stampable outcome.
     assert "`issue_obsolete` is not an `outcome`" in text
     # Corrections are annotations, not rewrites.
     assert "Corrections are COMMENTS, never body edits" in text
+
+
+def _section(text: str, header: str) -> str:
+    """The body under ``header``, up to the next heading of the same or higher level.
+
+    Header-index slicing per the repo's drift-guard convention (§4 mistake 6): a whole-document
+    substring check cannot tell an INSTRUCTION to call the bypass from a mention of it.
+    """
+    start = text.index(header) + len(header)
+    depth = len(header) - len(header.lstrip("#"))
+    rest = text[start:]
+    ends = [rest.index(f"\n{'#' * lvl} ") for lvl in range(1, depth + 1)
+            if f"\n{'#' * lvl} " in rest]
+    return rest[:min(ends)] if ends else rest
+
+
+def test_the_selection_sections_route_through_next_child_not_the_pure_function():
+    """#840 Step-11 round 3, High 2. The doc grew a correct `next-child` section while its OWN
+    primary loop and advance rule still told operators to call `next_ready_issue(state,
+    deps_satisfied_by)` directly. That call observes no head, so it bypasses the gate entirely on
+    a receipt-less campaign and RAISES on an armed one — an operator following the main loop
+    selected a child without ever fetching `origin/main`.
+
+    Mutation-sensitive on purpose: the two sections that carried the bypass are sliced out by
+    header and checked individually. A whole-document check would stay green on exactly the
+    defect that shipped, because the corrective section elsewhere already names `next-child`.
+    """
+    text = _doc()
+    for header in ("## The loop", "## Dependency ordering (schema v2)"):
+        body = _section(text, header)
+        assert "next-child" in body, (
+            f"{header} must route selection through `launcher_lib.py next-child`")
+        if "next_ready_issue" in body:
+            assert "never" in body.lower() and "directly" in body.lower(), (
+                f"{header} names the pure selector without saying not to call it directly — "
+                "that is the round-3 High 2 bypass verbatim")
+
+
+def test_the_next_child_exit_contract_documents_rc_2():
+    """Round-3 finding 6. rc 2 covers three situations, one of which is a SUCCESSFUL selection
+    missing only `project`. Neither driver document nor the CLI help mentioned it, so an
+    automated caller could only guess — and guessing 'error' stops a campaign that is fine."""
+    text = _doc()
+    body = _section(text, "### The gate is LIVE (#840 PR 2)")
+    assert "| 2 |" in body, "rc 2 is missing from the next-child exit-code table"
+    assert "parse stdout" in body.lower(), "rc 2 is useless to a caller without this instruction"
+    assert "`next_issue`" in body

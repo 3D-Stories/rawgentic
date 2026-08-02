@@ -577,6 +577,55 @@ def test_cli_goal_text_reports_truncation() -> None:
 # #611 Step-11 High 1 — the production caller
 # ---------------------------------------------------------------------------
 
+# #840 — `_cmd_handoff` now observes `origin/main` UNCONDITIONALLY (Step-11 finding 1), so these
+# CLI tests must not point `--project-root` at the real checkout: that would make the suite do a
+# live `git fetch` per test and depend on the network. A throwaway repo with a LOCAL origin gives a
+# real, observable head with no network at all.
+REVAL_LOCAL_HEAD_CACHE: dict = {}
+
+
+def _local_repo_with_origin(tmp_path):
+    """(work_tree, head_sha) for a repository whose `origin` is a local bare clone."""
+    origin, work = tmp_path / "origin.git", tmp_path / "work"
+    if work.exists():
+        return str(work), REVAL_LOCAL_HEAD_CACHE[str(work)]
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(origin)],
+                   capture_output=True, check=True)
+    subprocess.run(["git", "init", "-b", "main", str(work)], capture_output=True, check=True)
+    for cfg in (["user.email", "t@example.com"], ["user.name", "t"]):
+        subprocess.run(["git", "-C", str(work), "config", *cfg], capture_output=True, check=True)
+    (work / "f.txt").write_text("one\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(work), "add", "f.txt"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(work), "commit", "-m", "one"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(work), "remote", "add", "origin", str(origin)],
+                   capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(work), "push", "-u", "origin", "main"],
+                   capture_output=True, check=True)
+    head = subprocess.run(["git", "-C", str(work), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    REVAL_LOCAL_HEAD_CACHE[str(work)] = head
+    return str(work), head
+
+
+def _armed(state_dict, head):
+    """Add a minimal VALID `queue_revalidation` receipt attesting `head`, and stamp every queued
+    child at it — the gate is universal since #840, so a receipt-less campaign is refused."""
+    claim = {"kind": "cause", "quoted_from_body": "the cause is X",
+             "checked_against": f"hooks/launcher_lib.py@{head}",
+             "evidence": "read at that sha; still holds", "verdict": "holds"}
+    children = {}
+    for issue in state_dict["issues"]:
+        if issue.get("status") == "queued":
+            issue["validated_against"] = head
+            children[str(issue["number"])] = {
+                "body_hash": "9" * 64, "from_sha": head, "to_sha": head,
+                "extraction": "paths", "depth": "quick", "outcome": "still_valid",
+                "claims": [dict(claim)], "validated_at": 1_754_000_000}
+    state_dict["queue_revalidation"] = {"version": 1, "extractor_version": 1,
+                                        "validated_head": head, "children": children}
+    return state_dict
+
+
 def _state(tmp_path, **over):
     state = {"campaign": "epic-667", "epic": 667, "generation": 3,
              # #682: a campaign state needs the project, or there is no valid
@@ -586,14 +635,18 @@ def _state(tmp_path, **over):
              "issues": [{"number": 611, "status": "merged"},
                         {"number": 612, "status": "queued"}]}
     state.update(over)
+    _work, head = _local_repo_with_origin(tmp_path)
+    if "queue_revalidation" not in state:
+        _armed(state, head)
     p = tmp_path / "driver-state.json"
     p.write_text(json.dumps(state), encoding="utf-8")
     return p
 
 
 def _handoff_argv(state, tmp_path, **over):
+    work, _head = _local_repo_with_origin(tmp_path)
     kw = {"--driver-state": str(state), "--anchor-pane": "w1:p1", "--name": "child4",
-          "--project-root": str(REPO_ROOT), "--project": PROJECT, "--cwd": str(REPO_ROOT),
+          "--project-root": work, "--project": PROJECT, "--cwd": str(REPO_ROOT),
           "--registry": "/reg.jsonl", "--transcript-dir": str(tmp_path),
           "--goal-condition": "keep going", "--launch-mode": "fresh",
           "--herdr-mode": "herdr"}
@@ -680,9 +733,17 @@ class TestHandoffCLI:
         import driver_lib as dl  # noqa: PLC0415
 
         state = json.loads(_state(tmp_path).read_text(encoding="utf-8"))
-        disposition = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE)
+        work, head = _local_repo_with_origin(tmp_path)
+        # #840 — an armed campaign cannot produce a disposition without a freshly observed head;
+        # the pure side takes the SHA, the launcher side takes the repo root and observes it itself.
+        disposition = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE,
+                                               observed_head=head)
         assert disposition["outcome"] == "ready"
-        assert ll.resume_prompt_for_state(state, project=PROJECT) == disposition["resume_prompt"]
+        # #840 made this a result object rather than `str | None`, so a revalidation refusal
+        # could stop being reported as "the epic finished". The prompt itself is unchanged.
+        result = ll.resume_prompt_for_state(state, project=PROJECT, repo_root=work)
+        assert result["outcome"] == "ready", result
+        assert result["prompt"] == disposition["resume_prompt"]
         assert "612" in disposition["resume_prompt"]
 
     def test_the_condition_can_be_read_verbatim_from_a_transcript(self, tmp_path) -> None:
@@ -1610,8 +1671,10 @@ class TestTheLadderMatchesTheSendOrder:
             "spawned", "project_switched", "goal_armed"]
 
     def test_the_mid_child_ladder_follows_the_sends(self) -> None:
+        """#840 prepends `queue_revalidated`: the queue must be revalidated BEFORE a successor is
+        spawned to inherit it, so it cannot sit among the post-launch rungs."""
         assert [s["step"] for s in ll.mid_child_verification_steps()] == [
-            "spawned", "project_switched", "prompt_landed", "goal_armed",
+            "queue_revalidated", "spawned", "project_switched", "prompt_landed", "goal_armed",
             "position_rebuilt", "state_claimed"]
 
     def test_the_old_goal_first_ladder_is_no_longer_permitted(self) -> None:

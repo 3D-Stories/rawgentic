@@ -114,22 +114,66 @@ put a list up by hand).
 - **Fresh-session boundary (#569 — only when `session_mode == "fresh-session"`).** After a
   child reaches ANY terminal outcome — `merged` OR a blocker's `deferred`/`abandoned` — the
   session ENDS rather than looping in-process (a blocked child's context must not bleed into
-  an independent successor). Call `driver_lib.fresh_session_handoff(state, mode=..., project=<the bound project NAME>)` —
+  an independent successor). Get the disposition through
+  **`python3 hooks/launcher_lib.py handoff ...`**, never by calling
+  `driver_lib.fresh_session_handoff` directly (#840): an armed campaign REFUSES a
+  disposition computed without a freshly observed head, and a receipt-less one would bypass
+  the gate entirely — the launcher command is what runs `observe_head`. If you do call the
+  pure function in a probe, pass `observed_head=` from `launcher_lib.observe_head(<repo>)`.
+  It takes `project=<the bound project NAME>` —
   the project is REQUIRED (#682): the resume prompt must OPEN with `/rawgentic:switch <project>`,
   because a bare bind enters the switch skill's list mode and waits for a human, and the
   launcher closes the successor's pane when `project_switched` exhausts at 120 s. Without it the
   disposition is `no_project` and NOTHING is persisted (deliberately, so a refusal cannot strand
-  a bumped `generation`). On
-  `ready` persist the handoff via `driver_lib.open_handoff(state, disp, now_ts=)` (bumps the
-  monotonic `generation` + writes `handoff_pending`) and end; the durable launcher — which must
+  a bumped `generation`).
+  **On `ready` the `handoff` command performs the whole boundary itself — do NOT call
+  `driver_lib.open_handoff` after it** (corrected at Step-11 round 4, High 2; the instruction to
+  do so described a transaction that does not exist). `handoff` observes the head, computes the
+  disposition and, when it is `ready`, goes straight into `perform_handoff`: it splits the pane,
+  launches the successor and — unless `--no-teardown` — retires the predecessor, then prints an
+  `ok` report (rc 0 ok, 4 the ladder refused, 3 nothing ready, 5 head unobservable, 6 revalidate
+  first). It returns no disposition object for you to persist, and there is no `disp` to pass on.
+  **Known gap, stated rather than papered over:** this boundary writes no `handoff_pending`, so
+  it carries no generation/claim fence — that mechanism belongs to `mid-child-handoff`, which
+  does call `open_handoff`. Two `handoff` invocations for the same child can therefore each
+  launch a successor. Tracked as #845; until it is closed, never run `handoff` twice for
+  one boundary on the assumption the second is a no-op. Then the durable launcher — which must
   POSITIVELY advertise no-`--resume` support (`fresh_session_available`'s `fresh_launch_supported`
   probe) — starts a FRESH `claude -p` **with NO `--resume`** for the successor. The successor
-  `driver_lib.handoff_claim`s under the launcher flock (exactly-one-successor), rebuilds position
-  from `.driver-state` — never from in-context memory — then `driver_lib.handoff_ack_started`s
-  after starting the child (a claim that crashes before `started` is reclaimed after the lease, so
-  a failed takeover never strands the run). On `complete` (every child merged) do Step 5; on
+  rebuilds position from `.driver-state`, never from in-context memory.
+  **It does NOT `handoff_claim`/`handoff_ack_started` here, and there is no exactly-one-successor
+  fence at this boundary** — corrected at round-5 High 3, which caught this paragraph asserting
+  the very fence the paragraph above it says does not exist. The claim/lease/ack machinery is
+  `mid-child-handoff`'s (#665), because only that path writes `handoff_pending` for a successor to
+  claim. Closing the gap here is #845. On `complete` (every child merged) do Step 5; on
   `blocked` (unmerged children remain but none ready) leave the epic OPEN with an honest summary
-  and end — never conflate `blocked` with `complete`. **The terminal-backend verdict is part of
+  and end — never conflate `blocked` with `complete`. On **`revalidation_required`** (#840 — the
+  remaining queue has not been revalidated against the current `origin/main`) **READ THE REASON
+  BEFORE ACTING** (round-6 finding 4 — this used to say "run the skill and retry"
+  unconditionally, which is a no-op for one of the two reasons):
+  - **stale provenance** (a child never revalidated, or stamped against an older head) → run
+    `/rawgentic:revalidate-children`, post any corrections, then retry the disposition.
+
+  That is the ONLY reason the gate produces today. A `pending_disposition` used to be a second,
+  owner-only reason; the owner gate was cut from #840 and is being rebuilt in #848, so a marker
+  currently refuses nothing. When #848 lands, this list grows a second bullet whose remedy is an
+  owner write-back that the revalidation skill can never clear.
+
+  This is neither `complete` nor `blocked` and must never be reported as either.
+- **Selecting the next child in the IN-SESSION loop goes through
+  `python3 hooks/launcher_lib.py next-child --driver-state <f> --project-root <r>`** (#840),
+  never by reading the state file and picking. That command observes `origin/main` itself and
+  is the only in-session path the freshness gate can see: `single-session` mode does not cross
+  a process boundary, so it never calls `handoff`, and before this the default mode advanced
+  on a stale queue. rc 0 = ready (`next_issue` on stdout), 3 = nothing ready, 5 = the head
+  could not be observed, 6 = revalidate first (worklist on stdout). **rc 2 = caller/data error —
+  read stdout before deciding:** a `next_issue` key means selection SUCCEEDED and only a valid
+  `project` is missing (pass `--project` and re-run), anything else means the state file is
+  unusable and the run stops. `launcher_lib handoff`
+  exits **6** for it and **5** when the head cannot be observed at all. **After EVERY merge, the
+  remaining children need revalidating before the next one starts** — that is what the gate
+  enforces, and it is the tax this epic's own 2026-08-02 audit measured at 14 rotted bodies out of
+  23. **The terminal-backend verdict is part of
   this decision, not a later one (#611).** Resolve it first —
   `python3 hooks/launcher_lib.py select-mode --terminal-backend <backend> [--herdr-available]
   [--launcher-herdr]` — and pass it as `fresh_session_available`'s `launch_mode`. Deciding it

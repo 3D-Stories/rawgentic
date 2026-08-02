@@ -1,5 +1,21 @@
 # Design — #840: re-validate remaining children after every merge
 
+> **SUPERSEDED AS A NORMATIVE SPEC — 2026-08-02, round-9 Medium 3.** This document records the
+> design as it stood BEFORE nine review rounds. It is kept as history and must NOT be followed as
+> an implementation contract: it names `driver_state.observe_head` (no such module exists —
+> production uses `launcher_lib.observe_head`), defines only the head and eligible-stamp clauses
+> (the live gate has a THIRD, wider clause on any durably-undisposed child carrying a
+> `pending_disposition`), shows `revalidation_worklist` without `issue_state_probe` or
+> `unresolvable_shas`, and states that only children whose stamp differs from the head enter the
+> worklist — which is false: a child stamped at the current head under a stale or unattested
+> receipt is also included, and following the old text recreates the jam round 7 fixed.
+>
+> **The live contract is the code and its tests:** `hooks/driver_lib.py`
+> (`_refuse_unrevalidated_queue`, `revalidation_worklist`, `rebuild_receipt`),
+> `skills/revalidate-children/SKILL.md`, and `tests/hooks/test_revalidation_jam_matrix.py`.
+
+
+
 **Issue:** #840 (epic #756, Tier 1, owner-ordered FIRST)
 **Author:** WF2, session f704bd0c, 2026-08-02. **Revision 4** — supersedes r3 after the pass-3 gate
 (self-review 2 High / 2 Med / 1 Low + adversarial 6 High / 3 Med, 3 of them ambiguous). The

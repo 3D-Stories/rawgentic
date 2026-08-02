@@ -34,6 +34,8 @@ experience shows hand-maintained state transitions are error-prone.
 Pure, stdlib-only, no I/O and no side effects — safe to import from the driver
 pattern, the test suite, or a ``python3 -c`` one-liner in the docs.
 """
+import copy
+import hashlib
 import heapq
 import re
 
@@ -222,16 +224,23 @@ class DependencyCycleError(DriverStateError):
 class QueueRevalidationRequired(DriverStateError):
     """Raised when the remaining queue has not been revalidated against the current head.
 
-    **Defined here in PR 1; nothing raises it until PR 2.** That split is deliberate: the
-    design gate refused an earlier plan that shipped the refusal before the mechanism that
-    clears it, which would have jammed a live campaign between two PRs.
+    **LIVE since PR 2** (`_refuse_unrevalidated_queue`, reached from `next_ready_issue`,
+    `fresh_session_handoff` and `validate_queue_revalidation`). PR 1 defined it and raised it
+    nowhere, deliberately — the design gate refused an earlier plan that shipped the refusal
+    before the mechanism that clears it, which would have jammed a live campaign between two
+    PRs. That is history now; do not read this class as inert.
 
     It subclasses `DriverStateError` so every existing `except DriverStateError` caller stays
     correct, and it is a distinct type so callers can tell "the queue is stale" from "nothing
-    is ready". That distinction is the whole reason selection RAISES rather than returning
-    `None`: `resume_prompt_for_state` collapses every non-ready outcome into `None` and reports
-    it as "complete or blocked", so a stale queue would otherwise be announced to the operator
-    as *the epic finished*.
+    is ready" — `launcher_lib next-child` maps it to rc 6 ("revalidate, then retry") rather
+    than rc 2 ("this state is unusable").
+
+    That distinction is the whole reason selection RAISES rather than returning `None`.
+    `resume_prompt_for_state` USED to collapse every non-ready outcome into `None` and report it
+    as "complete or blocked", which would have announced a stale queue to the operator as *the
+    epic finished*; it now returns a result object carrying the outcome, so the collapse is
+    closed (`tests/hooks/test_revalidation_gate.py::TestRefusalPropagation`). The raise is still
+    what makes that possible, and reintroducing a `None` return would reopen it.
     """
 
 
@@ -254,6 +263,14 @@ _DEPTHS = frozenset({"deep", "quick"})
 # because a stamped child is selectable. It lives only in `pending_disposition`.
 _OUTCOMES = frozenset({"still_valid", "body_corrected"})
 _PENDING_DISPOSITIONS = frozenset({"issue_obsolete"})
+# Statuses that SETTLE a pending owner decision, so a leftover `validated_against` beside a
+# `pending_disposition` is stale bookkeeping rather than a live contradiction (round-5 High 2).
+# `deferred`/`abandoned` are the two dispositions the refusal itself names; `merged` is a
+# stronger outcome than either, and exempting it is what keeps a merged child with a stale
+# marker from jamming the campaign with no way out. Deliberately NOT here: `pr_open` and
+# `in_progress`, which leave the decision outstanding — and `pr_open` can satisfy a dependent's
+# dependency, so exempting it let an obsolete child hand out somebody else's work.
+_DISPOSED_STATUSES = frozenset({"deferred", "abandoned", "merged"})
 
 
 def _enum(value, allowed, what):
@@ -378,7 +395,50 @@ def validate_revalidation_child(record) -> bool:
     return True
 
 
+_RECEIPT_REMEDY = (" Run the revalidate-children skill to rebuild the receipt from evidence "
+                   "(it drops any record that no longer validates), then retry")
+
+# Canonical decimal, ASCII only (round-9 High 2). `str.isdigit()` was the old check and it is
+# true for `"01"`, `"001"` and the Unicode digit `"١"` — all of which `int()` maps to 1, so the
+# validator accepted them while every consumer looks up `children.get(str(number))` and found
+# nothing. A `pending_disposition` filed under `"01"` therefore validated cleanly AND was
+# invisible to the owner gate, which released the dependent. Identity has to have one spelling.
+_CANONICAL_CHILD_KEY_RE = re.compile(r"\A(?:0|[1-9][0-9]*)\Z")
+
+
 def validate_queue_revalidation(state: dict) -> bool:
+    """Validate the campaign receipt, and make EVERY refusal name the remedy that clears it.
+
+    **The remedy is attached HERE, at the function boundary, not at each `raise` (round 8).** The
+    round-8 sweep drove all 3840 reachable gate states through their own printed instructions and
+    found 280 that named nothing an operator could run — every one of them a bare `DriverStateError`
+    from this validator. An earlier fix in the same round had patched exactly one of those raise
+    sites, which is the mistake this whole PR keeps repeating: fix the instance, ship the twin.
+    A wrapper covers the raise sites that exist today AND the ones somebody adds later, which is
+    the only version of this fix that stays fixed.
+
+    `QueueRevalidationRequired` passes through untouched: it is the designed, recoverable refusal
+    and already carries its own remedy, which is an OWNER write-back rather than this skill.
+    """
+    try:
+        return _validate_queue_revalidation(state)
+    except QueueRevalidationRequired:
+        raise
+    except DriverStateError as exc:
+        # **Attached UNCONDITIONALLY, and the remedy is carried STRUCTURALLY (round-9 High 3).**
+        # This used to skip the append when the message already contained "revalidate-children",
+        # which is corruption-controlled text: a receipt whose `version` is the string
+        # `"revalidate-children"` echoes into the message, suppressed the remedy, and left a
+        # refusal naming nothing to run. The jam harness shared the identical substring blind
+        # spot and scored that instructionless refusal as recoverable — the guard and its test
+        # were wrong in exactly the same way, which is why `remedy` is now an ATTRIBUTE rather
+        # than something anybody has to find in prose.
+        error = DriverStateError(str(exc).rstrip(".") + "." + _RECEIPT_REMEDY)
+        error.remedy = "revalidate"
+        raise error from exc
+
+
+def _validate_queue_revalidation(state: dict) -> bool:
     """Validate the campaign-level receipt AND its linkage to `issues[].validated_against`.
 
     Added after the adversarial-diff review (2026-08-02) found that nothing validated the
@@ -405,9 +465,11 @@ def validate_queue_revalidation(state: dict) -> bool:
         raise DriverStateError("queue_revalidation.children must be an object keyed by number")
     parsed: dict[int, dict] = {}
     for key, record in children.items():
-        if not (isinstance(key, str) and key.isdigit()):
+        if not (isinstance(key, str) and _CANONICAL_CHILD_KEY_RE.match(key)):
             raise DriverStateError(
-                f"queue_revalidation.children key {key!r} is not an issue number")
+                f"queue_revalidation.children key {key!r} is not a canonical issue number — "
+                "'01', '001' and non-ASCII digits all parse to the same int but no consumer "
+                "looks them up, so a record filed under one is invisible to the owner gate")
         validate_revalidation_child(record)
         if record["to_sha"] != head:
             raise DriverStateError(
@@ -425,6 +487,39 @@ def validate_queue_revalidation(state: dict) -> bool:
             raise DriverStateError(
                 f"issue #{issue['number']} is stamped at the validated head but the receipt "
                 "carries no evidence for it")
+        # #840 Step-11 round 3, finding 5. `validate_revalidation_child` already refuses
+        # `pending_disposition` alongside an `outcome`, for the reason that decides this too: a
+        # STAMPED child is selectable, so an obsolete one must stay unstamped. The record-level
+        # check could not see the issue-level stamp, so both together passed the whole validator —
+        # the receipt asserted an obsolete child had been cleared. Selection refuses it anyway on
+        # the pending marker, so this closes an invariant hole rather than a bypass; but a receipt
+        # is exactly the artifact whose invariants have to hold on their own.
+        #
+        # **Scoped to UNDISPOSED statuses (round-4 High 4, corrected by round-5 High 2).**
+        # Round 4 exempted every non-`queued` status on the reasoning that a non-queued child is
+        # not selectable. True, and beside the point: a `pr_open` child SATISFIES A DEPENDENCY
+        # under `deps_satisfied_by: "pr_open"`, so a stamped child the receipt calls obsolete
+        # could unblock a DIFFERENT child, and that one was handed out. The question is never
+        # only "is this child selectable" but "what does this child let somebody else do".
+        #
+        # `_DISPOSED_STATUSES` is what genuinely settles the pending owner decision: the two
+        # documented dispositions, plus `merged`, which is a stronger outcome than either and
+        # must be exempt or a merged child with a stale marker would jam the campaign for good.
+        #
+        # **Scoped at all (round-4 High 4).** Unscoped, this refusal outlived its own
+        # remedy: `record_child_outcome` moves the STATUS to `deferred`/`abandoned` and leaves the
+        # stamp untouched, so the invariant kept firing after the owner had done exactly what the
+        # message asked, and re-running the revalidation skill could not help either — it skips a
+        # child that is no longer eligible. The campaign was then unrecoverable, which is the very
+        # class of defect rounds 2 and 3 were spent removing. The invariant is about
+        # SELECTABILITY, so it applies only where selection can happen; once a child is disposed
+        # of it is not selectable and a leftover stamp asserts nothing.
+        # The stamped-plus-pending invariant went with the owner gate (#848). It existed only
+        # because a stamped child is SELECTABLE and an obsolete one must not be — a statement
+        # about a gate that no longer runs. Keeping it would refuse a receipt shape nothing acts
+        # on, which is the "guard keyed to something that cannot matter" class this PR has now
+        # shipped twice. `validate_revalidation_child` still refuses a record carrying BOTH a
+        # pending_disposition and an outcome: that is record coherence, not gating, and it stands.
     return True
 
 
@@ -497,8 +592,84 @@ def parse_changed_paths(diff_text: str) -> set[str]:
     return changed
 
 
+def carries_successor_evidence(record) -> bool:
+    """Does this record hold something the SUCCESSOR still needs? PURE.
+
+    #840 round 12, found independently by two lenses. `rebuild_receipt` drops any record that does
+    not attest the head being validated — and for the active `in_progress` child that deleted its
+    `body_corrected` record, which is the ONLY place `corrections_clause` can read the correction
+    from. The worklist is `queued`-only, so nothing re-supplied it; the rung then reported PASSED
+    and the successor resumed from the stale body the correction existed to fix.
+
+    "Successor-facing" is exactly what `corrections_clause` renders: a broken claim, a correction
+    comment, or a pending disposition. Deliberately NOT "any record" — dropping ordinary
+    `still_valid` evidence is how a corrupt entry becomes recoverable (round 8), and this must not
+    become "never drop anything".
+    """
+    if not isinstance(record, dict):
+        return False
+    if record.get("correction_comment") or record.get("pending_disposition"):
+        return True
+    return any(isinstance(claim, dict) and claim.get("verdict") == "broken"
+               for claim in (record.get("claims") or []))
+
+
+def _receipt_covers_child(state: dict, number: int, observed_head: str) -> bool:
+    """Does a CURRENT campaign receipt carry evidence for this child? PURE.
+
+    #840 Step-11 round 6, High 3. A `validated_against` stamp is a claim; the receipt is the
+    evidence behind it. Treating the stamp alone as "already done" let the head clause refuse a
+    campaign while `revalidation_worklist` returned nothing to do — the refusal named a skill that
+    had no work and so could never advance the receipt the gate demands.
+
+    **Coverage requires a STRUCTURALLY VALID record, not a present key (round 8, High 3).** The
+    first fix asked only `str(number) in children`, which reopened the very jam it closed, one
+    layer down: a corrupt current record — `body_hash: "bad"` reproduces it — made selection die
+    inside `validate_queue_revalidation` with a hard data error while this function reported the
+    child covered, so the worklist came back empty and nothing the operator could run rebuilt the
+    entry. Key presence is not attestation. `to_sha` is checked here too: `validate_queue_revalidation`
+    enforces it against the receipt head, but the worklist path never runs that validator, so this
+    function cannot borrow its guarantee.
+
+    Fails toward MORE work: anything it cannot positively read as valid evidence becomes a
+    re-audit candidate, which costs a look and never hands out an unattested child.
+    """
+    reval = state.get("queue_revalidation")
+    if not isinstance(reval, dict) or reval.get("validated_head") != observed_head:
+        return False
+    children = reval.get("children")
+    if not isinstance(children, dict):
+        return False
+    record = children.get(str(number))
+    try:
+        validate_revalidation_child(record)
+    except DriverStateError:
+        return False
+    return record.get("to_sha") == observed_head
+
+
+def _baseline_usable(sha, unresolvable: frozenset) -> bool:
+    """Can ``sha`` actually serve as the left endpoint of a diff? PURE.
+
+    #840 Step-11 round 3, High 1. Two different ways a baseline is unusable, and they must be
+    handled together because the consequence is identical:
+      * **malformed** — decidable from the value alone. `queue.schema.json` constrains
+        `base_default_branch_sha` to a string and nothing more, so `""` and `"abc"` are
+        schema-valid and were reaching the strict validator, which raised.
+      * **unresolvable** — a well-formed SHA whose object is gone (force-pushed, pruned, or from
+        a different repository). That is I/O and this module does none, so the caller PROBES and
+        passes the answer in; here it is simply believed.
+    """
+    if sha is None or isinstance(sha, bool) or not isinstance(sha, str):
+        return False
+    if not _SHA_RE.match(sha):
+        return False
+    return sha not in unresolvable
+
+
 def revalidation_worklist(state: dict, observed_head: str, extractions: dict,
-                          changed_by_child: dict, issue_state_probe=None) -> list[dict]:
+                          changed_by_child: dict, issue_state_probe=None,
+                          unresolvable_shas=None) -> list[dict]:
     """Which remaining children need a look against ``observed_head``, and how hard a one. PURE.
 
     **Owner ruling 2026-08-02: the cited-paths intersection decides HOW HARD to look, never
@@ -524,22 +695,85 @@ def revalidation_worklist(state: dict, observed_head: str, extractions: dict,
     entry raises rather than defaulting: an absent extraction would silently produce `quick`,
     which fails toward LESS scrutiny, and that is the one direction this design must never
     take. "No data" must never read as "no changes".
+
+    **Baselines, and the division of labour (round-3 High 1).** Each item reports its
+    ``baseline`` provenance — ``"stamp"``, ``"base"``, or ``"unavailable"``. A child carrying a
+    stamp is dated from ITS stamp; one without, from the campaign base. When that commit is
+    unusable — malformed, or named in ``unresolvable_shas`` — the range collapses to
+    ``from_sha == to_sha == observed_head`` with ``depth`` forced to ``"deep"`` and provenance
+    recorded as ``"unavailable"``. It never raises: raising is what made the universal gate
+    unrecoverable twice.
+
+    ``unresolvable_shas`` is the SKILL's half of that split. Whether a well-formed SHA still
+    exists is I/O (force-push, prune, wrong repository), so the skill probes — e.g.
+    ``git cat-file -e <sha>^{commit}`` per distinct baseline — and passes the failures in. Omit
+    it and only malformed values are caught, which leaves the skill to jam one step later on a
+    ``git diff`` whose left endpoint does not exist.
     """
     validate_validated_against(observed_head)
     issues = state.get("issues", [])
     _numbers(issues)
     base = state.get("base_default_branch_sha")
+    unresolvable = frozenset(unresolvable_shas or ())
     effective, _overlaid = effective_issue_statuses(issues, issue_state_probe)
     work: list[dict] = []
+    reval_children = ((state.get("queue_revalidation") or {}).get("children") or {}) \
+        if isinstance(state.get("queue_revalidation"), dict) else {}
     for issue in issues:
         number = issue["number"]
         if effective[number] != "queued":
-            continue
+            # **A non-queued child still needs auditing when it holds successor-facing evidence
+            # (round 12).** The worklist being `queued`-only is what made the active child's
+            # correction unreplaceable: `rebuild_receipt` dropped the record and nothing could
+            # produce a new one, so refusing the drop alone would have been another
+            # unrecoverable jam. A DISPOSED child is exempt — nobody will be handed it, so its
+            # correction has no consumer left.
+            record = reval_children.get(str(number)) if isinstance(reval_children, dict) else None
+            if not (carries_successor_evidence(record)
+                    and issue.get("status") not in _DISPOSED_STATUSES):
+                continue
         stamped = issue.get("validated_against")
-        if stamped is not None:
-            validate_validated_against(stamped)
-            if stamped == observed_head:
-                continue                       # already validated against this exact head
+        # **A stamp is evidence only when a CURRENT receipt vouches for it (round-6 High 3).**
+        # This used to skip on the stamp alone, which made the head clause's own refusal
+        # unclearable: a child stamped at the observed head under a STALE or ABSENT receipt was
+        # skipped, the worklist came back empty, and the skill the refusal names had nothing to
+        # audit and no way to advance the receipt. That is the fifth unrecoverable jam this issue
+        # has produced, and the first found by asking what the REMEDY does rather than what the
+        # refusal does.
+        covered = _receipt_covers_child(state, number, observed_head)
+        if stamped == observed_head and covered:
+            continue                           # validated at this head, and attested
+        # Audited again, and its stamp is NOT a baseline: there is no range to diff and nothing
+        # attesting it, so it falls through to unavailable/deep rather than producing an empty
+        # range that would buy `quick`.
+        #
+        # **A per-child LOCAL, not a mutation of `base` (round-7 Low 1).** The first version set
+        # `base = None` here, and `base` is loop-invariant — so one unattested stamp silently
+        # downgraded every LATER unstamped child to `head..head`/`deep` even where the campaign
+        # base was perfectly good. It fails toward more scrutiny, so it was never unsafe, but it
+        # is provenance the receipt then records wrongly, and it is the sort of quiet
+        # cross-contamination that is very hard to see later.
+        # **A stamp is a baseline only when something attests THAT stamp (round-11 High 2).**
+        # This used to check attestation only for a stamp equal to the observed head, so a child
+        # stamped at an OLDER head under a CURRENT receipt carrying no entry for it kept
+        # `baseline="stamp"` and bought `quick` — and `quick` takes citation claims as-is, so the
+        # missing evidence suppressed exactly the checks `deep` would have run. Failing toward
+        # LESS scrutiny is the one direction forbidden here.
+        #
+        # Scoped to campaigns that HAVE a receipt: a pre-#840 campaign has none, so nothing could
+        # attest any stamp, and forcing every child deep there would make the first arm — the
+        # migration path rounds 2 and 3 were spent making possible — expensive for every legacy
+        # campaign at once. `test_a_usable_base_and_stamp_are_still_used` is the twin that caught
+        # this fix being too broad on the first attempt.
+        if stamped is None:
+            force_unavailable = False
+        elif state.get("queue_revalidation") is not None:
+            force_unavailable = not _receipt_covers_child(state, number, stamped)
+        else:
+            force_unavailable = stamped == observed_head
+        # A malformed stamp used to RAISE here (round-3 High 1). `observed_head` is validated
+        # above, so the equality check needs no validation of its own, and an unusable stamp is
+        # now a baseline problem — handled with the campaign base below — not a hard error.
         if number not in extractions:
             raise DriverStateError(
                 f"no extraction supplied for child #{number} — refusing to default it, because "
@@ -579,21 +813,250 @@ def revalidation_worklist(state: dict, observed_head: str, extractions: dict,
                 "a null cannot be read as 'nothing changed'")
         intersects = bool(set(cited) & set(changed))
         depth = "deep" if (extraction != "paths" or intersects) else "quick"
-        if stamped is None:
-            # The campaign base is optional and nullable in queue.schema.json and
-            # validate_driver_state ignores it, so an accepted state can carry no base at
-            # all — which previously emitted `from_sha: None`, a value the receipt shape can
-            # never satisfy. Validated LAZILY, so a campaign whose children are all stamped
-            # is unaffected.
-            if base is None:
-                raise DriverStateError(
-                    f"child #{number} has never been validated and the campaign carries no "
-                    "base_default_branch_sha, so there is no range to revalidate over")
-            validate_validated_against(base)
+        # Which commit dates this child's range, and can it actually serve?
+        #
+        # A child that carries a stamp uses ITS stamp — never the campaign base. Falling through
+        # from an unusable stamp to the base would date the range from a commit this child was
+        # never validated at, and a wider-but-wrong range can buy `quick` on a real change.
+        # A child with no stamp uses the campaign base; that is the first arm.
+        if force_unavailable:
+            candidate, provenance = None, "stamp"
+        else:
+            candidate, provenance = (stamped, "stamp") if stamped is not None else (base, "base")
+        if _baseline_usable(candidate, unresolvable):
+            from_sha = candidate
+        else:
+            # **This used to RAISE, and Step-11 rounds 2 and 3 both proved that made the universal
+            # gate unrecoverable.** Round 2: `base_default_branch_sha` is optional and nullable in
+            # queue.schema.json, so a schema-valid pre-#840 campaign was refused by the gate while
+            # the clearing skill could not build its first worklist — re-running changed nothing,
+            # so there was no path from "refused" to "armed". Round 3: the same jam survived for
+            # every OTHER unusable value, because the schema constrains the field to a string and
+            # nothing more — `""`, `"abc"` and a force-pushed SHA all still raised, as did a
+            # pruned per-child stamp. A migration with no way through is worse than no migration.
+            #
+            # The fallback collapses the range to `observed_head` at BOTH ends and forces `deep`.
+            # That is the honest reading: with no usable baseline there is no range to diff, so
+            # nothing can be shown to be untouched and every claim has to be checked against the
+            # current tree. It fails toward MORE scrutiny, which is the only direction allowed
+            # here, and `from_sha == to_sha` is a valid receipt shape (both are full SHAs).
+            from_sha, provenance, depth = observed_head, "unavailable", "deep"
         work.append({"number": number, "depth": depth, "extraction": extraction,
-                     "from_sha": stamped if stamped is not None else base,
-                     "to_sha": observed_head})
+                     "from_sha": from_sha, "to_sha": observed_head, "baseline": provenance})
     return work
+
+
+def normalize_issue_body(body: str) -> str:
+    """The canonical form `body_hash` is taken over. PURE.
+
+    Defined HERE rather than in prose (round-9 High 5). The design doc said "sha256 of the
+    normalized body" and no code anywhere defined "normalized", so two sessions hashing the same
+    body could disagree and the receipt's binding to the body meant nothing. The rules are the
+    minimum that survive a round-trip through the GitHub API and a local editor:
+
+    * CRLF and CR both become LF — the API and a Windows editor disagree, and that is not a body
+      change;
+    * trailing whitespace is stripped per line, for the same reason;
+    * leading and trailing blank lines are dropped.
+
+    Nothing else is touched: internal blank lines, markdown and unicode are content.
+    """
+    if not isinstance(body, str):
+        raise DriverStateError(f"issue body must be a string, got {type(body).__name__}")
+    lines = [line.rstrip() for line in body.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
+
+
+def build_revalidation_record(*, body: str, from_sha: str, to_sha: str, extraction: str,
+                              depth: str, claims: list, validated_at: int,
+                              outcome: str | None = "still_valid",
+                              pending_disposition: str | None = None,
+                              correction_comment: str | None = None) -> dict:
+    """One `queue_revalidation.children[<n>]` record, built and validated. PURE.
+
+    Round-9 High 5: the skill told an agent to pass `audited` records "carrying
+    `to_sha == observed_head`" and said nothing else, while `validate_revalidation_child` requires
+    EIGHT fields plus a `body_hash` whose derivation was documented nowhere. The printed call
+    could not run, and an agent had to reverse-engineer the validator or the tests first. A
+    constructor is the executable version of that contract — and it validates its own output, so
+    a bad record fails here rather than at the receipt write.
+
+    `validated_at` is INJECTED: this module does no I/O and takes no clock, which is also what
+    keeps its tests deterministic.
+    """
+    record = {"body_hash": hashlib.sha256(
+                  normalize_issue_body(body).encode("utf-8")).hexdigest(),
+              "from_sha": from_sha, "to_sha": to_sha, "extraction": extraction, "depth": depth,
+              "outcome": outcome, "claims": claims, "validated_at": validated_at}
+    if pending_disposition is not None:
+        # The two are mutually exclusive by the receipt's own coherence rule: an obsolete child
+        # is awaiting a decision, so it has no outcome yet.
+        record["pending_disposition"] = pending_disposition
+        record["outcome"] = None
+    if correction_comment is not None:
+        record["correction_comment"] = correction_comment
+    validate_revalidation_child(record)
+    return record
+
+
+def rebuild_receipt(state: dict, observed_head: str, audited: dict) -> dict:
+    """Write the campaign receipt FROM EVIDENCE. PURE — returns a new state, mutates nothing.
+
+    This is `skills/revalidate-children/SKILL.md` step 7 made executable. It used to be prose, and
+    prose is where three of this issue's eight review rounds found defects — a step described in
+    English is a step every future session re-derives, slightly differently. The rules below are
+    the ones that were impossible to state safely in a paragraph:
+
+    * **A record that does not validate is not evidence, so it is DROPPED.** Carrying it forward
+      is what made a corrupt entry unrecoverable (round-8 sweep, 39 states): the worklist only
+      ever audits ELIGIBLE children, so a malformed record belonging to a `merged` or
+      `in_progress` child was never rewritten and `validate_queue_revalidation` refused for ever.
+      Rebuilding from evidence has no such blind spot — anything unreadable simply does not
+      survive into the new receipt.
+    * **A record attesting a different head is dropped too.** It says nothing about this one.
+    * **A stamp with no surviving record is CLEARED.** The linkage invariant refuses a child
+      stamped at the validated head with no evidence behind it, and after a drop that is exactly
+      what would be left. The stamp is the claim; the record is the evidence; losing the evidence
+      must lose the claim, never the other way round.
+    * A `pending_disposition` on a record is carried forward as EVIDENCE of what the audit
+      found, but it gates nothing while #848 is open, so it no longer withholds the stamp.
+
+    ``audited`` maps issue number to the record just produced for it — normally one entry per
+    `revalidation_worklist` item. An EMPTY ``audited`` is legitimate and still advances the head:
+    a campaign whose children are all merged or in flight has nothing to audit but must still be
+    armable, or the gate would be permanently shut on the mid-child handoff it exists to serve.
+
+    Fails CLOSED on STRUCTURE: the result is validated before it is returned, so it can never be
+    the source of a structurally invalid receipt. It does **not** promise the gate will then open
+    — round-9 Medium 1 corrected an earlier docstring that claimed exactly that. An incomplete
+    audit leaves eligible children stamped at an older head and the gate refuses that on purpose.
+    Structural validity and a satisfied gate are different properties; only the first is
+    guaranteed here.
+    """
+    validate_validated_against(observed_head)
+    if not isinstance(audited, dict):
+        raise DriverStateError(f"audited must be a dict of number -> record, got "
+                               f"{type(audited).__name__}")
+    new = copy.deepcopy(state)
+    prior = state.get("queue_revalidation")
+    prior_children = prior.get("children") if isinstance(prior, dict) else None
+    # **A live owner obligation blocks the rebuild (round-9 High 1, found independently by two
+    # reviewers).** A `pending_disposition` is OWNER state that happens to be stored inside a
+    # HEAD-SCOPED audit record, so every rule that drops or replaces records against a head can
+    # destroy it — and three separate paths did: a malformed record was dropped, a record
+    # attesting an older head was dropped, and a clean audited record simply overwrote the
+    # marker. In each case the campaign armed, the gate opened, and a dependent was handed out
+    # with nobody having decided anything. Refusing is the only safe direction: a machine may not
+    # close a child, and it may not launder the requirement to either.
+    #
+    # The recoverability sweep scored all three as PASSES, because its whole question is "does
+    # the gate open" — which is precisely what laundering achieves. That gap is now covered by
+    # `TestTheGateNeverOpensOverALiveOwnerDecision`.
+    children: dict[str, dict] = {}
+    if isinstance(prior_children, dict):
+        for key, record in prior_children.items():
+            if not (isinstance(key, str) and _CANONICAL_CHILD_KEY_RE.match(key)):
+                continue                       # not an addressable issue number
+            try:
+                validate_revalidation_child(record)
+            except DriverStateError:
+                continue                       # unreadable, so not evidence
+            if record.get("to_sha") == observed_head:
+                children[key] = copy.deepcopy(record)
+    # **Refuse to DROP evidence the successor still needs (round 12).** Everything above kept a
+    # prior record only when it attests `observed_head`; for the active child that silently
+    # deleted the correction `corrections_clause` reads. Scoped to UNDISPOSED children, and to
+    # records that actually carry successor-facing evidence, so ordinary stale or corrupt records
+    # are still dropped freely — that dropping is what makes a corrupt entry recoverable.
+    prior_map = prior_children if isinstance(prior_children, dict) else {}
+    for issue in state.get("issues", []):
+        number = issue["number"]
+        if issue.get("status") in _DISPOSED_STATUSES or int(number) in {
+                int(k) for k in audited}:
+            continue
+        record = prior_map.get(str(number))
+        if carries_successor_evidence(record) and str(number) not in children:
+            error = DriverStateError(
+                f"refusing to rebuild the receipt: child #{number} is still active and its record "
+                "carries evidence the successor needs (a correction, a broken claim or a pending "
+                "disposition), and this rebuild would drop it. Re-audit that child against the "
+                "observed head and supply its replacement record — the revalidate-children skill "
+                "lists it")
+            error.remedy = "revalidate"
+            raise error
+    for number, record in audited.items():
+        validate_revalidation_child(record)
+        # **An OLDER audit may not replace a NEWER record at the SAME head (round 12).** The
+        # state lock serialises WRITES; it does not order EVIDENCE. A session holding a record
+        # prepared before another session's correction landed would otherwise overwrite it, and
+        # both are legitimately "at the observed head".
+        existing = children.get(str(int(number)))
+        if isinstance(existing, dict):
+            was, now = existing.get("validated_at"), record.get("validated_at")
+            if _is_int(was) and _is_int(now):
+                if now < was:
+                    raise DriverStateError(
+                        f"refusing the audit record for child #{number}: it was validated at "
+                        f"{now} but the receipt already holds evidence validated at {was}, which "
+                        "is newer. Re-audit against the observed head rather than replaying an "
+                        "older pass")
+                # **Round 13, found by all six reviewers.** `validated_at` is an integer epoch
+                # SECOND, so two audits prepared inside the same second TIE — and the round-12
+                # guard above, testing only `<`, let the incoming one win on a tie. That is the
+                # same evidence loss round 12 existed to close. Equality orders nothing, so it
+                # is only safe when there is nothing to order: an IDENTICAL record is a retry of
+                # a write that may have been interrupted, and must still succeed or a rebuild
+                # could never be re-run. Anything else at the same instant is refused.
+                if now == was and record != existing:
+                    raise DriverStateError(
+                        f"refusing the audit record for child #{number}: it and the receipt's "
+                        f"existing evidence are both stamped {now}, so they are unordered — an "
+                        "equal timestamp cannot decide which is later, and the existing record "
+                        "differs. Re-audit against the observed head so the replacement carries "
+                        "a strictly later validated_at")
+        if record.get("to_sha") != observed_head:
+            # **This is the NORMAL case of `main` moving mid-audit, not a caller bug — so it
+            # names a remedy (round-10, all three lenses).** It used to state only the mismatch,
+            # which left the operator holding an rc 6 and no next step for the most ordinary
+            # thing that can happen during a long audit: somebody merged while you were reading
+            # issue bodies. The evidence is not wrong, it is simply dated.
+            error = DriverStateError(
+                f"the audit record for child #{number} attests {record.get('to_sha')!r}, not the "
+                f"head being validated ({observed_head!r}) — origin/main moved while the audit "
+                "was running. Re-run the revalidate-children skill against the newly observed "
+                "head; the evidence you gathered is dated, not wrong")
+            error.remedy = "revalidate"
+            raise error
+        children[str(int(number))] = copy.deepcopy(record)
+    new["queue_revalidation"] = {"version": 1, "extractor_version": 1,
+                                 "validated_head": observed_head, "children": children}
+    for issue in new.get("issues", []):
+        key = str(issue["number"])
+        record = children.get(key)
+        if record is None:
+            stamped = issue.get("validated_against")
+            # An UNUSABLE stamp is cleared too, not only one matching the head. It names no
+            # commit, so it attests nothing — and leaving it made this very function refuse its
+            # own output at the fail-closed validation below, which turned the documented remedy
+            # into a crash for every campaign carrying one.
+            if stamped is not None and (stamped == observed_head
+                                        or not _baseline_usable(stamped, frozenset())):
+                del issue["validated_against"]     # the claim outlived its evidence
+            continue
+        # **An audited child is STAMPED even when its record carries a marker (#848).** The
+        # "an obsolete child stays unstamped" rule existed solely to protect the owner gate — a
+        # stamped child is selectable, so one awaiting a decision must not be. With that gate cut
+        # the rule has nothing left to protect and became an unrecoverable jam instead: the child
+        # was never stamped, so the per-child provenance clause refused for ever and re-running
+        # the skill changed nothing. Caught by the jam sweep, not by review. #848 restores this
+        # together with the clause it serves.
+        issue["validated_against"] = observed_head
+    validate_queue_revalidation(new)
+    return new
 
 
 def parse_depends_on(body: str) -> list[int]:
@@ -792,8 +1255,185 @@ def effective_issue_statuses(issues, issue_state_probe=None) -> tuple[dict, dict
     return effective, overlaid
 
 
+def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict) -> None:
+    """The #840 head-and-provenance gate. Raises `QueueRevalidationRequired`, or returns.
+
+    Refuse when EITHER clause fails (design §4, both required — pass-2 findings #1 and #2):
+
+        observed_head != queue_revalidation.validated_head
+        any eligible child's validated_against != observed_head
+        any DURABLY-UNDISPOSED child carries a pending_disposition
+
+    Note the scope difference on the third clause, and it is deliberate (round-6 High 2, restated
+    here at round-8 Medium 2 because this docstring still carried the old eligible-only wording
+    beside the corrected code). Stamp freshness is an ELIGIBLE-child question. The pending marker
+    is not: a `pr_open` child cannot be selected but can still SATISFY a dependency, so an
+    obsolete one would otherwise hand out somebody else's work.
+
+    The head clause alone was r2's design and both reviewers refuted it: a brand-new campaign
+    sitting at its base head, or a newly-added unstamped child at an unmoved head, would hand out
+    work with no provenance at all. The per-child clause alone is equally insufficient — stamps
+    can be advanced without the receipt advancing atomically, and then every child *looks*
+    current while nothing attests the queue as a whole.
+
+    `pending_disposition` is the owner gate. Revalidation may conclude a child is obsolete, but
+    closing a child is an owner decision, so the machine's job is to REFUSE rather than choose
+    between `deferred` and `abandoned`. It is read from the receipt because that is where §3 puts
+    it, and it holds regardless of the child's stamps — an obsolete child that is otherwise fully
+    stamped and current must still not be handed out.
+
+    Eligibility is EFFECTIVE status, not durable status: a `queued` entry the probe confirms
+    already merged must not jam the queue on a revalidation nobody can meaningfully perform.
+
+    **The per-child clauses are skipped when no child is eligible; the HEAD clause is not.**
+    An earlier revision of this docstring said "nothing is refused when no child is eligible",
+    and that stopped being true when Step-11 finding 3 made the head comparison unconditional:
+    the rung asserts "this campaign's queue is current", which a mid-child handoff needs to hold
+    even while its only child is `in_progress` and nothing is selectable. So a campaign with no
+    eligible child and a stale — or absent — receipt IS refused. What the eligibility check buys
+    is only that an empty queue is not asked for per-child provenance it cannot have.
+    """
+    validate_validated_against(observed_head)
+    reval = state.get("queue_revalidation")
+    validated_head = None
+    children: dict = {}
+    if reval is not None:
+        # Validated BEFORE any eligibility shortcut (Step-11 review finding 3, reproduced): the
+        # old code returned early when nothing was eligible, so a receipt of
+        # `{"validated_head": "not-a-sha"}` was never validated and `produce_queue_revalidated`
+        # reported the ladder rung PASSED on it. The producer's contract says a malformed receipt
+        # fails closed, so the validation cannot sit behind a shortcut that exists for selection.
+        #
+        # This also checks the LINKAGE to the per-child stamps, so a fabricated stamp with no
+        # evidence behind it fails here rather than passing the gate.
+        validate_queue_revalidation(state)
+        validated_head = reval.get("validated_head")
+        children = reval.get("children") or {}
+    eligible = [i for i in state.get("issues", []) if effective[i["number"]] == "queued"]
+    reasons: list[str] = []
+    # The head clause is UNCONDITIONAL, not gated on eligibility (finding 3). It is a statement
+    # about the QUEUE as a whole, and an empty eligible set does not make a stale receipt fresh —
+    # the ladder rung asserts "this campaign's queue is current", which a mid-child handoff needs
+    # to be true even while its only child is `in_progress`.
+    #
+    # A campaign with NO receipt fails it too (finding 1, owner decision 2026-08-02). The
+    # compatibility argument for waving those through was refuted by the reviewer and the
+    # refutation is decisive: a refusal is recoverable by running `revalidate-children`, whereas
+    # silent selection is the one failure direction this design forbids. An un-armed campaign is
+    # therefore refused with an actionable reason rather than quietly advanced.
+    if validated_head != observed_head:
+        reasons.append(
+            f"the campaign receipt attests {validated_head!r}, not the observed head "
+            f"{observed_head!r}" if validated_head is not None else
+            "this campaign has never been revalidated (no queue_revalidation receipt) — run "
+            "/rawgentic:revalidate-children once to arm it")
+    # The outstanding set is structured, not just prose, because `fresh_session_handoff` has to
+    # hand the successor a worklist and this is the only place that knows which children are in
+    # it. `depth` is deliberately NOT computed here: it needs the changed-file sets, which are
+    # I/O, and this module is pure. The revalidate-children skill annotates depth via
+    # `revalidation_worklist`.
+    outstanding: list[dict] = []
+    # **The `pending_disposition` OWNER GATE IS NOT ENFORCED HERE — cut deliberately (#848).**
+    # It was added in round 6 of this PR's review and broke in rounds 7, 8, 9 and 10; four of
+    # round 10's six findings lived entirely inside it, while the two clauses above had been
+    # stable since round 5. Owner decision 2026-08-02: ship the stable half and rebuild the owner
+    # gate in #848 behind ONE function that owns "what is wrong and what clears it" — the
+    # structural answer to the defect that kept recurring, which was several sites each computing
+    # their own remedy from information some of them did not have.
+    #
+    # The FIELD still exists and is still validated on every record; nothing gates on it, exactly
+    # as v3.117.0 shipped the rest of this machinery inert. `TestTheOwnerGateIsInert` pins that,
+    # and #848 INVERTS that guard rather than deleting it.
+    #
+    # What stays open until #848 lands, stated rather than hidden: an obsolete child can still
+    # satisfy a dependent's dependency under `deps_satisfied_by: "pr_open"`. That is a PRE-EXISTING
+    # hole — nothing enforced it before #840 either — so cutting this returns to the status quo
+    # rather than regressing past it.
+    for issue in eligible:
+        number = issue["number"]
+        stamped = issue.get("validated_against")
+        if stamped is None:
+            outstanding.append({"number": number, "validated_against": None,
+                                "reason": "never revalidated"})
+            continue
+        # **An unusable stamp is STALE PROVENANCE, not a hard error (round-8 sweep).** This used
+        # to `validate_validated_against(stamped)` and raise, which killed selection with a bare
+        # data error naming no remedy — and `revalidation_worklist` had already stopped raising on
+        # exactly this value at round-3 High 1, so the gate and the skill disagreed about whether
+        # `"abc"` was recoverable. It is: the stamp claims a head it cannot name, which is a claim
+        # with no evidence, and rebuilding the receipt clears it.
+        if not _baseline_usable(stamped, frozenset()):
+            outstanding.append({"number": number, "validated_against": stamped,
+                                "reason": f"carries an unusable stamp {stamped!r}, so it names no "
+                                          "head it can be compared against"})
+            continue
+        if stamped != observed_head:
+            outstanding.append({"number": number, "validated_against": stamped,
+                                "reason": "revalidated against a stale head"})
+            continue
+    reasons.extend(f"#{item['number']}: {item['reason']}" for item in outstanding)
+    if reasons:
+        # **The closing instruction is CONDITIONAL (round-7 Medium 1).** It used to append "Run
+        # the revalidate-children skill … then retry" to every refusal, including a pending-only
+        # one whose own text had just explained that revalidation cannot clear it — so the
+        # message contradicted itself and its last line was a no-op. The suffix now names only
+        # the remedies that apply: revalidation for stale provenance, the owner's write-back for
+        # a pending marker, and both only when both are genuinely outstanding.
+        #
+        # **A STALE HEAD counts as needing revalidation, even with no stale-provenance child
+        # (round 8, Medium 1).** This was derived from `outstanding` alone, which holds per-child
+        # items only — so a stale receipt head plus a pending-only outstanding set printed
+        # "re-running it will change nothing" while the stale head was precisely what re-running
+        # fixes. Executing the printed remedy left the gate still refusing, and only then asked
+        # for revalidation: a two-step remedy delivered one step at a time, which is the same
+        # defect as a remedy that does nothing, spread over two attempts.
+        # Only ONE remedy exists while the owner gate is out (#848): revalidation. The two-part
+        # and owner-only branches went with it — a suffix naming a remedy no clause can produce is
+        # exactly the prose-contradicting-code defect this PR kept shipping.
+        suffix = ". Run the revalidate-children skill, post any corrections, then retry."
+        error = QueueRevalidationRequired(
+            "refusing to hand out the next child: the remaining queue has not been revalidated "
+            f"against {observed_head}. " + "; ".join(reasons) + suffix)
+        # Carried on the exception so `fresh_session_handoff` can surface a worklist without
+        # re-deriving it — and so the refusal is never reduced to an opaque string the caller has
+        # to parse.
+        error.observed_head = observed_head
+        error.validated_head = validated_head
+        error.outstanding = outstanding
+        # STRUCTURAL, not something a reader has to infer from the prose (round-9 High 3 and
+        # Medium 1). Consumers — including the jam sweep — dispatch on this rather than pattern
+        # matching the message, so corruption-controlled text cannot forge or suppress a remedy,
+        # and a refusal can be checked for having DISCLOSED every action it will take.
+        error.remedy = "revalidate"
+        raise error
+
+
+def campaign_deps_satisfied_by(state: dict) -> str:
+    """The campaign's persisted `policy.deps_satisfied_by`, or the strict default. PURE.
+
+    #840 Step-11 round 4, High 1. `fresh_session_handoff` took `next_ready_issue`'s `"merged"`
+    default and silently discarded the persisted policy, so the documented headless stacked-PR
+    flow (`deps_satisfied_by: "pr_open"`, dependents advance once their prerequisite has an open
+    PR) reported `blocked` — which the driver reads as "nothing left" and stops on. #840's own
+    gate work is what routed selection through that path, so it shipped the regression.
+
+    **An unusable value falls back to `"merged"`, the STRICTER rule, rather than raising.**
+    `pr_open` is the looser of the two, so a value nobody can read must not buy it; and raising
+    would strand a whole campaign over a typo in a knob, which is the unrecoverable class this
+    issue has now hit three times. Fail toward strictness, never toward a jam.
+    """
+    policy = state.get("policy")
+    if not isinstance(policy, dict):
+        return "merged"
+    value = policy.get("deps_satisfied_by")
+    if isinstance(value, str) and not isinstance(value, bool) and value in _SATISFIED_BY:
+        return value
+    return "merged"
+
+
 def next_ready_issue(state: dict, deps_satisfied_by: str = "merged",
-                     issue_state_probe=None) -> int | None:
+                     issue_state_probe=None, *,
+                     observed_head: str | None = None) -> int | None:
     """Return the first queued issue whose dependencies are satisfied, else None.
 
     "First" is queue order (the ``issues`` list order). A dependency counts as
@@ -827,6 +1467,20 @@ def next_ready_issue(state: dict, deps_satisfied_by: str = "merged",
     by_num = {i["number"]: i for i in issues}
     numset = set(by_num)
     effective, _overlaid = effective_issue_statuses(issues, issue_state_probe)
+    # #840 — the gate runs BEFORE selection, because a stale queue must refuse whether or not
+    # something happens to be ready. The discriminator is the STATE, never the argument: an
+    # optional enforcement input is a bypass, and this repo has already shipped that exact defect
+    # once (`tests/hooks/test_driver_state_write_back.py:304-306` documents an optional probe that
+    # shipped dead). So a campaign that opted into revalidation and is then queried with no
+    # observation is REFUSED rather than silently waved through.
+    if observed_head is not None:
+        _refuse_unrevalidated_queue(state, observed_head, effective)
+    elif state.get("queue_revalidation") is not None:
+        raise DriverStateError(
+            "this campaign carries a queue_revalidation receipt, so selection requires a freshly "
+            "observed head (launcher_lib.observe_head). Selecting without one would skip the "
+            "freshness gate entirely — pass observed_head, or explicitly None only for a campaign "
+            "that predates #840 and has no receipt")
     for issue in issues:
         if effective[issue["number"]] != "queued":
             continue
@@ -893,6 +1547,20 @@ def record_child_outcome(state: dict, issue: int, status: str) -> dict | None:
     new = dict(state)
     new["issues"] = [dict(e, status=status) if e["number"] == issue else dict(e)
                      for e in issues]
+    # #840 note, deliberately NOT a write here. `handoff_claim` compares the persisted queue
+    # payload for exact equality, and this writer is the normal way a child's status changes, so an
+    # unrelated terminal reconciliation between `open_handoff` and the claim DOES invalidate the
+    # pending payload (Step-11 finding 4). An earlier fix cancelled the record from here and was
+    # reverted: `tests/hooks/test_mid_child_handoff.py` asserts by AST that `open_handoff` is the
+    # ONLY writer of `handoff_pending` in this module, and that single-writer rule is worth more
+    # than the convenience — a second mutation path for the handoff record is exactly the parallel
+    # mechanism #665 was rewritten to avoid.
+    #
+    # The recovery already exists and is the honest one: a refused claim leaves the predecessor
+    # alive and guarded, and the NEXT handoff attempt calls `open_handoff`, which bumps the
+    # generation and writes a payload derived from current state. See `handoff_claim` and
+    # `handoff_queue_is_current` for how the refusal is reported so it is not mistaken for a
+    # foreign claim.
     return new
 
 
@@ -1027,6 +1695,54 @@ def _lead_with_bind(body: str, project, include_bind: bool) -> str:
     return body[:1].upper() + body[1:]
 
 
+def corrections_clause(state: dict, issue: int) -> str:
+    """The correction a successor MUST see before it builds child ``issue``. ``""`` when none.
+
+    #840's mandatory correction consumer. Posting a correction comment does not repair the issue
+    body, and before this nothing surfaced one to the implementing agent — measured:
+    ``grep -c correction hooks/driver_lib.py`` was **0**. So an agent could pass the freshness gate
+    and then build from the exact stale claim the revalidation had already caught. The 2026-08-02
+    owner ruling put the consumer IN SCOPE for that reason, and it lives in the prompt BUILDERS
+    because the prompt is the only artifact the successor is guaranteed to receive.
+
+    It renders the evidence, not just a link: the claim verbatim from the body, what it was checked
+    against, and what the check found. A bare URL is an instruction to go and read something, which
+    an unattended successor may not do; the quoted evidence is the correction itself.
+    """
+    reval = state.get("queue_revalidation") or {}
+    record = (reval.get("children") or {}).get(str(issue))
+    if not isinstance(record, dict):
+        return ""
+    broken = [c for c in (record.get("claims") or [])
+              if isinstance(c, dict) and c.get("verdict") == "broken"]
+    pending = record.get("pending_disposition")
+    url = record.get("correction_comment")
+    if not broken and not pending:
+        return ""
+    parts = [f" CORRECTION for #{issue} — its body carries claims that were checked against the "
+             "current main and FOUND STALE. Do NOT build from them, and do not treat the body as "
+             "authoritative where it conflicts with this:"]
+    for index, claim in enumerate(broken, start=1):
+        parts.append(
+            f" ({index}) the body claims {claim.get('quoted_from_body')!r}; checked against "
+            f"{claim.get('checked_against')}; found: {claim.get('evidence')}.")
+    if url:
+        parts.append(f" The correction comment is posted at {url} — the body itself is "
+                     "deliberately NOT edited, so the comment is the authority.")
+    if pending:
+        # **INFORMATIONAL, not a block (round-11, found by two lenses independently).** The
+        # `pending_disposition` owner gate was cut to #848, so a child carrying a marker is now
+        # SELECTED — and this sentence still told the successor an owner decision was required
+        # "before any work starts". An unattended successor reads the prompt, not the code, so it
+        # stalled on a gate that no longer exists. The marker is still surfaced, because the owner
+        # does need to see it; it just no longer claims to stop anything.
+        parts.append(f" NOTE, not a blocker: an earlier revalidation marked this child {pending!r}."
+                     " That marker is INFORMATIONAL until #848 lands — it does not gate this work."
+                     " Proceed, and flag it to the owner in your summary so they can decide"
+                     " whether the child is still worth doing.")
+    return "".join(parts)
+
+
 def _build_resume_prompt(state: dict, next_issue: int, project=None,
                          include_bind: bool = True) -> str:
     """The canonical idempotent, state-re-deriving resume prompt for a fresh session (no
@@ -1052,12 +1768,16 @@ def _build_resume_prompt(state: dict, next_issue: int, project=None,
         "from durable state, never in-context memory; never re-do a merged/closed child; restate "
         "the run's auth grant. On a blocker, post the ERROR comment and end so the next fresh "
         "session continues."
+        # #840 — appended, never interleaved: the bind must stay first (#682) and the correction
+        # must survive whether or not the bind travels inside the prompt (#694).
+        + corrections_clause(state, next_issue)
     )
     return _lead_with_bind(body, project, include_bind)
 
 
 def fresh_session_handoff(state: dict, *, mode: str, project=None,
-                          include_bind: bool = True, issue_state_probe=None) -> dict:
+                          include_bind: bool = True, issue_state_probe=None,
+                          observed_head: str | None = None) -> dict:
     """Decide the process-boundary handoff after a child reaches a terminal outcome (#569).
 
     Returns an explicit disposition (NEVER a bare None — design §4 [2]):
@@ -1068,11 +1788,54 @@ def fresh_session_handoff(state: dict, *, mode: str, project=None,
       queued dependency-satisfied child exists (``generation`` is the monotonic claim token).
     - ``{"outcome": "blocked"}`` when unmerged children remain but none is ready (all
       deferred/abandoned/dependency-blocked) — the epic stays OPEN; NEVER conflated with complete.
+    - ``{"outcome": "revalidation_required", "worklist", "observed_head", "reason"}`` (#840) when
+      the remaining queue has not been revalidated against ``observed_head``.
+
+    #840, and this is the whole reason selection RAISES instead of returning ``None``: every
+    non-``ready`` outcome used to collapse into ``None`` at `resume_prompt_for_state`, which
+    reports it as "complete or blocked". A stale queue announced to the operator as *the epic
+    finished* is the worst failure available here, so `revalidation_required` is its own explicit
+    disposition and is never conflated with `blocked`.
     """
-    if mode != FRESH_SESSION_MODE:
-        return {"outcome": "single_session"}
     issues = state.get("issues", [])
     _numbers(issues)  # fail-closed on missing/non-int/duplicate number
+    # #840 Step-11 finding 2 (Critical, reproduced): the mode check used to be the FIRST thing
+    # here, so `single-session` returned before selection and an armed campaign with a STALE
+    # receipt advanced anyway — even when a freshly observed head was supplied. The single-session
+    # loop is the epic driver's DEFAULT and the documented fallback, so that was not a corner: it
+    # was the main path.
+    #
+    # The gate therefore runs BEFORE the mode branch. It is still conditional on `observed_head`
+    # being supplied, because only a caller that made a real observation can be gated — which is
+    # why `launcher_lib next-child` exists and why the in-session loop must select through it
+    # rather than reading state itself.
+    if observed_head is not None:
+        effective_pre, _ = effective_issue_statuses(issues, issue_state_probe)
+        try:
+            _refuse_unrevalidated_queue(state, observed_head, effective_pre)
+        except DriverStateError as exc:
+            # **A RECOVERABLE receipt error becomes the same disposition (round-10 Medium 1).**
+            # Only `QueueRevalidationRequired` was caught here, so a structural receipt error —
+            # an unsupported version, a non-canonical key — escaped as a bare `DriverStateError`.
+            # `launcher_lib.main` catches only `LauncherError`, so the real handoff CLI would
+            # have exited with an UNCAUGHT TRACEBACK on a state its own message says to fix by
+            # running one skill. The `remedy` attribute is what separates recoverable from
+            # genuinely corrupt; anything without it still propagates to rc 2.
+            if not isinstance(exc, QueueRevalidationRequired) \
+                    and getattr(exc, "remedy", None) != "revalidate":
+                raise
+            return {"outcome": "revalidation_required",
+                    "worklist": getattr(exc, "outstanding", []),
+                    "observed_head": getattr(exc, "observed_head", observed_head),
+                    "validated_head": getattr(exc, "validated_head", None),
+                    "reason": str(exc)}
+    elif state.get("queue_revalidation") is not None:
+        raise DriverStateError(
+            "this campaign carries a queue_revalidation receipt, so a handoff disposition "
+            "requires a freshly observed head (launcher_lib.observe_head); refusing to decide "
+            "without one")
+    if mode != FRESH_SESSION_MODE:
+        return {"outcome": "single_session"}
     # #695 AC2: the overlay reaches the COMPLETE verdict too, not just selection. A campaign
     # whose last child shipped outside the driver reads `queued` on disk, and without this it
     # would never report complete — the epic would stay open forever with nothing runnable,
@@ -1081,8 +1844,25 @@ def fresh_session_handoff(state: dict, *, mode: str, project=None,
     if issues and all(effective[i["number"]] == "merged" for i in issues):
         return {"outcome": "complete"}
     # This is the ONE production selection site, so the probe has to arrive here or the
-    # corroboration is dead code. `_cmd_handoff` supplies the real `gh api graphql` probe.
-    nxt = next_ready_issue(state, issue_state_probe=issue_state_probe)
+    # corroboration is dead code. `_cmd_handoff` supplies the real `gh api graphql` probe, and
+    # (#840) the freshly observed head from `launcher_lib.observe_head`.
+    try:
+        # The campaign's own policy, not this function's default (round-4 High 1): dropping it
+        # here turned every `pr_open` stacked-PR campaign into a permanent `blocked`.
+        nxt = next_ready_issue(state, campaign_deps_satisfied_by(state),
+                               issue_state_probe=issue_state_probe,
+                               observed_head=observed_head)
+    except DriverStateError as exc:
+        # Same widening as the pre-gate above (round-10 Medium 1): a recoverable receipt error
+        # reaching selection must become the disposition, not a traceback.
+        if not isinstance(exc, QueueRevalidationRequired) \
+                and getattr(exc, "remedy", None) != "revalidate":
+            raise
+        return {"outcome": "revalidation_required",
+                "worklist": getattr(exc, "outstanding", []),
+                "observed_head": getattr(exc, "observed_head", observed_head),
+                "validated_head": getattr(exc, "validated_head", None),
+                "reason": str(exc)}
     if nxt is not None:
         chosen = project or state.get("project")
         if not valid_project_name(chosen):
@@ -1098,9 +1878,50 @@ def fresh_session_handoff(state: dict, *, mode: str, project=None,
         generation = (state.get("generation") if _is_int(state.get("generation")) else 0) + 1
         return {"outcome": "ready", "next_issue": nxt, "generation": generation,
                 "campaign": state.get("campaign", ""),
+                # #840 AC4a — one of the two producers. Built here, next to the disposition it
+                # rides, so it is the same snapshot the gate just approved rather than a second
+                # read that could disagree with it.
+                "queue": revalidated_queue_payload(state),
                 "resume_prompt": _build_resume_prompt(state, nxt, chosen,
                                                       include_bind=include_bind)}
     return {"outcome": "blocked"}
+
+
+def revalidated_queue_payload(state: dict) -> dict:
+    """The ORDERED snapshot of the queue a successor is about to inherit, plus the head it was
+    attested against. PURE.
+
+    Order is load-bearing (`docs/multi-issue-driver.md`), so this is a LIST in `issues` order and
+    never a dict keyed by number: a reordered queue hands children out in the wrong dependency
+    order, and a set-membership check cannot see that. r2 proposed validating "head and
+    membership", which a reviewer refuted for exactly this reason — membership admits a reordered
+    queue and falsified per-child fields.
+
+    EVERY child is included, not only the eligible ones. Two reasons: `handoff_claim` has no issue
+    probe, so it can only re-derive what durable state alone determines; and a child whose status
+    changed between the handoff being written and claimed means the queue moved under the
+    successor, which SHOULD invalidate the claim rather than be tolerated.
+
+    Per-child fields come from the receipt (`extraction`, `depth`, `outcome`,
+    `correction_comment`) and from the queue entry (`number`, `status`, `validated_against`), so
+    the successor consumes the revalidation result rather than re-deriving it — AC4a.
+    """
+    reval = state.get("queue_revalidation") or {}
+    children = reval.get("children") or {}
+    payload = []
+    for issue in state.get("issues", []):
+        record = children.get(str(issue["number"]))
+        record = record if isinstance(record, dict) else {}
+        payload.append({
+            "number": issue["number"],
+            "status": issue.get("status"),
+            "validated_against": issue.get("validated_against"),
+            "extraction": record.get("extraction"),
+            "depth": record.get("depth"),
+            "outcome": record.get("outcome"),
+            "correction_comment": record.get("correction_comment"),
+        })
+    return {"validated_head": reval.get("validated_head"), "children": payload}
 
 
 def open_handoff(state: dict, disposition: dict, *, now_ts: int) -> dict:
@@ -1124,6 +1945,26 @@ def open_handoff(state: dict, disposition: dict, *, now_ts: int) -> dict:
     position = disposition.get("position")
     if position is not None:
         pending["position"] = dict(position) if isinstance(position, dict) else position
+    # #840 — `queue` is MANDATORY for a revalidation campaign and ABSENT otherwise.
+    #
+    # The discriminator is the state's own `queue_revalidation`, NOT the disposition's `kind`.
+    # r4 keyed it on `kind` and the verifier caught it: `fresh_session_handoff`'s ready
+    # disposition carries no `kind` at all (only `mid_child_handoff` sets one) yet IS a campaign
+    # producer, so keying on `kind` would either break the two tests that pin exactly three
+    # persisted keys on that very path, or silently drop the campaign queue and bypass claim-time
+    # validation. Both are wrong.
+    #
+    # Optional propagation was also refused (pass-3): a producer that dropped `queue` would have
+    # `open_handoff` quietly write the legacy three-key shape, bypassing ordered-payload
+    # validation. So it RAISES.
+    if state.get("queue_revalidation") is not None:
+        queue = disposition.get("queue")
+        if queue is None:
+            raise DriverStateError(
+                "a revalidation campaign's handoff disposition must carry `queue` — writing the "
+                "legacy record for it would leave the successor's claim with nothing to validate "
+                "and silently bypass the ordered-payload check")
+        pending["queue"] = queue
     new["handoff_pending"] = pending
     return new
 
@@ -1180,6 +2021,89 @@ def handoff_reclaimable(state: dict, *, now_ts: int, lease_s: int) -> bool:
     return _is_int(claimed_at) and (now_ts - claimed_at) > lease_s
 
 
+def handoff_claim_is_live(state: dict, *, now_ts: int, lease_s: int) -> bool:
+    """Is the CURRENT generation's handoff claim live? PURE.
+
+    **The name and this line were corrected at round 6.** Round 4 introduced this as "any
+    generation"; round 5 scoped it to the current generation (see below) and left the docstring
+    claiming otherwise — a function whose contract line contradicts its body is exactly the defect
+    class three rounds of this review have been spent removing.
+
+    **Known limit, tracked as #846 and NOT closed here.** Because completion is inferred from
+    `claim.generation != state.generation` rather than recorded, a claim that is genuinely still
+    running is invisible once a later generation is opened — and nothing stops `open_handoff`
+    from opening one, since it has never consulted `handoff_claim` at all (true before #840 PR 2;
+    verified by source). Closing that needs an explicit claim lifecycle, which is a change to
+    #665's design rather than to this gate.
+
+    #840 Step-11 round 4, High 3. Round 3's precedence fix asked only about the CALLER's own
+    generation, which left the dangerous interleaving open: a successor holding generation N+1
+    is invisible to a stale successor still asking about N, so the payload diagnostic spoke and
+    told the operator to open yet another generation — beside a claimant that is actively
+    working. Generation is the right fence for WHO MAY CLAIM; it is the wrong question for
+    "is somebody in there right now".
+
+    Live means started, or claimed and still inside its lease. A never-started claim past its
+    lease is reclaimable (#665's crash-recovery rule) and is deliberately NOT live — otherwise
+    one crashed successor would mask every genuine queue change from then on.
+    """
+    claim = state.get("handoff_claim")
+    if not isinstance(claim, dict):
+        return False
+    # **Scoped to the CURRENT generation (round-5 High 1).** Round 4 ignored generation entirely
+    # so that a claimant on a NEWER generation could not be missed — but nothing clears
+    # `handoff_claim` when a generation completes, so a finished claim sat in state looking
+    # permanently live and masked every later queue change. The operator was then told "do NOT
+    # open another generation" when opening one is precisely the remedy for a payload mismatch:
+    # the fix for one unrecoverable instruction had produced another.
+    #
+    # The current generation is the right scope for BOTH cases. Round 4's stale-caller-N /
+    # live-claimant-N+1 shape still trips it, because there the live claim IS the current
+    # generation; a historical claim below it is correctly ignored.
+    if claim.get("generation") != state.get("generation"):
+        return False
+    return bool(claim.get("started")) or not handoff_reclaimable(
+        state, now_ts=now_ts, lease_s=lease_s)
+
+
+def handoff_claim_completion_unprovable(state: dict) -> bool:
+    """Is there a STARTED claim on another generation whose completion cannot be proven? PURE.
+
+    #840 Step-11 round 7, High 1. Completion is inferred from `claim.generation !=
+    state.generation`, never recorded (#846), so "an older started claim" and "a successor that
+    finished cleanly" are indistinguishable from durable state. That ambiguity is tolerable for
+    deciding who may claim — the generation fence handles it — but NOT for the advice printed on
+    a refusal: telling an operator to open yet another generation while a started claimant may
+    still be running is how a competitor gets spawned, and that instruction is emitted by code
+    this PR added. So the PR owns making it safe even though the lifecycle gap predates it.
+
+    Returns True only for the genuinely ambiguous shape. A claim on the CURRENT generation is
+    handled by `handoff_claim_is_live`; a never-started claim was never a takeover.
+    """
+    claim = state.get("handoff_claim")
+    if not isinstance(claim, dict) or not claim.get("started"):
+        return False
+    return claim.get("generation") != state.get("generation")
+
+
+def handoff_claim_blocked_by_live_claim(state: dict, generation: int, *, now_ts: int,
+                                        lease_s: int) -> bool:
+    """Is a LIVE (started, or claimed-and-still-within-lease) claim holding ``generation``? PURE.
+
+    #840 Step-11 round 3, High 3. `handoff_claim` checks this BEFORE it compares the queue payload,
+    so when a foreign claimant is live AND the payload is stale, the live claim is the real refusal.
+    `retire_predecessor` needs to know which one fired: reporting the payload instead says "no claim
+    was ever created — open a new generation", which spawns a COMPETITOR while the real claimant is
+    still working. A live claim outranks every payload diagnostic.
+
+    `handoff_claim` calls this itself, so the predicate cannot drift from the refusal it explains.
+    """
+    claim = state.get("handoff_claim")
+    if not isinstance(claim, dict) or claim.get("generation") != generation:
+        return False
+    return handoff_claim_is_live(state, now_ts=now_ts, lease_s=lease_s)
+
+
 def handoff_claim(state: dict, generation: int, *, claimant: str, now_ts: int,
                   lease_s: int = 1800) -> tuple[bool, dict]:
     """Atomically CLAIM the pending handoff for ``generation`` (exactly-one-successor, design §5/§6).
@@ -1196,14 +2120,63 @@ def handoff_claim(state: dict, generation: int, *, claimant: str, now_ts: int,
     if not (_is_int(generation) and generation >= 0 and _is_int(pend.get("generation"))
             and _is_int(cur) and pend["generation"] == generation == cur):
         return (False, state)  # F4: monotonic, current, non-negative — no stale replay
-    claim = state.get("handoff_claim")
-    if isinstance(claim, dict) and claim.get("generation") == generation:
-        if claim.get("started") or not handoff_reclaimable(state, now_ts=now_ts, lease_s=lease_s):
-            return (False, state)  # already taken over, or a live in-progress claim
+    if handoff_claim_blocked_by_live_claim(state, generation, now_ts=now_ts, lease_s=lease_s):
+        return (False, state)  # already taken over, or a live in-progress claim
+    # #840 AC4a's consumer — validated HERE, under the generation fence this function already
+    # enforces, because this is the moment the successor takes ownership of the queue.
+    #
+    # The comparison is EXACT and whole-payload: it covers the order, `validated_head`, and every
+    # declared per-child field against durable state. r2 proposed "head and membership", which a
+    # reviewer refuted — membership admits a reordered queue (order decides which child runs next)
+    # and cannot see a falsified `outcome`, `depth` or `correction_comment`. Re-deriving the
+    # expected payload from state and comparing wholesale is both stricter and simpler than
+    # field-by-field checks, and it cannot drift from the producer because both call the same
+    # function.
+    if state.get("queue_revalidation") is not None:
+        if pend.get("queue") != revalidated_queue_payload(state):
+            return (False, state)
     new = dict(state)
     new["handoff_claim"] = {"generation": generation, "claimant": claimant,
                             "claimed_at": now_ts, "started": False}
     return (True, new)
+
+
+def handoff_queue_is_current(state: dict) -> bool:
+    """Does the persisted `handoff_pending.queue` still match what state re-derives? PURE.
+
+    #840 Step-11 finding 4. `handoff_claim` refuses on a queue mismatch, and that refusal used to be
+    indistinguishable from "a foreign or live claim holds this generation" — the reason
+    `retire_predecessor` printed. The mismatch is a DIFFERENT situation with a different remedy: the
+    queue legitimately moved under an in-flight handoff (any `record_child_outcome` on an included
+    child does it), the predecessor is still alive and guarded, and the fix is to run the handoff
+    again so `open_handoff` writes a payload derived from current state — NOT to retry the same
+    generation, which can never succeed, and NOT to wait for the lease, which does not apply because
+    no claim was ever created.
+
+    Exact equality is deliberately kept in `handoff_claim`: it is what detects a reordered or
+    field-falsified payload, which is the whole point of AC4a. This function only makes the refusal
+    legible. It never writes — the single-writer rule for `handoff_pending` is asserted by AST in
+    `tests/hooks/test_mid_child_handoff.py`.
+
+    Returns True when there is genuinely nothing to check — a campaign with no receipt, or no
+    pending record at all — so a caller can use it as "is the mismatch the reason?" without
+    special-casing pre-#840 states.
+
+    **A pending record that carries NO queue while the campaign HAS a receipt returns False**
+    (Step-11 round 2, finding 3, reproduced). That is the migration shape: a pre-#840 handoff is
+    in flight, `revalidate-children` then arms the campaign, and `handoff_claim` starts requiring a
+    payload the in-flight record never had. Returning True there reported the resulting refusal as
+    "a foreign or live claim holds it" — the one diagnosis that sends the operator looking for a
+    competing session instead of opening a new generation, which is the only thing that works.
+    """
+    if state.get("queue_revalidation") is None:
+        return True
+    pending = state.get("handoff_pending")
+    if not isinstance(pending, dict):
+        return True
+    if pending.get("queue") is None:
+        return False
+    return pending["queue"] == revalidated_queue_payload(state)
 
 
 def handoff_ack_started(state: dict, generation: int, claimant: str) -> tuple[bool, dict]:
@@ -1296,6 +2269,9 @@ def _build_mid_child_resume_prompt(state: dict, position: dict, generation: int,
         "rebuilt, retire the predecessor LAST via "
         "`python3 hooks/launcher_lib.py retire-predecessor`. On a blocker, post the ERROR "
         "comment on the child issue and end so the next session can continue."
+        # #840 — the mid-child successor resumes the SAME child, so it needs that child's
+        # correction just as much as a fresh-session successor needs the next child's.
+        + corrections_clause(state, position["issue"])
     )
     return (f"{mid_child_marker(position['issue'], generation)} "
             f"{_lead_with_bind(body, position.get('project') or '', include_bind)}")
@@ -1333,6 +2309,9 @@ def mid_child_handoff(state: dict, *, position, include_bind: bool = True) -> di
     return {"outcome": "ready", "next_issue": active[0], "generation": generation,
             "campaign": state.get("campaign", ""), "kind": MID_CHILD_HANDOFF_KIND,
             "position": dict(position),
+            # #840 AC4a — the second producer. A mid-child successor inherits the same queue and
+            # must consume the same attested snapshot.
+            "queue": revalidated_queue_payload(state),
             "resume_prompt": _build_mid_child_resume_prompt(state, position, generation,
                                                             include_bind=include_bind)}
 

@@ -70,12 +70,14 @@ def _goal_row(condition: str, met: bool) -> str:
 
 
 class TestMidChildLadder:
-    def test_ladder_is_six_causal_steps_naming_on_disk_artifacts(self):
+    def test_ladder_is_seven_causal_steps_naming_on_disk_artifacts(self):
         """#694 reordered the four predecessor-owned rungs to match the send order: the bind is its
-        own send, so its registry row comes first, and `/goal` goes last so `goal_armed` does too."""
+        own send, so its registry row comes first, and `/goal` goes last so `goal_armed` does too.
+        #840 prepended `queue_revalidated` — the queue must be revalidated BEFORE a successor is
+        spawned to inherit it, so it cannot sit among the post-launch rungs."""
         steps = ll.mid_child_verification_steps()
         assert [s["step"] for s in steps] == [
-            "spawned", "project_switched", "prompt_landed", "goal_armed",
+            "queue_revalidated", "spawned", "project_switched", "prompt_landed", "goal_armed",
             "position_rebuilt", "state_claimed"]
         for s in steps:
             assert s["artifact"].strip()
@@ -90,21 +92,23 @@ class TestMidChildLadder:
             "spawned", "project_switched", "goal_armed"]
 
     def test_evaluate_stops_at_the_first_missing_mid_child_step(self):
-        results = {"spawned": True, "goal_armed": True, "prompt_landed": True,
+        results = {"queue_revalidated": True, "spawned": True, "goal_armed": True,
+                   "prompt_landed": True,
                    "project_switched": True}          # position_rebuilt / state_claimed absent
         ok, failed, checked = ll.evaluate_verifications(
             results, steps=ll.mid_child_verification_steps())
         assert ok is False and failed == "position_rebuilt"
         assert checked[-1] == "position_rebuilt"
 
-    def test_teardown_refused_until_all_six_pass(self):
-        results = {"spawned": True, "goal_armed": True, "prompt_landed": True,
+    def test_teardown_refused_until_all_seven_pass(self):
+        results = {"queue_revalidated": True, "spawned": True, "goal_armed": True,
+                   "prompt_landed": True,
                    "project_switched": True, "position_rebuilt": False, "state_claimed": True}
         allowed, reason = ll.teardown_allowed(
             results, steps=ll.mid_child_verification_steps())
         assert allowed is False and "position_rebuilt" in reason
 
-    def test_teardown_allowed_when_all_six_pass(self):
+    def test_teardown_allowed_when_all_seven_pass(self):
         results = {s["step"]: True for s in ll.mid_child_verification_steps()}
         allowed, _ = ll.teardown_allowed(results, steps=ll.mid_child_verification_steps())
         assert allowed is True
@@ -254,6 +258,10 @@ COND = "drive epic #667 to completion"
 BRANCH = "feat/665-mid-child-handoff"
 
 
+# #840 — the head the fake `origin/main` resolves to; the fixtures' receipt attests it.
+REVAL_HEAD = "a" * 40
+
+
 class FakeWorld:
     """One injected runner for herdr AND git (design §8: the same runner throughout).
 
@@ -264,9 +272,13 @@ class FakeWorld:
 
     def __init__(self, tmp_path, *, pane_session=PRED, branch=BRANCH, toplevel=None,
                  clear_text_rc=0, clear_keys_rc=0, pane_close_rcs=(0,),
-                 confirm_clear=True, confirm_rearm=True, pane_get_rc=0):
+                 confirm_clear=True, confirm_rearm=True, pane_get_rc=0,
+                 fetch_rc=0, observed_head_rc=0):
         self.tmp = tmp_path
         self.repo = str(tmp_path / "repo")
+        # #840 — the freshness probe travels through this same runner.
+        self.fetch_rc = fetch_rc
+        self.observed_head_rc = observed_head_rc
         self.pane_session = pane_session
         self.branch = branch
         self.toplevel = toplevel if toplevel is not None else self.repo
@@ -298,6 +310,13 @@ class FakeWorld:
 
     def __call__(self, argv, timeout=180):
         self.calls.append(list(argv))
+        if argv[0] == "git" and "fetch" in argv:
+            # #840 — `produce_queue_revalidated` observes the head through this same injected
+            # runner, so the fake has to answer the fetch/rev-parse pair or every retire-side
+            # test would fail at the `queue_revalidated` rung instead of what it is named for.
+            return FakeProc(self.fetch_rc, "")
+        if argv[0] == "git" and "rev-parse" in argv and argv[-1] == "origin/main":
+            return FakeProc(self.observed_head_rc, REVAL_HEAD + "\n")
         if argv[0] == "git":
             value = self.toplevel if argv[-1] == "--show-toplevel" else self.branch
             return FakeProc(0, value + "\n")
@@ -363,17 +382,32 @@ def _world(tmp_path, *, marker_gen=GEN, succ_goal_rows=None, registry_project="r
     return world
 
 
-def _write_state(tmp_path, world, *, pend_over=None, position_over=None, claim=None):
+def _write_state(tmp_path, world, *, pend_over=None, position_over=None, claim=None,
+                 state_over=None):
     pend = {"generation": GEN, "next_issue": ISSUE, "written_ts": 1,
             "kind": dl.MID_CHILD_HANDOFF_KIND, "cancelled": False, "teardown_phase": None,
             "position": _position(world, **(position_over or {})),
             "successor": {"pane": SUCC_PANE, "session": SUCC}}
-    pend.update(pend_over or {})
     state = {"schema_version": 2, "campaign": "epic-667", "epic": 667, "generation": GEN,
              "issues": [{"number": ISSUE, "status": "in_progress"}],
-             "handoff_pending": pend}
+             # #840 — an ARMED campaign. Owner decision 2026-08-02: a campaign with no
+             # `queue_revalidation` receipt now FAILS the `queue_revalidated` rung, so a
+             # receipt-less fixture would refuse teardown before reaching the behaviour each of
+             # these tests exists to check. `children` is empty legitimately: the only child is
+             # `in_progress`, so nothing is eligible and nothing is stamped.
+             "queue_revalidation": {"version": 1, "extractor_version": 1,
+                                    "validated_head": REVAL_HEAD, "children": {}}}
+    # And an armed campaign's `handoff_pending` must carry the ordered queue payload, because
+    # `handoff_claim` now compares it for exact equality. Derived from the production function
+    # rather than hand-written, so the fixture cannot drift from the contract it has to satisfy.
+    pend["queue"] = dl.revalidated_queue_payload(state)
+    pend.update(pend_over or {})
+    state["handoff_pending"] = pend
     if claim is not None:
         state["handoff_claim"] = claim
+    # `state_over` lands LAST so a test can supersede the campaign generation (round-4 High 3)
+    # without the payload derivation above already having used the new value.
+    state.update(state_over or {})
     p = tmp_path / "state.json"
     p.write_text(json.dumps(state), encoding="utf-8")
     return p
@@ -505,6 +539,155 @@ class TestRetireRefusesBeforeAnythingDestructive:
                                     "claimed_at": 999, "started": False})
         out = _retire(state, world, tmp_path)
         assert out["outcome"] == "claim_refused"
+        self._assert_nothing_destructive(world)
+
+    def test_a_live_foreign_claim_outranks_a_missing_queue_payload(self, tmp_path):
+        """#840 round-3 High 3. `handoff_claim` refuses a live/started claim BEFORE it ever reads
+        the queue payload, so when BOTH are wrong the live claim is the actual refusal. Reporting
+        `queue_changed` there tells the operator "no claim was ever created — open a new
+        generation", which spawns a COMPETITOR while the real claimant is still working. A live
+        claim must outrank payload diagnostics."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world,
+                             claim={"generation": GEN, "claimant": "someone-else",
+                                    "claimed_at": 999, "started": True},
+                             pend_over={"queue": None})
+        assert dl.handoff_queue_is_current(_state_of(state)) is False, \
+            "fixture must present BOTH failures at once or it proves nothing"
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "claim_refused"
+        assert out.get("queue_changed") is not True, out["reason"]
+        assert "claim holds this campaign" in out["reason"]
+        assert "new generation" not in out["reason"], \
+            "the one instruction that can spawn a competitor beside a live claimant"
+        self._assert_nothing_destructive(world)
+
+    def test_a_live_foreign_claim_outranks_a_tampered_queue_payload(self, tmp_path):
+        """The same precedence for a payload that exists but no longer matches state — the
+        legitimate-move shape rather than the migration shape."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world,
+                             claim={"generation": GEN, "claimant": "someone-else",
+                                    "claimed_at": 999, "started": True},
+                             pend_over={"queue": {"validated_head": "b" * 40, "children": []}})
+        assert dl.handoff_queue_is_current(_state_of(state)) is False
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "claim_refused"
+        assert out.get("queue_changed") is not True, out["reason"]
+        assert "claim holds this campaign" in out["reason"]
+        assert "new generation" not in out["reason"], \
+            "the one instruction that can spawn a competitor beside a live claimant"
+        self._assert_nothing_destructive(world)
+
+    def test_a_live_claim_on_a_SUPERSEDED_generation_still_outranks(self, tmp_path):
+        """**Round-4 High 3 — the hole left by my round-3 fix.** The live-claim check asked only
+        about the caller's OWN requested generation. So the dangerous interleaving survived:
+
+          * this successor captured generation N and passed the identity checks;
+          * generation N+1 was opened and a DIFFERENT successor claimed and started it;
+          * the queue then moved, making the payload stale.
+
+        `handoff_claim` refuses N on the generation fence, the live-claim predicate for N is
+        False because the live claim names N+1, and the payload is stale — so the operator was
+        still told "no claim was ever created, open a new generation" while a successor was
+        actively working. Any live claim outranks the payload diagnostic, whatever generation it
+        names: the message must never invite a competitor."""
+        world = _world(tmp_path)
+        state = _write_state(
+            tmp_path, world,
+            claim={"generation": GEN + 1, "claimant": "newer-successor",
+                   "claimed_at": 999, "started": True},
+            pend_over={"queue": None},
+            state_over={"generation": GEN + 1})
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "claim_refused"
+        assert out.get("queue_changed") is not True, out["reason"]
+        assert "new generation" not in out["reason"], \
+            "the one instruction that can spawn a competitor beside a live claimant"
+        self._assert_nothing_destructive(world)
+
+    def test_a_COMPLETED_older_generations_claim_does_not_mask_a_queue_change(self, tmp_path):
+        """**Round-5 High 1 — the defect my round-4 fix created.** Round 4 widened liveness to
+        ignore generation entirely, so that a claimant on a NEWER generation could not be missed.
+        But nothing ever clears `handoff_claim` when a generation completes, so a finished
+        generation-7 claim sat in state looking permanently live — and the next genuine queue
+        change on generation 8 was then reported as "a claim holds this campaign, do NOT open
+        another generation", when opening another generation is exactly the remedy. The fix for
+        one unrecoverable instruction produced another.
+
+        Liveness is scoped to the CURRENT generation: that still catches round 4's
+        stale-caller-N / live-claimant-N+1 case, because there the live claim IS the current
+        generation, while a historical claim below it is correctly ignored."""
+        world = _world(tmp_path)
+        state = _write_state(
+            tmp_path, world,
+            claim={"generation": GEN - 1, "claimant": "finished-long-ago",
+                   "claimed_at": 1, "started": True},
+            pend_over={"queue": None})
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "claim_refused"
+        # **INVERTED at round 7 (High 1).** This originally demanded `queue_changed` and the
+        # "open a new generation" instruction, because round 5's complaint was that a finished
+        # claim BLOCKED the only recovery. Round 7 showed the opposite branch is worse: that
+        # instruction can spawn a competitor beside a successor that is still running, and
+        # durable state cannot tell the two apart because completion is never recorded (#846).
+        #
+        # Neither confident answer is honest, so the contract is now the third one — say the
+        # state is ambiguous and require reconciliation. Round 5's real requirement survives:
+        # the operator is NOT told "do not open another generation" and left stuck; they are
+        # told exactly what to check to become unstuck.
+        assert out.get("claim_state_ambiguous") is True, out["reason"]
+        assert "RECONCILE BY HAND" in out["reason"]
+        assert out.get("queue_changed") is not True, out["reason"]
+
+    def test_a_started_claim_on_an_OLDER_generation_gets_an_ambiguous_verdict(self, tmp_path):
+        """**Round-7 High 1.** Round 6 scoped liveness to the current generation, which fixed the
+        masking problem and left a worse one: a STARTED claim on an older generation then read as
+        "nobody is there", and a stale payload sent the operator to open yet another generation —
+        beside a claimant that may still be running.
+
+        Completion is INFERRED from `claim.generation != state.generation`, never recorded
+        (#846), so durable state genuinely cannot tell a finished successor from a live one. The
+        honest answer is neither confident branch: say the state is ambiguous and require manual
+        reconciliation. The lifecycle gap predates this PR; the dangerous INSTRUCTION does not,
+        which is why it is fixed here rather than deferred with it."""
+        world = _world(tmp_path)
+        state = _write_state(
+            tmp_path, world,
+            claim={"generation": GEN - 1, "claimant": "maybe-still-running",
+                   "claimed_at": 1, "started": True},
+            pend_over={"queue": None})
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "claim_refused"
+        assert out.get("claim_state_ambiguous") is True, out["reason"]
+        assert out.get("queue_changed") is not True, out["reason"]
+        assert "RECONCILE BY HAND" in out["reason"]
+        self._assert_nothing_destructive(world)
+
+    def test_an_expired_unstarted_claim_is_NOT_treated_as_live(self, tmp_path):
+        """The other side of the boundary, or the fix would report every stale record as a live
+        claimant and hide real queue changes for ever. A claim past its lease that never started
+        is reclaimable — #665's own crash-recovery rule — so it must not outrank anything."""
+        world = _world(tmp_path)
+        state = _write_state(
+            tmp_path, world,
+            claim={"generation": GEN, "claimant": "crashed", "claimed_at": 1,
+                   "started": False},
+            pend_over={"queue": None})
+        out = _retire(state, world, tmp_path, now_ts=1_000_000)
+        assert out["outcome"] == "claim_refused"
+        assert out["queue_changed"] is True, out["reason"]
+
+    def test_a_stale_payload_with_NO_live_claim_still_reports_the_queue_change(self, tmp_path):
+        """The negative twin — without it the fix could simply delete the `queue_changed` branch
+        and both tests above would still pass. An UNCLAIMED generation whose payload moved is the
+        case that branch exists for, and its remedy really is a new generation."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world, pend_over={"queue": None})
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "claim_refused"
+        assert out["queue_changed"] is True
+        assert "the campaign queue changed" in out["reason"]
         self._assert_nothing_destructive(world)
 
     def test_our_own_started_claim_is_a_continuation_not_a_deadlock(self, tmp_path):
@@ -759,6 +942,10 @@ class TestMidChildHandoffCommand:
                     "session_id": SUCC, "truncated": False, "cleanup": None,
                     "teardown_skipped": None}
 
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff", fake_perform)
         rc = ll._cmd_mid_child_handoff(self._args(tmp_path, state))
         assert rc == 0
@@ -770,7 +957,7 @@ class TestMidChildHandoffCommand:
         assert pend["position"]["goal_condition"] == COND
         assert pend["successor"] == {"pane": SUCC_PANE, "session": SUCC}
         assert pend.get("cancelled") is not True
-        # the successor is launched with the six-step ladder and a generation-bound marker,
+        # the successor is launched with the seven-step ladder and a generation-bound marker,
         # and it is NOT the predecessor's job to retire anything
         assert seen["teardown"] is False
         assert [s["step"] for s in seen["steps"]] == [
@@ -783,6 +970,10 @@ class TestMidChildHandoffCommand:
         """Otherwise the abandoned record IS the current generation and stays claimable, so a
         delayed successor could take a lease on a handoff that already aborted."""
         state = self._bare_state(tmp_path)
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff", lambda **kw: {
             "ok": False, "results": {}, "failed_step": "goal_armed", "new_pane": None,
             "session_id": None, "truncated": False, "cleanup": None, "teardown_skipped": None})
@@ -792,6 +983,10 @@ class TestMidChildHandoffCommand:
 
     def test_no_active_child_writes_nothing(self, tmp_path, monkeypatch):
         state = self._bare_state(tmp_path, issues=[{"number": ISSUE, "status": "merged"}])
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff",
                             lambda **kw: pytest.fail("must not launch a successor"))
         rc = ll._cmd_mid_child_handoff(self._args(tmp_path, state))
@@ -800,6 +995,10 @@ class TestMidChildHandoffCommand:
 
     def test_a_position_that_names_the_wrong_child_writes_nothing(self, tmp_path, monkeypatch):
         state = self._bare_state(tmp_path)
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff",
                             lambda **kw: pytest.fail("must not launch a successor"))
         rc = ll._cmd_mid_child_handoff(self._args(tmp_path, state, issue=612))
@@ -1164,6 +1363,10 @@ class TestHandoffRecordIsCancelledOnEveryFailurePath:
         def boom(**kw):
             raise ll.LauncherError("malformed pane id 'nope!'")
 
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff", boom)
         rc = ll._cmd_mid_child_handoff(args)
         assert rc != 0
@@ -1186,6 +1389,10 @@ class TestRepoRootIsBoundToTheProject:
         state = TestMidChildHandoffCommand()._bare_state(tmp_path)
         args = TestMidChildHandoffCommand()._args(tmp_path, state,
                                                   repo_root="/somewhere/else/entirely")
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff",
                             lambda **kw: pytest.fail("must not launch a successor"))
         rc = ll._cmd_mid_child_handoff(args)
@@ -1381,6 +1588,10 @@ class TestAnUnrecordableSuccessorIsAFailedLaunch:
                     "new_pane": SUCC_PANE, "session_id": SUCC, "truncated": False,
                     "cleanup": None, "teardown_skipped": None}
 
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff", fake_perform)
         rc = ll._cmd_mid_child_handoff(args)
         assert seen["recorded"] is False, "a superseded generation must not record a successor"
@@ -1398,9 +1609,22 @@ class TestAnUnrecordableSuccessorIsAFailedLaunch:
                 return FakeProc(0, json.dumps({"result": {"pane_id": SUCC_PANE}}))
             if argv[:3] == ["herdr", "pane", "get"]:
                 return FakeProc(0, json.dumps({"result": {"agent_session": {"value": SUCC}}}))
+            if argv[0] == "git" and "rev-parse" in argv and argv[-1] == "origin/main":
+                return FakeProc(0, REVAL_HEAD + "\n")     # #840 freshness probe
             return FakeProc(0, "")
 
         (tmp_path / "t").mkdir()
+        # #840 — the mid-child ladder carries `queue_revalidated`, whose producer reads the receipt
+        # and observes the head through this same injected runner. The campaign is ARMED (owner
+        # decision 2026-08-02: a receipt-less campaign FAILS the rung), so the rung passes and this
+        # test still exercises the successor-recording contract it is named for.
+        state_path = tmp_path / "campaign.json"
+        state_path.write_text(json.dumps(
+            {"version": 1, "campaign": "c",
+             "issues": [{"number": 1, "status": "in_progress"}],
+             "queue_revalidation": {"version": 1, "extractor_version": 1,
+                                    "validated_head": REVAL_HEAD, "children": {}}}),
+            encoding="utf-8")
         out = ll.perform_handoff(
             anchor_pane=ANCHOR, cwd=str(tmp_path), project_root=str(tmp_path), name="succ",
             expected_project="rawgentic",
@@ -1409,7 +1633,9 @@ class TestAnUnrecordableSuccessorIsAFailedLaunch:
             registry_path=str(tmp_path / "reg.jsonl"), transcript_dir=str(tmp_path / "t"),
             runner=runner, sleeper=lambda _s: None, read_text=lambda p: "",
             prompt_marker="marker-x", steps=ll.mid_child_verification_steps(),
-            teardown=False, on_successor=lambda pane, sess: False)
+            teardown=False, on_successor=lambda pane, sess: False,
+            campaign_context={"driver_state_path": str(state_path),
+                              "repo_root": str(tmp_path)})
         assert out["failed_step"] == "successor_not_recorded", out
         assert not any(a[:3] == ["herdr", "pane", "send-text"] for a in calls), \
             "nothing may be armed for a successor that cannot be recorded"
@@ -1443,6 +1669,10 @@ class TestTheGoalConditionIsBoundToTheLiveGuard:
         transcript = tmp_path / "pred.jsonl"
         transcript.write_text("\n".join([_goal_row(COND, met=False),
                                          _goal_row(COND, met=True)]) + "\n", encoding="utf-8")
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff",
                             lambda **kw: pytest.fail("must not launch a successor"))
         assert ll.main(self._argv(tmp_path, state, transcript)) == 3
@@ -1451,6 +1681,10 @@ class TestTheGoalConditionIsBoundToTheLiveGuard:
         state = TestMidChildHandoffCommand()._bare_state(tmp_path)
         transcript = tmp_path / "pred.jsonl"
         transcript.write_text(_goal_row(COND, met=False) + "\n", encoding="utf-8")
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff",
                             lambda **kw: pytest.fail("must not launch a successor"))
         assert ll.main(self._argv(tmp_path, state, transcript,
@@ -1624,6 +1858,10 @@ class TestAnExplicitlyAssertedReplacedGuardIsRefused:
         transcript.write_text("\n".join([_goal_row(COND, met=False),
                                          _goal_row("a replacement guard", met=False)]) + "\n",
                              encoding="utf-8")
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff",
                             lambda **kw: pytest.fail("must not launch a successor"))
         rc = ll.main(TestTheGoalConditionIsBoundToTheLiveGuard()._argv(
