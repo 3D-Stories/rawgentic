@@ -81,6 +81,85 @@ _DEP_LIST_RE = re.compile(
 _TASK_LIST_RE = re.compile(r"^\s*[-*]\s*\[[ xX]\]\s*#(\d+)\b")
 _HASH_NUM_RE = re.compile(r"#(\d+)\b")
 
+# --------------------------------------------------------------------------- #
+# #840: citation extraction from an issue body
+# --------------------------------------------------------------------------- #
+# An issue body is UNTRUSTED text, so every quantifier below is BOUNDED. There is no `+`
+# or `*` outside a character class anywhere in these patterns — that is asserted
+# structurally by `tests/hooks/test_revalidation_extraction.py`, because the classic ReDoS
+# shape is a variable-length group under an unbounded quantifier and a body is exactly the
+# input an attacker (or an unlucky paste) controls. Bounds: at most 8 path segments of at
+# most 64 characters each, so a match attempt does O(1) work per starting position.
+#
+# Extensions are an allowlist rather than `\w+`: "a/b.c" in prose is not a citation, and
+# widening this is how prose starts reading as code.
+_CITATION_EXTENSIONS = "py|md|json|sh|yml|yaml|toml|js|ts|tsx|html|css|cfg|ini|txt"
+_PATH_SEGMENT = r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}"
+
+# URLs are stripped BEFORE candidate scanning: `https://example.com/a/b/c.py` names a path
+# on someone else's host, not in this repository, and treating it as a citation would tie a
+# child's freshness to a file it never referenced.
+_URL_RE = re.compile(r"https?://[^\s)\]>`\"']{1,2048}")
+
+# The leading `(?:\.{1,2}/){0,4}` deliberately CAPTURES `./` and `../` rather than excluding
+# them in a lookbehind, so traversal can be rejected explicitly on the matched text below.
+# An explicit rejection is auditable; a lookbehind that happens to exclude it is not.
+# The `/` in the lookbehind is what rejects an absolute path: in `/etc/x.py` the candidate
+# would have to start after a `/`.
+_CITATION_RE = re.compile(
+    r"(?<![\w/-])"
+    r"((?:\.{1,2}/){0,4}"
+    rf"(?:{_PATH_SEGMENT}/){{1,8}}"
+    rf"{_PATH_SEGMENT}\.(?:{_CITATION_EXTENSIONS}))"
+    # Optional line/range suffix, stripped: `path:84`, `path:84-85`, `path#L84`, `path@84`.
+    r"(?::\d{1,6}(?:-\d{1,6})?|\#L\d{1,6}(?:-L?\d{1,6})?|@\d{1,6})?"
+)
+
+# Exposed so a drift-guard test can assert the no-unbounded-quantifier property directly.
+CITATION_PATTERNS = (_URL_RE, _CITATION_RE)
+
+
+def cited_paths(body: str, resolves) -> tuple[list[str], str]:
+    """Repository paths an issue body CITES, plus how confident that reading is.
+
+    Returns ``(paths, extraction)`` where ``extraction`` is one of:
+
+    - ``"paths"``    — at least one candidate resolves in an endpoint tree.
+    - ``"none"``     — the body names nothing path-shaped at all. Confidently citation-free.
+    - ``"ambiguous"``— it names path-shaped tokens, none of which resolve. NOT the same as
+      ``"none"``: we could not read it, so it must fail toward MORE scrutiny (``depth: deep``),
+      never less. Collapsing these two was a design-gate finding.
+
+    ``resolves`` is the set of paths known to exist in one of the two endpoint trees. It is
+    INJECTED rather than probed here because this module is pure — no I/O, no subprocess —
+    a promise enforced by a source grep in `tests/hooks/test_driver_state_write_back.py`.
+    The caller obtains it with `git cat-file -e <ref>:<path>`.
+
+    Absolute paths and `../` traversal are rejected: a citation is a repository-relative
+    path, and anything else is either prose or an attempt to point outside the tree.
+    """
+    if not isinstance(body, str) or not body:
+        return ([], "none")
+    scrubbed = _URL_RE.sub(" ", body)
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for match in _CITATION_RE.finditer(scrubbed):
+        raw = match.group(1)
+        if ".." in raw or raw.startswith("/"):
+            continue                      # traversal / absolute — never a citation
+        normalized = raw[2:] if raw.startswith("./") else raw
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            candidates.append(normalized)
+    if not candidates:
+        return ([], "none")
+    known = set(resolves or ())
+    resolved = [c for c in candidates if c in known]
+    if not resolved:
+        # Path-shaped but unreadable against either tree — the uncertain case.
+        return ([], "ambiguous")
+    return (resolved, "paths")
+
 
 class DriverStateError(ValueError):
     """Raised on a malformed driver-state or an invalid driver operation."""

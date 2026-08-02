@@ -136,11 +136,23 @@ class TestAdversarialInput:
         dl.cited_paths(hostile, resolves=set())
         assert time.monotonic() - start < 2.0, "extraction is superlinear on hostile input"
 
-    def test_no_unbounded_nested_quantifier_in_the_patterns(self):
-        """Structural guard: a nested quantifier over a variable-length group is the ReDoS
-        shape. Asserted against the compiled patterns so a future edit re-introducing one
-        fails here rather than in production on a hostile body."""
+    def test_the_patterns_contain_no_unbounded_quantifier_at_all(self):
+        """Structural guard for the property the module's own comment claims.
+
+        A weaker version of this test (looking only for a nested quantifier over a group)
+        was written first and would have passed VACUOUSLY against bounded quantifiers, so
+        it proved nothing about a future edit. The real invariant is stronger and is what
+        makes the ReDoS argument sound: no `+` or `*` outside a character class anywhere,
+        so every match attempt does O(1) work per starting position.
+
+        Character classes are stripped first — `[A-Za-z0-9_.-]` contains a literal `-` and
+        `[^\\s)\\]>`"']` contains an escaped `]`, and neither is a quantifier.
+        """
         for pattern in dl.CITATION_PATTERNS:
-            src = pattern.pattern if isinstance(pattern, re.Pattern) else str(pattern)
-            assert not re.search(r"\([^)]*[+*]\)[+*]", src), (
-                f"nested quantifier over a group in {src!r}")
+            src = pattern.pattern
+            without_classes = re.sub(r"\[(?:\\.|[^\]\\])*\]", "", src)
+            offender = re.search(r"(?<!\\)[+*]", without_classes)
+            assert offender is None, (
+                f"unbounded quantifier {offender.group(0)!r} at index {offender.start()} "
+                f"of {without_classes!r} (from {src!r}) — bound it, or the ReDoS claim in "
+                "driver_lib's citation-extraction comment is false")
