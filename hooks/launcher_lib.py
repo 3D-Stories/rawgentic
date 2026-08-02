@@ -219,7 +219,8 @@ _VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
 # position 1 — but the last two are the SUCCESSOR's own (a rebuild receipt and its claim). A
 # predecessor-side gate that demanded all seven could never pass, and — worse — a full ladder
 # handed to `teardown_allowed` on the predecessor side would authorise a predecessor to retire
-# ITSELF after four checks, which is precisely the ownership inversion approach C was rejected
+# ITSELF after the five checks it owns, which is precisely the ownership inversion approach C
+# was rejected
 # for (design §2).
 #
 # #694 reordered the four predecessor-owned rungs to `project_switched -> prompt_landed ->

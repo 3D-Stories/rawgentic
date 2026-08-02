@@ -261,6 +261,14 @@ _DEPTHS = frozenset({"deep", "quick"})
 # because a stamped child is selectable. It lives only in `pending_disposition`.
 _OUTCOMES = frozenset({"still_valid", "body_corrected"})
 _PENDING_DISPOSITIONS = frozenset({"issue_obsolete"})
+# Statuses that SETTLE a pending owner decision, so a leftover `validated_against` beside a
+# `pending_disposition` is stale bookkeeping rather than a live contradiction (round-5 High 2).
+# `deferred`/`abandoned` are the two dispositions the refusal itself names; `merged` is a
+# stronger outcome than either, and exempting it is what keeps a merged child with a stale
+# marker from jamming the campaign with no way out. Deliberately NOT here: `pr_open` and
+# `in_progress`, which leave the decision outstanding — and `pr_open` can satisfy a dependent's
+# dependency, so exempting it let an obsolete child hand out somebody else's work.
+_DISPOSED_STATUSES = frozenset({"deferred", "abandoned", "merged"})
 
 
 def _enum(value, allowed, what):
@@ -440,7 +448,18 @@ def validate_queue_revalidation(state: dict) -> bool:
         # the pending marker, so this closes an invariant hole rather than a bypass; but a receipt
         # is exactly the artifact whose invariants have to hold on their own.
         #
-        # **Scoped to `queued` (round-4 High 4).** Unscoped, this refusal outlived its own
+        # **Scoped to UNDISPOSED statuses (round-4 High 4, corrected by round-5 High 2).**
+        # Round 4 exempted every non-`queued` status on the reasoning that a non-queued child is
+        # not selectable. True, and beside the point: a `pr_open` child SATISFIES A DEPENDENCY
+        # under `deps_satisfied_by: "pr_open"`, so a stamped child the receipt calls obsolete
+        # could unblock a DIFFERENT child, and that one was handed out. The question is never
+        # only "is this child selectable" but "what does this child let somebody else do".
+        #
+        # `_DISPOSED_STATUSES` is what genuinely settles the pending owner decision: the two
+        # documented dispositions, plus `merged`, which is a stronger outcome than either and
+        # must be exempt or a merged child with a stale marker would jam the campaign for good.
+        #
+        # **Scoped at all (round-4 High 4).** Unscoped, this refusal outlived its own
         # remedy: `record_child_outcome` moves the STATUS to `deferred`/`abandoned` and leaves the
         # stamp untouched, so the invariant kept firing after the owner had done exactly what the
         # message asked, and re-running the revalidation skill could not help either — it skips a
@@ -450,7 +469,7 @@ def validate_queue_revalidation(state: dict) -> bool:
         # of it is not selectable and a leftover stamp asserts nothing.
         record = parsed.get(issue["number"])
         if record is not None and record.get("pending_disposition") is not None \
-                and stamped == head and issue.get("status") == "queued":
+                and stamped == head and issue.get("status") not in _DISPOSED_STATUSES:
             # `QueueRevalidationRequired`, NOT a bare `DriverStateError`, and the difference is
             # load-bearing. It subclasses `DriverStateError`, so every structural caller keeps
             # working — but `_refuse_unrevalidated_queue` already refuses this exact shape as the
@@ -1592,6 +1611,18 @@ def handoff_claim_is_live(state: dict, *, now_ts: int, lease_s: int) -> bool:
     """
     claim = state.get("handoff_claim")
     if not isinstance(claim, dict):
+        return False
+    # **Scoped to the CURRENT generation (round-5 High 1).** Round 4 ignored generation entirely
+    # so that a claimant on a NEWER generation could not be missed — but nothing clears
+    # `handoff_claim` when a generation completes, so a finished claim sat in state looking
+    # permanently live and masked every later queue change. The operator was then told "do NOT
+    # open another generation" when opening one is precisely the remedy for a payload mismatch:
+    # the fix for one unrecoverable instruction had produced another.
+    #
+    # The current generation is the right scope for BOTH cases. Round 4's stale-caller-N /
+    # live-claimant-N+1 shape still trips it, because there the live claim IS the current
+    # generation; a historical claim below it is correctly ignored.
+    if claim.get("generation") != state.get("generation"):
         return False
     return bool(claim.get("started")) or not handoff_reclaimable(
         state, now_ts=now_ts, lease_s=lease_s)

@@ -268,7 +268,17 @@ because order decides which child runs next.
 successor's FIRST `next_ready_issue` refuses, because a crashed predecessor left `validated_head`
 behind the head it died at.
 
-**What clears it:** `/rawgentic:revalidate-children`, and nothing else.
+**What clears it depends on WHY it refused** — a distinction round-5 finding 4 caught this
+document getting wrong, having previously said "`/rawgentic:revalidate-children`, and nothing
+else":
+
+- **Stale provenance** (the receipt attests an older head, or an eligible child is unstamped) →
+  `/rawgentic:revalidate-children`, and nothing else. Re-running it is the whole remedy.
+- **A pending disposition** (revalidation concluded a child is obsolete) → **only the OWNER
+  clears it**, with
+  `python3 hooks/launcher_lib.py record-child-outcome --issue <n> --status deferred|abandoned`.
+  Re-running the revalidation skill rediscovers the same marker and changes nothing, because
+  choosing between `deferred` and `abandoned` is deliberately not a machine's decision.
 
 **Selection in the IN-SESSION loop goes through `launcher_lib next-child`.** The driver's default
 mode is `single-session`, which never crosses a process boundary and so never calls `handoff`. Before
@@ -541,7 +551,15 @@ plugin repo — a deferred owner-attended follow-up, mirroring the #568 Phase-1 
 until it lands, fresh-session mode's pre-launch check degrades to single-session, so nothing
 regresses.)
 
-**Generation counter (monotonic).** On a `ready` disposition the driver persists the handoff via
+> **Scope of the two sections below: the MID-CHILD boundary only** (`mid-child-handoff`, #665).
+> Round-5 High 3: they read as though they also covered the child boundary described above, which
+> flatly contradicts it — that boundary's `handoff` command never calls `open_handoff`, writes no
+> `handoff_pending`, and offers a successor nothing to claim. Until **#845** lands, there is no
+> generation counter and no exactly-one-successor fence at the child boundary. Everything from
+> here to the end of this subsection describes `mid-child-handoff`.
+
+**Generation counter (monotonic).** On a `ready` mid-child disposition the driver persists the
+handoff via
 `driver_lib.open_handoff(state, disposition, now_ts=)`, which bumps the top-level `generation`
 counter AND writes `handoff_pending = {generation, next_issue, written_ts}` atomically — the bump
 is required so a later handoff can never reuse a generation (a reused generation would let a stale

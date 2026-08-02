@@ -1329,21 +1329,53 @@ class TestRound3Finding5AStampedObsoleteChildIsNotValidatorValid:
         assert dl.validate_queue_revalidation(
             dl.record_child_outcome(jammed, 1, disposition)) is True
 
-    @pytest.mark.parametrize("status", ["in_progress", "pr_open", "merged",
-                                        "deferred", "abandoned"])
-    def test_narrowing_to_queued_opens_no_hole_because_nothing_else_is_selectable(self, status):
-        """The question the round-4 narrowing actually turns on, answered by enumeration rather
-        than by argument. The invariant now reads DURABLE status while selection reads EFFECTIVE
-        status, so "scoped to queued" is only safe if every OTHER status is unselectable anyway —
-        otherwise the fix for the jam would re-open the hole round 3 closed.
+    @pytest.mark.parametrize("status", ["merged", "deferred", "abandoned"])
+    def test_only_genuinely_DISPOSING_statuses_are_exempt(self, status):
+        """**Round-5 High 2 corrected my round-4 fix.** I exempted every non-`queued` status,
+        reasoning that a non-queued child is not selectable. That was true and beside the point:
+        the reviewer found that a `pr_open` child SATISFIES A DEPENDENCY under
+        `deps_satisfied_by: "pr_open"`, so a stamped child the receipt calls obsolete could
+        unblock a different child and that one got selected. My own enumeration test missed it
+        exactly because it asked "is THIS child selectable" and never "what does this child let
+        somebody else do".
 
-        It holds: for each non-`queued` status the receipt validates AND the child cannot be
-        selected, so a leftover stamp beside a pending marker cannot hand anyone stale work."""
+        The exemption is now the statuses that genuinely settle the pending owner decision:
+        `deferred` and `abandoned` are the documented dispositions, and `merged` is a stronger
+        outcome than either. Everything else must still be refused."""
         state = _state(_iss(1, status, validated_against=HEAD),
                        reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
         assert dl.validate_queue_revalidation(state) is True
-        assert dl.next_ready_issue(state, observed_head=HEAD) is None, \
-            f"a {status!r} child must not be selectable, or narrowing the invariant is a bypass"
+
+    @pytest.mark.parametrize("status", ["queued", "pr_open", "in_progress"])
+    def test_an_UNDISPOSED_status_is_still_refused(self, status):
+        """The other half: these leave the owner decision outstanding, so the contradiction
+        stands. Each is recoverable — the owner records a disposition, or the PR merges."""
+        state = _state(_iss(1, status, validated_against=HEAD),
+                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
+        with pytest.raises(dl.QueueRevalidationRequired):
+            dl.validate_queue_revalidation(state)
+
+    def test_an_obsolete_child_can_never_UNBLOCK_a_dependent(self):
+        """The round-5 High 2 failure itself, pinned. Child #1 is stamped, its receipt says
+        obsolete, and its status is `pr_open`; child #2 is queued and depends on it under the
+        `pr_open` policy. Before the fix the receipt validated and #2 was handed out — work
+        unblocked by a child a human had already been asked to write off."""
+        state = _state(_iss(1, "pr_open", validated_against=HEAD),
+                       _iss(2, depends_on=[1], validated_against=HEAD),
+                       policy={"deps_satisfied_by": "pr_open"},
+                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete"),
+                                           "2": _receipt_child()}))
+        with pytest.raises(dl.QueueRevalidationRequired):
+            dl.next_ready_issue(state, "pr_open", observed_head=HEAD)
+
+    @pytest.mark.parametrize("status", ["queued", "pr_open", "in_progress"])
+    def test_every_refusing_status_has_a_way_out(self, status):
+        """No refusal without an exit — the rule this PR has now broken three times. Whichever
+        undisposed status a child sits in, recording a disposition must open the gate."""
+        state = _state(_iss(1, status, validated_against=HEAD),
+                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
+        assert dl.validate_queue_revalidation(
+            dl.record_child_outcome(state, 1, "abandoned")) is True
 
     def test_the_probe_overlay_case_is_refused_but_still_recoverable(self):
         """The one shape where durable and effective status genuinely disagree: the file says

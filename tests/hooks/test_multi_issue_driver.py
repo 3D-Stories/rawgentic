@@ -156,7 +156,14 @@ def test_doc_documents_queue_revalidation_840():
     assert "### The gate is LIVE (#840 PR 2)" in text
     assert "It **raises** rather than returning `None`" in text
     assert "must be FRESHLY OBSERVED" in text
-    assert "**What clears it:** `/rawgentic:revalidate-children`, and nothing else." in text
+    # INVERTED at round-5 finding 4. This pinned the sentence "**What clears it:**
+    # `/rawgentic:revalidate-children`, and nothing else." — which is FALSE for a pending
+    # disposition: re-running the skill rediscovers the same marker, and only the owner's
+    # `record-child-outcome --status deferred|abandoned` clears it. A drift guard that pins a
+    # false sentence actively defends the error, which is worse than having no guard.
+    assert "**What clears it depends on WHY it refused**" in text
+    assert "only the OWNER" in text and "record-child-outcome" in text
+    assert "and nothing else" in text, "the stale-provenance half is still absolute"
     # The review round INVERTED this pin. It previously required the doc to state the
     # per-campaign activation limit; the Step-11 review called that limit opt-in theatre and the
     # owner closed it, so the doc must now state that the gate is universal AND name the migration

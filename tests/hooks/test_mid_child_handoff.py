@@ -606,6 +606,30 @@ class TestRetireRefusesBeforeAnythingDestructive:
             "the one instruction that can spawn a competitor beside a live claimant"
         self._assert_nothing_destructive(world)
 
+    def test_a_COMPLETED_older_generations_claim_does_not_mask_a_queue_change(self, tmp_path):
+        """**Round-5 High 1 — the defect my round-4 fix created.** Round 4 widened liveness to
+        ignore generation entirely, so that a claimant on a NEWER generation could not be missed.
+        But nothing ever clears `handoff_claim` when a generation completes, so a finished
+        generation-7 claim sat in state looking permanently live — and the next genuine queue
+        change on generation 8 was then reported as "a claim holds this campaign, do NOT open
+        another generation", when opening another generation is exactly the remedy. The fix for
+        one unrecoverable instruction produced another.
+
+        Liveness is scoped to the CURRENT generation: that still catches round 4's
+        stale-caller-N / live-claimant-N+1 case, because there the live claim IS the current
+        generation, while a historical claim below it is correctly ignored."""
+        world = _world(tmp_path)
+        state = _write_state(
+            tmp_path, world,
+            claim={"generation": GEN - 1, "claimant": "finished-long-ago",
+                   "claimed_at": 1, "started": True},
+            pend_over={"queue": None})
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "claim_refused"
+        assert out["queue_changed"] is True, out["reason"]
+        assert "new generation" in out["reason"], \
+            "opening a new generation IS the recovery for a payload mismatch"
+
     def test_an_expired_unstarted_claim_is_NOT_treated_as_live(self, tmp_path):
         """The other side of the boundary, or the fix would report every stale record as a live
         claimant and hide real queue changes for ever. A claim past its lease that never started
@@ -899,7 +923,7 @@ class TestMidChildHandoffCommand:
         assert pend["position"]["goal_condition"] == COND
         assert pend["successor"] == {"pane": SUCC_PANE, "session": SUCC}
         assert pend.get("cancelled") is not True
-        # the successor is launched with the six-step ladder and a generation-bound marker,
+        # the successor is launched with the seven-step ladder and a generation-bound marker,
         # and it is NOT the predecessor's job to retire anything
         assert seen["teardown"] is False
         assert [s["step"] for s in seen["steps"]] == [

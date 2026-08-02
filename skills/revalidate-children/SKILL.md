@@ -28,7 +28,15 @@ issue. A successor then implements from a body that is quietly wrong.
 - every eligible child carries `validated_against == that head`, AND
 - no eligible child carries a `pending_disposition`.
 
-Only this skill clears that. It is also the producer for the `queue_revalidated` rung on the
+**This skill clears the first two; it CANNOT clear the third** (corrected at round-5 finding 4 —
+this line used to read "only this skill clears that", contradicting the skill's own step 6 below).
+A `pending_disposition` is an OWNER decision by design: re-running this skill rediscovers the same
+marker and changes nothing, because choosing between `deferred` and `abandoned` is deliberately not
+a machine's call. Only
+`python3 hooks/launcher_lib.py record-child-outcome --issue <n> --status deferred|abandoned`
+clears it. Say so when you report a refusal, or the operator re-runs this skill for ever.
+
+It is also the producer for the `queue_revalidated` rung on the
 pane-handoff ladder — `teardown_allowed` refuses to retire a predecessor until the receipt is current.
 
 ## The procedure

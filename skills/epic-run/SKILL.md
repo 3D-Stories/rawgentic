@@ -140,10 +140,12 @@ put a list up by hand).
   one boundary on the assumption the second is a no-op. Then the durable launcher — which must
   POSITIVELY advertise no-`--resume` support (`fresh_session_available`'s `fresh_launch_supported`
   probe) — starts a FRESH `claude -p` **with NO `--resume`** for the successor. The successor
-  `driver_lib.handoff_claim`s under the launcher flock (exactly-one-successor), rebuilds position
-  from `.driver-state` — never from in-context memory — then `driver_lib.handoff_ack_started`s
-  after starting the child (a claim that crashes before `started` is reclaimed after the lease, so
-  a failed takeover never strands the run). On `complete` (every child merged) do Step 5; on
+  rebuilds position from `.driver-state`, never from in-context memory.
+  **It does NOT `handoff_claim`/`handoff_ack_started` here, and there is no exactly-one-successor
+  fence at this boundary** — corrected at round-5 High 3, which caught this paragraph asserting
+  the very fence the paragraph above it says does not exist. The claim/lease/ack machinery is
+  `mid-child-handoff`'s (#665), because only that path writes `handoff_pending` for a successor to
+  claim. Closing the gap here is #845. On `complete` (every child merged) do Step 5; on
   `blocked` (unmerged children remain but none ready) leave the epic OPEN with an honest summary
   and end — never conflate `blocked` with `complete`. On **`revalidation_required`** (#840 — the
   remaining queue has not been revalidated against the current `origin/main`) run
