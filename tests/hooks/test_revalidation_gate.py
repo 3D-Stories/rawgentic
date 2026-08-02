@@ -775,3 +775,52 @@ class TestTheCorrectionConsumer:
         clause = dl.corrections_clause(
             _state(_iss(1), reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")})), 1)
         assert "issue_obsolete" in clause and "owner decision" in clause
+
+
+# --------------------------------------------------------------------------- #
+# §4 — every CAMPAIGN call site supplies the enforcement inputs (source-level)
+# --------------------------------------------------------------------------- #
+
+class TestTheCampaignCallSites:
+    """Source-level pins, in the pattern `tests/hooks/test_wf_review_sites.py` uses.
+
+    These exist because an optional enforcement input that no caller threads in ships DEAD, and
+    this repo has done exactly that once: `tests/hooks/test_driver_state_write_back.py:304-306`
+    records an optional probe nobody passed. Adding a campaign caller without the argument fails
+    CI here.
+
+    They are a BELT, not the braces. On their own "a source test exists" is vacuous — deleting the
+    test deletes the guard — so the runtime refusals in `TestTheLegacyContractIsExplicitNeverSilent`
+    and `TestPerformHandoffRefusesBeforeAnyEffect` are what actually enforce this, and
+    `TestTheObservedHeadDataflow` proves the wrapper's value is what reaches the comparison.
+    """
+
+    @staticmethod
+    def _source(name):
+        import inspect
+        return inspect.getsource(getattr(ll, name))
+
+    def test_cmd_handoff_observes_the_head_and_threads_it_into_selection(self):
+        src = self._source("_cmd_handoff")
+        assert "observe_head(" in src, "the ONE production selection site must observe the head"
+        assert "observed_head=observed_head" in src, "and thread it into fresh_session_handoff"
+
+    def test_resume_prompt_for_state_observes_the_head(self):
+        assert "observe_head(" in self._source("resume_prompt_for_state")
+
+    def test_the_mid_child_handoff_site_supplies_campaign_context(self):
+        """Its ladder carries `queue_revalidated`, and an unreported rung fail-closes — so
+        omitting this would refuse every mid-child handoff, not silently skip the check."""
+        assert "campaign_context=" in self._source("_cmd_mid_child_handoff")
+
+    def test_retire_predecessor_produces_the_rung_itself(self):
+        """Recomputed rather than trusted from the predecessor's report: this is the last gate
+        before an irreversible teardown."""
+        assert "produce_queue_revalidated(" in self._source("retire_predecessor")
+
+    def test_the_ad_hoc_site_deliberately_has_no_campaign_context(self):
+        """The other half of the contract. An ad-hoc handoff has no campaign, uses the three-rung
+        launch ladder, and must NOT acquire a campaign argument by copy-paste."""
+        src = self._source("_cmd_ad_hoc_handoff")
+        assert "campaign_context=" not in src
+        assert "steps=" not in src, "an ad-hoc handoff must keep the default launch ladder"
