@@ -372,7 +372,7 @@ class TestHandoffCLIRefusals:
         assert payload["observed_head"] == head, payload
         assert [w["number"] for w in payload["worklist"]] == [2], payload
 
-    def test_a_receiptless_campaign_says_enforcement_is_off_rather_than_failing(self, tmp_path):
+    def test_a_receiptless_campaign_says_enforcement_is_off_rather_than_failing_cli(self, tmp_path):
         """Every pre-#840 campaign must keep working. The note is mandatory — a silent
         fail-open is how a real miss comes to look like a deliberate no-op (#695 M2's lesson)."""
         state = _state(_iss(1), session_mode=dl.FRESH_SESSION_MODE)
@@ -384,3 +384,187 @@ class TestHandoffCLIRefusals:
                               capture_output=True, text=True, check=False)
         assert proc.returncode != 5, (proc.returncode, proc.stderr)
         assert "enforcement is OFF" in proc.stderr, proc.stderr
+
+
+# --------------------------------------------------------------------------- #
+# §7 — the ladder rung AND its producer. The rung alone is a landmine, not a no-op.
+# --------------------------------------------------------------------------- #
+
+class TestTheRungExistsAndIsFirst:
+    def test_queue_revalidated_leads_the_mid_child_ladder(self):
+        """FIRST, because a successor handed a stale queue has already read the wrong issue
+        bodies by the time any later rung could object."""
+        assert [s["step"] for s in ll.mid_child_verification_steps()][0] == "queue_revalidated"
+
+    def test_the_launch_ladder_does_not_carry_it(self):
+        """The ad-hoc handoff uses the launch ladder. Adding the rung there would refuse every
+        ad-hoc handoff, which has no campaign to revalidate."""
+        assert "queue_revalidated" not in [s["step"] for s in ll.handoff_verification_steps()]
+
+    def test_an_unreported_rung_stays_fail_closed(self):
+        """The reason the producer is mandatory. Every OTHER rung passes and teardown is still
+        refused, naming this one — so shipping the rung without a producer would jam every
+        mid-child handoff and every teardown."""
+        results = {s["step"]: True for s in ll.mid_child_verification_steps()
+                   if s["step"] != "queue_revalidated"}
+        allowed, reason = ll.teardown_allowed(results,
+                                              steps=ll.mid_child_verification_steps())
+        assert allowed is False
+        assert "queue_revalidated" in reason, reason
+
+
+class TestTheProducer:
+    """The rung's result is produced by the LAUNCHER reading the durable receipt — never by a
+    caller-supplied verification result. An agent asserting its own homework is the vacuous pass
+    this whole issue exists to eliminate (peer-consult finding)."""
+
+    def test_a_missing_campaign_context_fails_closed(self):
+        passed, reason = ll.produce_queue_revalidated(None)
+        assert passed is False
+        assert "no campaign context" in reason
+
+    def test_a_half_supplied_context_fails_closed(self):
+        passed, _ = ll.produce_queue_revalidated({"driver_state_path": "/x"})
+        assert passed is False
+
+    def test_an_unreadable_state_file_fails_closed(self, tmp_path):
+        passed, reason = ll.produce_queue_revalidated(
+            {"driver_state_path": str(tmp_path / "missing.json"), "repo_root": str(tmp_path)})
+        assert passed is False
+        assert "could not read" in reason or "does not hold" in reason
+
+    def test_a_receiptless_campaign_passes_with_the_reason_recorded(self, tmp_path):
+        """A stated limit, not an oversight: every campaign predating #840 has no receipt, and
+        the mid-child ladder is used only by campaign paths, so failing them would break every
+        existing mid-child handoff — the same landmine in another shape."""
+        path = _write_state(tmp_path, _state(_iss(1)))
+        passed, reason = ll.produce_queue_revalidated(
+            {"driver_state_path": str(path), "repo_root": str(tmp_path)})
+        assert passed is True
+        assert "OFF" in reason, reason
+
+    def test_a_stale_receipt_fails_against_a_freshly_observed_head(self, tmp_path):
+        """A fully SELF-CONSISTENT receipt that is simply behind: #1 is stamped at OLD and the
+        receipt attests OLD with matching evidence. Nothing about it is malformed — the only thing
+        wrong is that `main` has moved, which is precisely what this gate is for."""
+        work, head = _repo_with_origin(tmp_path)
+        path = _write_state(tmp_path, _state(
+            _iss(1, validated_against=OLD),
+            reval=_reval(OLD, {"1": _receipt_child(to_sha=OLD)})))
+        passed, reason = ll.produce_queue_revalidated(
+            {"driver_state_path": str(path), "repo_root": str(work)})
+        assert passed is False
+        assert head in reason, reason
+        assert head != OLD
+
+    def test_a_current_receipt_passes_against_a_freshly_observed_head(self, tmp_path):
+        work, head = _repo_with_origin(tmp_path)
+        path = _write_state(tmp_path, _state(
+            _iss(1, validated_against=head),
+            reval=_reval(head, {"1": _receipt_child(to_sha=head)})))
+        passed, reason = ll.produce_queue_revalidated(
+            {"driver_state_path": str(path), "repo_root": str(work)})
+        assert passed is True, reason
+        assert head in reason
+
+    def test_an_unobservable_head_fails_closed_even_with_a_valid_receipt(self, tmp_path):
+        """The receipt looks perfect; the head cannot be confirmed. Fail closed — what this
+        gates is an irreversible teardown."""
+        not_a_repo = tmp_path / "elsewhere"
+        not_a_repo.mkdir()
+        path = _write_state(tmp_path, _state(
+            _iss(1, validated_against=HEAD),
+            reval=_reval(HEAD, {"1": _receipt_child()})))
+        passed, reason = ll.produce_queue_revalidated(
+            {"driver_state_path": str(path), "repo_root": str(not_a_repo)})
+        assert passed is False
+        assert "refusing to observe the head" in reason
+
+
+class TestPerformHandoffRefusesBeforeAnyEffect:
+    """The strongest form of the gate: with a stale queue, no pane is ever split.
+
+    A refusal that has already spawned a successor leaves an orphan nobody owns, so the position
+    of the check — after argument validation, before the first effect — is the contract, not an
+    implementation detail.
+    """
+
+    @staticmethod
+    def _runner(calls):
+        def run(argv, timeout=180):
+            calls.append(argv)
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return type("P", (), {"returncode": 0, "stderr": "", "stdout": json.dumps(
+                    {"result": {"panes": [{"pane_id": "w1:p1"}]}})})()
+            if argv[:3] == ["herdr", "pane", "split"]:
+                return type("P", (), {"returncode": 0, "stderr": "", "stdout": json.dumps(
+                    {"result": {"pane_id": "w1:p2"}})})()
+            return type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        return run
+
+    def _handoff(self, tmp_path, state_path, repo_root, calls):
+        (tmp_path / "t").mkdir(exist_ok=True)
+        return ll.perform_handoff(
+            anchor_pane="w1:p1", cwd=str(tmp_path), project_root=str(tmp_path), name="succ",
+            expected_project="rawgentic", goal_condition="keep going",
+            resume_prompt="marker-x — do the thing",
+            registry_path=str(tmp_path / "reg.jsonl"), transcript_dir=str(tmp_path / "t"),
+            runner=self._runner(calls), sleeper=lambda _s: None, read_text=lambda _p: "",
+            prompt_marker="marker-x", steps=ll.mid_child_verification_steps(),
+            teardown=False, on_successor=lambda _p, _s: True,
+            campaign_context={"driver_state_path": str(state_path),
+                              "repo_root": str(repo_root)})
+
+    def test_a_stale_queue_refuses_without_splitting_a_pane(self, tmp_path):
+        work, _head = _repo_with_origin(tmp_path)
+        state_path = _write_state(tmp_path, _state(
+            _iss(1, validated_against=OLD), reval=_reval(OLD, {})))
+        calls = []
+        out = self._handoff(tmp_path, state_path, work, calls)
+        assert out["failed_step"] == "queue_revalidated", out
+        assert out["results"]["queue_revalidated"] is False
+        assert not any(a[:3] == ["herdr", "pane", "split"] for a in calls), \
+            "a refusal that has already split a pane leaves an orphan nobody owns"
+
+    def test_a_missing_campaign_context_refuses_rather_than_skipping_the_check(self, tmp_path):
+        """Deviation from the design's literal wording, recorded deliberately.
+
+        The design said an absent `campaign_context` means "the ad-hoc case, check does not run".
+        Verified at source: NO path uses the mid-child ladder without campaign state — the ad-hoc
+        handoff (`_cmd_ad_hoc_handoff`) passes no `steps=` and gets the three-rung launch ladder,
+        which carries no such rung. So "absent" on THIS ladder can only be a campaign caller that
+        forgot the argument, and passing the rung for it would be a silent skip of the whole gate.
+        Failing toward less scrutiny is the one direction this design must never take, so absence
+        refuses here as well as being pinned by a source-level call-site test.
+        """
+        (tmp_path / "t").mkdir(exist_ok=True)
+        calls = []
+        out = ll.perform_handoff(
+            anchor_pane="w1:p1", cwd=str(tmp_path), project_root=str(tmp_path), name="succ",
+            expected_project="rawgentic", goal_condition="keep going",
+            resume_prompt="marker-x — do the thing",
+            registry_path=str(tmp_path / "reg.jsonl"), transcript_dir=str(tmp_path / "t"),
+            runner=self._runner(calls), sleeper=lambda _s: None, read_text=lambda _p: "",
+            prompt_marker="marker-x", steps=ll.mid_child_verification_steps(),
+            teardown=False, on_successor=lambda _p, _s: True)
+        assert out["failed_step"] == "queue_revalidated", out
+        assert not any(a[:3] == ["herdr", "pane", "split"] for a in calls)
+
+    def test_a_bad_argument_still_raises_rather_than_being_masked(self, tmp_path):
+        """The check sits AFTER caller-mismatch validation on purpose: a malformed argument is a
+        caller bug and must keep raising, not be reported as a queue refusal."""
+        work, _head = _repo_with_origin(tmp_path)
+        state_path = _write_state(tmp_path, _state(
+            _iss(1, validated_against=OLD), reval=_reval(OLD, {})))
+        (tmp_path / "t").mkdir(exist_ok=True)
+        with pytest.raises(ll.LauncherError):
+            ll.perform_handoff(
+                anchor_pane="w1:p1", cwd=str(tmp_path), project_root=str(tmp_path), name="succ",
+                expected_project="rawgentic", goal_condition="keep going",
+                resume_prompt="no marker here",           # prompt_marker absent from the prompt
+                registry_path=str(tmp_path / "reg.jsonl"), transcript_dir=str(tmp_path / "t"),
+                runner=self._runner([]), sleeper=lambda _s: None, read_text=lambda _p: "",
+                prompt_marker="marker-x", steps=ll.mid_child_verification_steps(),
+                teardown=False, on_successor=lambda _p, _s: True,
+                campaign_context={"driver_state_path": str(state_path),
+                                  "repo_root": str(work)})

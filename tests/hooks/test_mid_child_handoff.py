@@ -70,12 +70,14 @@ def _goal_row(condition: str, met: bool) -> str:
 
 
 class TestMidChildLadder:
-    def test_ladder_is_six_causal_steps_naming_on_disk_artifacts(self):
+    def test_ladder_is_seven_causal_steps_naming_on_disk_artifacts(self):
         """#694 reordered the four predecessor-owned rungs to match the send order: the bind is its
-        own send, so its registry row comes first, and `/goal` goes last so `goal_armed` does too."""
+        own send, so its registry row comes first, and `/goal` goes last so `goal_armed` does too.
+        #840 prepended `queue_revalidated` — the queue must be revalidated BEFORE a successor is
+        spawned to inherit it, so it cannot sit among the post-launch rungs."""
         steps = ll.mid_child_verification_steps()
         assert [s["step"] for s in steps] == [
-            "spawned", "project_switched", "prompt_landed", "goal_armed",
+            "queue_revalidated", "spawned", "project_switched", "prompt_landed", "goal_armed",
             "position_rebuilt", "state_claimed"]
         for s in steps:
             assert s["artifact"].strip()
@@ -90,21 +92,23 @@ class TestMidChildLadder:
             "spawned", "project_switched", "goal_armed"]
 
     def test_evaluate_stops_at_the_first_missing_mid_child_step(self):
-        results = {"spawned": True, "goal_armed": True, "prompt_landed": True,
+        results = {"queue_revalidated": True, "spawned": True, "goal_armed": True,
+                   "prompt_landed": True,
                    "project_switched": True}          # position_rebuilt / state_claimed absent
         ok, failed, checked = ll.evaluate_verifications(
             results, steps=ll.mid_child_verification_steps())
         assert ok is False and failed == "position_rebuilt"
         assert checked[-1] == "position_rebuilt"
 
-    def test_teardown_refused_until_all_six_pass(self):
-        results = {"spawned": True, "goal_armed": True, "prompt_landed": True,
+    def test_teardown_refused_until_all_seven_pass(self):
+        results = {"queue_revalidated": True, "spawned": True, "goal_armed": True,
+                   "prompt_landed": True,
                    "project_switched": True, "position_rebuilt": False, "state_claimed": True}
         allowed, reason = ll.teardown_allowed(
             results, steps=ll.mid_child_verification_steps())
         assert allowed is False and "position_rebuilt" in reason
 
-    def test_teardown_allowed_when_all_six_pass(self):
+    def test_teardown_allowed_when_all_seven_pass(self):
         results = {s["step"]: True for s in ll.mid_child_verification_steps()}
         allowed, _ = ll.teardown_allowed(results, steps=ll.mid_child_verification_steps())
         assert allowed is True
@@ -1401,6 +1405,13 @@ class TestAnUnrecordableSuccessorIsAFailedLaunch:
             return FakeProc(0, "")
 
         (tmp_path / "t").mkdir()
+        # #840 — the mid-child ladder now carries `queue_revalidated`, whose producer needs the
+        # campaign context. A receipt-less state means enforcement is OFF for this campaign, so the
+        # rung passes and this test still exercises what it is named for.
+        state_path = tmp_path / "campaign.json"
+        state_path.write_text(json.dumps(
+            {"version": 1, "campaign": "c", "issues": [{"number": 1, "status": "in_progress"}]}),
+            encoding="utf-8")
         out = ll.perform_handoff(
             anchor_pane=ANCHOR, cwd=str(tmp_path), project_root=str(tmp_path), name="succ",
             expected_project="rawgentic",
@@ -1409,7 +1420,9 @@ class TestAnUnrecordableSuccessorIsAFailedLaunch:
             registry_path=str(tmp_path / "reg.jsonl"), transcript_dir=str(tmp_path / "t"),
             runner=runner, sleeper=lambda _s: None, read_text=lambda p: "",
             prompt_marker="marker-x", steps=ll.mid_child_verification_steps(),
-            teardown=False, on_successor=lambda pane, sess: False)
+            teardown=False, on_successor=lambda pane, sess: False,
+            campaign_context={"driver_state_path": str(state_path),
+                              "repo_root": str(tmp_path)})
         assert out["failed_step"] == "successor_not_recorded", out
         assert not any(a[:3] == ["herdr", "pane", "send-text"] for a in calls), \
             "nothing may be armed for a successor that cannot be recorded"

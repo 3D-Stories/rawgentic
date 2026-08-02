@@ -209,14 +209,14 @@ _VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
                  "attachment with met:false whose condition is the one we armed"},
 )
 
-# The mid-child ladder (#665). Six checks, still CAUSAL, and every artifact is a file on disk or
-# live git state — none of them reads scraped terminal output, which is why a handoff can be
-# verified at all.
+# The mid-child ladder (#665, extended by #840). SEVEN checks, still CAUSAL, and every artifact is
+# a file on disk or live git state — none of them reads scraped terminal output, which is why a
+# handoff can be verified at all.
 #
 # `owner` records which side can produce each piece of evidence, and it is load-bearing rather
 # than documentation: the predecessor can prove the first four about the successor it just
 # launched, but the last two are the SUCCESSOR's own (a rebuild receipt and its claim). A
-# predecessor-side gate that demanded all six could never pass, and — worse — a six-step ladder
+# predecessor-side gate that demanded all seven could never pass, and — worse — a full ladder
 # handed to `teardown_allowed` on the predecessor side would authorise a predecessor to retire
 # ITSELF after four checks, which is precisely the ownership inversion approach C was rejected
 # for (design §2).
@@ -226,7 +226,25 @@ _VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
 # now its own send, and `/goal` goes last). Order here is not cosmetic: `evaluate_verifications`
 # walks it and stops at the FIRST failure, so a ladder listing rungs out of send order reports the
 # wrong step as the thing that broke.
+#
+# #840 puts `queue_revalidated` FIRST. The queue must be revalidated BEFORE a successor is spawned
+# to inherit it — a successor handed a stale queue has already read the wrong issue bodies by the
+# time any later rung could object. It is predecessor-owned because the predecessor is what just
+# merged the child that moved `main`.
+#
+# **The rung and its producer must ship together.** A rung with no producer is not inert: it is a
+# landmine. `perform_handoff` gates on `_predecessor_steps(ladder)` at `:1699` and `:1722`,
+# `retire_predecessor` gates at `:2501`, and `evaluate_verifications` treats an UNREPORTED step as
+# failed (`:1139`) — so adding the rung alone fail-closes every mid-child handoff and every
+# teardown the moment it lands.
 _MID_CHILD_VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
+    {"step": "queue_revalidated", "owner": "predecessor",
+     "artifact": ".driver-state -> a queue_revalidation receipt whose validated_head equals a "
+                 "FRESHLY observed origin/main (launcher_lib.observe_head), with every eligible "
+                 "child stamped at that head and none carrying a pending_disposition. Produced by "
+                 "the launcher reading the receipt — never satisfied by a caller-supplied rung "
+                 "result, because an agent asserting its own homework is the vacuous pass this "
+                 "whole issue exists to eliminate"},
     {"step": "spawned", "owner": "predecessor",
      "artifact": "herdr pane get <new> -> a non-empty agent_session.value, recorded into "
                  "handoff_pending.successor so the successor can later bind its own session id "
@@ -1094,10 +1112,70 @@ def handoff_verification_steps() -> list[dict[str, str]]:
 
 
 def mid_child_verification_steps() -> list[dict[str, str]]:
-    """The six-step mid-child ladder (#665). A SEPARATE tuple, not a mutation of #611's three:
-    that contract is pinned by its own test and a launch handoff still has exactly three checks
-    to make."""
+    """The seven-step mid-child ladder (#665, `queue_revalidated` added by #840). A SEPARATE tuple,
+    not a mutation of #611's three: that contract is pinned by its own test and a launch handoff
+    still has exactly three checks to make."""
     return [dict(s) for s in _MID_CHILD_VERIFICATION_STEPS]
+
+
+QUEUE_REVALIDATED_STEP = "queue_revalidated"
+
+
+def produce_queue_revalidated(campaign_context, *, runner=None) -> tuple[bool, str]:
+    """The `queue_revalidated` rung's PRODUCER. Reads the receipt; returns ``(passed, reason)``.
+
+    This is deliberately launcher-owned rather than caller-supplied, which was the peer consult's
+    sharpest point: *agent-provided verification JSON must not satisfy this rung.* The launcher
+    reads the durable receipt and compares it against a head it observes itself, so the evidence
+    cannot be the assertion of the thing being checked.
+
+    ``campaign_context`` is ``{driver_state_path, repo_root}`` (``generation`` is accepted and
+    ignored here — it is the caller's own bookkeeping). ``None`` means "not a campaign", which is
+    the ad-hoc handoff: that path uses the three-rung launch ladder and never carries this rung at
+    all, so there is nothing to produce. If the rung were somehow in the ladder with no context,
+    the result stays UNREPORTED and `evaluate_verifications` fail-closes — safe by construction.
+
+    **A campaign with no receipt PASSES, with the reason recorded.** That is a stated limit, not an
+    oversight: the mid-child ladder is used only by campaign paths, every campaign predating #840
+    has no receipt, and failing them would break every existing mid-child handoff — the same
+    landmine the rung-without-producer split creates. Enforcement arms for a campaign once
+    `revalidate-children` has written its first receipt, and from then on the check is real.
+
+    Fail-CLOSED on everything it cannot read: an unobservable head, an unreadable state file, or a
+    malformed receipt all refuse. What this gates is an irreversible teardown.
+    """
+    # `runner` defaults inside rather than in the signature: this function is defined next to the
+    # ladder it serves, which is ABOVE `_default_runner`, and a default argument is evaluated at
+    # definition time.
+    runner = _default_runner if runner is None else runner
+    if not isinstance(campaign_context, dict):
+        return (False, "no campaign context supplied, so the receipt could not be read")
+    state_path = campaign_context.get("driver_state_path")
+    repo_root = campaign_context.get("repo_root")
+    if not state_path or not repo_root:
+        return (False, "campaign context needs both driver_state_path and repo_root; got "
+                       f"{campaign_context!r}")
+    driver_lib = _driver_lib()
+    try:
+        state = _locked_state_read(state_path)
+    except (OSError, ValueError) as exc:
+        return (False, f"could not read {state_path}: {type(exc).__name__}: {exc}")
+    if not isinstance(state, dict):
+        return (False, f"{state_path} does not hold a JSON object")
+    if state.get("queue_revalidation") is None:
+        return (True, "queue-revalidation enforcement is OFF for this campaign — it carries no "
+                      "queue_revalidation receipt; run /rawgentic:revalidate-children to arm it")
+    try:
+        head = observe_head(repo_root, runner=runner)
+    except LauncherError as exc:
+        return (False, str(exc))
+    try:
+        driver_lib.next_ready_issue(state, observed_head=head)
+    except driver_lib.QueueRevalidationRequired as exc:
+        return (False, str(exc))
+    except driver_lib.DriverStateError as exc:
+        return (False, f"driver state refused the freshness check: {exc}")
+    return (True, f"the queue is revalidated against {head}")
 
 
 def _predecessor_steps(steps) -> list[dict[str, str]]:
@@ -1315,7 +1393,8 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     predecessor_session: str | None = None,
                     predecessor_goal_condition: str | None = None,
                     strict_goal_binding: bool = False,
-                    expected_predecessor_goal=_UNSET_GOAL_SNAPSHOT) -> dict:
+                    expected_predecessor_goal=_UNSET_GOAL_SNAPSHOT,
+                    campaign_context=None) -> dict:
     """Execute the ordered handoff. Effects are injected so tests drive the whole sequence.
 
     THE ORDER, and why each position is load-bearing:
@@ -1487,6 +1566,26 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     if not os.path.isdir(transcript_dir):
         raise LauncherError(f"transcript directory {transcript_dir!r} does not exist — the "
                             "goal_armed check could never read anything")
+
+    # #840 — the FIRST rung, produced here: after every caller-mismatch validation (so a bad
+    # argument still RAISES rather than being masked by a queue refusal) and before any pane,
+    # session or state effect exists. A successor handed a stale queue has already read the wrong
+    # issue bodies by the time a later rung could object, so this cannot wait for the post-launch
+    # checks.
+    #
+    # `campaign_context` is an EXPLICIT parameter rather than something inferred, because
+    # `perform_handoff` is deliberately shared with `_cmd_ad_hoc_handoff`, which has no campaign
+    # state at all. Present => the check runs, fail-closed. Absent => the ad-hoc case, whose
+    # three-rung launch ladder carries no such rung, so there is nothing to produce.
+    if any(s.get("step") == QUEUE_REVALIDATED_STEP for s in ladder):
+        revalidated, revalidation_reason = produce_queue_revalidated(campaign_context,
+                                                                     runner=runner)
+        out["results"][QUEUE_REVALIDATED_STEP] = revalidated
+        record("queue_revalidated", ["<driver-state receipt>"], note=revalidation_reason)
+        if not revalidated:
+            out["failed_step"] = QUEUE_REVALIDATED_STEP
+            out["reason"] = revalidation_reason
+            return out
 
     # Captured BEFORE the split so nothing already on disk can be mistaken for this launch's
     # evidence (#611 Step-11 Medium 4). A registry that exists but cannot be read yields no
@@ -2414,7 +2513,7 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
          one failed teardown would block its own retry for the whole 1800 s lease.
     4.   verify the four launch checks from the successor's OWN artifacts (never a report handed
          to it), then `position_rebuilt` from live git state in the recorded repository.
-    5-6. ack, then gate on all six. Not allowed returns now, predecessor alive AND still guarded.
+    5-6. ack, then gate on all seven. Not allowed returns now, predecessor alive AND still guarded.
     7.   prove the target's identity: `pane get` must still return the recorded predecessor
          session. A pane id is a reusable handle and syntax validation cannot detect a recycled one.
     8.   re-check that OUR guard is still in force. Step 4's `goal_armed` proves a guard existed at
@@ -2551,6 +2650,15 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             read_or_empty(registry_path), session_id,
             expected_project=position["project"],
             expected_project_path=position["project_path"])
+        # #840 — the same launcher-owned producer as `perform_handoff`, recomputed here rather
+        # than trusted from the predecessor's run. This is the LAST gate before an irreversible
+        # teardown, and the predecessor may have merged another child since it reported. Both
+        # inputs are already in scope, so there is no signature change.
+        revalidated, revalidation_reason = produce_queue_revalidated(
+            {"driver_state_path": driver_state_path, "repo_root": position["repo_root"]},
+            runner=runner)
+        out["results"][QUEUE_REVALIDATED_STEP] = revalidated
+        record("queue_revalidated", ["<driver-state receipt>"], note=revalidation_reason)
 
         launch_ladder = _predecessor_steps(mid_child_verification_steps())
         ok_early, failed_early, _ = evaluate_verifications(out["results"], steps=launch_ladder)
@@ -2622,7 +2730,7 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
         out["results"]["state_claimed"] = _locked_state_update(driver_state_path,
                                                                _ack) is not None
 
-        # --- 6. gate on all six ---
+        # --- 6. gate on all seven ---
         allowed, reason = teardown_allowed(out["results"],
                                           steps=mid_child_verification_steps())
         if not allowed:
@@ -3731,7 +3839,14 @@ def _cmd_mid_child_handoff(args) -> int:
             prompt_marker=driver_lib.mid_child_marker(position["issue"], generation),
             expected_project=args.project, expected_project_path=args.project_path,
             steps=mid_child_verification_steps(), teardown=False,
-            on_successor=_record_successor)
+            on_successor=_record_successor,
+            # #840 — MANDATORY on this call site. The mid-child ladder carries the
+            # `queue_revalidated` rung, and `evaluate_verifications` fail-closes on an unreported
+            # step, so omitting this would refuse every mid-child handoff. Pinned by a
+            # source-level call-site test.
+            campaign_context={"driver_state_path": args.driver_state,
+                              "repo_root": position["repo_root"],
+                              "generation": generation})
     except Exception as exc:  # pylint: disable=broad-except
         # Broad on purpose: a narrow tuple let `UnicodeDecodeError` from
         # `subprocess.run(text=True)` and `JSONDecodeError` from a state read escape. Reported,

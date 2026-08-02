@@ -1614,8 +1614,10 @@ class TestTheLadderMatchesTheSendOrder:
             "spawned", "project_switched", "goal_armed"]
 
     def test_the_mid_child_ladder_follows_the_sends(self) -> None:
+        """#840 prepends `queue_revalidated`: the queue must be revalidated BEFORE a successor is
+        spawned to inherit it, so it cannot sit among the post-launch rungs."""
         assert [s["step"] for s in ll.mid_child_verification_steps()] == [
-            "spawned", "project_switched", "prompt_landed", "goal_armed",
+            "queue_revalidated", "spawned", "project_switched", "prompt_landed", "goal_armed",
             "position_rebuilt", "state_claimed"]
 
     def test_the_old_goal_first_ladder_is_no_longer_permitted(self) -> None:
