@@ -56,17 +56,27 @@ equal to itself and opens the gate on a moved main.
 - its changed set, from `git -C . diff --name-status -M <from_sha> <to_sha>` parsed by
   `driver_lib.parse_changed_paths` — **rename-aware, both old and new path count**;
 - the range is **per child and cumulative**: from that child's own `validated_against` to the
-  observed head, or from `base_default_branch_sha` when it has never been validated. **When
-  the campaign carries no `base_default_branch_sha` either** — legal, the field is optional —
-  the range collapses to `from_sha == to_sha == observed_head` and the depth is forced to
-  `deep`. With no baseline nothing can be shown to be untouched, so every claim is checked
-  against the current tree. This is the FIRST-ARM path and it must work, or a legacy campaign
-  refused by the gate could never be armed at all.
+  observed head, or from `base_default_branch_sha` when it has never been validated. **When that
+  commit is UNUSABLE the range collapses to `from_sha == to_sha == observed_head` and the depth is
+  forced to `deep`** — with no baseline nothing can be shown to be untouched, so every claim is
+  checked against the current tree. This is the FIRST-ARM path and it must work, or a legacy
+  campaign refused by the gate could never be armed at all. Unusable means either of:
+  - **absent or malformed** — the field is optional, nullable, and schema-constrained only to
+    "a string", so `null`, `""` and `"abc"` all occur in schema-valid state. `revalidation_worklist`
+    decides this one itself.
+  - **unresolvable** — a well-formed SHA whose object is gone (force-pushed, pruned, or from
+    another repository). Format cannot see it, so **you probe**: run
+    `git -C . cat-file -e <sha>^{commit}` once per distinct baseline (rc 0 present, non-zero gone)
+    and pass every failure in `unresolvable_shas`. Skip the probe and the worklist builds, but the
+    `git diff` above then fails on a left endpoint that does not exist.
 - The range is never **last-merge-only** — that misses the crash gap, the skipped-merge gap and the
   multi-session gap, which are the cases this exists for.
 
-Then `driver_lib.revalidation_worklist(state, observed_head, extractions, changed_by_child)` returns
-one item per child with a `depth`.
+Then `driver_lib.revalidation_worklist(state, observed_head, extractions, changed_by_child,
+unresolvable_shas=<probed set>)` returns one item per child with a `depth` and a `baseline`
+provenance of `stamp`, `base` or `unavailable`. **A child carrying an unusable stamp does NOT fall
+back to the campaign base** — that would date the range from a commit it was never validated at, and
+a wider-but-wrong range can buy `quick` on a real change. It goes straight to `unavailable`/`deep`.
 
 **4. Look — and the depth decides HOW HARD, never WHETHER.**
 

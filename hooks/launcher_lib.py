@@ -2630,6 +2630,11 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
                 claim_state["verdict"] = "already_ours"
                 return None
             claim_state["verdict"] = "refused"
+            # #840 Step-11 round 3, High 3: WHY it refused, decided from the same state the
+            # decision was made on and inside the same lock — a re-read afterwards could observe a
+            # claim that appeared or expired in between and mis-attribute the refusal.
+            claim_state["live_claim"] = driver_lib.handoff_claim_blocked_by_live_claim(
+                s, generation, now_ts=now, lease_s=lease_s)
             return None
 
         _locked_state_update(driver_state_path, _claim)
@@ -2638,7 +2643,14 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             # #840 Step-11 finding 4: a queue mismatch and a foreign claim are different
             # situations with different remedies, and reporting both as "a foreign or live claim"
             # sent the operator looking for a competing session that does not exist.
-            if not driver_lib.handoff_queue_is_current(_locked_state_read(driver_state_path)):
+            #
+            # Round 3, High 3: but the payload diagnostic may only speak when a live claim did NOT
+            # cause the refusal. `handoff_claim` tests the claim FIRST, so with both wrong the
+            # claim is the reason — and "no claim was ever created, open a new generation" would
+            # then invite a competitor alongside a claimant that is still working.
+            if not claim_state.get("live_claim") \
+                    and not driver_lib.handoff_queue_is_current(
+                        _locked_state_read(driver_state_path)):
                 out["queue_changed"] = True
                 out["reason"] = (
                     f"could not claim generation {generation} — the campaign queue changed after "
@@ -4159,8 +4171,10 @@ def main(argv: list[str] | None = None) -> int:
     # default single-session mode had no way to select a child through a freshly observed head.
     p_nc = sub.add_parser("next-child",
                           help="which child may be started now, gated on a freshly observed "
-                               "origin/main (rc 0 ready, 3 nothing ready, 5 head unobservable, "
-                               "6 revalidation required)")
+                               "origin/main (rc 0 ready, 2 caller/data error — PARSE STDOUT: a "
+                               "`next_issue` key means selection succeeded and only `project` is "
+                               "missing, otherwise the state is unusable; 3 nothing ready, "
+                               "5 head unobservable, 6 revalidation required)")
     p_nc.add_argument("--driver-state", required=True)
     p_nc.add_argument("--project-root", default=".",
                       help="repository root; the head is observed with `git -C <root>`")

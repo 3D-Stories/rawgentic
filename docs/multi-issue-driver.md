@@ -77,9 +77,16 @@ retroactively repair.
 
 For each issue the campaign advances to:
 
-1. **Pick the next issue** — `next_ready_issue(state, deps_satisfied_by)` (see
-   *Dependency ordering*). If it returns `None`, the campaign is done or every
-   remaining issue is parked/blocked.
+1. **Pick the next issue** — `python3 hooks/launcher_lib.py next-child --driver-state <file>
+   --project-root <root> [--project <name>]`, and branch on its exit code (full contract under
+   *Selection in the IN-SESSION loop*, below). **Never call `next_ready_issue` directly here.**
+   That is the pure function; it cannot fetch, so on a receipt-less campaign it selects without
+   ever observing `origin/main` — bypassing the #840 gate — and on an armed one it raises
+   `QueueRevalidationRequired` instead of selecting. `next-child` is the caller that observes the
+   head first and then selects. rc 0 → build that child; rc 3 → the campaign is done or every
+   remaining issue is parked/blocked; rc 6 → run `/rawgentic:revalidate-children` and retry;
+   rc 5 → stop, the head could not be observed; rc 2 → read stdout before deciding (see the
+   table).
 2. **Run WF2 fresh** — invoke `/rawgentic:implement-feature <number>` as a brand
    new run. It goes through all 16 steps and **terminates at Step 16** exactly as
    it does standalone. The driver observes the *outcome*; it never reaches inside
@@ -273,9 +280,19 @@ pure function cannot fetch. `next-child` is the caller that observes. Exit codes
 | rc | meaning |
 |---|---|
 | 0 | a child is ready; `next_issue` on stdout |
+| 2 | **caller/data error — parse stdout before deciding** (see below) |
 | 3 | nothing ready (`complete` / `blocked`) |
 | 5 | the head could not be observed — fail-closed |
 | 6 | the queue needs revalidation; the worklist is on stdout |
+
+**rc 2 covers three situations and the number alone cannot separate them** (round-3 finding 6):
+unreadable or invalid state JSON, any `DriverStateError`, and — the one that is not a failure —
+a SUCCESSFUL selection whose campaign carries no valid `project`. So an automated caller must
+read stdout on rc 2: **a `next_issue` key means selection worked and only the project binding is
+missing** (supply `--project` or add the field, then re-run), while no `next_issue` means the
+state itself could not be used and the run stops. rc 2 is deliberately NOT rc 3: folding a
+config error into "nothing ready" once stopped a live campaign for good, which is round-2
+finding 2.
 
 **The gate is UNIVERSAL — a campaign with no receipt is refused, not waved through.** An earlier
 revision activated enforcement per campaign, once a receipt existed. The Step-11 cross-model review
@@ -367,8 +384,13 @@ When `order: dependency`, the queue is a DAG.
    `#1 -> #2 -> #1`) — the campaign stops loudly rather than silently
    mis-ordering. External dependencies (not in the queue) impose no ordering
    edge.
-3. **Advance rule** — `next_ready_issue(state, deps_satisfied_by)` returns the
-   first `queued` issue whose in-queue dependencies are satisfied. A dependency
+3. **Advance rule** — the ordering law `next-child` enforces underneath. `next_ready_issue(state,
+   deps_satisfied_by)` returns the
+   first `queued` issue whose in-queue dependencies are satisfied. **This states the ordering law,
+   not the call to make: never invoke `next_ready_issue` directly — drive it through
+   `python3 hooks/launcher_lib.py next-child`** (see *The loop*), which observes `origin/main`
+   first. Calling it directly bypasses the #840 gate on a receipt-less campaign and raises
+   `QueueRevalidationRequired` on an armed one. A dependency
    counts as satisfied per the `deps_satisfied_by` policy knob:
    `merged` (default) → only `merged`; `pr_open` → `merged` or `pr_open`. A
    dependency that is `deferred`/`abandoned` is **not** satisfied, so its

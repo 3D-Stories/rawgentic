@@ -1173,6 +1173,103 @@ class TestRound2Finding1TheFirstArmIsAlwaysPossible:
         assert dl.next_ready_issue(armed, observed_head=HEAD) == 1
 
 
+class TestRound3Finding1UnusableBaselinesAreAlsoRecoverable:
+    """**High.** Round 2 fixed the jam for `base_default_branch_sha is None` only. But
+    `queue.schema.json:36` accepts ANY string with no format or reachability constraint, so
+    `""`, `"abc"` and a well-formed-but-force-pushed SHA all still reached the strict validator
+    and RAISED — the same unrecoverable migration in a different costume. A stale
+    `issues[].validated_against` whose commit was pruned has the identical problem.
+
+    The rule: a baseline that cannot be READ and a baseline that cannot be RESOLVED are the same
+    situation — there is no range to diff, so nothing can be shown untouched and everything must
+    be looked at. Both collapse to `from_sha == to_sha == observed_head`, forced `deep`, and
+    provenance recorded as unavailable.
+
+    **Malformed is decidable here; unresolvable is I/O.** So the pure function decides the first
+    itself and ACCEPTS the second as an injected fact — `unresolvable_shas` — which the skill
+    fills by probing. That split is the whole reason this is not one check.
+    """
+
+    def _work(self, state, **kw):
+        return dl.revalidation_worklist(
+            state, HEAD, extractions={1: (["hooks/driver_lib.py"], "paths")},
+            changed_by_child={1: set()}, **kw)
+
+    @pytest.mark.parametrize("base", ["", "abc", "not-a-sha", "A" * 40, " " + "a" * 39])
+    def test_a_malformed_base_falls_back_instead_of_raising(self, base):
+        work = self._work(_state(_iss(1), base_default_branch_sha=base))
+        assert [w["number"] for w in work] == [1]
+        assert work[0]["from_sha"] == HEAD and work[0]["to_sha"] == HEAD, work[0]
+        assert work[0]["depth"] == "deep", work[0]
+        assert work[0]["baseline"] == "unavailable", work[0]
+
+    def test_an_unresolvable_but_well_formed_base_falls_back(self):
+        """The force-pushed / pruned commit. Format cannot detect it, so the skill's probe says
+        so and the pure function honours it — otherwise the skill jams one step later on a
+        `git diff` whose left endpoint does not exist."""
+        gone = "d" * 40
+        work = self._work(_state(_iss(1), base_default_branch_sha=gone),
+                          unresolvable_shas={gone})
+        assert work[0]["from_sha"] == HEAD and work[0]["depth"] == "deep", work[0]
+        assert work[0]["baseline"] == "unavailable", work[0]
+
+    def test_a_malformed_child_stamp_falls_back_instead_of_raising(self):
+        """Round 2 covered the campaign base only; a corrupt per-child stamp jammed the same way."""
+        work = self._work(_state(_iss(1, validated_against="short"),
+                                 base_default_branch_sha=OLD))
+        assert work[0]["from_sha"] == HEAD and work[0]["depth"] == "deep", work[0]
+        assert work[0]["baseline"] == "unavailable", work[0]
+
+    def test_an_unresolvable_child_stamp_falls_back(self):
+        gone = "e" * 40
+        work = self._work(_state(_iss(1, validated_against=gone),
+                                 base_default_branch_sha=OLD),
+                          unresolvable_shas={gone})
+        assert work[0]["from_sha"] == HEAD and work[0]["depth"] == "deep", work[0]
+        assert work[0]["baseline"] == "unavailable", work[0]
+
+    def test_an_unusable_stamp_does_NOT_silently_fall_through_to_the_campaign_base(self):
+        """The tempting near-miss: 'the stamp is bad, so use the base'. That would date the range
+        from a commit this child was never validated at and could buy `quick` on a real diff."""
+        work = self._work(_state(_iss(1, validated_against="short"),
+                                 base_default_branch_sha=OLD))
+        assert work[0]["from_sha"] != OLD, work[0]
+
+    def test_a_usable_base_and_stamp_are_still_used(self):
+        """The negative twin — without it the fix could force every child to `unavailable`/deep
+        and every test above would still pass."""
+        stamped = self._work(_state(_iss(1, validated_against=OLD),
+                                    base_default_branch_sha=SENTINEL))
+        assert stamped[0]["from_sha"] == OLD and stamped[0]["baseline"] == "stamp", stamped[0]
+        based = self._work(_state(_iss(1), base_default_branch_sha=OLD))
+        assert based[0]["from_sha"] == OLD and based[0]["baseline"] == "base", based[0]
+        assert based[0]["depth"] == "quick", "a real range must still be allowed to buy quick"
+
+    def test_an_unrelated_shas_probe_does_not_disturb_a_good_baseline(self):
+        """`unresolvable_shas` naming some OTHER commit must change nothing."""
+        work = self._work(_state(_iss(1), base_default_branch_sha=OLD),
+                          unresolvable_shas={"f" * 40})
+        assert work[0]["from_sha"] == OLD and work[0]["baseline"] == "base", work[0]
+
+    def test_the_round_trip_actually_opens_the_gate_for_a_malformed_base(self):
+        """The claim that matters: refused -> arm -> selectable. Building a worklist is not proof
+        the migration completes."""
+        state = _state(_iss(1), base_default_branch_sha="not-a-sha")
+        with pytest.raises(dl.QueueRevalidationRequired):
+            dl.next_ready_issue(state, observed_head=HEAD)
+        item = self._work(state)[0]
+        armed = dict(state)
+        armed["issues"] = [dict(state["issues"][0], validated_against=HEAD)]
+        armed["queue_revalidation"] = {
+            "version": 1, "extractor_version": 1, "validated_head": HEAD,
+            "children": {"1": {"body_hash": BODY_HASH, "from_sha": item["from_sha"],
+                               "to_sha": item["to_sha"], "extraction": item["extraction"],
+                               "depth": item["depth"], "outcome": "still_valid",
+                               "claims": [_claim()], "validated_at": 1}}}
+        dl.validate_queue_revalidation(armed)
+        assert dl.next_ready_issue(armed, observed_head=HEAD) == 1
+
+
 class TestRound2Finding2NoProjectIsNotNothingReady:
     """**High.** `next-child` folds every non-ready disposition into rc 3, which it documents as
     "nothing ready". `project` is not required by the schema and a default single-session campaign

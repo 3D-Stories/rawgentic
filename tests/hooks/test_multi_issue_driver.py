@@ -170,3 +170,50 @@ def test_doc_documents_queue_revalidation_840():
     assert "`issue_obsolete` is not an `outcome`" in text
     # Corrections are annotations, not rewrites.
     assert "Corrections are COMMENTS, never body edits" in text
+
+
+def _section(text: str, header: str) -> str:
+    """The body under ``header``, up to the next heading of the same or higher level.
+
+    Header-index slicing per the repo's drift-guard convention (§4 mistake 6): a whole-document
+    substring check cannot tell an INSTRUCTION to call the bypass from a mention of it.
+    """
+    start = text.index(header) + len(header)
+    depth = len(header) - len(header.lstrip("#"))
+    rest = text[start:]
+    ends = [rest.index(f"\n{'#' * lvl} ") for lvl in range(1, depth + 1)
+            if f"\n{'#' * lvl} " in rest]
+    return rest[:min(ends)] if ends else rest
+
+
+def test_the_selection_sections_route_through_next_child_not_the_pure_function():
+    """#840 Step-11 round 3, High 2. The doc grew a correct `next-child` section while its OWN
+    primary loop and advance rule still told operators to call `next_ready_issue(state,
+    deps_satisfied_by)` directly. That call observes no head, so it bypasses the gate entirely on
+    a receipt-less campaign and RAISES on an armed one — an operator following the main loop
+    selected a child without ever fetching `origin/main`.
+
+    Mutation-sensitive on purpose: the two sections that carried the bypass are sliced out by
+    header and checked individually. A whole-document check would stay green on exactly the
+    defect that shipped, because the corrective section elsewhere already names `next-child`.
+    """
+    text = _doc()
+    for header in ("## The loop", "## Dependency ordering (schema v2)"):
+        body = _section(text, header)
+        assert "next-child" in body, (
+            f"{header} must route selection through `launcher_lib.py next-child`")
+        if "next_ready_issue" in body:
+            assert "never" in body.lower() and "directly" in body.lower(), (
+                f"{header} names the pure selector without saying not to call it directly — "
+                "that is the round-3 High 2 bypass verbatim")
+
+
+def test_the_next_child_exit_contract_documents_rc_2():
+    """Round-3 finding 6. rc 2 covers three situations, one of which is a SUCCESSFUL selection
+    missing only `project`. Neither driver document nor the CLI help mentioned it, so an
+    automated caller could only guess — and guessing 'error' stops a campaign that is fine."""
+    text = _doc()
+    body = _section(text, "### The gate is LIVE (#840 PR 2)")
+    assert "| 2 |" in body, "rc 2 is missing from the next-child exit-code table"
+    assert "parse stdout" in body.lower(), "rc 2 is useless to a caller without this instruction"
+    assert "`next_issue`" in body

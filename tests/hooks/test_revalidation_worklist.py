@@ -169,11 +169,22 @@ class TestFailClosed:
             dl.revalidation_worklist(state, "not-a-sha", extractions={840: ([], "none")},
                                      changed_by_child={840: set()})
 
-    def test_a_malformed_existing_stamp_raises(self):
+    def test_a_malformed_existing_stamp_no_longer_raises_it_falls_back(self):
+        """**INVERTED at Step-11 round 3 (High 1), deliberately.** This asserted that a corrupt
+        stamp raises. That WAS the jam: once the gate became universal, a campaign carrying one
+        was refused by the gate while the clearing skill could not build the worklist that would
+        clear it. The contract now is fail-toward-MORE-scrutiny instead of fail-shut — the range
+        collapses to the observed head and depth is forced `deep`, so nothing is waved through.
+
+        Inverted rather than deleted: a guard that no longer describes the code is worse than no
+        guard, and this one has to keep saying that a corrupt stamp is never merely ignored."""
         state = _state([_iss(840, validated="short")])
-        with pytest.raises(dl.DriverStateError):
-            dl.revalidation_worklist(state, HEAD, extractions={840: ([], "none")},
-                                     changed_by_child={840: set()})
+        items = dl.revalidation_worklist(state, HEAD, extractions={840: ([], "none")},
+                                         changed_by_child={840: set()})
+        assert [i["number"] for i in items] == [840], "the child must still be looked at"
+        assert items[0]["from_sha"] == HEAD and items[0]["to_sha"] == HEAD, items[0]
+        assert items[0]["depth"] == "deep", items[0]
+        assert items[0]["baseline"] == "unavailable", items[0]
 
 
 class TestReviewFindingsValueValidation:

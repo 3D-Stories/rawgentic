@@ -537,6 +537,52 @@ class TestRetireRefusesBeforeAnythingDestructive:
         assert out["outcome"] == "claim_refused"
         self._assert_nothing_destructive(world)
 
+    def test_a_live_foreign_claim_outranks_a_missing_queue_payload(self, tmp_path):
+        """#840 round-3 High 3. `handoff_claim` refuses a live/started claim BEFORE it ever reads
+        the queue payload, so when BOTH are wrong the live claim is the actual refusal. Reporting
+        `queue_changed` there tells the operator "no claim was ever created — open a new
+        generation", which spawns a COMPETITOR while the real claimant is still working. A live
+        claim must outrank payload diagnostics."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world,
+                             claim={"generation": GEN, "claimant": "someone-else",
+                                    "claimed_at": 999, "started": True},
+                             pend_over={"queue": None})
+        assert dl.handoff_queue_is_current(_state_of(state)) is False, \
+            "fixture must present BOTH failures at once or it proves nothing"
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "claim_refused"
+        assert out.get("queue_changed") is not True, out["reason"]
+        assert "foreign or live claim" in out["reason"]
+        self._assert_nothing_destructive(world)
+
+    def test_a_live_foreign_claim_outranks_a_tampered_queue_payload(self, tmp_path):
+        """The same precedence for a payload that exists but no longer matches state — the
+        legitimate-move shape rather than the migration shape."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world,
+                             claim={"generation": GEN, "claimant": "someone-else",
+                                    "claimed_at": 999, "started": True},
+                             pend_over={"queue": {"validated_head": "b" * 40, "children": []}})
+        assert dl.handoff_queue_is_current(_state_of(state)) is False
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "claim_refused"
+        assert out.get("queue_changed") is not True, out["reason"]
+        assert "foreign or live claim" in out["reason"]
+        self._assert_nothing_destructive(world)
+
+    def test_a_stale_payload_with_NO_live_claim_still_reports_the_queue_change(self, tmp_path):
+        """The negative twin — without it the fix could simply delete the `queue_changed` branch
+        and both tests above would still pass. An UNCLAIMED generation whose payload moved is the
+        case that branch exists for, and its remedy really is a new generation."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world, pend_over={"queue": None})
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "claim_refused"
+        assert out["queue_changed"] is True
+        assert "the campaign queue changed" in out["reason"]
+        self._assert_nothing_destructive(world)
+
     def test_our_own_started_claim_is_a_continuation_not_a_deadlock(self, tmp_path):
         """Probed live: `handoff_claim` returns False for a same-claimant re-claim inside the
         lease AND after `started`. Without this branch one failed teardown would block its own

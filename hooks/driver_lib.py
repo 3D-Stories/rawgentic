@@ -497,8 +497,28 @@ def parse_changed_paths(diff_text: str) -> set[str]:
     return changed
 
 
+def _baseline_usable(sha, unresolvable: frozenset) -> bool:
+    """Can ``sha`` actually serve as the left endpoint of a diff? PURE.
+
+    #840 Step-11 round 3, High 1. Two different ways a baseline is unusable, and they must be
+    handled together because the consequence is identical:
+      * **malformed** — decidable from the value alone. `queue.schema.json` constrains
+        `base_default_branch_sha` to a string and nothing more, so `""` and `"abc"` are
+        schema-valid and were reaching the strict validator, which raised.
+      * **unresolvable** — a well-formed SHA whose object is gone (force-pushed, pruned, or from
+        a different repository). That is I/O and this module does none, so the caller PROBES and
+        passes the answer in; here it is simply believed.
+    """
+    if sha is None or isinstance(sha, bool) or not isinstance(sha, str):
+        return False
+    if not _SHA_RE.match(sha):
+        return False
+    return sha not in unresolvable
+
+
 def revalidation_worklist(state: dict, observed_head: str, extractions: dict,
-                          changed_by_child: dict, issue_state_probe=None) -> list[dict]:
+                          changed_by_child: dict, issue_state_probe=None,
+                          unresolvable_shas=None) -> list[dict]:
     """Which remaining children need a look against ``observed_head``, and how hard a one. PURE.
 
     **Owner ruling 2026-08-02: the cited-paths intersection decides HOW HARD to look, never
@@ -524,11 +544,26 @@ def revalidation_worklist(state: dict, observed_head: str, extractions: dict,
     entry raises rather than defaulting: an absent extraction would silently produce `quick`,
     which fails toward LESS scrutiny, and that is the one direction this design must never
     take. "No data" must never read as "no changes".
+
+    **Baselines, and the division of labour (round-3 High 1).** Each item reports its
+    ``baseline`` provenance — ``"stamp"``, ``"base"``, or ``"unavailable"``. A child carrying a
+    stamp is dated from ITS stamp; one without, from the campaign base. When that commit is
+    unusable — malformed, or named in ``unresolvable_shas`` — the range collapses to
+    ``from_sha == to_sha == observed_head`` with ``depth`` forced to ``"deep"`` and provenance
+    recorded as ``"unavailable"``. It never raises: raising is what made the universal gate
+    unrecoverable twice.
+
+    ``unresolvable_shas`` is the SKILL's half of that split. Whether a well-formed SHA still
+    exists is I/O (force-push, prune, wrong repository), so the skill probes — e.g.
+    ``git cat-file -e <sha>^{commit}`` per distinct baseline — and passes the failures in. Omit
+    it and only malformed values are caught, which leaves the skill to jam one step later on a
+    ``git diff`` whose left endpoint does not exist.
     """
     validate_validated_against(observed_head)
     issues = state.get("issues", [])
     _numbers(issues)
     base = state.get("base_default_branch_sha")
+    unresolvable = frozenset(unresolvable_shas or ())
     effective, _overlaid = effective_issue_statuses(issues, issue_state_probe)
     work: list[dict] = []
     for issue in issues:
@@ -536,10 +571,11 @@ def revalidation_worklist(state: dict, observed_head: str, extractions: dict,
         if effective[number] != "queued":
             continue
         stamped = issue.get("validated_against")
-        if stamped is not None:
-            validate_validated_against(stamped)
-            if stamped == observed_head:
-                continue                       # already validated against this exact head
+        if stamped == observed_head:
+            continue                           # already validated against this exact head
+        # A malformed stamp used to RAISE here (round-3 High 1). `observed_head` is validated
+        # above, so the equality check needs no validation of its own, and an unusable stamp is
+        # now a baseline problem — handled with the campaign base below — not a hard error.
         if number not in extractions:
             raise DriverStateError(
                 f"no extraction supplied for child #{number} — refusing to default it, because "
@@ -579,31 +615,33 @@ def revalidation_worklist(state: dict, observed_head: str, extractions: dict,
                 "a null cannot be read as 'nothing changed'")
         intersects = bool(set(cited) & set(changed))
         depth = "deep" if (extraction != "paths" or intersects) else "quick"
-        from_sha = stamped
-        if stamped is None:
-            # The campaign base is optional and nullable in queue.schema.json and
-            # validate_driver_state ignores it, so an accepted state can carry no base at all.
+        # Which commit dates this child's range, and can it actually serve?
+        #
+        # A child that carries a stamp uses ITS stamp — never the campaign base. Falling through
+        # from an unusable stamp to the base would date the range from a commit this child was
+        # never validated at, and a wider-but-wrong range can buy `quick` on a real change.
+        # A child with no stamp uses the campaign base; that is the first arm.
+        candidate, provenance = (stamped, "stamp") if stamped is not None else (base, "base")
+        if _baseline_usable(candidate, unresolvable):
+            from_sha = candidate
+        else:
+            # **This used to RAISE, and Step-11 rounds 2 and 3 both proved that made the universal
+            # gate unrecoverable.** Round 2: `base_default_branch_sha` is optional and nullable in
+            # queue.schema.json, so a schema-valid pre-#840 campaign was refused by the gate while
+            # the clearing skill could not build its first worklist — re-running changed nothing,
+            # so there was no path from "refused" to "armed". Round 3: the same jam survived for
+            # every OTHER unusable value, because the schema constrains the field to a string and
+            # nothing more — `""`, `"abc"` and a force-pushed SHA all still raised, as did a
+            # pruned per-child stamp. A migration with no way through is worse than no migration.
             #
-            # **This used to RAISE, and Step-11 round 2 proved that made the universal gate
-            # unrecoverable** (finding 1, reproduced): a schema-valid pre-#840 campaign with no
-            # base and one queued child is refused by the gate, and then the revalidation skill
-            # could not build its first worklist — re-running it changed nothing, so there was no
-            # path from "refused" to "armed". A migration with no way through is worse than no
-            # migration.
-            #
-            # The initial arm therefore falls back to `observed_head` for BOTH ends and forces
-            # `deep`. That is the honest reading: with no baseline there is no range to diff, so
-            # nothing can be shown to be untouched, and every claim has to be checked against the
+            # The fallback collapses the range to `observed_head` at BOTH ends and forces `deep`.
+            # That is the honest reading: with no usable baseline there is no range to diff, so
+            # nothing can be shown to be untouched and every claim has to be checked against the
             # current tree. It fails toward MORE scrutiny, which is the only direction allowed
             # here, and `from_sha == to_sha` is a valid receipt shape (both are full SHAs).
-            if base is None:
-                from_sha = observed_head
-                depth = "deep"
-            else:
-                validate_validated_against(base)
-                from_sha = base
+            from_sha, provenance, depth = observed_head, "unavailable", "deep"
         work.append({"number": number, "depth": depth, "extraction": extraction,
-                     "from_sha": from_sha, "to_sha": observed_head})
+                     "from_sha": from_sha, "to_sha": observed_head, "baseline": provenance})
     return work
 
 
@@ -1468,6 +1506,25 @@ def handoff_reclaimable(state: dict, *, now_ts: int, lease_s: int) -> bool:
     return _is_int(claimed_at) and (now_ts - claimed_at) > lease_s
 
 
+def handoff_claim_blocked_by_live_claim(state: dict, generation: int, *, now_ts: int,
+                                        lease_s: int) -> bool:
+    """Is a LIVE (started, or claimed-and-still-within-lease) claim holding ``generation``? PURE.
+
+    #840 Step-11 round 3, High 3. `handoff_claim` checks this BEFORE it compares the queue payload,
+    so when a foreign claimant is live AND the payload is stale, the live claim is the real refusal.
+    `retire_predecessor` needs to know which one fired: reporting the payload instead says "no claim
+    was ever created — open a new generation", which spawns a COMPETITOR while the real claimant is
+    still working. A live claim outranks every payload diagnostic.
+
+    `handoff_claim` calls this itself, so the predicate cannot drift from the refusal it explains.
+    """
+    claim = state.get("handoff_claim")
+    if not isinstance(claim, dict) or claim.get("generation") != generation:
+        return False
+    return bool(claim.get("started")) or not handoff_reclaimable(
+        state, now_ts=now_ts, lease_s=lease_s)
+
+
 def handoff_claim(state: dict, generation: int, *, claimant: str, now_ts: int,
                   lease_s: int = 1800) -> tuple[bool, dict]:
     """Atomically CLAIM the pending handoff for ``generation`` (exactly-one-successor, design §5/§6).
@@ -1484,10 +1541,8 @@ def handoff_claim(state: dict, generation: int, *, claimant: str, now_ts: int,
     if not (_is_int(generation) and generation >= 0 and _is_int(pend.get("generation"))
             and _is_int(cur) and pend["generation"] == generation == cur):
         return (False, state)  # F4: monotonic, current, non-negative — no stale replay
-    claim = state.get("handoff_claim")
-    if isinstance(claim, dict) and claim.get("generation") == generation:
-        if claim.get("started") or not handoff_reclaimable(state, now_ts=now_ts, lease_s=lease_s):
-            return (False, state)  # already taken over, or a live in-progress claim
+    if handoff_claim_blocked_by_live_claim(state, generation, now_ts=now_ts, lease_s=lease_s):
+        return (False, state)  # already taken over, or a live in-progress claim
     # #840 AC4a's consumer — validated HERE, under the generation fence this function already
     # enforces, because this is the moment the successor takes ownership of the queue.
     #
