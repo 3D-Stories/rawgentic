@@ -324,3 +324,42 @@ class TestTwoChildStatesWhereOneChildUnblocksAnother:
         state["issues"][0]["validated_against"] = HEAD
         with pytest.raises(dl.QueueRevalidationRequired):
             dl.next_ready_issue(state, observed_head=HEAD)
+
+
+class TestTheSwallowedValidatorRefusalOpensNoHole:
+    """**The invariant behind round 8's High 2 fix, pinned directly.**
+
+    `_refuse_unrevalidated_queue` swallows the `QueueRevalidationRequired` that
+    `validate_queue_revalidation` raises for the stamped-plus-pending shape, so that the
+    probe-aware owner-gate remedy below it can be reached. That is safe ONLY IF the owner-gate
+    pass reports a superset of the shapes the validator fires on — otherwise the swallow would
+    make an obsolete stamped child selectable, which is the single outcome this gate exists to
+    prevent.
+
+    The code carries a `preempted` re-raise as a backstop, and that line is deliberately
+    UNREACHABLE while the superset holds — sabotaging it does not turn the suite red, which under
+    this repo's own rules makes it a guard keyed to a shape that cannot occur. So the superset
+    claim is proved HERE instead, by sweep, rather than left as a comment asserting itself."""
+
+    def test_every_state_the_validator_refuses_is_also_refused_by_the_gate(self):
+        checked = leaks = 0
+        examples = []
+        for label, state, probe in _every_state():
+            try:
+                dl.validate_queue_revalidation(state)
+                continue                       # the validator is happy; nothing to prove here
+            except dl.QueueRevalidationRequired:
+                pass
+            except dl.DriverStateError:
+                continue                       # structural errors propagate; not the swallowed kind
+            checked += 1
+            callable_probe = (lambda _n, _p=probe: _p) if probe else None
+            try:
+                dl.next_ready_issue(state, observed_head=HEAD, issue_state_probe=callable_probe)
+            except dl.DriverStateError:
+                continue                       # still refused, as it must be
+            leaks += 1
+            examples.append(label)
+        assert checked > 0, "no state reached the swallowed branch — this sweep proves nothing"
+        assert not leaks, (f"{leaks}/{checked} states are refused by the receipt validator but "
+                           f"SELECTABLE through the gate: {examples[:10]}")
