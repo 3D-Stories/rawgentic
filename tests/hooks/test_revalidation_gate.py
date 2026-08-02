@@ -1782,3 +1782,49 @@ class TestRound8AnUnusableStampIsStaleProvenanceNotACrash:
         with pytest.raises(dl.QueueRevalidationRequired) as exc:
             dl.next_ready_issue(state, observed_head=HEAD)
         assert "stale head" in str(exc.value), str(exc.value)
+
+
+class TestRound10TheRemainingTwoFindingsInTheShippedHalf:
+    """The two round-10 findings that were NOT in the cut owner gate, so they had to be fixed
+    rather than removed. Written after a sabotage pass found both fixes untested — the guards
+    survived their own sabotage, which under this repo's rules means they were not guards at all."""
+
+    def test_a_head_movement_mid_audit_names_its_remedy(self):
+        """All three lenses. `origin/main` moving during a long audit is the most ordinary thing
+        that can happen, and it refused with a bare mismatch and no next step."""
+        with pytest.raises(dl.DriverStateError) as exc:
+            dl.rebuild_receipt(_state(_iss(1)), HEAD, {1: _receipt_child(to_sha=OLD)})
+        message = str(exc.value)
+        assert "revalidate-children" in message, message
+        assert getattr(exc.value, "remedy", None) == "revalidate", message
+
+    def test_and_executing_that_remedy_opens_the_gate(self):
+        """Re-auditing against the newly observed head is what the message prescribes."""
+        rebuilt = dl.rebuild_receipt(_state(_iss(1)), HEAD, {1: _receipt_child(to_sha=HEAD)})
+        assert dl.next_ready_issue(rebuilt, observed_head=HEAD) == 1
+
+    @pytest.mark.parametrize("broken,label", [
+        ({"version": 2, "extractor_version": 1, "validated_head": HEAD, "children": {}},
+         "unsupported version"),
+        ({"version": 1, "extractor_version": 1, "validated_head": HEAD, "children": {"01": {}}},
+         "non-canonical key"),
+    ])
+    def test_a_recoverable_receipt_error_becomes_a_disposition_not_a_traceback(self, broken, label):
+        """Round-10 Medium 1. Only `QueueRevalidationRequired` was caught, so these escaped as a
+        bare `DriverStateError` — and `launcher_lib.main` catches only `LauncherError`, so the
+        real handoff CLI would have exited with an UNCAUGHT TRACEBACK on a state whose own message
+        says to fix it by running one skill."""
+        state = _state(_iss(1), reval=broken)
+        disposition = dl.fresh_session_handoff(
+            state, mode=dl.FRESH_SESSION_MODE, observed_head=HEAD)
+        assert disposition["outcome"] == "revalidation_required", (label, disposition)
+        assert "revalidate-children" in disposition["reason"], label
+
+    def test_a_GENUINELY_corrupt_state_still_propagates(self):
+        """The negative twin, and the reason the widening keys on `remedy` rather than catching
+        every `DriverStateError`: a state file that is simply unusable must stay rc 2, not be
+        dressed up as something one skill run can fix."""
+        state = _state(_iss(1))
+        state["issues"] = [{"number": "not-an-int", "status": "queued"}]
+        with pytest.raises(dl.DriverStateError):
+            dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE, observed_head=HEAD)
