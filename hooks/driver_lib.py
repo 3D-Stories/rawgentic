@@ -579,20 +579,31 @@ def revalidation_worklist(state: dict, observed_head: str, extractions: dict,
                 "a null cannot be read as 'nothing changed'")
         intersects = bool(set(cited) & set(changed))
         depth = "deep" if (extraction != "paths" or intersects) else "quick"
+        from_sha = stamped
         if stamped is None:
             # The campaign base is optional and nullable in queue.schema.json and
-            # validate_driver_state ignores it, so an accepted state can carry no base at
-            # all — which previously emitted `from_sha: None`, a value the receipt shape can
-            # never satisfy. Validated LAZILY, so a campaign whose children are all stamped
-            # is unaffected.
+            # validate_driver_state ignores it, so an accepted state can carry no base at all.
+            #
+            # **This used to RAISE, and Step-11 round 2 proved that made the universal gate
+            # unrecoverable** (finding 1, reproduced): a schema-valid pre-#840 campaign with no
+            # base and one queued child is refused by the gate, and then the revalidation skill
+            # could not build its first worklist — re-running it changed nothing, so there was no
+            # path from "refused" to "armed". A migration with no way through is worse than no
+            # migration.
+            #
+            # The initial arm therefore falls back to `observed_head` for BOTH ends and forces
+            # `deep`. That is the honest reading: with no baseline there is no range to diff, so
+            # nothing can be shown to be untouched, and every claim has to be checked against the
+            # current tree. It fails toward MORE scrutiny, which is the only direction allowed
+            # here, and `from_sha == to_sha` is a valid receipt shape (both are full SHAs).
             if base is None:
-                raise DriverStateError(
-                    f"child #{number} has never been validated and the campaign carries no "
-                    "base_default_branch_sha, so there is no range to revalidate over")
-            validate_validated_against(base)
+                from_sha = observed_head
+                depth = "deep"
+            else:
+                validate_validated_against(base)
+                from_sha = base
         work.append({"number": number, "depth": depth, "extraction": extraction,
-                     "from_sha": stamped if stamped is not None else base,
-                     "to_sha": observed_head})
+                     "from_sha": from_sha, "to_sha": observed_head})
     return work
 
 
@@ -1513,14 +1524,24 @@ def handoff_queue_is_current(state: dict) -> bool:
     legible. It never writes — the single-writer rule for `handoff_pending` is asserted by AST in
     `tests/hooks/test_mid_child_handoff.py`.
 
-    Returns True when there is nothing to check (no receipt, or no pending queue), so a caller can
-    use it as "is the mismatch the reason?" without special-casing pre-#840 states.
+    Returns True when there is genuinely nothing to check — a campaign with no receipt, or no
+    pending record at all — so a caller can use it as "is the mismatch the reason?" without
+    special-casing pre-#840 states.
+
+    **A pending record that carries NO queue while the campaign HAS a receipt returns False**
+    (Step-11 round 2, finding 3, reproduced). That is the migration shape: a pre-#840 handoff is
+    in flight, `revalidate-children` then arms the campaign, and `handoff_claim` starts requiring a
+    payload the in-flight record never had. Returning True there reported the resulting refusal as
+    "a foreign or live claim holds it" — the one diagnosis that sends the operator looking for a
+    competing session instead of opening a new generation, which is the only thing that works.
     """
     if state.get("queue_revalidation") is None:
         return True
     pending = state.get("handoff_pending")
-    if not isinstance(pending, dict) or pending.get("queue") is None:
+    if not isinstance(pending, dict):
         return True
+    if pending.get("queue") is None:
+        return False
     return pending["queue"] == revalidated_queue_payload(state)
 
 

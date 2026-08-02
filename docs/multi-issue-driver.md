@@ -489,8 +489,10 @@ durable state alone.
 
 **The boundary.** After a child reaches ANY terminal outcome — `merged` or a blocker's
 `deferred`/`abandoned` — the session ENDS (a blocked child's context must not bleed into an
-independent successor). The driver calls `driver_lib.fresh_session_handoff(state, mode=...)`,
-which returns an explicit disposition — never a `None` sentinel:
+independent successor). The driver gets the disposition from `launcher_lib handoff`,
+which calls `driver_lib.fresh_session_handoff(state, mode=..., observed_head=...)` with a head it
+observed itself (#840 — an armed campaign refuses a disposition computed without one).
+It returns an explicit disposition — never a `None` sentinel:
 
 - `ready` → write `handoff_pending` (`generation` id + `next_issue`) to `.driver-state` and end.
 - `complete` (ONLY when every child is `merged`) → run the wrap-up (close the epic).

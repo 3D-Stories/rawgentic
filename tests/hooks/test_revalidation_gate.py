@@ -18,6 +18,7 @@ the provenance clause passes, so only the head comparison can refuse it.
 Pure functions imported directly per `docs/testing.md:5-8`.
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -1037,12 +1038,14 @@ class TestFinding5NoGenerationIsSpentOnAnUncheckedQueue:
              "--transcript-dir", str(tmp_path), "--issue", "1", "--step", "8",
              "--branch", "feat/x", "--test-baseline", "1/0",
              "--goal-condition-from", str(own), "--repo-root", str(work),
-             # Explicit, NOT inherited from the environment. CI has no
-             # CLAUDE_CODE_SESSION_ID, so without this the command refused with rc 2
-             # ("refusing to guess which session is handing over") before ever reaching
-             # the queue check — green locally, red in CI. A test that depends on the
-             # developer's ambient env is testing the developer.
              "--predecessor-session", "pred-1"],
+            # The session identity is PINNED in the child environment, not inherited and not
+            # assumed absent. Both directions bit: with no `--predecessor-session` the command
+            # refused ("refusing to guess which session is handing over") in CI where
+            # CLAUDE_CODE_SESSION_ID is unset; with the flag alone it refused in an interactive
+            # session because the flag CONTRADICTED the ambient id. Setting both to the same value
+            # is the only form that is deterministic in either environment.
+            env={**os.environ, "CLAUDE_CODE_SESSION_ID": "pred-1"},
             capture_output=True, text=True, check=False)
         assert proc.returncode == 6, (proc.returncode, proc.stdout, proc.stderr)
         written = json.loads(path.read_text(encoding="utf-8"))
@@ -1108,3 +1111,178 @@ class TestFinding6TheCallSitesArePinnedAtRUNTIME:
         assert out["results"].get("queue_revalidated") is False, out["results"]
         assert not any(a[:3] == ["herdr", "pane", "close"] for a in calls), \
             "a refused teardown must never close the predecessor's pane"
+
+
+# --------------------------------------------------------------------------- #
+# Step-11 ROUND 2 — the universal gate must be recoverable, not just strict
+# --------------------------------------------------------------------------- #
+
+class TestRound2Finding1TheFirstArmIsAlwaysPossible:
+    """**High.** The gate became universal, which meant every legacy campaign is refused until
+    armed. `revalidation_worklist` RAISED for an unstamped child when the campaign carried no
+    `base_default_branch_sha` — a field `queue.schema.json` makes optional and nullable. So a
+    schema-valid pre-#840 campaign was refused by the gate and the clearing skill could not build
+    its first worklist: re-running it changed nothing. A migration with no way through is worse
+    than no migration."""
+
+    def test_a_campaign_with_no_base_can_still_build_its_first_worklist(self):
+        state = _state(_iss(1))                      # never validated, and no campaign base
+        assert "base_default_branch_sha" not in state
+        work = dl.revalidation_worklist(
+            state, HEAD, extractions={1: (["hooks/driver_lib.py"], "paths")},
+            changed_by_child={1: set()})
+        assert [w["number"] for w in work] == [1]
+        assert work[0]["from_sha"] == HEAD and work[0]["to_sha"] == HEAD, work[0]
+
+    def test_the_no_base_first_arm_is_forced_DEEP(self):
+        """It must fail toward MORE scrutiny. With no baseline nothing can be shown to be
+        untouched, so an empty changed-set must NOT buy `quick` — which is exactly what the naive
+        `from_sha == to_sha` range would compute."""
+        work = dl.revalidation_worklist(
+            _state(_iss(1)), HEAD,
+            extractions={1: (["hooks/driver_lib.py"], "paths")},
+            changed_by_child={1: set()})
+        assert work[0]["depth"] == "deep", work[0]
+
+    def test_a_campaign_WITH_a_base_still_uses_it(self):
+        """The negative twin: the fallback must not swallow a real baseline, or every first arm
+        would silently lose its range."""
+        state = _state(_iss(1), base_default_branch_sha=OLD)
+        work = dl.revalidation_worklist(
+            state, HEAD, extractions={1: ([], "none")}, changed_by_child={1: set()})
+        assert work[0]["from_sha"] == OLD, work[0]
+
+    def test_the_round_trip_actually_opens_the_gate(self):
+        """The claim that matters: refused -> arm -> selectable. A test that only checks the
+        worklist builds would not prove the migration completes."""
+        state = _state(_iss(1))
+        with pytest.raises(dl.QueueRevalidationRequired):
+            dl.next_ready_issue(state, observed_head=HEAD)
+        work = dl.revalidation_worklist(
+            state, HEAD, extractions={1: ([], "none")}, changed_by_child={1: set()})
+        item = work[0]
+        armed = dict(state)
+        armed["issues"] = [dict(state["issues"][0], validated_against=HEAD)]
+        armed["queue_revalidation"] = {
+            "version": 1, "extractor_version": 1, "validated_head": HEAD,
+            "children": {"1": {"body_hash": BODY_HASH, "from_sha": item["from_sha"],
+                               "to_sha": item["to_sha"], "extraction": item["extraction"],
+                               "depth": item["depth"], "outcome": "still_valid",
+                               "claims": [_claim()], "validated_at": 1}}}
+        dl.validate_queue_revalidation(armed)        # the receipt shape must be legal
+        assert dl.next_ready_issue(armed, observed_head=HEAD) == 1
+
+
+class TestRound2Finding2NoProjectIsNotNothingReady:
+    """**High.** `next-child` folds every non-ready disposition into rc 3, which it documents as
+    "nothing ready". `project` is not required by the schema and a default single-session campaign
+    never needed one, so a fresh, ready campaign lacking it reported as complete-or-blocked and the
+    loop could stop for good."""
+
+    def test_a_ready_campaign_without_a_project_does_not_report_nothing_ready(self, tmp_path):
+        work, head = _repo_with_origin(tmp_path)
+        state = _state(_iss(1, validated_against=head),
+                       reval=_reval(head, {"1": _receipt_child(to_sha=head)}))
+        del state["project"]
+        path = _write_state(tmp_path, state)
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "next-child", "--driver-state", str(path),
+             "--project-root", str(work), "--no-probe"],
+            capture_output=True, text=True, check=False)
+        assert proc.returncode != 3, (
+            "a config error must not masquerade as 'nothing ready' — the loop stops on rc 3")
+        assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
+        assert "no valid `project`" in proc.stderr, proc.stderr
+        assert json.loads(proc.stdout)["next_issue"] == 1, "selection DID succeed; say so"
+
+    def test_supplying_the_project_makes_the_same_campaign_ready(self, tmp_path):
+        work, head = _repo_with_origin(tmp_path)
+        state = _state(_iss(1, validated_against=head),
+                       reval=_reval(head, {"1": _receipt_child(to_sha=head)}))
+        del state["project"]
+        path = _write_state(tmp_path, state)
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "next-child", "--driver-state", str(path),
+             "--project-root", str(work), "--project", "rawgentic", "--no-probe"],
+            capture_output=True, text=True, check=False)
+        assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
+
+
+class TestRound2Finding3TheMigrationShapeIsDiagnosedHonestly:
+    """**High.** A pre-#840 handoff in flight has a pending record with NO queue. Arming the
+    campaign then makes `handoff_claim` require one, so the claim fails — and
+    `handoff_queue_is_current` returned True for exactly that shape, so the failure was reported as
+    "a foreign or live claim holds it": the one diagnosis that sends an operator looking for a
+    competing session instead of opening a new generation."""
+
+    def _legacy_pending_then_armed(self):
+        state = _state(_iss(1, "merged"), _iss(2), session_mode=dl.FRESH_SESSION_MODE)
+        disp = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE, project="rawgentic")
+        legacy = dl.open_handoff(state, disp, now_ts=1000)
+        assert "queue" not in legacy["handoff_pending"], "this fixture IS the legacy shape"
+        armed = dict(legacy)
+        armed["issues"] = [dict(legacy["issues"][0]),
+                           dict(legacy["issues"][1], validated_against=HEAD)]
+        armed["queue_revalidation"] = _reval(HEAD, {"2": _receipt_child()})
+        return armed
+
+    def test_a_queueless_pending_record_under_a_receipt_is_reported_as_a_queue_change(self):
+        armed = self._legacy_pending_then_armed()
+        assert dl.handoff_claim(armed, armed["generation"],
+                               claimant="s", now_ts=1)[0] is False
+        assert dl.handoff_queue_is_current(armed) is False, \
+            "a missing payload under a live receipt is a queue change, not a foreign claim"
+
+    def test_a_campaign_with_no_receipt_at_all_is_still_reported_current(self):
+        """The boundary: this predicate must stay True for every genuinely pre-#840 state, or every
+        legacy claim refusal would be mis-reported the other way."""
+        state = _state(_iss(1, "merged"), _iss(2), session_mode=dl.FRESH_SESSION_MODE)
+        disp = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE, project="rawgentic")
+        assert dl.handoff_queue_is_current(dl.open_handoff(state, disp, now_ts=1)) is True
+
+    def test_a_state_with_a_receipt_and_no_pending_record_is_current(self):
+        state = _state(_iss(1, validated_against=HEAD), reval=_reval(HEAD, {"1": _receipt_child()}))
+        assert dl.handoff_queue_is_current(state) is True
+
+
+class TestRound2Finding5TheMidChildContextIsPinnedAtRUNTIME:
+    """**Medium.** The mid-child `campaign_context` propagation was still guarded only by a
+    substring assertion that survives `campaign_context=None`, and the stale-campaign command test
+    exits at the earlier pre-check so it never reaches the propagation. This drives a CURRENT armed
+    campaign through the command and asserts the value `perform_handoff` actually received."""
+
+    def test_the_command_passes_a_real_campaign_context(self, tmp_path, monkeypatch):
+        # Pinned rather than inherited — see the note in TestFinding5: an ambient id that differs
+        # from `--predecessor-session` is refused as a contradiction.
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "pred-1")
+        work, head = _repo_with_origin(tmp_path)
+        seen = {}
+
+        def fake_perform(**kw):
+            seen.update(kw)
+            return {"ok": True, "results": {}, "failed_step": None, "new_pane": "w1:p2",
+                    "session_id": "succ", "truncated": False, "cleanup": None,
+                    "teardown_skipped": None}
+
+        monkeypatch.setattr(ll, "perform_handoff", fake_perform)
+        state = _state(_iss(1, "in_progress"), reval=_reval(head, {}))
+        path = _write_state(tmp_path, state)
+        own = tmp_path / "own.jsonl"
+        own.write_text(json.dumps({
+            "type": "user", "sessionId": "pred-1",
+            "attachment": {"type": "goal_status", "met": False, "sentinel": True,
+                           "condition": "keep going"}}) + "\n", encoding="utf-8")
+        rc = ll.main([
+            "mid-child-handoff", "--driver-state", str(path), "--anchor-pane", "w1:p1",
+            "--name", "succ", "--project", "rawgentic", "--project-path", str(work),
+            "--project-root", str(work), "--cwd", str(work),
+            "--registry", str(tmp_path / "reg.jsonl"), "--transcript-dir", str(tmp_path),
+            "--issue", "1", "--step", "8", "--branch", "main", "--test-baseline", "1/0",
+            "--goal-condition-from", str(own), "--repo-root", str(work),
+            "--predecessor-session", "pred-1"])
+        assert rc == 0, rc
+        context = seen.get("campaign_context")
+        assert isinstance(context, dict), f"campaign_context was {context!r} — None passes the old "\
+                                          f"substring test but disables the rung's producer"
+        assert context["driver_state_path"] == str(path)
+        assert context["repo_root"] == str(work)

@@ -3322,6 +3322,23 @@ def _cmd_next_child(args) -> int:
                           "worklist": disposition.get("worklist", []),
                           "reason": disposition.get("reason")}, indent=2))
         return 6
+    if outcome == "no_project":
+        # #840 Step-11 round 2, finding 2 (High, reproduced): this used to fold into rc 3, which
+        # this command documents as "nothing ready" — so a perfectly ready campaign whose state
+        # omits the optional `project` field reported as complete-or-blocked and the loop could
+        # stop. `project` is not required by queue.schema.json, and a default single-session
+        # campaign historically never needed one, because only a successor BIND needs it.
+        #
+        # It is a configuration error, not a queue verdict, so it gets its own rc and says what to
+        # do. Selection itself already succeeded: the gate passed and a child is ready.
+        print(json.dumps({"outcome": outcome, "observed_head": observed_head,
+                          "next_issue": disposition.get("next_issue"),
+                          "errors": disposition.get("errors", [])}, indent=2))
+        print("refusing: the queue is fresh and a child IS ready, but this campaign has no valid "
+              "`project` for the resume-prompt bind. Pass --project, or add `project` to the "
+              "driver-state file. This is a config error, NOT 'nothing ready' (#840)",
+              file=sys.stderr)
+        return 2
     if outcome != "ready":
         print(json.dumps({"outcome": outcome, "observed_head": observed_head}, indent=2))
         return 3

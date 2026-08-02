@@ -56,9 +56,14 @@ equal to itself and opens the gate on a moved main.
 - its changed set, from `git -C . diff --name-status -M <from_sha> <to_sha>` parsed by
   `driver_lib.parse_changed_paths` — **rename-aware, both old and new path count**;
 - the range is **per child and cumulative**: from that child's own `validated_against` to the
-  observed head, or from `base_default_branch_sha` when it has never been validated. Not
-  last-merge-only — that misses the crash gap, the skipped-merge gap and the multi-session gap,
-  which are the cases this exists for.
+  observed head, or from `base_default_branch_sha` when it has never been validated. **When
+  the campaign carries no `base_default_branch_sha` either** — legal, the field is optional —
+  the range collapses to `from_sha == to_sha == observed_head` and the depth is forced to
+  `deep`. With no baseline nothing can be shown to be untouched, so every claim is checked
+  against the current tree. This is the FIRST-ARM path and it must work, or a legacy campaign
+  refused by the gate could never be armed at all.
+- The range is never **last-merge-only** — that misses the crash gap, the skipped-merge gap and the
+  multi-session gap, which are the cases this exists for.
 
 Then `driver_lib.revalidation_worklist(state, observed_head, extractions, changed_by_child)` returns
 one item per child with a `depth`.

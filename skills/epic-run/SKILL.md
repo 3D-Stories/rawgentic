@@ -114,7 +114,13 @@ put a list up by hand).
 - **Fresh-session boundary (#569 — only when `session_mode == "fresh-session"`).** After a
   child reaches ANY terminal outcome — `merged` OR a blocker's `deferred`/`abandoned` — the
   session ENDS rather than looping in-process (a blocked child's context must not bleed into
-  an independent successor). Call `driver_lib.fresh_session_handoff(state, mode=..., project=<the bound project NAME>)` —
+  an independent successor). Get the disposition through
+  **`python3 hooks/launcher_lib.py handoff ...`**, never by calling
+  `driver_lib.fresh_session_handoff` directly (#840): an armed campaign REFUSES a
+  disposition computed without a freshly observed head, and a receipt-less one would bypass
+  the gate entirely — the launcher command is what runs `observe_head`. If you do call the
+  pure function in a probe, pass `observed_head=` from `launcher_lib.observe_head(<repo>)`.
+  It takes `project=<the bound project NAME>` —
   the project is REQUIRED (#682): the resume prompt must OPEN with `/rawgentic:switch <project>`,
   because a bare bind enters the switch skill's list mode and waits for a human, and the
   launcher closes the successor's pane when `project_switched` exhausts at 120 s. Without it the
