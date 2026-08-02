@@ -372,9 +372,22 @@ class TestHandoffCLIRefusals:
         assert payload["observed_head"] == head, payload
         assert [w["number"] for w in payload["worklist"]] == [2], payload
 
-    def test_a_receiptless_campaign_says_enforcement_is_off_rather_than_failing_cli(self, tmp_path):
-        """Every pre-#840 campaign must keep working. The note is mandatory — a silent
-        fail-open is how a real miss comes to look like a deliberate no-op (#695 M2's lesson)."""
+    def test_a_receiptless_campaign_is_REFUSED_by_the_cli(self, tmp_path):
+        """Step-11 finding 1 at the CLI. This previously asserted an "enforcement is OFF" note and
+        that the command carried on; the gate is now universal, so an un-armed campaign gets the
+        revalidation exit code and an actionable reason."""
+        work, _head = _repo_with_origin(tmp_path)
+        state = _state(_iss(1), session_mode=dl.FRESH_SESSION_MODE)
+        path = _write_state(tmp_path, state)
+        proc = subprocess.run([sys.executable, str(CLI), *_handoff_argv(path, tmp_path, work)],
+                              capture_output=True, text=True, check=False)
+        assert proc.returncode == 6, (proc.returncode, proc.stdout, proc.stderr)
+        assert "never been revalidated" in proc.stdout, proc.stdout
+
+    def test_the_head_is_observed_even_for_an_unarmed_campaign(self, tmp_path):
+        """The mechanism behind finding 1: the observation used to be skipped when no receipt was
+        present, which is what let selection proceed with neither. `--project-root` is not a repo,
+        so a command that still observes must exit 5 rather than sailing past."""
         state = _state(_iss(1), session_mode=dl.FRESH_SESSION_MODE)
         path = _write_state(tmp_path, state)
         not_a_repo = tmp_path / "elsewhere"
@@ -382,8 +395,8 @@ class TestHandoffCLIRefusals:
         proc = subprocess.run([sys.executable, str(CLI),
                                *_handoff_argv(path, tmp_path, not_a_repo)],
                               capture_output=True, text=True, check=False)
-        assert proc.returncode != 5, (proc.returncode, proc.stderr)
-        assert "enforcement is OFF" in proc.stderr, proc.stderr
+        assert proc.returncode == 5, (proc.returncode, proc.stdout, proc.stderr)
+        assert "refusing to observe the head" in proc.stderr, proc.stderr
 
 
 # --------------------------------------------------------------------------- #
@@ -433,15 +446,23 @@ class TestTheProducer:
         assert passed is False
         assert "could not read" in reason or "does not hold" in reason
 
-    def test_a_receiptless_campaign_passes_with_the_reason_recorded(self, tmp_path):
-        """A stated limit, not an oversight: every campaign predating #840 has no receipt, and
-        the mid-child ladder is used only by campaign paths, so failing them would break every
-        existing mid-child handoff — the same landmine in another shape."""
+    def test_a_receiptless_campaign_FAILS(self, tmp_path):
+        """**Step-11 finding 1 (Critical), owner decision 2026-08-02.** This asserted the OPPOSITE
+        until the review: a receipt-less campaign passed the rung "with the reason recorded", on a
+        compatibility argument. The reviewer refuted it and the refutation is decisive — a refusal
+        is recoverable by running the skill this PR ships, whereas silent passage is the one
+        failure direction this design forbids, and nothing in the code would ever have created
+        that first receipt.
+
+        A real repo is used so the head IS observable: this must fail on the RECEIPT, not because
+        git was unavailable."""
+        work, _head = _repo_with_origin(tmp_path)
         path = _write_state(tmp_path, _state(_iss(1)))
         passed, reason = ll.produce_queue_revalidated(
-            {"driver_state_path": str(path), "repo_root": str(tmp_path)})
-        assert passed is True
-        assert "OFF" in reason, reason
+            {"driver_state_path": str(path), "repo_root": str(work)})
+        assert passed is False
+        assert "never been revalidated" in reason, reason
+        assert "revalidate-children" in reason, "the refusal must name its own remedy"
 
     def test_a_stale_receipt_fails_against_a_freshly_observed_head(self, tmp_path):
         """A fully SELF-CONSISTENT receipt that is simply behind: #1 is stamped at OLD and the
@@ -824,3 +845,260 @@ class TestTheCampaignCallSites:
         src = self._source("_cmd_ad_hoc_handoff")
         assert "campaign_context=" not in src
         assert "steps=" not in src, "an ad-hoc handoff must keep the default launch ladder"
+
+
+# --------------------------------------------------------------------------- #
+# Step-11 review round — one regression test per finding, runtime not source
+# --------------------------------------------------------------------------- #
+
+class TestFinding2SingleSessionIsNoLongerABypass:
+    """**Critical.** `single-session` is the epic driver's DEFAULT mode and its documented
+    fallback. `fresh_session_handoff` used to check the mode FIRST and return `single_session`
+    before selection, so an armed campaign with a STALE receipt advanced anyway — even when a
+    freshly observed head was supplied. That was the main path, not a corner."""
+
+    def _stale_armed(self):
+        return _state(_iss(1, validated_against=OLD), _iss(2, validated_against=OLD),
+                      session_mode="single-session",
+                      reval=_reval(OLD, {"1": _receipt_child(to_sha=OLD),
+                                         "2": _receipt_child(to_sha=OLD)}))
+
+    def test_single_session_mode_is_gated(self):
+        disp = dl.fresh_session_handoff(self._stale_armed(), mode="single-session",
+                                        project="rawgentic", observed_head=HEAD)
+        assert disp["outcome"] == "revalidation_required", disp
+
+    def test_a_current_campaign_still_gets_its_single_session_verdict(self):
+        """The gate must not swallow the mode verdict it sits in front of — `single_session` is
+        load-bearing for #569 and still has to be reachable."""
+        state = _state(_iss(1, validated_against=HEAD), session_mode="single-session",
+                       reval=_reval(HEAD, {"1": _receipt_child()}))
+        disp = dl.fresh_session_handoff(state, mode="single-session", project="rawgentic",
+                                        observed_head=HEAD)
+        assert disp["outcome"] == "single_session", disp
+
+    def test_an_armed_campaign_cannot_decide_without_an_observation(self):
+        with pytest.raises(dl.DriverStateError):
+            dl.fresh_session_handoff(self._stale_armed(), mode="single-session",
+                                     project="rawgentic")
+
+
+class TestFinding2TheGatedSelectionCommandExists:
+    """The other half of finding 2: moving the gate above the mode check was necessary but not
+    sufficient, because the in-session loop still had no caller that makes a REAL observation.
+    A pure function cannot fetch."""
+
+    def _run(self, tmp_path, state, repo_root, *extra):
+        path = _write_state(tmp_path, state)
+        return subprocess.run(
+            [sys.executable, str(CLI), "next-child", "--driver-state", str(path),
+             "--project-root", str(repo_root), "--no-probe", *extra],
+            capture_output=True, text=True, check=False)
+
+    def test_a_current_campaign_yields_the_next_child(self, tmp_path):
+        work, head = _repo_with_origin(tmp_path)
+        state = _state(_iss(1, validated_against=head),
+                       reval=_reval(head, {"1": _receipt_child(to_sha=head)}))
+        proc = self._run(tmp_path, state, work)
+        assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
+        payload = json.loads(proc.stdout)
+        assert payload == {"outcome": "ready", "next_issue": 1, "observed_head": head}
+
+    def test_a_stale_campaign_exits_6_with_the_worklist(self, tmp_path):
+        work, head = _repo_with_origin(tmp_path)
+        state = _state(_iss(1, validated_against=OLD),
+                       reval=_reval(OLD, {"1": _receipt_child(to_sha=OLD)}))
+        proc = self._run(tmp_path, state, work)
+        assert proc.returncode == 6, (proc.returncode, proc.stdout, proc.stderr)
+        payload = json.loads(proc.stdout)
+        assert payload["observed_head"] == head and payload["validated_head"] == OLD
+        assert [w["number"] for w in payload["worklist"]] == [1]
+
+    def test_an_unobservable_head_exits_5(self, tmp_path):
+        not_a_repo = tmp_path / "nope"
+        not_a_repo.mkdir()
+        proc = self._run(tmp_path, _state(_iss(1)), not_a_repo)
+        assert proc.returncode == 5, (proc.returncode, proc.stderr)
+
+    def test_an_unarmed_campaign_exits_6_not_0(self, tmp_path):
+        work, _head = _repo_with_origin(tmp_path)
+        proc = self._run(tmp_path, _state(_iss(1)), work)
+        assert proc.returncode == 6, (proc.returncode, proc.stdout, proc.stderr)
+
+
+class TestFinding3TheNoEligibleShortcutNoLongerFalsePasses:
+    """**Critical.** The eligibility shortcut returned before `validate_queue_revalidation` and
+    before the head comparison, so with one `in_progress` child and no queued child the producer
+    reported the ladder rung PASSED on a malformed *or* stale receipt — on the path that gates an
+    irreversible teardown."""
+
+    def test_a_malformed_receipt_raises_even_with_nothing_eligible(self):
+        state = _state(_iss(1, "in_progress"))
+        state["queue_revalidation"] = {"validated_head": "not-a-sha"}
+        with pytest.raises(dl.DriverStateError):
+            dl.next_ready_issue(state, observed_head=HEAD)
+
+    def test_a_stale_receipt_refuses_even_with_nothing_eligible(self):
+        state = _state(_iss(1, "in_progress"), reval=_reval(OLD, {}))
+        with pytest.raises(dl.QueueRevalidationRequired):
+            dl.next_ready_issue(state, observed_head=HEAD)
+
+    def test_the_producer_fails_on_both_shapes(self, tmp_path):
+        work, head = _repo_with_origin(tmp_path)
+        for label, reval in (("malformed", {"validated_head": "not-a-sha"}),
+                             ("stale", _reval(OLD, {}))):
+            state = _state(_iss(1, "in_progress"))
+            state["queue_revalidation"] = reval
+            path = _write_state(tmp_path, state)
+            passed, reason = ll.produce_queue_revalidated(
+                {"driver_state_path": str(path), "repo_root": str(work)})
+            assert passed is False, f"{label} receipt passed the rung: {reason}"
+        assert head  # the head really was observable, so these failed on the receipt
+
+    def test_a_current_receipt_with_nothing_eligible_still_passes(self, tmp_path):
+        """The negative twin: the fix must not refuse a perfectly good mid-child handoff whose
+        only child is in progress. Without this, a gate that refused everything would pass above."""
+        work, head = _repo_with_origin(tmp_path)
+        state = _state(_iss(1, "in_progress"), reval=_reval(head, {}))
+        path = _write_state(tmp_path, state)
+        passed, reason = ll.produce_queue_revalidated(
+            {"driver_state_path": str(path), "repo_root": str(work)})
+        assert passed is True, reason
+
+
+class TestFinding4AnInvalidatedPayloadIsLegibleAndRecoverable:
+    """**High.** Exact equality is KEPT — it is what detects a reordered or falsified payload. What
+    was missing was a legible refusal and a stated recovery, because the claim failure was reported
+    as "a foreign or live claim holds it", sending the operator after a session that does not exist.
+    """
+
+    def _armed_with_pending(self):
+        state = _state(_iss(1, validated_against=HEAD), _iss(2, validated_against=HEAD),
+                       session_mode=dl.FRESH_SESSION_MODE,
+                       reval=_reval(HEAD, {"1": _receipt_child(), "2": _receipt_child()}))
+        disp = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE, project="rawgentic",
+                                        observed_head=HEAD)
+        return dl.open_handoff(state, disp, now_ts=1000)
+
+    def test_the_mismatch_is_reported_as_a_queue_change_not_a_foreign_claim(self):
+        pending = self._armed_with_pending()
+        assert dl.handoff_queue_is_current(pending) is True
+        after = dl.record_child_outcome(pending, 1, "merged")
+        assert dl.handoff_claim(after, 2, claimant="s", now_ts=1)[0] is False
+        assert dl.handoff_queue_is_current(after) is False, \
+            "the launcher needs this to tell a queue change from a competing claim"
+
+    def test_a_tampered_payload_is_ALSO_reported_as_a_queue_change(self):
+        """Honest about the limit: this predicate says "the payload no longer matches state", which
+        covers both a legitimate move and tampering. It is a reporting aid, not an authorisation."""
+        pending = self._armed_with_pending()
+        pending["handoff_pending"]["queue"]["children"].reverse()
+        assert dl.handoff_queue_is_current(pending) is False
+
+    def test_a_fresh_handoff_recovers_the_run(self):
+        """The recovery that already existed and is now documented: a NEW disposition regenerates
+        the payload from current state and its generation is claimable."""
+        after = dl.record_child_outcome(self._armed_with_pending(), 1, "merged")
+        disp2 = dl.fresh_session_handoff(after, mode=dl.FRESH_SESSION_MODE, project="rawgentic",
+                                        observed_head=HEAD)
+        assert disp2["outcome"] == "ready" and disp2["next_issue"] == 2, disp2
+        regenerated = dl.open_handoff(after, disp2, now_ts=2000)
+        assert dl.handoff_claim(regenerated, disp2["generation"],
+                                claimant="s", now_ts=1)[0] is True
+
+    def test_a_pre_840_state_is_reported_current(self):
+        state = _state(_iss(1, "merged"), _iss(2), session_mode=dl.FRESH_SESSION_MODE)
+        disp = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE, project="rawgentic")
+        assert dl.handoff_queue_is_current(dl.open_handoff(state, disp, now_ts=1)) is True
+
+
+class TestFinding5NoGenerationIsSpentOnAnUncheckedQueue:
+    """**Medium.** `_cmd_mid_child_handoff` bumped `generation` and wrote `handoff_pending` before
+    `perform_handoff` ran the first-rung check, and the cancelling `try/finally` began after that
+    write — so an abrupt death in between left an uncancelled generation for a queue nobody had
+    checked. The check now runs before anything durable is written."""
+
+    def test_a_stale_queue_costs_no_generation(self, tmp_path):
+        work, _head = _repo_with_origin(tmp_path)
+        state = _state(_iss(1, "in_progress"), generation=7, reval=_reval(OLD, {}))
+        path = _write_state(tmp_path, state)
+        # The predecessor's own transcript, carrying the live goal row the command reads its
+        # condition from verbatim (#611: never retype a goal).
+        own = tmp_path / "own.jsonl"
+        own.write_text(json.dumps({
+            "type": "user", "sessionId": "pred-1",
+            "attachment": {"type": "goal_status", "met": False, "sentinel": True,
+                           "condition": "keep going"}}) + "\n", encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "mid-child-handoff",
+             "--driver-state", str(path), "--anchor-pane", "w1:p1", "--name", "succ",
+             "--project", "rawgentic", "--project-path", str(work), "--project-root", str(work),
+             "--cwd", str(work), "--registry", str(tmp_path / "reg.jsonl"),
+             "--transcript-dir", str(tmp_path), "--issue", "1", "--step", "8",
+             "--branch", "feat/x", "--test-baseline", "1/0",
+             "--goal-condition-from", str(own), "--repo-root", str(work)],
+            capture_output=True, text=True, check=False)
+        assert proc.returncode == 6, (proc.returncode, proc.stdout, proc.stderr)
+        written = json.loads(path.read_text(encoding="utf-8"))
+        assert written["generation"] == 7, "a refused handoff must not spend a generation"
+        assert "handoff_pending" not in written, written
+
+
+class TestFinding6TheCallSitesArePinnedAtRUNTIME:
+    """**Medium — my own tests.** The source-level pins survived every sabotage the reviewer named:
+    `campaign_context=None` still satisfies `assert "campaign_context=" in src`; discarding the
+    producer's result and hardcoding the rung `True` still passed; overwriting `observed_head` with
+    a cached head still satisfied both substring checks. Substring presence is not dataflow.
+
+    These replace them with runtime assertions: a genuinely stale campaign must be REFUSED through
+    each production entry point, which no amount of argument-shaped text can fake.
+    """
+
+    def test_cmd_handoff_refuses_a_stale_campaign_end_to_end(self, tmp_path):
+        work, _head = _repo_with_origin(tmp_path)
+        state = _state(_iss(1, validated_against=OLD), session_mode=dl.FRESH_SESSION_MODE,
+                       reval=_reval(OLD, {"1": _receipt_child(to_sha=OLD)}))
+        path = _write_state(tmp_path, state)
+        proc = subprocess.run([sys.executable, str(CLI), *_handoff_argv(path, tmp_path, work)],
+                              capture_output=True, text=True, check=False)
+        assert proc.returncode == 6, (proc.returncode, proc.stdout, proc.stderr)
+
+    def test_retire_predecessor_refuses_a_stale_campaign_without_touching_the_pane(self, tmp_path):
+        """The teardown path is irreversible, so the assertion is that NO destructive herdr call is
+        made — not merely that the verdict was negative."""
+        work, _head = _repo_with_origin(tmp_path)
+        calls = []
+
+        def runner(argv, timeout=180):
+            calls.append(list(argv))
+            if argv[:3] == ["herdr", "pane", "get"]:
+                return type("P", (), {"returncode": 0, "stderr": "", "stdout": json.dumps(
+                    {"result": {"pane_id": argv[3], "agent_session": {"value": "pred"}}})})()
+            if argv[0] == "git":
+                import subprocess as sp
+                return sp.run(argv, capture_output=True, text=True, check=False)
+            return type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        position = {"issue": 1, "step": "8", "branch": "main", "test_baseline": "1/0",
+                    "predecessor_pane": "w1:p1", "predecessor_session": "pred",
+                    "goal_condition": "keep going", "project": "rawgentic",
+                    "project_path": str(work), "repo_root": str(work)}
+        state = _state(_iss(1, "in_progress"), generation=5, reval=_reval(OLD, {}))
+        # An armed campaign's pending record must carry the ordered payload, else `handoff_claim`
+        # refuses on the payload before the rung is ever evaluated — which would make this test
+        # pass for the wrong reason. Derived from the production function so it cannot drift.
+        state["handoff_pending"] = {
+            "generation": 5, "next_issue": 1, "written_ts": 1,
+            "kind": dl.MID_CHILD_HANDOFF_KIND, "position": position,
+            "queue": dl.revalidated_queue_payload(state),
+            "successor": {"pane": "w1:p2", "session": "succ"}}
+        path = _write_state(tmp_path, state)
+        (tmp_path / "t").mkdir(exist_ok=True)
+        out = ll.retire_predecessor(
+            driver_state_path=str(path), session_id="succ", anchor_pane="w1:p1",
+            transcript_dir=str(tmp_path / "t"), registry_path=str(tmp_path / "reg.jsonl"),
+            runner=runner, sleeper=lambda _s: None, now_ts=1000)
+        assert out["outcome"] == "teardown_refused", out
+        assert out["results"].get("queue_revalidated") is False, out["results"]
+        assert not any(a[:3] == ["herdr", "pane", "close"] for a in calls), \
+            "a refused teardown must never close the predecessor's pane"

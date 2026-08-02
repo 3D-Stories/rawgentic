@@ -258,6 +258,10 @@ COND = "drive epic #667 to completion"
 BRANCH = "feat/665-mid-child-handoff"
 
 
+# #840 — the head the fake `origin/main` resolves to; the fixtures' receipt attests it.
+REVAL_HEAD = "a" * 40
+
+
 class FakeWorld:
     """One injected runner for herdr AND git (design §8: the same runner throughout).
 
@@ -268,9 +272,13 @@ class FakeWorld:
 
     def __init__(self, tmp_path, *, pane_session=PRED, branch=BRANCH, toplevel=None,
                  clear_text_rc=0, clear_keys_rc=0, pane_close_rcs=(0,),
-                 confirm_clear=True, confirm_rearm=True, pane_get_rc=0):
+                 confirm_clear=True, confirm_rearm=True, pane_get_rc=0,
+                 fetch_rc=0, observed_head_rc=0):
         self.tmp = tmp_path
         self.repo = str(tmp_path / "repo")
+        # #840 — the freshness probe travels through this same runner.
+        self.fetch_rc = fetch_rc
+        self.observed_head_rc = observed_head_rc
         self.pane_session = pane_session
         self.branch = branch
         self.toplevel = toplevel if toplevel is not None else self.repo
@@ -302,6 +310,13 @@ class FakeWorld:
 
     def __call__(self, argv, timeout=180):
         self.calls.append(list(argv))
+        if argv[0] == "git" and "fetch" in argv:
+            # #840 — `produce_queue_revalidated` observes the head through this same injected
+            # runner, so the fake has to answer the fetch/rev-parse pair or every retire-side
+            # test would fail at the `queue_revalidated` rung instead of what it is named for.
+            return FakeProc(self.fetch_rc, "")
+        if argv[0] == "git" and "rev-parse" in argv and argv[-1] == "origin/main":
+            return FakeProc(self.observed_head_rc, REVAL_HEAD + "\n")
         if argv[0] == "git":
             value = self.toplevel if argv[-1] == "--show-toplevel" else self.branch
             return FakeProc(0, value + "\n")
@@ -372,10 +387,21 @@ def _write_state(tmp_path, world, *, pend_over=None, position_over=None, claim=N
             "kind": dl.MID_CHILD_HANDOFF_KIND, "cancelled": False, "teardown_phase": None,
             "position": _position(world, **(position_over or {})),
             "successor": {"pane": SUCC_PANE, "session": SUCC}}
-    pend.update(pend_over or {})
     state = {"schema_version": 2, "campaign": "epic-667", "epic": 667, "generation": GEN,
              "issues": [{"number": ISSUE, "status": "in_progress"}],
-             "handoff_pending": pend}
+             # #840 — an ARMED campaign. Owner decision 2026-08-02: a campaign with no
+             # `queue_revalidation` receipt now FAILS the `queue_revalidated` rung, so a
+             # receipt-less fixture would refuse teardown before reaching the behaviour each of
+             # these tests exists to check. `children` is empty legitimately: the only child is
+             # `in_progress`, so nothing is eligible and nothing is stamped.
+             "queue_revalidation": {"version": 1, "extractor_version": 1,
+                                    "validated_head": REVAL_HEAD, "children": {}}}
+    # And an armed campaign's `handoff_pending` must carry the ordered queue payload, because
+    # `handoff_claim` now compares it for exact equality. Derived from the production function
+    # rather than hand-written, so the fixture cannot drift from the contract it has to satisfy.
+    pend["queue"] = dl.revalidated_queue_payload(state)
+    pend.update(pend_over or {})
+    state["handoff_pending"] = pend
     if claim is not None:
         state["handoff_claim"] = claim
     p = tmp_path / "state.json"
@@ -763,6 +789,10 @@ class TestMidChildHandoffCommand:
                     "session_id": SUCC, "truncated": False, "cleanup": None,
                     "teardown_skipped": None}
 
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff", fake_perform)
         rc = ll._cmd_mid_child_handoff(self._args(tmp_path, state))
         assert rc == 0
@@ -787,6 +817,10 @@ class TestMidChildHandoffCommand:
         """Otherwise the abandoned record IS the current generation and stays claimable, so a
         delayed successor could take a lease on a handoff that already aborted."""
         state = self._bare_state(tmp_path)
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff", lambda **kw: {
             "ok": False, "results": {}, "failed_step": "goal_armed", "new_pane": None,
             "session_id": None, "truncated": False, "cleanup": None, "teardown_skipped": None})
@@ -796,6 +830,10 @@ class TestMidChildHandoffCommand:
 
     def test_no_active_child_writes_nothing(self, tmp_path, monkeypatch):
         state = self._bare_state(tmp_path, issues=[{"number": ISSUE, "status": "merged"}])
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff",
                             lambda **kw: pytest.fail("must not launch a successor"))
         rc = ll._cmd_mid_child_handoff(self._args(tmp_path, state))
@@ -804,6 +842,10 @@ class TestMidChildHandoffCommand:
 
     def test_a_position_that_names_the_wrong_child_writes_nothing(self, tmp_path, monkeypatch):
         state = self._bare_state(tmp_path)
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff",
                             lambda **kw: pytest.fail("must not launch a successor"))
         rc = ll._cmd_mid_child_handoff(self._args(tmp_path, state, issue=612))
@@ -1168,6 +1210,10 @@ class TestHandoffRecordIsCancelledOnEveryFailurePath:
         def boom(**kw):
             raise ll.LauncherError("malformed pane id 'nope!'")
 
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff", boom)
         rc = ll._cmd_mid_child_handoff(args)
         assert rc != 0
@@ -1190,6 +1236,10 @@ class TestRepoRootIsBoundToTheProject:
         state = TestMidChildHandoffCommand()._bare_state(tmp_path)
         args = TestMidChildHandoffCommand()._args(tmp_path, state,
                                                   repo_root="/somewhere/else/entirely")
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff",
                             lambda **kw: pytest.fail("must not launch a successor"))
         rc = ll._cmd_mid_child_handoff(args)
@@ -1385,6 +1435,10 @@ class TestAnUnrecordableSuccessorIsAFailedLaunch:
                     "new_pane": SUCC_PANE, "session_id": SUCC, "truncated": False,
                     "cleanup": None, "teardown_skipped": None}
 
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff", fake_perform)
         rc = ll._cmd_mid_child_handoff(args)
         assert seen["recorded"] is False, "a superseded generation must not record a successor"
@@ -1402,15 +1456,21 @@ class TestAnUnrecordableSuccessorIsAFailedLaunch:
                 return FakeProc(0, json.dumps({"result": {"pane_id": SUCC_PANE}}))
             if argv[:3] == ["herdr", "pane", "get"]:
                 return FakeProc(0, json.dumps({"result": {"agent_session": {"value": SUCC}}}))
+            if argv[0] == "git" and "rev-parse" in argv and argv[-1] == "origin/main":
+                return FakeProc(0, REVAL_HEAD + "\n")     # #840 freshness probe
             return FakeProc(0, "")
 
         (tmp_path / "t").mkdir()
-        # #840 — the mid-child ladder now carries `queue_revalidated`, whose producer needs the
-        # campaign context. A receipt-less state means enforcement is OFF for this campaign, so the
-        # rung passes and this test still exercises what it is named for.
+        # #840 — the mid-child ladder carries `queue_revalidated`, whose producer reads the receipt
+        # and observes the head through this same injected runner. The campaign is ARMED (owner
+        # decision 2026-08-02: a receipt-less campaign FAILS the rung), so the rung passes and this
+        # test still exercises the successor-recording contract it is named for.
         state_path = tmp_path / "campaign.json"
         state_path.write_text(json.dumps(
-            {"version": 1, "campaign": "c", "issues": [{"number": 1, "status": "in_progress"}]}),
+            {"version": 1, "campaign": "c",
+             "issues": [{"number": 1, "status": "in_progress"}],
+             "queue_revalidation": {"version": 1, "extractor_version": 1,
+                                    "validated_head": REVAL_HEAD, "children": {}}}),
             encoding="utf-8")
         out = ll.perform_handoff(
             anchor_pane=ANCHOR, cwd=str(tmp_path), project_root=str(tmp_path), name="succ",
@@ -1456,6 +1516,10 @@ class TestTheGoalConditionIsBoundToTheLiveGuard:
         transcript = tmp_path / "pred.jsonl"
         transcript.write_text("\n".join([_goal_row(COND, met=False),
                                          _goal_row(COND, met=True)]) + "\n", encoding="utf-8")
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff",
                             lambda **kw: pytest.fail("must not launch a successor"))
         assert ll.main(self._argv(tmp_path, state, transcript)) == 3
@@ -1464,6 +1528,10 @@ class TestTheGoalConditionIsBoundToTheLiveGuard:
         state = TestMidChildHandoffCommand()._bare_state(tmp_path)
         transcript = tmp_path / "pred.jsonl"
         transcript.write_text(_goal_row(COND, met=False) + "\n", encoding="utf-8")
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff",
                             lambda **kw: pytest.fail("must not launch a successor"))
         assert ll.main(self._argv(tmp_path, state, transcript,
@@ -1637,6 +1705,10 @@ class TestAnExplicitlyAssertedReplacedGuardIsRefused:
         transcript.write_text("\n".join([_goal_row(COND, met=False),
                                          _goal_row("a replacement guard", met=False)]) + "\n",
                              encoding="utf-8")
+        # #840 — the CLI's own pre-check does a real `git fetch`; these tests are about the
+        # record/cancel bookkeeping, so the freshness verdict is stubbed. Dedicated tests in
+        # test_revalidation_gate.py prove the pre-check actually fires and actually refuses.
+        monkeypatch.setattr(ll, "produce_queue_revalidated", lambda *a, **k: (True, "stubbed ok"))
         monkeypatch.setattr(ll, "perform_handoff",
                             lambda **kw: pytest.fail("must not launch a successor"))
         rc = ll.main(TestTheGoalConditionIsBoundToTheLiveGuard()._argv(

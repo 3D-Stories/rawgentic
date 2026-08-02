@@ -819,26 +819,40 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
     Nothing is refused when no child is eligible. There is no work to hand out in that case, so a
     refusal could only strand a finished or fully-parked campaign.
     """
-    eligible = [i for i in state.get("issues", []) if effective[i["number"]] == "queued"]
-    if not eligible:
-        return
     validate_validated_against(observed_head)
     reval = state.get("queue_revalidation")
     validated_head = None
     children: dict = {}
     if reval is not None:
-        # Validates the receipt AND its linkage to the per-child stamps, so a fabricated stamp
-        # with no evidence behind it fails here rather than passing the gate.
+        # Validated BEFORE any eligibility shortcut (Step-11 review finding 3, reproduced): the
+        # old code returned early when nothing was eligible, so a receipt of
+        # `{"validated_head": "not-a-sha"}` was never validated and `produce_queue_revalidated`
+        # reported the ladder rung PASSED on it. The producer's contract says a malformed receipt
+        # fails closed, so the validation cannot sit behind a shortcut that exists for selection.
+        #
+        # This also checks the LINKAGE to the per-child stamps, so a fabricated stamp with no
+        # evidence behind it fails here rather than passing the gate.
         validate_queue_revalidation(state)
         validated_head = reval.get("validated_head")
         children = reval.get("children") or {}
+    eligible = [i for i in state.get("issues", []) if effective[i["number"]] == "queued"]
     reasons: list[str] = []
+    # The head clause is UNCONDITIONAL, not gated on eligibility (finding 3). It is a statement
+    # about the QUEUE as a whole, and an empty eligible set does not make a stale receipt fresh —
+    # the ladder rung asserts "this campaign's queue is current", which a mid-child handoff needs
+    # to be true even while its only child is `in_progress`.
+    #
+    # A campaign with NO receipt fails it too (finding 1, owner decision 2026-08-02). The
+    # compatibility argument for waving those through was refuted by the reviewer and the
+    # refutation is decisive: a refusal is recoverable by running `revalidate-children`, whereas
+    # silent selection is the one failure direction this design forbids. An un-armed campaign is
+    # therefore refused with an actionable reason rather than quietly advanced.
     if validated_head != observed_head:
         reasons.append(
             f"the campaign receipt attests {validated_head!r}, not the observed head "
             f"{observed_head!r}" if validated_head is not None else
-            f"the campaign carries no revalidation receipt for the observed head "
-            f"{observed_head!r}")
+            "this campaign has never been revalidated (no queue_revalidation receipt) — run "
+            "/rawgentic:revalidate-children once to arm it")
     # The outstanding set is structured, not just prose, because `fresh_session_handoff` has to
     # hand the successor a worklist and this is the only place that knows which children are in
     # it. `depth` is deliberately NOT computed here: it needs the changed-file sets, which are
@@ -995,6 +1009,20 @@ def record_child_outcome(state: dict, issue: int, status: str) -> dict | None:
     new = dict(state)
     new["issues"] = [dict(e, status=status) if e["number"] == issue else dict(e)
                      for e in issues]
+    # #840 note, deliberately NOT a write here. `handoff_claim` compares the persisted queue
+    # payload for exact equality, and this writer is the normal way a child's status changes, so an
+    # unrelated terminal reconciliation between `open_handoff` and the claim DOES invalidate the
+    # pending payload (Step-11 finding 4). An earlier fix cancelled the record from here and was
+    # reverted: `tests/hooks/test_mid_child_handoff.py` asserts by AST that `open_handoff` is the
+    # ONLY writer of `handoff_pending` in this module, and that single-writer rule is worth more
+    # than the convenience — a second mutation path for the handoff record is exactly the parallel
+    # mechanism #665 was rewritten to avoid.
+    #
+    # The recovery already exists and is the honest one: a refused claim leaves the predecessor
+    # alive and guarded, and the NEXT handoff attempt calls `open_handoff`, which bumps the
+    # generation and writes a payload derived from current state. See `handoff_claim` and
+    # `handoff_queue_is_current` for how the refusal is reported so it is not mistaken for a
+    # foreign claim.
     return new
 
 
@@ -1223,10 +1251,35 @@ def fresh_session_handoff(state: dict, *, mode: str, project=None,
     finished* is the worst failure available here, so `revalidation_required` is its own explicit
     disposition and is never conflated with `blocked`.
     """
-    if mode != FRESH_SESSION_MODE:
-        return {"outcome": "single_session"}
     issues = state.get("issues", [])
     _numbers(issues)  # fail-closed on missing/non-int/duplicate number
+    # #840 Step-11 finding 2 (Critical, reproduced): the mode check used to be the FIRST thing
+    # here, so `single-session` returned before selection and an armed campaign with a STALE
+    # receipt advanced anyway — even when a freshly observed head was supplied. The single-session
+    # loop is the epic driver's DEFAULT and the documented fallback, so that was not a corner: it
+    # was the main path.
+    #
+    # The gate therefore runs BEFORE the mode branch. It is still conditional on `observed_head`
+    # being supplied, because only a caller that made a real observation can be gated — which is
+    # why `launcher_lib next-child` exists and why the in-session loop must select through it
+    # rather than reading state itself.
+    if observed_head is not None:
+        effective_pre, _ = effective_issue_statuses(issues, issue_state_probe)
+        try:
+            _refuse_unrevalidated_queue(state, observed_head, effective_pre)
+        except QueueRevalidationRequired as exc:
+            return {"outcome": "revalidation_required",
+                    "worklist": getattr(exc, "outstanding", []),
+                    "observed_head": getattr(exc, "observed_head", observed_head),
+                    "validated_head": getattr(exc, "validated_head", None),
+                    "reason": str(exc)}
+    elif state.get("queue_revalidation") is not None:
+        raise DriverStateError(
+            "this campaign carries a queue_revalidation receipt, so a handoff disposition "
+            "requires a freshly observed head (launcher_lib.observe_head); refusing to decide "
+            "without one")
+    if mode != FRESH_SESSION_MODE:
+        return {"outcome": "single_session"}
     # #695 AC2: the overlay reaches the COMPLETE verdict too, not just selection. A campaign
     # whose last child shipped outside the driver reads `queued` on disk, and without this it
     # would never report complete — the epic would stay open forever with nothing runnable,
@@ -1441,6 +1494,34 @@ def handoff_claim(state: dict, generation: int, *, claimant: str, now_ts: int,
     new["handoff_claim"] = {"generation": generation, "claimant": claimant,
                             "claimed_at": now_ts, "started": False}
     return (True, new)
+
+
+def handoff_queue_is_current(state: dict) -> bool:
+    """Does the persisted `handoff_pending.queue` still match what state re-derives? PURE.
+
+    #840 Step-11 finding 4. `handoff_claim` refuses on a queue mismatch, and that refusal used to be
+    indistinguishable from "a foreign or live claim holds this generation" — the reason
+    `retire_predecessor` printed. The mismatch is a DIFFERENT situation with a different remedy: the
+    queue legitimately moved under an in-flight handoff (any `record_child_outcome` on an included
+    child does it), the predecessor is still alive and guarded, and the fix is to run the handoff
+    again so `open_handoff` writes a payload derived from current state — NOT to retry the same
+    generation, which can never succeed, and NOT to wait for the lease, which does not apply because
+    no claim was ever created.
+
+    Exact equality is deliberately kept in `handoff_claim`: it is what detects a reordered or
+    field-falsified payload, which is the whole point of AC4a. This function only makes the refusal
+    legible. It never writes — the single-writer rule for `handoff_pending` is asserted by AST in
+    `tests/hooks/test_mid_child_handoff.py`.
+
+    Returns True when there is nothing to check (no receipt, or no pending queue), so a caller can
+    use it as "is the mismatch the reason?" without special-casing pre-#840 states.
+    """
+    if state.get("queue_revalidation") is None:
+        return True
+    pending = state.get("handoff_pending")
+    if not isinstance(pending, dict) or pending.get("queue") is None:
+        return True
+    return pending["queue"] == revalidated_queue_payload(state)
 
 
 def handoff_ack_started(state: dict, generation: int, claimant: str) -> tuple[bool, dict]:

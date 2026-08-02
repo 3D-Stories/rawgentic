@@ -1135,11 +1135,14 @@ def produce_queue_revalidated(campaign_context, *, runner=None) -> tuple[bool, s
     all, so there is nothing to produce. If the rung were somehow in the ladder with no context,
     the result stays UNREPORTED and `evaluate_verifications` fail-closes — safe by construction.
 
-    **A campaign with no receipt PASSES, with the reason recorded.** That is a stated limit, not an
-    oversight: the mid-child ladder is used only by campaign paths, every campaign predating #840
-    has no receipt, and failing them would break every existing mid-child handoff — the same
-    landmine the rung-without-producer split creates. Enforcement arms for a campaign once
-    `revalidate-children` has written its first receipt, and from then on the check is real.
+    **A campaign with no receipt FAILS** (Step-11 finding 1, owner decision 2026-08-02). An earlier
+    revision of this function passed it with the reason recorded, on a compatibility argument: every
+    campaign predating #840 has no receipt, so failing them refuses every existing mid-child
+    handoff. The reviewer refuted that and the refutation is decisive — a refusal is RECOVERABLE by
+    running `revalidate-children`, whereas silent passage is the one failure direction this design
+    forbids, and nothing in the code would ever have created that first receipt or produced the
+    refusal that prompts someone to. Arming a campaign is one command; a gate that never fires is
+    not a gate.
 
     Fail-CLOSED on everything it cannot read: an unobservable head, an unreadable state file, or a
     malformed receipt all refuse. What this gates is an irreversible teardown.
@@ -1162,9 +1165,11 @@ def produce_queue_revalidated(campaign_context, *, runner=None) -> tuple[bool, s
         return (False, f"could not read {state_path}: {type(exc).__name__}: {exc}")
     if not isinstance(state, dict):
         return (False, f"{state_path} does not hold a JSON object")
-    if state.get("queue_revalidation") is None:
-        return (True, "queue-revalidation enforcement is OFF for this campaign — it carries no "
-                      "queue_revalidation receipt; run /rawgentic:revalidate-children to arm it")
+    # #840 Step-11 finding 1 (Critical, reproduced): this used to return `(True, "enforcement is
+    # OFF")` for a campaign with no receipt, which made all three layers opt-in — nothing in the
+    # code created the first receipt or produced the refusal that would prompt anyone to. Owner
+    # decision 2026-08-02 closed it: a campaign with no receipt now FAILS the rung, with an
+    # actionable reason. A refusal is recoverable by the skill this ships; silent passage is not.
     try:
         head = observe_head(repo_root, runner=runner)
     except LauncherError as exc:
@@ -2630,9 +2635,22 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
         _locked_state_update(driver_state_path, _claim)
         if claim_state.get("verdict") == "refused":
             out["outcome"] = "claim_refused"
-            out["reason"] = ("could not claim generation "
-                             f"{generation} — a foreign or live claim holds it; the run continues "
-                             "in place and the predecessor stays alive and guarded")
+            # #840 Step-11 finding 4: a queue mismatch and a foreign claim are different
+            # situations with different remedies, and reporting both as "a foreign or live claim"
+            # sent the operator looking for a competing session that does not exist.
+            if not driver_lib.handoff_queue_is_current(_locked_state_read(driver_state_path)):
+                out["queue_changed"] = True
+                out["reason"] = (
+                    f"could not claim generation {generation} — the campaign queue changed after "
+                    "this handoff was written (a child's status moved), so the recorded payload no "
+                    "longer matches durable state. Nothing is wrong with this session: the "
+                    "predecessor stays alive and guarded. Re-run the handoff so a new generation "
+                    "is opened from current state; retrying THIS generation can never succeed and "
+                    "the claim lease does not apply, because no claim was ever created")
+            else:
+                out["reason"] = ("could not claim generation "
+                                 f"{generation} — a foreign or live claim holds it; the run "
+                                 "continues in place and the predecessor stays alive and guarded")
             return out
 
         # --- 4. verify from the SUCCESSOR's own artifacts ---
@@ -3253,6 +3271,65 @@ def resume_prompt_for_state(state: dict, project: str | None = None, *,
     return result
 
 
+def _cmd_next_child(args) -> int:
+    """#840 Step-11 finding 2 — the gated selection path for the IN-SESSION loop.
+
+    The epic driver's default mode is `single-session`: it loops child-by-child in one session and
+    never crosses a process boundary, so it never calls `handoff`. Before this command existed the
+    in-session loop had no gated way to pick the next child — the skill read driver state itself —
+    and `fresh_session_handoff` returned `single_session` before selection, so an armed campaign
+    with a STALE receipt advanced anyway. That was the main path, not a corner.
+
+    Moving the gate above the mode check in `driver_lib` was necessary but not sufficient: the loop
+    still needed a caller that makes a REAL observation, because a pure function cannot fetch. This
+    is that caller. Exit codes match `handoff`'s so the two surfaces cannot drift:
+
+    - **0** — a child is ready; its number is on stdout as JSON.
+    - **3** — nothing ready (`complete` / `blocked`), with the outcome named.
+    - **5** — the head could not be observed (fail-closed).
+    - **6** — the queue needs revalidation; the worklist is on stdout.
+    """
+    driver_lib = _driver_lib()
+    try:
+        with open(args.driver_state, encoding="utf-8") as fh:
+            state = json.load(fh)
+    except (OSError, ValueError) as exc:
+        print(f"refusing: cannot read {args.driver_state}: {exc}", file=sys.stderr)
+        return 2
+    try:
+        observed_head = observe_head(getattr(args, "project_root", None) or ".")
+    except LauncherError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 5
+    probe = _issue_state_probe_for(getattr(args, "project_root", ".")) \
+        if not getattr(args, "no_probe", False) else None
+    try:
+        # `mode=FRESH_SESSION_MODE` is passed deliberately even for an in-session loop: it is what
+        # makes the disposition compute `complete`/`ready`/`blocked` instead of short-circuiting to
+        # `single_session`. This command answers "which child may I start", not "should I hand off",
+        # and the caller does not act on the process-boundary part of the verdict.
+        disposition = driver_lib.fresh_session_handoff(
+            state, mode=driver_lib.FRESH_SESSION_MODE,
+            project=getattr(args, "project", None), issue_state_probe=probe,
+            observed_head=observed_head)
+    except driver_lib.DriverStateError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 2
+    outcome = disposition.get("outcome")
+    if outcome == "revalidation_required":
+        print(json.dumps({"outcome": outcome, "observed_head": observed_head,
+                          "validated_head": disposition.get("validated_head"),
+                          "worklist": disposition.get("worklist", []),
+                          "reason": disposition.get("reason")}, indent=2))
+        return 6
+    if outcome != "ready":
+        print(json.dumps({"outcome": outcome, "observed_head": observed_head}, indent=2))
+        return 3
+    print(json.dumps({"outcome": "ready", "next_issue": disposition["next_issue"],
+                      "observed_head": observed_head}, indent=2))
+    return 0
+
+
 def _cmd_record_child_outcome(args) -> int:
     """#695 — write a child's terminal status back to every campaign queue that names it.
 
@@ -3390,25 +3467,18 @@ def _cmd_handoff(args) -> int:
     # #840 — the freshly observed head, supplied HERE for the same reason #695's probe is: an
     # enforcement input that no caller threads in ships dead.
     #
-    # It is observed only when the campaign carries a `queue_revalidation` receipt. That is the
-    # SAME discriminator the payload uses (design §8) and it is a deliberate, stated limit rather
-    # than an oversight: every pre-#840 campaign has no receipt and must keep behaving exactly as
-    # it does, so enforcement activates for a campaign once the revalidate-children skill has run
-    # against it. A receipt-carrying campaign is then hard-gated — `next_ready_issue` REFUSES if
-    # this observation is missing, so there is no path that quietly skips it.
-    observed_head = None
-    if state.get("queue_revalidation") is not None:
-        try:
-            observed_head = observe_head(getattr(args, "project_root", None) or ".")
-        except LauncherError as exc:
-            # Fail-CLOSED. Without a confirmed head every freshness comparison would compare a
-            # stale value against itself and open the gate on a moved main.
-            print(f"refusing: {exc}", file=sys.stderr)
-            return 5
-    else:
-        print("note: queue-revalidation enforcement is OFF for this campaign — it carries no "
-              "queue_revalidation receipt; run /rawgentic:revalidate-children to arm it (#840)",
-              file=sys.stderr)
+    # Observed UNCONDITIONALLY (Step-11 finding 1, owner decision 2026-08-02). An earlier revision
+    # observed only when the state already carried a receipt, which made the whole gate opt-in: a
+    # never-armed campaign skipped the observation, then `next_ready_issue` saw neither an
+    # observation nor a receipt and selected work normally. Observing always means an un-armed
+    # campaign is REFUSED with an actionable reason instead of quietly advanced.
+    try:
+        observed_head = observe_head(getattr(args, "project_root", None) or ".")
+    except LauncherError as exc:
+        # Fail-CLOSED. Without a confirmed head every freshness comparison would compare a stale
+        # value against itself and open the gate on a moved main.
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 5
     disposition = driver_lib.fresh_session_handoff(state, mode=mode,
                                                   project=getattr(args, "project", None),
                                                   include_bind=False,
@@ -3769,6 +3839,30 @@ def _cmd_mid_child_handoff(args) -> int:
                 "project": args.project, "project_path": args.project_path,
                 "repo_root": repo_root}
 
+    # #840 Step-11 finding 5 (Medium): the queue check used to run only inside `perform_handoff`,
+    # i.e. AFTER `open_handoff` had bumped `generation` and written `handoff_pending`, and after the
+    # cancelling `try/finally` had been entered. An abrupt death between that write and the block
+    # left an UNCANCELLED generation for a queue nobody had checked. Checking before anything
+    # durable is written means a stale queue costs no generation at all. `perform_handoff` still
+    # checks: defence in depth, and it is the only check the `retire-predecessor` side gets.
+    #
+    # It runs on an UNLOCKED pre-read, deliberately, for two reasons. Ordering: a bad position or
+    # "no active child" is a caller error and must keep its own exit code rather than being masked
+    # by a queue refusal, so the plausibility check has to come first. And the freshness probe does
+    # a `git fetch` — holding the campaign lock across a network call would block every concurrent
+    # reader for its duration. The locked `_open` below stays authoritative; this only decides
+    # whether to get that far.
+    pre_disposition = driver_lib.mid_child_handoff(
+        _locked_state_read(args.driver_state), position=position, include_bind=False)
+    if pre_disposition.get("outcome") == "ready":
+        revalidated, revalidation_reason = produce_queue_revalidated(
+            {"driver_state_path": args.driver_state, "repo_root": position["repo_root"]})
+        if not revalidated:
+            print(json.dumps({"ok": False, "failed_step": QUEUE_REVALIDATED_STEP,
+                              "reason": revalidation_reason}, indent=2))
+            print(f"refusing mid-child handoff: {revalidation_reason}", file=sys.stderr)
+            return 6
+
     # The disposition is computed INSIDE the lock so the generation it bumps is derived from the
     # state actually being written, not from a copy read earlier.
     held: dict = {}
@@ -4044,6 +4138,20 @@ def main(argv: list[str] | None = None) -> int:
     # #695 — the ONE owner of a child's terminal status write-back. Invoked at each authoritative
     # terminal event: WF2 Step 14 right after the merge is confirmed, and Step 16 as idempotent
     # reconciliation. Step 16 alone was the first design and it is NOT atomic with the merge.
+    # #840 — the gated selection path for the in-session loop (Step-11 finding 2). Without this the
+    # default single-session mode had no way to select a child through a freshly observed head.
+    p_nc = sub.add_parser("next-child",
+                          help="which child may be started now, gated on a freshly observed "
+                               "origin/main (rc 0 ready, 3 nothing ready, 5 head unobservable, "
+                               "6 revalidation required)")
+    p_nc.add_argument("--driver-state", required=True)
+    p_nc.add_argument("--project-root", default=".",
+                      help="repository root; the head is observed with `git -C <root>`")
+    p_nc.add_argument("--project", help="project name, for the resume-prompt bind")
+    p_nc.add_argument("--no-probe", action="store_true",
+                      help="skip the GitHub issue-state corroboration (#695); the driver-state "
+                           "file's own statuses are then trusted")
+
     p_rco = sub.add_parser("record-child-outcome",
                            help="write a child's terminal status back to its campaign queue")
     p_rco.add_argument("--issue", type=int, required=True)
@@ -4098,6 +4206,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_mid_child_handoff(args)
         if args.cmd == "retire-predecessor":
             return _cmd_retire_predecessor(args)
+        if args.cmd == "next-child":
+            return _cmd_next_child(args)
         if args.cmd == "record-child-outcome":
             return _cmd_record_child_outcome(args)
         if args.cmd == "read-goal-condition":
