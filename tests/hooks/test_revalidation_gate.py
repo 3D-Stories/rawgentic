@@ -804,17 +804,34 @@ class TestTheCorrectionConsumer:
 # --------------------------------------------------------------------------- #
 
 class TestTheCampaignCallSites:
-    """Source-level pins, in the pattern `tests/hooks/test_wf_review_sites.py` uses.
+    """What is LEFT of the source-level pins after Step-11 round 3, finding 7 — and why.
 
-    These exist because an optional enforcement input that no caller threads in ships DEAD, and
-    this repo has done exactly that once: `tests/hooks/test_driver_state_write_back.py:304-306`
-    records an optional probe nobody passed. Adding a campaign caller without the argument fails
-    CI here.
+    Four positive substring pins lived here: `_cmd_handoff` observes and threads the head,
+    `resume_prompt_for_state` observes it, `_cmd_mid_child_handoff` supplies `campaign_context`,
+    and `retire_predecessor` produces the rung. **All four are DELETED**, because they were
+    redundant AND misleading:
 
-    They are a BELT, not the braces. On their own "a source test exists" is vacuous — deleting the
-    test deletes the guard — so the runtime refusals in `TestTheLegacyContractIsExplicitNeverSilent`
-    and `TestPerformHandoffRefusesBeforeAnyEffect` are what actually enforce this, and
-    `TestTheObservedHeadDataflow` proves the wrapper's value is what reaches the comparison.
+    * Redundant — round 2 already added the runtime replacements and said so in
+      `TestFinding6TheCallSitesArePinnedAtRUNTIME`, but never removed what they replaced. The
+      contracts are now owned by, respectively:
+      `TestFinding6...::test_cmd_handoff_refuses_a_stale_campaign_end_to_end`,
+      `TestTheObservedHeadDataflow::test_the_sentinel_from_observe_head_reaches_the_refusal`
+      (a monkeypatched sentinel — dataflow, not spelling),
+      `TestFinding5...::test_the_command_passes_a_real_campaign_context` (asserts the dict
+      `perform_handoff` actually received), and
+      `TestFinding6...::test_retire_predecessor_refuses_a_stale_campaign_without_touching_the_pane`.
+    * Misleading — every one survived the exact sabotages this file's own comments admit:
+      `campaign_context=None` still satisfies `"campaign_context=" in src`; discarding the
+      producer's result and hardcoding the rung `True` still passed; overwriting `observed_head`
+      with a cached value still satisfied both substring checks. Substring presence is not
+      dataflow.
+
+    The old docstring also claimed "adding a campaign caller without the argument fails CI here".
+    **That was false** — each pin inspected one NAMED function, so a brand-new call site was never
+    examined at all. Removing the tests removes no coverage; it removes a claim of coverage.
+
+    The one pin kept below is NEGATIVE, and a negative has no runtime twin: no test can prove a
+    ladder rung that must never appear is absent by observing behaviour that never runs.
     """
 
     @staticmethod
@@ -822,27 +839,13 @@ class TestTheCampaignCallSites:
         import inspect
         return inspect.getsource(getattr(ll, name))
 
-    def test_cmd_handoff_observes_the_head_and_threads_it_into_selection(self):
-        src = self._source("_cmd_handoff")
-        assert "observe_head(" in src, "the ONE production selection site must observe the head"
-        assert "observed_head=observed_head" in src, "and thread it into fresh_session_handoff"
+    def test_the_ad_hoc_site_source_still_carries_no_campaign_context(self):
+        """SOURCE-SHAPE pin, and named so — it proves what the text says, not what the code does.
 
-    def test_resume_prompt_for_state_observes_the_head(self):
-        assert "observe_head(" in self._source("resume_prompt_for_state")
-
-    def test_the_mid_child_handoff_site_supplies_campaign_context(self):
-        """Its ladder carries `queue_revalidated`, and an unreported rung fail-closes — so
-        omitting this would refuse every mid-child handoff, not silently skip the check."""
-        assert "campaign_context=" in self._source("_cmd_mid_child_handoff")
-
-    def test_retire_predecessor_produces_the_rung_itself(self):
-        """Recomputed rather than trusted from the predecessor's report: this is the last gate
-        before an irreversible teardown."""
-        assert "produce_queue_revalidated(" in self._source("retire_predecessor")
-
-    def test_the_ad_hoc_site_deliberately_has_no_campaign_context(self):
-        """The other half of the contract. An ad-hoc handoff has no campaign, uses the three-rung
-        launch ladder, and must NOT acquire a campaign argument by copy-paste."""
+        An ad-hoc handoff has no campaign and uses the three-rung launch ladder. It must not
+        acquire a campaign argument or a `steps=` override by copy-paste from the mid-child site
+        next door, which is the realistic way this breaks. Kept as a substring check because the
+        contract IS absence; if it ever gains a runtime twin, delete this."""
         src = self._source("_cmd_ad_hoc_handoff")
         assert "campaign_context=" not in src
         assert "steps=" not in src, "an ad-hoc handoff must keep the default launch ladder"
@@ -981,7 +984,12 @@ class TestFinding4AnInvalidatedPayloadIsLegibleAndRecoverable:
                                         observed_head=HEAD)
         return dl.open_handoff(state, disp, now_ts=1000)
 
-    def test_the_mismatch_is_reported_as_a_queue_change_not_a_foreign_claim(self):
+    def test_the_PREDICATE_separates_a_moved_queue_from_a_competing_claim(self):
+        """Renamed at round 3 (finding 7): this exercises `handoff_queue_is_current` ALONE, so it
+        cannot say anything about what is *reported* — deleting `retire_predecessor`'s
+        `queue_changed` branch entirely would leave it green. The reporting claim is owned by
+        `tests/hooks/test_mid_child_handoff.py::TestRetireRefusesBeforeAnythingDestructive`, which
+        drives missing, tampered and live-claim payloads through `retire_predecessor` itself."""
         pending = self._armed_with_pending()
         assert dl.handoff_queue_is_current(pending) is True
         after = dl.record_child_outcome(pending, 1, "merged")
@@ -989,9 +997,10 @@ class TestFinding4AnInvalidatedPayloadIsLegibleAndRecoverable:
         assert dl.handoff_queue_is_current(after) is False, \
             "the launcher needs this to tell a queue change from a competing claim"
 
-    def test_a_tampered_payload_is_ALSO_reported_as_a_queue_change(self):
+    def test_the_PREDICATE_also_returns_False_for_a_tampered_payload(self):
         """Honest about the limit: this predicate says "the payload no longer matches state", which
-        covers both a legitimate move and tampering. It is a reporting aid, not an authorisation."""
+        covers both a legitimate move and tampering. It is a reporting aid, not an authorisation —
+        and per round-3 High 3 it is outranked by a live claim at the call site."""
         pending = self._armed_with_pending()
         pending["handoff_pending"]["queue"]["children"].reverse()
         assert dl.handoff_queue_is_current(pending) is False
@@ -1173,6 +1182,61 @@ class TestRound2Finding1TheFirstArmIsAlwaysPossible:
         assert dl.next_ready_issue(armed, observed_head=HEAD) == 1
 
 
+class TestRound3Finding5AStampedObsoleteChildIsNotValidatorValid:
+    """**Medium.** `validate_revalidation_child` already refuses `pending_disposition` together
+    with an `outcome`, because a stamped child is selectable and an obsolete child must stay
+    unstamped. But the ISSUE-level stamp was never checked against it: the linkage clause only
+    asks whether a receipt entry EXISTS, so a queued child carrying both `validated_against ==
+    validated_head` and a receipt record marked `issue_obsolete` passed `validate_queue_revalidation`
+    whole.
+
+    Selection still refuses it on the pending marker, so this is an invariant violation rather
+    than a bypass — but the invariant is the thing the receipt is FOR, and README claimed this
+    defect was already closed. The half-enforced version is the dangerous kind: it reads as
+    protection at the only place a reader checks.
+    """
+
+    def _armed(self, **child_kw):
+        state = _state(_iss(1, validated_against=HEAD),
+                       reval=_reval(HEAD, {"1": _receipt_child(**child_kw)}))
+        return state
+
+    def test_a_stamp_whose_receipt_carries_a_pending_disposition_is_refused(self):
+        with pytest.raises(dl.DriverStateError):
+            dl.validate_queue_revalidation(self._armed(pending="issue_obsolete"))
+
+    def test_the_refusal_is_RECOVERABLE_not_a_corrupt_state_error(self):
+        """The near-miss that a literal reading of the finding produces, and it is not academic —
+        the first version of this fix raised the base `DriverStateError` and broke
+        `TestObsoleteChildIsNeverSelected`. `_refuse_unrevalidated_queue` already refuses this
+        shape as the OWNER GATE: a machine may not choose between `deferred` and `abandoned`, so
+        the operator must be told to dispose of the child (rc 6), not that their state file is
+        unusable (rc 2). Enforcing an invariant must not downgrade a designed recovery path."""
+        with pytest.raises(dl.QueueRevalidationRequired):
+            dl.validate_queue_revalidation(self._armed(pending="issue_obsolete"))
+        assert issubclass(dl.QueueRevalidationRequired, dl.DriverStateError), \
+            "structural callers must keep catching it"
+
+    @pytest.mark.parametrize(
+        "pending", sorted(dl._PENDING_DISPOSITIONS))       # pylint: disable=protected-access
+    def test_every_pending_disposition_is_refused_not_just_the_obsolete_one(self, pending):
+        """Driven from the vocabulary itself, so a disposition added later is covered the day it
+        is added rather than the day someone remembers this test. (A hand-written second value
+        would have to be skipped when absent, and a permanently-skipped case proves nothing.)"""
+        with pytest.raises(dl.DriverStateError):
+            dl.validate_queue_revalidation(self._armed(pending=pending))
+
+    def test_an_UNSTAMPED_child_with_a_pending_disposition_is_still_fine(self):
+        """The negative twin, and the whole point of `pending_disposition`: recording that a child
+        is obsolete must remain legal — it is the STAMP that may not coexist with it."""
+        state = _state(_iss(1), reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
+        assert dl.validate_queue_revalidation(state) is True
+
+    def test_an_ordinary_stamped_child_is_still_fine(self):
+        """The other twin — without it the fix could refuse every stamp and still pass above."""
+        assert dl.validate_queue_revalidation(self._armed()) is True
+
+
 class TestRound3Finding1UnusableBaselinesAreAlsoRecoverable:
     """**High.** Round 2 fixed the jam for `base_default_branch_sha is None` only. But
     `queue.schema.json:36` accepts ANY string with no format or reachability constraint, so
@@ -1323,7 +1387,10 @@ class TestRound2Finding3TheMigrationShapeIsDiagnosedHonestly:
         armed["queue_revalidation"] = _reval(HEAD, {"2": _receipt_child()})
         return armed
 
-    def test_a_queueless_pending_record_under_a_receipt_is_reported_as_a_queue_change(self):
+    def test_the_PREDICATE_returns_False_for_a_queueless_record_under_a_receipt(self):
+        """Renamed at round 3 (finding 7) for the same reason as its siblings: it exercises the
+        predicate only. What the caller REPORTS for this shape — and that a live claim outranks
+        it — is asserted in `test_mid_child_handoff.py` against `retire_predecessor`."""
         armed = self._legacy_pending_then_armed()
         assert dl.handoff_claim(armed, armed["generation"],
                                claimant="s", now_ts=1)[0] is False

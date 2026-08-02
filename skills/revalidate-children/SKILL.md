@@ -91,6 +91,16 @@ through a file the child never cites — #835 is the standing proof: its body wa
   as-is. This is the affordability lever and it is honest — it drops the class of check a merge is
   least likely to invalidate, never the class #835 failed on.
 
+**What the receipt actually proves — read this before trusting a `deep` stamp** (Step-11 round 3,
+finding 4). `deep` is an INSTRUCTION to you, not a mechanically verified property of the receipt.
+`validate_claims` refuses an empty claims list and validates the shape of every claim it is given,
+but it does **not** check completeness or kind coverage: a `deep` record carrying one `cause` claim
+is structurally valid and makes the child selectable. So the receipt attests *that a look happened
+and left evidence*, never *that every claim in the body was examined*. Closing that gap needs a
+mechanical inventory of the issue body bound claim-by-claim to the receipt — a much larger change
+than this machinery carries, and deliberately not attempted here. **The consequence for you: depth
+is your obligation, and nothing downstream will catch you skimping on it.**
+
 **5. Record each claim as evidence.** Per claim:
 
 ```json

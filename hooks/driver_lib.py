@@ -222,16 +222,23 @@ class DependencyCycleError(DriverStateError):
 class QueueRevalidationRequired(DriverStateError):
     """Raised when the remaining queue has not been revalidated against the current head.
 
-    **Defined here in PR 1; nothing raises it until PR 2.** That split is deliberate: the
-    design gate refused an earlier plan that shipped the refusal before the mechanism that
-    clears it, which would have jammed a live campaign between two PRs.
+    **LIVE since PR 2** (`_refuse_unrevalidated_queue`, reached from `next_ready_issue`,
+    `fresh_session_handoff` and `validate_queue_revalidation`). PR 1 defined it and raised it
+    nowhere, deliberately — the design gate refused an earlier plan that shipped the refusal
+    before the mechanism that clears it, which would have jammed a live campaign between two
+    PRs. That is history now; do not read this class as inert.
 
     It subclasses `DriverStateError` so every existing `except DriverStateError` caller stays
     correct, and it is a distinct type so callers can tell "the queue is stale" from "nothing
-    is ready". That distinction is the whole reason selection RAISES rather than returning
-    `None`: `resume_prompt_for_state` collapses every non-ready outcome into `None` and reports
-    it as "complete or blocked", so a stale queue would otherwise be announced to the operator
-    as *the epic finished*.
+    is ready" — `launcher_lib next-child` maps it to rc 6 ("revalidate, then retry") rather
+    than rc 2 ("this state is unusable").
+
+    That distinction is the whole reason selection RAISES rather than returning `None`.
+    `resume_prompt_for_state` USED to collapse every non-ready outcome into `None` and report it
+    as "complete or blocked", which would have announced a stale queue to the operator as *the
+    epic finished*; it now returns a result object carrying the outcome, so the collapse is
+    closed (`tests/hooks/test_revalidation_gate.py::TestRefusalPropagation`). The raise is still
+    what makes that possible, and reintroducing a `None` return would reopen it.
     """
 
 
@@ -425,6 +432,29 @@ def validate_queue_revalidation(state: dict) -> bool:
             raise DriverStateError(
                 f"issue #{issue['number']} is stamped at the validated head but the receipt "
                 "carries no evidence for it")
+        # #840 Step-11 round 3, finding 5. `validate_revalidation_child` already refuses
+        # `pending_disposition` alongside an `outcome`, for the reason that decides this too: a
+        # STAMPED child is selectable, so an obsolete one must stay unstamped. The record-level
+        # check could not see the issue-level stamp, so both together passed the whole validator —
+        # the receipt asserted an obsolete child had been cleared. Selection refuses it anyway on
+        # the pending marker, so this closes an invariant hole rather than a bypass; but a receipt
+        # is exactly the artifact whose invariants have to hold on their own.
+        record = parsed.get(issue["number"])
+        if record is not None and record.get("pending_disposition") is not None \
+                and stamped == head:
+            # `QueueRevalidationRequired`, NOT a bare `DriverStateError`, and the difference is
+            # load-bearing. It subclasses `DriverStateError`, so every structural caller keeps
+            # working — but `_refuse_unrevalidated_queue` already refuses this exact shape as the
+            # OWNER GATE (a machine may not choose between `deferred` and `abandoned`), and the
+            # CLI maps this type to rc 6 "resolve the queue" instead of rc 2 "the state file is
+            # unusable". Raising the base type here converted a designed, recoverable refusal
+            # into a hard data error and broke `TestObsoleteChildIsNeverSelected` — caught by
+            # that test, which is why it exists.
+            raise QueueRevalidationRequired(
+                f"issue #{issue['number']} is stamped at the validated head while its receipt "
+                f"record carries pending_disposition {record['pending_disposition']!r} — a "
+                "stamped child is selectable, so a child awaiting a disposition must stay "
+                "unstamped; the owner records `deferred` or `abandoned` to clear it")
     return True
 
 
@@ -865,8 +895,13 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
     Eligibility is EFFECTIVE status, not durable status: a `queued` entry the probe confirms
     already merged must not jam the queue on a revalidation nobody can meaningfully perform.
 
-    Nothing is refused when no child is eligible. There is no work to hand out in that case, so a
-    refusal could only strand a finished or fully-parked campaign.
+    **The per-child clauses are skipped when no child is eligible; the HEAD clause is not.**
+    An earlier revision of this docstring said "nothing is refused when no child is eligible",
+    and that stopped being true when Step-11 finding 3 made the head comparison unconditional:
+    the rung asserts "this campaign's queue is current", which a mid-child handoff needs to hold
+    even while its only child is `in_progress` and nothing is selectable. So a campaign with no
+    eligible child and a stale — or absent — receipt IS refused. What the eligibility check buys
+    is only that an empty queue is not asked for per-child provenance it cannot have.
     """
     validate_validated_against(observed_head)
     reval = state.get("queue_revalidation")
