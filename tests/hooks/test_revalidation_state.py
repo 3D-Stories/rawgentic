@@ -40,10 +40,20 @@ class TestValidatedAgainst:
             dl.validate_validated_against(bad)
 
     def test_a_bool_raises_rather_than_passing_as_int(self):
-        """`isinstance(True, int)` is True in Python, and that has bitten this module before
-        (`_is_int` exists for exactly this). A `True` stamp must never read as provenance."""
+        """`isinstance(True, int)` is True in Python, and that has bitten this module before.
+
+        VACUITY NOTE (Step-11 review): this test passed even with the explicit bool clause
+        deleted, because `True` is also not a `str` and the string check caught it anyway. It
+        therefore proved nothing about the clause it was named for. It now asserts the
+        clause's OWN reachability directly, so deleting it turns this red.
+        """
         with pytest.raises(dl.DriverStateError):
             dl.validate_validated_against(True)
+        import inspect
+        src = inspect.getsource(dl.validate_validated_against)
+        assert "isinstance(value, bool)" in src, (
+            "the explicit bool rejection is the documented guard; the string check happens to "
+            "cover True today, so without this assertion its removal would be invisible")
 
     @pytest.mark.parametrize("bad", [None, 42, [SHA], {"sha": SHA}])
     def test_a_non_string_raises(self, bad):
@@ -110,9 +120,13 @@ class TestChildRecord:
         with pytest.raises(dl.DriverStateError):
             dl.validate_revalidation_child(self._record(outcome="issue_obsolete"))
 
-    def test_pending_disposition_accepts_issue_obsolete_or_none(self):
+    def test_an_obsolete_child_carries_no_outcome(self):
+        """CORRECTED after the adversarial-diff review. This test previously asserted that
+        `pending_disposition: "issue_obsolete"` could sit alongside `outcome: "still_valid"`,
+        which contradicts the design's own rule that an obsolete child stays UNSTAMPED — a
+        stamped child is selectable. The record shape now makes the two mutually exclusive."""
         assert dl.validate_revalidation_child(
-            self._record(pending_disposition="issue_obsolete")) is True
+            self._record(pending_disposition="issue_obsolete", outcome=None)) is True
         assert dl.validate_revalidation_child(self._record(pending_disposition=None)) is True
 
     def test_an_unknown_pending_disposition_raises(self):
@@ -164,3 +178,112 @@ class TestQueueRevalidationRequiredExists:
                  "queue_revalidation": {"version": 1, "extractor_version": 1,
                                         "validated_head": OTHER_SHA, "children": {}}}
         assert dl.next_ready_issue(state) == 840
+
+
+class TestReviewFindingsReceiptIntegrity:
+    """Adversarial-diff review, 2026-08-02. Every case below was CONFIRMED accepted before the
+    fix, and each lets a contradictory or unbound receipt support a current stamp."""
+
+    def _record(self, **over):
+        rec = {"body_hash": "a" * 64, "from_sha": OTHER_SHA, "to_sha": SHA,
+               "extraction": "paths", "depth": "deep", "outcome": "still_valid",
+               "pending_disposition": None, "claims": [_claim()],
+               "correction_comment": None, "validated_at": 1754100000}
+        rec.update(over)
+        return rec
+
+    @pytest.mark.parametrize("bad", [None, "", "zz", "A" * 64, 42, True])
+    def test_a_malformed_body_hash_raises(self, bad):
+        """It was presence-checked only, so `body_hash: null` passed and the receipt's
+        claimed binding to the issue body meant nothing."""
+        with pytest.raises(dl.DriverStateError):
+            dl.validate_revalidation_child(self._record(body_hash=bad))
+
+    def test_still_valid_with_a_broken_claim_raises(self):
+        """The fields were validated independently, so a receipt could assert `still_valid`
+        while its own evidence said otherwise."""
+        with pytest.raises(dl.DriverStateError):
+            dl.validate_revalidation_child(
+                self._record(outcome="still_valid", claims=[_claim(verdict="broken")]))
+
+    def test_body_corrected_requires_a_broken_claim(self):
+        with pytest.raises(dl.DriverStateError):
+            dl.validate_revalidation_child(
+                self._record(outcome="body_corrected", claims=[_claim(verdict="holds")],
+                             correction_comment="https://example.com/c/1"))
+
+    def test_body_corrected_requires_a_correction_comment(self):
+        with pytest.raises(dl.DriverStateError):
+            dl.validate_revalidation_child(
+                self._record(outcome="body_corrected", claims=[_claim(verdict="broken")],
+                             correction_comment=None))
+
+    def test_body_corrected_with_both_is_accepted(self):
+        assert dl.validate_revalidation_child(
+            self._record(outcome="body_corrected", claims=[_claim(verdict="broken")],
+                         correction_comment="https://example.com/c/1")) is True
+
+    def test_still_valid_must_not_carry_a_correction_comment(self):
+        with pytest.raises(dl.DriverStateError):
+            dl.validate_revalidation_child(
+                self._record(correction_comment="https://example.com/c/1"))
+
+    def test_a_pending_disposition_cannot_coexist_with_a_stamped_outcome(self):
+        """An obsolete child must stay UNSTAMPED; carrying both let it be selectable."""
+        with pytest.raises(dl.DriverStateError):
+            dl.validate_revalidation_child(
+                self._record(pending_disposition="issue_obsolete"))
+
+
+class TestQueueRevalidationValidator:
+    """Adversarial-diff review: nothing validated the campaign-level receipt or connected it
+    to `issues[].validated_against`, so a fabricated receipt passed the documented entry."""
+
+    def _state(self, **over):
+        st = {"schema_version": 2, "campaign": "c", "epic": 756,
+              "issues": [{"number": 840, "status": "queued", "depends_on": [],
+                          "validated_against": SHA}],
+              "queue_revalidation": {
+                  "version": 1, "extractor_version": 1, "validated_head": SHA,
+                  "children": {"840": {
+                      "body_hash": "a" * 64, "from_sha": OTHER_SHA, "to_sha": SHA,
+                      "extraction": "paths", "depth": "deep", "outcome": "still_valid",
+                      "pending_disposition": None, "claims": [_claim()],
+                      "correction_comment": None, "validated_at": 1}}}}
+        st["queue_revalidation"].update(over)
+        return st
+
+    def test_a_coherent_receipt_validates(self):
+        assert dl.validate_queue_revalidation(self._state()) is True
+
+    def test_a_state_without_the_key_is_a_silent_pass(self):
+        assert dl.validate_queue_revalidation({"issues": []}) is True
+
+    def test_a_malformed_validated_head_raises(self):
+        with pytest.raises(dl.DriverStateError):
+            dl.validate_queue_revalidation(self._state(validated_head="nope"))
+
+    def test_an_unknown_version_raises(self):
+        with pytest.raises(dl.DriverStateError):
+            dl.validate_queue_revalidation(self._state(version=99))
+
+    def test_a_stamp_with_no_matching_receipt_child_raises(self):
+        """The core linkage: an issue stamped at the current head with no receipt entry is
+        exactly the fabricated-provenance case."""
+        st = self._state()
+        st["queue_revalidation"]["children"] = {}
+        with pytest.raises(dl.DriverStateError):
+            dl.validate_queue_revalidation(st)
+
+    def test_a_receipt_child_whose_to_sha_disagrees_with_the_head_raises(self):
+        st = self._state()
+        st["queue_revalidation"]["children"]["840"]["to_sha"] = OTHER_SHA
+        with pytest.raises(dl.DriverStateError):
+            dl.validate_queue_revalidation(st)
+
+    def test_a_non_numeric_child_key_raises(self):
+        st = self._state()
+        st["queue_revalidation"]["children"]["not-a-number"] = \
+            st["queue_revalidation"]["children"].pop("840")
+        with pytest.raises(dl.DriverStateError):
+            dl.validate_queue_revalidation(st)

@@ -36,7 +36,12 @@ MEASURED = {
     838: {"expected": "paths",
           "resolves": {"hooks/executor_routing_lib.py",
                        "phase_executor/src/phase_executor/supervisor.py"}},
-    734: {"expected": "paths",
+    # CHANGED after the Step-11 review: #734 names three path-shaped tokens and only two
+    # resolve, so the body is only PARTLY readable. Under the corrected rule — any unresolved
+    # candidate makes the whole body ambiguous — its true classification is `ambiguous`, not
+    # `paths`. The earlier expectation would have let a partly-unreadable body take the
+    # `quick` path.
+    734: {"expected": "ambiguous",
           "resolves": {"hooks/context_meter.py", "hooks/hooks.json"}},
     763: {"expected": "paths",
           "resolves": {"docs/reviews/session-mining-2026-07-30.md",
@@ -75,25 +80,23 @@ class TestCitedPathsOnRealBodies:
         assert set(paths) == case["resolves"], (
             f"#{number}: extracted {sorted(paths)} but only {sorted(case['resolves'])} resolve")
 
-    def test_a_candidate_that_does_not_resolve_is_not_a_citation(self):
-        """#734 names three path-shaped tokens; only two exist on main. The third must be
-        dropped, because an unresolvable token is prose that merely looks like a path."""
+    def test_a_partly_unreadable_body_is_ambiguous(self):
+        """#734 names three path-shaped tokens; only two exist on main. The resolved two are
+        still returned, but the VERDICT is `ambiguous` — a body we could only partly read is
+        one we cannot vouch for, and it must take the deep path."""
         paths, extraction = dl.cited_paths(_body(734), resolves=MEASURED[734]["resolves"])
-        assert extraction == "paths"
+        assert extraction == "ambiguous"
         assert set(paths) == MEASURED[734]["resolves"]
-        assert len(paths) == 2
 
 
 class TestExtractionEdgeCases:
     def test_absolute_paths_are_rejected(self):
-        paths, _ = dl.cited_paths("see `/etc/passwd` and `/home/u/x.py`",
-                                  resolves={"/etc/passwd", "/home/u/x.py"})
-        assert not paths
+        assert dl.cited_paths("see `/etc/passwd` and `/home/u/x.py`",
+                              resolves={"/etc/passwd", "/home/u/x.py"}) == ([], "none")
 
     def test_traversal_is_rejected(self):
-        paths, _ = dl.cited_paths("see `../../secrets/key.py`",
-                                  resolves={"../../secrets/key.py"})
-        assert not paths
+        assert dl.cited_paths("see `../../secrets/key.py`",
+                              resolves={"../../secrets/key.py"}) == ([], "none")
 
     def test_line_and_range_suffixes_are_stripped(self):
         paths, _ = dl.cited_paths("`hooks/a.py:84-85` and `hooks/b.py:12`",
@@ -106,9 +109,61 @@ class TestExtractionEdgeCases:
         assert set(paths) == {"hooks/a.py", "hooks/b.py"}
 
     def test_urls_are_not_treated_as_repository_paths(self):
-        paths, _ = dl.cited_paths("https://example.com/a/b/c.py is not ours",
-                                  resolves={"a/b/c.py"})
-        assert not paths
+        """Asserts the EXACT tuple. The earlier version checked only that `paths` was empty,
+        and a reviewer showed it stayed green with URL handling deleted — the regex then
+        extracted `com/a/b/c.py`, failed to resolve, and produced `ambiguous`, which the
+        assertion never looked at."""
+        assert dl.cited_paths("https://example.com/a/b/c.py is not ours",
+                              resolves={"a/b/c.py"}) == ([], "none")
+
+    def test_a_url_longer_than_any_bound_leaves_no_tail_behind(self):
+        """The old code stripped a bounded 2048-character prefix and rescanned the remainder,
+        so a long URL could smuggle in a foreign path as a repository citation."""
+        assert dl.cited_paths("https://" + "x" * 4096 + "a/b/c.py",
+                              resolves={"a/b/c.py"}) == ([], "none")
+
+    def test_a_url_does_not_swallow_a_citation_that_follows_it(self):
+        """`,` was not a delimiter, so the URL match ran on through a real citation and
+        DELETED it — failing toward less scrutiny."""
+        paths, extraction = dl.cited_paths(
+            "https://example.invalid/x,hooks/touched.py and hooks/untouched.py",
+            resolves={"hooks/touched.py", "hooks/untouched.py"})
+        assert extraction == "paths"
+        assert set(paths) == {"hooks/touched.py", "hooks/untouched.py"}
+
+    def test_an_extension_prefix_is_never_matched(self):
+        """`ts` preceded `tsx` with no right boundary, so `web/app.tsx` extracted as
+        `web/app.ts` — a WRONG path whose empty intersection yields `quick`."""
+        assert dl.cited_paths("see `web/app.tsx`",
+                              resolves={"web/app.ts", "web/app.tsx"}) == (["web/app.tsx"], "paths")
+        assert dl.cited_paths("see `hooks/a.pyc`", resolves={"hooks/a.py"}) == ([], "none")
+        assert dl.cited_paths("see `data/run.jsonl`",
+                              resolves={"data/run.jsonl"}) == (["data/run.jsonl"], "paths")
+
+    def test_a_root_level_file_is_a_citation(self):
+        """The grammar required at least one directory component, so `README.md` was invisible
+        and a body citing only root-level files looked citation-free."""
+        assert dl.cited_paths("README.md changed", resolves={"README.md"}) == (["README.md"], "paths")
+
+    def test_a_dot_directory_is_a_citation(self):
+        assert dl.cited_paths("`.github/workflows/ci.yml`",
+                              resolves={".github/workflows/ci.yml"}) == (
+                                  [".github/workflows/ci.yml"], "paths")
+
+    def test_an_underscore_filename_survives_tokenisation(self):
+        """Self-caught while rewriting: `_` is a markdown emphasis marker AND an ordinary
+        filename character. Using it as a token delimiter shattered every `test_*.py`."""
+        assert dl.cited_paths("see hooks/test_driver_lib.py",
+                              resolves={"hooks/test_driver_lib.py"}) == (
+                                  ["hooks/test_driver_lib.py"], "paths")
+
+    def test_one_resolving_decoy_does_not_make_the_body_readable(self):
+        """Returning `paths` as soon as ONE candidate resolved let untrusted text manufacture
+        the classification that REDUCES scrutiny."""
+        paths, extraction = dl.cited_paths("hooks/real.py and hooks/ghost.py",
+                                           resolves={"hooks/real.py"})
+        assert extraction == "ambiguous"
+        assert paths == ["hooks/real.py"]
 
     def test_leading_dot_slash_is_normalised(self):
         paths, _ = dl.cited_paths("`./hooks/a.py`", resolves={"hooks/a.py"})
@@ -136,23 +191,41 @@ class TestAdversarialInput:
         dl.cited_paths(hostile, resolves=set())
         assert time.monotonic() - start < 2.0, "extraction is superlinear on hostile input"
 
-    def test_the_patterns_contain_no_unbounded_quantifier_at_all(self):
-        """Structural guard for the property the module's own comment claims.
+    def test_no_pattern_has_a_nested_quantifier(self):
+        """The ReDoS shape, asserted honestly for the CURRENT design.
 
-        A weaker version of this test (looking only for a nested quantifier over a group)
-        was written first and would have passed VACUOUSLY against bounded quantifiers, so
-        it proved nothing about a future edit. The real invariant is stronger and is what
-        makes the ReDoS argument sound: no `+` or `*` outside a character class anywhere,
-        so every match attempt does O(1) work per starting position.
+        An earlier version of this test asserted "no `+` or `*` anywhere outside a character
+        class". That was right for the old single-regex extractor, and it is simply FALSE for
+        the tokenising one — `_TOKEN_SPLIT_RE` is `[...]+` and `_COMPONENT_RE` ends in
+        `[...]*`, both of which are single-class repetitions and therefore linear. Keeping the
+        old assertion would have meant either a failing test or contorting the code to satisfy
+        a rule that no longer describes the risk.
 
-        Character classes are stripped first — `[A-Za-z0-9_.-]` contains a literal `-` and
-        `[^\\s)\\]>`"']` contains an escaped `]`, and neither is a quantifier.
+        The real invariant is: no VARIABLE-LENGTH GROUP under a quantifier, which is what
+        makes backtracking superlinear. Bounded input does the rest — `_COMPONENT_RE` only
+        ever sees a component already length-checked to <= _MAX_COMPONENT_LEN.
+
+        Sabotage-checked below with a deliberately catastrophic pattern, so this is not taken
+        on faith.
         """
+        assert len(dl.CITATION_PATTERNS) >= 4, (
+            "the guard passes vacuously if the tuple is emptied or a production pattern is "
+            "dropped from it — assert membership, not just per-pattern cleanliness")
+        nested = re.compile(r"\((?:\?:)?[^()]*[+*][^()]*\)\s*[+*{]")
         for pattern in dl.CITATION_PATTERNS:
             src = pattern.pattern
             without_classes = re.sub(r"\[(?:\\.|[^\]\\])*\]", "", src)
-            offender = re.search(r"(?<!\\)[+*]", without_classes)
+            offender = nested.search(without_classes)
             assert offender is None, (
-                f"unbounded quantifier {offender.group(0)!r} at index {offender.start()} "
-                f"of {without_classes!r} (from {src!r}) — bound it, or the ReDoS claim in "
-                "driver_lib's citation-extraction comment is false")
+                f"nested quantifier {offender.group(0)!r} in {src!r} — a variable-length group "
+                "under a quantifier is the catastrophic-backtracking shape")
+
+    def test_the_nested_quantifier_guard_actually_catches_one(self):
+        """Sabotage check for the guard immediately above. Without this, that test could pass
+        because it detects nothing at all — the exact vacuous-guard failure this issue exists
+        to eliminate, and one this file has already committed twice."""
+        catastrophic = re.compile(r"(?:[a-z]+)+x")
+        nested = re.compile(r"\((?:\?:)?[^()]*[+*][^()]*\)\s*[+*{]")
+        without_classes = re.sub(r"\[(?:\\.|[^\]\\])*\]", "", catastrophic.pattern)
+        assert nested.search(without_classes) is not None, (
+            "the guard fails to detect a textbook catastrophic pattern, so it proves nothing")

@@ -97,13 +97,24 @@ class TestEligibility:
         assert _by_number(items).keys() == {841}
 
     def test_a_probe_failure_conservatively_keeps_the_child_eligible(self):
-        """`effective_issue_statuses` never vetoes on an outage, and neither may this."""
-        def boom(_n):
+        """`effective_issue_statuses` never vetoes on an outage, and neither may this.
+
+        VACUITY NOTE (Step-11 review): the original version passed even when probe forwarding
+        was removed entirely, because the durable status was `queued` anyway and the probe was
+        never called. It now asserts the probe IS invoked, so dropping the forwarding turns
+        this red.
+        """
+        called = []
+
+        def boom(n):
+            called.append(n)
             raise RuntimeError("github down")
+
         state = _state([_iss(840)])
         items = dl.revalidation_worklist(
             state, HEAD, extractions={840: ([], "none")}, changed_by_child={840: set()},
             issue_state_probe=boom)
+        assert called == [840], "the probe was never forwarded, so this proved nothing"
         assert _by_number(items).keys() == {840}
 
 
@@ -163,3 +174,42 @@ class TestFailClosed:
         with pytest.raises(dl.DriverStateError):
             dl.revalidation_worklist(state, HEAD, extractions={840: ([], "none")},
                                      changed_by_child={840: set()})
+
+
+class TestReviewFindingsValueValidation:
+    """Adversarial-diff review, 2026-08-02: the function checked only that a KEY was present,
+    never that its VALUE was usable. Confirmed by execution before the fix — a corrupt payload
+    produced `quick`, directly contradicting this function's own docstring promise that
+    unreadable data must never become "no changes"."""
+
+    def _run(self, extractions, changed):
+        state = _state([_iss(840)])
+        return dl.revalidation_worklist(state, HEAD, extractions=extractions,
+                                        changed_by_child=changed)
+
+    def test_a_null_changed_set_raises_instead_of_becoming_quick(self):
+        with pytest.raises(dl.DriverStateError):
+            self._run({840: ([], "none")}, {840: None})
+
+    def test_null_cited_paths_with_a_paths_verdict_raises(self):
+        """`(None, "paths")` claimed a successful extraction with nothing extracted, and the
+        empty intersection then produced `quick`."""
+        with pytest.raises(dl.DriverStateError):
+            self._run({840: (None, "paths")}, {840: {"hooks/a.py"}})
+
+    def test_an_off_vocabulary_extraction_verdict_raises(self):
+        with pytest.raises(dl.DriverStateError):
+            self._run({840: ([], "probably")}, {840: set()})
+
+    def test_a_non_tuple_extraction_raises(self):
+        with pytest.raises(dl.DriverStateError):
+            self._run({840: "paths"}, {840: set()})
+
+    def test_a_paths_verdict_with_an_empty_list_raises(self):
+        """`paths` asserts at least one resolved citation; an empty list is incoherent."""
+        with pytest.raises(dl.DriverStateError):
+            self._run({840: ([], "paths")}, {840: set()})
+
+    def test_a_non_string_inside_the_cited_list_raises(self):
+        with pytest.raises(dl.DriverStateError):
+            self._run({840: ([42], "paths")}, {840: set()})

@@ -93,30 +93,74 @@ _HASH_NUM_RE = re.compile(r"#(\d+)\b")
 #
 # Extensions are an allowlist rather than `\w+`: "a/b.c" in prose is not a citation, and
 # widening this is how prose starts reading as code.
-_CITATION_EXTENSIONS = "py|md|json|sh|yml|yaml|toml|js|ts|tsx|html|css|cfg|ini|txt"
+_CITATION_EXTENSIONS = frozenset({
+    "py", "md", "json", "jsonl", "sh", "yml", "yaml", "toml", "js", "ts", "tsx",
+    "html", "css", "cfg", "ini", "txt", "patch", "lock",
+})
+_MAX_PATH_COMPONENTS = 12
+_MAX_COMPONENT_LEN = 96
 _PATH_SEGMENT = r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}"
 
-# URLs are stripped BEFORE candidate scanning: `https://example.com/a/b/c.py` names a path
-# on someone else's host, not in this repository, and treating it as a citation would tie a
-# child's freshness to a file it never referenced.
-_URL_RE = re.compile(r"https?://[^\s)\]>`\"']{1,2048}")
+# Tokenised, not regex-substring. The Step-8a reviews (2026-08-02) confirmed by execution
+# that the previous regex matched EXTENSION PREFIXES — `src/view.tsx` extracted as
+# `src/view.ts`, `hooks/a.pyc` as `hooks/a.py`, `data/run.jsonl` as `data/run.json` — because
+# the alternation had no right boundary and listed `ts` before `tsx`. A false *resolving*
+# prefix then yields `paths` with a WRONG set, whose empty intersection produces `quick`.
+# That is the single dangerous misclassification for this design, so the grammar is no longer
+# expressed as a substring match at all: tokens are split out first and then validated by
+# COMPONENT, with the extension compared by exact set membership.
+# NOTE: `_` and `~` are deliberately NOT delimiters. They are markdown emphasis markers,
+# but they are also ordinary filename characters — splitting on `_` would shatter every
+# `test_driver_lib.py` in the corpus, which is a far worse failure than missing an emphasised
+# path. Caught by self-testing this rewrite before committing it.
+_TOKEN_SPLIT_RE = re.compile(r"[\s`\"'<>()\[\]{},;|]+")
+_URL_SCHEME_RE = re.compile(r"\A[A-Za-z][A-Za-z0-9+.-]{0,31}://")
+# `path:84`, `path:84-85`, `path#L84`, `path#L84-L90`, `path@84`.
+_CITATION_SUFFIX_RE = re.compile(r"(?::\d{1,6}(?:-\d{1,6})?|\#L\d{1,6}(?:-L?\d{1,6})?|@\d{1,6})\Z")
+# A single path component. A LEADING DOT is allowed (`.github`, `.gitignore`) — the previous
+# grammar rejected those and also refused every root-level file such as `README.md`, so a body
+# citing one looked citation-free. `.` and `..` are rejected explicitly below, by component,
+# rather than by a `".." in text` substring test that also rejected legitimate names.
+_COMPONENT_RE = re.compile(r"\A\.?[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
 
-# The leading `(?:\.{1,2}/){0,4}` deliberately CAPTURES `./` and `../` rather than excluding
-# them in a lookbehind, so traversal can be rejected explicitly on the matched text below.
-# An explicit rejection is auditable; a lookbehind that happens to exclude it is not.
-# The `/` in the lookbehind is what rejects an absolute path: in `/etc/x.py` the candidate
-# would have to start after a `/`.
-_CITATION_RE = re.compile(
-    r"(?<![\w/-])"
-    r"((?:\.{1,2}/){0,4}"
-    rf"(?:{_PATH_SEGMENT}/){{1,8}}"
-    rf"{_PATH_SEGMENT}\.(?:{_CITATION_EXTENSIONS}))"
-    # Optional line/range suffix, stripped: `path:84`, `path:84-85`, `path#L84`, `path@84`.
-    r"(?::\d{1,6}(?:-\d{1,6})?|\#L\d{1,6}(?:-L?\d{1,6})?|@\d{1,6})?"
-)
+CITATION_PATTERNS = (_TOKEN_SPLIT_RE, _URL_SCHEME_RE, _CITATION_SUFFIX_RE, _COMPONENT_RE)
 
-# Exposed so a drift-guard test can assert the no-unbounded-quantifier property directly.
-CITATION_PATTERNS = (_URL_RE, _CITATION_RE)
+
+def _candidate_path(token: str):
+    """One token -> a repo-relative path, or None. Pure, bounded, no backtracking hazard."""
+    if not token or _URL_SCHEME_RE.match(token):
+        # The WHOLE token is dropped when it is a URL. The previous code deleted a bounded
+        # 2048-character prefix, which both left a foreign tail to be rescanned as a citation
+        # and — because `,` was not a delimiter — swallowed a real citation that followed a
+        # URL. Tokenising first fixes both directions at once.
+        return None
+    # rstrip only: `.strip(".")` ate the LEADING dot of `.github/...`, turning a valid
+    # dot-directory citation into an unresolvable `github/...`. Found by self-test.
+    token = token.strip().rstrip(".")         # trailing sentence punctuation
+    token = _CITATION_SUFFIX_RE.sub("", token)
+    if token.startswith("./"):
+        token = token[2:]
+    if not token or token.startswith("/") or "\\" in token:
+        return None                            # absolute, or a Windows separator we do not read
+    components = token.split("/")
+    if not 1 <= len(components) <= _MAX_PATH_COMPONENTS:
+        return None
+    for component in components:
+        if component in ("", ".", ".."):
+            return None                        # traversal or an empty component
+        if len(component) > _MAX_COMPONENT_LEN or not _COMPONENT_RE.match(component):
+            return None
+    name = components[-1]
+    if "." not in name:
+        return None
+    stem, _, extension = name.rpartition(".")
+    # A bare extension like `.json` is not a filename. Require a non-empty stem.
+    if not stem:
+        return None
+    # EXACT extension membership, never a prefix match.
+    if extension.lower() not in _CITATION_EXTENSIONS:
+        return None
+    return token
 
 
 def cited_paths(body: str, resolves) -> tuple[list[str], str]:
@@ -124,40 +168,46 @@ def cited_paths(body: str, resolves) -> tuple[list[str], str]:
 
     Returns ``(paths, extraction)`` where ``extraction`` is one of:
 
-    - ``"paths"``    — at least one candidate resolves in an endpoint tree.
-    - ``"none"``     — the body names nothing path-shaped at all. Confidently citation-free.
-    - ``"ambiguous"``— it names path-shaped tokens, none of which resolve. NOT the same as
-      ``"none"``: we could not read it, so it must fail toward MORE scrutiny (``depth: deep``),
-      never less. Collapsing these two was a design-gate finding.
+    - ``"paths"``     — EVERY path-shaped candidate resolves in an endpoint tree.
+    - ``"none"``      — the body names nothing path-shaped at all. Confidently citation-free.
+    - ``"ambiguous"`` — at least one candidate could NOT be resolved.
+
+    **Any unresolved candidate makes the whole body ambiguous** (Step-11 review, 2026-08-02).
+    The previous rule returned ``"paths"`` as soon as ONE candidate resolved and silently
+    discarded the rest, so a body pairing an untouched resolving decoy with a stale citation
+    got ``quick`` — untrusted text manufacturing the classification that REDUCES scrutiny.
+    Ambiguity now propagates, because a body we could only partly read is one we cannot vouch
+    for.
 
     ``resolves`` is the set of paths known to exist in one of the two endpoint trees. It is
     INJECTED rather than probed here because this module is pure — no I/O, no subprocess —
     a promise enforced by a source grep in `tests/hooks/test_driver_state_write_back.py`.
-    The caller obtains it with `git cat-file -e <ref>:<path>`.
-
-    Absolute paths and `../` traversal are rejected: a citation is a repository-relative
-    path, and anything else is either prose or an attempt to point outside the tree.
     """
     if not isinstance(body, str) or not body:
         return ([], "none")
-    scrubbed = _URL_RE.sub(" ", body)
+    known = set(resolves or ())
     candidates: list[str] = []
     seen: set[str] = set()
-    for match in _CITATION_RE.finditer(scrubbed):
-        raw = match.group(1)
-        if ".." in raw or raw.startswith("/"):
-            continue                      # traversal / absolute — never a citation
-        normalized = raw[2:] if raw.startswith("./") else raw
-        if normalized and normalized not in seen:
-            seen.add(normalized)
-            candidates.append(normalized)
+    for token in _TOKEN_SPLIT_RE.split(body):
+        path = _candidate_path(token)
+        if path is None or path in seen:
+            continue
+        # A SINGLE-component token (`supervisor.py`) counts only when it really is a
+        # root-level file. Supporting root-level citations at all was a review finding —
+        # `README.md` was previously invisible — but measurement against five real issue
+        # bodies then showed the naive version turning every bare filename mentioned in
+        # prose into an UNRESOLVED citation, which dragged four of five fixtures to
+        # `ambiguous`. Prose naming a module is not a path claim; a resolving root-level
+        # file is. Multi-component tokens keep failing loudly when they do not resolve.
+        if "/" not in path and path not in known:
+            continue
+        seen.add(path)
+        candidates.append(path)
     if not candidates:
         return ([], "none")
-    known = set(resolves or ())
     resolved = [c for c in candidates if c in known]
-    if not resolved:
-        # Path-shaped but unreadable against either tree — the uncertain case.
-        return ([], "ambiguous")
+    if len(resolved) != len(candidates):
+        return (resolved, "ambiguous")
     return (resolved, "paths")
 
 
@@ -194,6 +244,7 @@ class QueueRevalidationRequired(DriverStateError):
 # `additionalProperties: true` at both levels, so a malformed stamp would otherwise pass every
 # existing check in silence. Provenance that can be garbage is not provenance.
 _SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")
+_SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 _CLAIM_KINDS = frozenset({"citation", "cause", "ac"})
 _CLAIM_VERDICTS = frozenset({"holds", "broken"})
 _CLAIM_REQUIRED = ("kind", "quoted_from_body", "checked_against", "evidence", "verdict")
@@ -203,6 +254,18 @@ _DEPTHS = frozenset({"deep", "quick"})
 # because a stamped child is selectable. It lives only in `pending_disposition`.
 _OUTCOMES = frozenset({"still_valid", "body_corrected"})
 _PENDING_DISPOSITIONS = frozenset({"issue_obsolete"})
+
+
+def _enum(value, allowed, what):
+    """Set membership that cannot leak a raw TypeError.
+
+    A list or dict reaching `value in frozenset(...)` raises `TypeError: unhashable type`,
+    which escapes the documented `DriverStateError` contract and would surface to a caller as
+    an unexpected crash rather than a validation refusal (Step-11 review, 2026-08-02).
+    """
+    if not isinstance(value, str) or value not in allowed:
+        raise DriverStateError(f"{what} must be one of {sorted(allowed)}, got {value!r}")
+    return value
 
 
 def validate_validated_against(value):
@@ -237,13 +300,8 @@ def validate_claims(claims) -> int:
         for field in _CLAIM_REQUIRED:
             if field not in claim:
                 raise DriverStateError(f"claims[{index}].{field} is required")
-        if claim["kind"] not in _CLAIM_KINDS:
-            raise DriverStateError(
-                f"claims[{index}].kind must be one of {sorted(_CLAIM_KINDS)}, got {claim['kind']!r}")
-        if claim["verdict"] not in _CLAIM_VERDICTS:
-            raise DriverStateError(
-                f"claims[{index}].verdict must be one of {sorted(_CLAIM_VERDICTS)}, "
-                f"got {claim['verdict']!r}")
+        _enum(claim["kind"], _CLAIM_KINDS, f"claims[{index}].kind")
+        _enum(claim["verdict"], _CLAIM_VERDICTS, f"claims[{index}].verdict")
         # A present-but-blank evidence field is the cheapest possible fake.
         for field in ("quoted_from_body", "checked_against", "evidence"):
             value = claim[field]
@@ -262,27 +320,111 @@ def validate_revalidation_child(record) -> bool:
                   "claims", "validated_at"):
         if field not in record:
             raise DriverStateError(f"revalidation child record is missing {field!r}")
-    if record["extraction"] not in _EXTRACTIONS:
+    _enum(record["extraction"], _EXTRACTIONS, "extraction")
+    _enum(record["depth"], _DEPTHS, "depth")
+    pending = record.get("pending_disposition")
+    if pending is not None:
+        _enum(pending, _PENDING_DISPOSITIONS, "pending_disposition")
+    outcome = record["outcome"]
+    # `pending_disposition` and `outcome` are MUTUALLY EXCLUSIVE (adversarial-diff review,
+    # 2026-08-02, confirmed by execution). A stamped child is selectable, so an obsolete child
+    # must stay unstamped — carrying both let a receipt assert an obsolete child was fine.
+    if pending is not None:
+        if outcome is not None:
+            raise DriverStateError(
+                f"a child with pending_disposition {pending!r} must carry outcome null — it is "
+                "NOT stamped, and a stamped child is selectable")
+    elif not isinstance(outcome, str) or outcome not in _OUTCOMES:
         raise DriverStateError(
-            f"extraction must be one of {sorted(_EXTRACTIONS)}, got {record['extraction']!r}")
-    if record["depth"] not in _DEPTHS:
-        raise DriverStateError(
-            f"depth must be one of {sorted(_DEPTHS)}, got {record['depth']!r}")
-    if record["outcome"] not in _OUTCOMES:
-        raise DriverStateError(
-            f"outcome must be one of {sorted(_OUTCOMES)}, got {record['outcome']!r} — note that "
+            f"outcome must be one of {sorted(_OUTCOMES)}, got {outcome!r} — note that "
             "'issue_obsolete' is NOT an outcome: a stamped child is selectable, so an obsolete "
             "child must stay unstamped and carry pending_disposition instead")
-    pending = record.get("pending_disposition")
-    if pending is not None and pending not in _PENDING_DISPOSITIONS:
-        raise DriverStateError(
-            f"pending_disposition must be null or one of {sorted(_PENDING_DISPOSITIONS)}, "
-            f"got {pending!r}")
     validate_validated_against(record["from_sha"])
     validate_validated_against(record["to_sha"])
-    validate_claims(record["claims"])
-    if not _is_int(record["validated_at"]):
-        raise DriverStateError("validated_at must be an int epoch")
+    # `body_hash` was presence-checked only, so `body_hash: null` passed and the receipt's
+    # claimed binding to the issue body meant nothing (same review).
+    body_hash = record["body_hash"]
+    if isinstance(body_hash, bool) or not isinstance(body_hash, str) \
+            or not _SHA256_RE.match(body_hash):
+        raise DriverStateError(
+            f"body_hash must be 64 lowercase hex characters, got {body_hash!r} — an unbound "
+            "receipt cannot attest which body was read")
+    n_claims = validate_claims(record["claims"])
+    if not _is_int(record["validated_at"]) or record["validated_at"] < 0:
+        raise DriverStateError(
+            f"validated_at must be a non-negative int epoch, got {record['validated_at']!r}")
+    # SEMANTIC coherence. The fields were validated independently, so a receipt could assert
+    # `still_valid` while its own evidence said `broken` (same review, confirmed by execution).
+    verdicts = [c["verdict"] for c in record["claims"]]
+    correction = record.get("correction_comment")
+    if outcome == "still_valid":
+        if "broken" in verdicts:
+            raise DriverStateError(
+                "outcome 'still_valid' contradicts its own evidence: "
+                f"{verdicts.count('broken')} of {n_claims} claims are 'broken'")
+        if correction is not None:
+            raise DriverStateError(
+                "outcome 'still_valid' must not carry a correction_comment — nothing was "
+                "corrected")
+    elif outcome == "body_corrected":
+        if "broken" not in verdicts:
+            raise DriverStateError(
+                "outcome 'body_corrected' requires at least one 'broken' claim naming what "
+                "was wrong")
+        if not isinstance(correction, str) or not correction.strip():
+            raise DriverStateError(
+                "outcome 'body_corrected' requires a correction_comment — a correction that "
+                "was never posted is not a correction")
+    return True
+
+
+def validate_queue_revalidation(state: dict) -> bool:
+    """Validate the campaign-level receipt AND its linkage to `issues[].validated_against`.
+
+    Added after the adversarial-diff review (2026-08-02) found that nothing validated the
+    receipt or connected it to the per-child stamps, so a fabricated receipt passed the
+    documented entry point and a later gate could see a current stamp with no evidence behind
+    it. A state with no `queue_revalidation` key passes silently — every pre-#840 campaign.
+    """
+    reval = state.get("queue_revalidation")
+    if reval is None:
+        return True
+    if not isinstance(reval, dict):
+        raise DriverStateError("queue_revalidation must be a JSON object")
+    for field in ("version", "extractor_version", "validated_head", "children"):
+        if field not in reval:
+            raise DriverStateError(f"queue_revalidation.{field} is required")
+    if reval["version"] != 1 or reval["extractor_version"] != 1:
+        raise DriverStateError(
+            f"unsupported queue_revalidation version {reval['version']!r}/"
+            f"{reval['extractor_version']!r} — refusing to read a receipt written by a "
+            "version this code does not understand")
+    head = validate_validated_against(reval["validated_head"])
+    children = reval["children"]
+    if not isinstance(children, dict):
+        raise DriverStateError("queue_revalidation.children must be an object keyed by number")
+    parsed: dict[int, dict] = {}
+    for key, record in children.items():
+        if not (isinstance(key, str) and key.isdigit()):
+            raise DriverStateError(
+                f"queue_revalidation.children key {key!r} is not an issue number")
+        validate_revalidation_child(record)
+        if record["to_sha"] != head:
+            raise DriverStateError(
+                f"child #{key} receipt was computed against {record['to_sha']!r} but the "
+                f"receipt claims validated_head {head!r} — a receipt cannot attest a head it "
+                "was not computed against")
+        parsed[int(key)] = record
+    # The linkage. A stamp with no receipt entry is exactly the fabricated-provenance case.
+    for issue in state.get("issues", []):
+        stamped = issue.get("validated_against")
+        if stamped is None:
+            continue
+        validate_validated_against(stamped)
+        if stamped == head and issue["number"] not in parsed:
+            raise DriverStateError(
+                f"issue #{issue['number']} is stamped at the validated head but the receipt "
+                "carries no evidence for it")
     return True
 
 
@@ -293,6 +435,9 @@ def validate_revalidation_child(record) -> bool:
 # A parser assuming two fields would take `old_name.py` as the STATUS and lose the old path.
 _DIFF_ONE_PATH_STATUSES = frozenset({"A", "D", "M", "T", "U", "X", "B"})
 _DIFF_TWO_PATH_STATUSES = frozenset({"R", "C"})
+# Whole-token match. `R100`, `R087` and a bare `R` are all real git output; `MALFORMED`,
+# `R1000`, `RX` and `M1` are not, and each of those was ACCEPTED before this pattern existed.
+_DIFF_STATUS_RE = re.compile(r"\A(?:[ADMTUXB]|[RC][0-9]{0,3})\Z")
 
 
 def parse_changed_paths(diff_text: str) -> set[str]:
@@ -322,23 +467,28 @@ def parse_changed_paths(diff_text: str) -> set[str]:
             continue
         fields = line.split("\t")
         status = fields[0].strip()
-        letter = status[:1].upper()
-        if len(fields) < 2:
+        # EXACT status syntax, not a first-character check. The adversarial-diff review
+        # (2026-08-02) confirmed by execution that `MALFORMED<TAB>a.py` parsed as an `M` row:
+        # the old code took `status[:1]`, so any word beginning with a valid letter was
+        # accepted. Corrupt input then under-reports the changed set, which downgrades a child
+        # to `quick` — failing toward LESS scrutiny, the one direction forbidden here.
+        if not _DIFF_STATUS_RE.match(status):
             raise DriverStateError(
-                f"diff line {lineno}: expected tab-separated status and path, got {line!r}")
-        if letter in _DIFF_TWO_PATH_STATUSES:
-            if len(fields) < 3:
-                raise DriverStateError(
-                    f"diff line {lineno}: status {status!r} is a rename/copy and must carry "
-                    f"BOTH an old and a new path, got {line!r} — a half-read rename "
-                    "under-reports the changed set")
-            paths = fields[1:3]
-        elif letter in _DIFF_ONE_PATH_STATUSES:
-            paths = fields[1:2]
-        else:
+                f"diff line {lineno}: malformed status {status!r} — expected one of "
+                f"{sorted(_DIFF_ONE_PATH_STATUSES)} or R/C with an optional 0-3 digit "
+                "similarity score; refusing to guess how many paths it carries")
+        letter = status[0].upper()
+        # EXACT field counts. The same review confirmed `M<TAB>a.py<TAB>b.py` silently
+        # returned only `a.py`, losing the second path: the old code sliced `fields[1:2]`
+        # and ignored the rest instead of refusing a row it did not understand.
+        expected = 3 if letter in _DIFF_TWO_PATH_STATUSES else 2
+        if len(fields) != expected:
+            what = ("a rename/copy, which must carry BOTH an old and a new path"
+                    if expected == 3 else "a single-path status")
             raise DriverStateError(
-                f"diff line {lineno}: unrecognised status {status!r} — refusing to guess how "
-                "many paths it carries")
+                f"diff line {lineno}: status {status!r} is {what}, so the row must have "
+                f"exactly {expected} tab-separated fields; got {len(fields)} in {line!r}")
+        paths = fields[1:expected]
         for path in paths:
             path = path.strip()
             if not path:
@@ -399,10 +549,47 @@ def revalidation_worklist(state: dict, observed_head: str, extractions: dict,
             raise DriverStateError(
                 f"no changed-file set supplied for child #{number} — 'no data' must never read "
                 "as 'no changes'")
-        cited, extraction = extractions[number]
+        # Validate the VALUES, not merely that the keys exist. The adversarial-diff review
+        # (2026-08-02) confirmed by execution that `changed_by_child[n] = None` became an empty
+        # set and `(None, "paths")` became a successful extraction with no intersection —
+        # both silently producing `quick`, which directly contradicted this function's own
+        # docstring promise that unreadable data must never become "no changes".
+        entry = extractions[number]
+        if not isinstance(entry, (tuple, list)) or len(entry) != 2:
+            raise DriverStateError(
+                f"extraction for child #{number} must be a (paths, extraction) pair, "
+                f"got {entry!r}")
+        cited, extraction = entry
+        _enum(extraction, _EXTRACTIONS, f"extraction verdict for child #{number}")
+        if not isinstance(cited, (list, tuple, set, frozenset)):
+            raise DriverStateError(
+                f"cited paths for child #{number} must be a collection, got {cited!r} — a null "
+                "cannot be read as 'nothing was cited'")
+        if any(not isinstance(p, str) or not p.strip() for p in cited):
+            raise DriverStateError(
+                f"cited paths for child #{number} must all be non-empty strings, got {cited!r}")
+        if extraction == "paths" and not cited:
+            raise DriverStateError(
+                f"child #{number} claims extraction 'paths' with no paths — incoherent; an "
+                "empty result is 'none' or 'ambiguous', never a successful extraction")
         changed = changed_by_child[number]
-        intersects = bool(set(cited or ()) & set(changed or ()))
+        if not isinstance(changed, (list, tuple, set, frozenset)):
+            raise DriverStateError(
+                f"changed-file set for child #{number} must be a collection, got {changed!r} — "
+                "a null cannot be read as 'nothing changed'")
+        intersects = bool(set(cited) & set(changed))
         depth = "deep" if (extraction != "paths" or intersects) else "quick"
+        if stamped is None:
+            # The campaign base is optional and nullable in queue.schema.json and
+            # validate_driver_state ignores it, so an accepted state can carry no base at
+            # all — which previously emitted `from_sha: None`, a value the receipt shape can
+            # never satisfy. Validated LAZILY, so a campaign whose children are all stamped
+            # is unaffected.
+            if base is None:
+                raise DriverStateError(
+                    f"child #{number} has never been validated and the campaign carries no "
+                    "base_default_branch_sha, so there is no range to revalidate over")
+            validate_validated_against(base)
         work.append({"number": number, "depth": depth, "extraction": extraction,
                      "from_sha": stamped if stamped is not None else base,
                      "to_sha": observed_head})

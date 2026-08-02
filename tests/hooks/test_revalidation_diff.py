@@ -102,3 +102,31 @@ class TestFailClosed:
     def test_an_empty_path_field_raises(self):
         with pytest.raises(dl.DriverStateError):
             dl.parse_changed_paths(f"M{T}")
+
+
+class TestReviewFindingsParserStrictness:
+    """Adversarial-diff review, 2026-08-02: the parser called itself fail-closed while
+    accepting malformed input. All three cases below were CONFIRMED by execution before the
+    fix — each under-reports the changed set, which downgrades a child to `quick`."""
+
+    def test_a_malformed_status_word_is_rejected(self):
+        """Only the first character was checked, so `MALFORMED` read as `M`."""
+        with pytest.raises(dl.DriverStateError):
+            dl.parse_changed_paths(f"MALFORMED{T}hooks/a.py")
+
+    def test_a_one_path_status_with_a_second_path_is_rejected(self):
+        """`M<TAB>a.py<TAB>b.py` silently returned only a.py, losing b.py entirely."""
+        with pytest.raises(dl.DriverStateError):
+            dl.parse_changed_paths(f"M{T}a.py{T}b.py")
+
+    def test_a_rename_row_with_a_fourth_field_is_rejected(self):
+        with pytest.raises(dl.DriverStateError):
+            dl.parse_changed_paths(f"R100{T}a.py{T}b.py{T}c.py")
+
+    def test_a_rename_status_without_a_similarity_score_is_accepted(self):
+        assert dl.parse_changed_paths(f"R{T}a.py{T}b.py") == {"a.py", "b.py"}
+
+    @pytest.mark.parametrize("bad", ["R1000", "RX", "M1", "Rabc"])
+    def test_a_malformed_similarity_score_is_rejected(self, bad):
+        with pytest.raises(dl.DriverStateError):
+            dl.parse_changed_paths(f"{bad}{T}a.py{T}b.py")
