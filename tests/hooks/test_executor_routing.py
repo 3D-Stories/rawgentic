@@ -4671,3 +4671,85 @@ def test_dispatch_cli_exposes_requires_context():
                        capture_output=True, text=True, check=False)
     assert r.returncode == 0, r.stderr
     assert "--requires-context" in r.stdout, r.stdout
+
+
+# --- #826 Step-11 F2: test the CHOKE POINT, not only the defense-in-depth copy ------------------
+# Round 3 of this issue was rejected for exactly this: asserting a property while testing something
+# other than the thing that provides it. The production guard lives in `_do_dispatch` because that
+# is the ONE place the ordinary, resume and supervised routes all pass through; `dispatch_seat`'s
+# copy is defense in depth for direct library callers and is NOT reached by resume or supervised.
+# Deleting the `_do_dispatch` guard must therefore fail tests here, not only in the section above.
+
+def _rc_cli_args(tmp_path, ws, *, seat="review", requires_context=True, context_text=None):
+    a = _dispatch_args(ws, seat=seat)
+    p = tmp_path / "brief.md"
+    p.write_text("# review brief\nJudge it.", encoding="utf-8")
+    a.prompt_file = str(p)
+    a.requires_context = requires_context
+    if context_text is not None:
+        c = tmp_path / "ctx.md"
+        c.write_text(context_text, encoding="utf-8")
+        a.context_file = [str(c)]
+    return a
+
+
+def _ledger_lines(repo, run_id="run1"):
+    f = _run_dir(repo, run_id) / "expected-calls.jsonl"
+    return f.read_text(encoding="utf-8").splitlines() if f.exists() else []
+
+
+def test_chokepoint_refuses_BEFORE_the_ledger_append(tmp_path, capsys):
+    """The discriminating assertion, and the only one that distinguishes the two guards.
+
+    `dispatch_seat`'s defense-in-depth copy also returns `review_context_required`, so asserting
+    the error code alone passes even with the `_do_dispatch` guard deleted — verified by
+    sabotage. What ONLY the choke point gives is refusal before `append_expected`, so the
+    expected-call ledger must gain no row for this dispatch.
+    """
+    ws, repo = _analysis_project(tmp_path)
+    assert er.main(["begin-run", "--run-id", "run1", "--workspace", ws,
+                    "--project", "rawgentic"]) == er.EXIT_OK
+    capsys.readouterr()
+    before = _ledger_lines(repo)
+    a = _rc_cli_args(tmp_path, ws, seat="review")
+    rc = er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_MALFORMED, out
+    assert out["error"]["code"] == "review_context_required", out
+    after = _ledger_lines(repo)
+    assert after == before, (
+        "the refusal happened AFTER the expected-call ledger append — that is the "
+        "dispatch_seat copy, not the _do_dispatch choke point this guard claims to be")
+
+
+def test_chokepoint_refuses_requires_context_on_the_resume_route(tmp_path, capsys):
+    """F1: resume drops --context-file (#832), so the flag would assert a delivery that never
+    happens. Refuse the COMBINATION rather than review nothing under a true-looking claim."""
+    ws, repo = _analysis_project(tmp_path)
+    assert er.main(["begin-run", "--run-id", "run1", "--workspace", ws,
+                    "--project", "rawgentic"]) == er.EXIT_OK
+    capsys.readouterr()
+    a = _rc_cli_args(tmp_path, ws, seat="review", context_text="# real artifact bytes\n")
+    a.resume_session_id = "sess-abc"
+    rc = er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_MALFORMED, out
+    assert out["error"]["code"] == "review_context_unsupported_route", out
+    assert "resume" in out["error"]["message"]
+
+
+def test_chokepoint_leaves_dispatches_that_make_no_claim_alone(tmp_path, capsys):
+    """The refusal is triggered by DECLARING the requirement. A resume dispatch that makes no such
+    claim must be untouched, or this guard would break every existing resume."""
+    ws, repo = _analysis_project(tmp_path)
+    assert er.main(["begin-run", "--run-id", "run1", "--workspace", ws,
+                    "--project", "rawgentic"]) == er.EXIT_OK
+    capsys.readouterr()
+    a = _rc_cli_args(tmp_path, ws, seat="analysis", requires_context=False)
+    a.resume_session_id = "sess-abc"
+    er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out)
+    # it may fail for unrelated downstream reasons in this fixture; what must NOT happen is our
+    # refusal firing on a dispatch that never declared the requirement
+    code = (out.get("error") or {}).get("code")
+    assert code not in ("review_context_required", "review_context_unsupported_route"), out

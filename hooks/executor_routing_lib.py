@@ -3202,6 +3202,30 @@ def _do_dispatch(args) -> int:
                           f"nothing still returns a verdict the gate reads as a pass",
                           retryable=False, correlation_id=args.correlation_id))
 
+    # #826 Step-11 F1: `--requires-context` is a POSITIVE assertion that the artifact reached the
+    # provider. On the resume and supervised routes it would be a false one — `_run_resume` and
+    # `_run_supervised` are handed `prompt` ONLY and drop `context` on the floor (#832, open). So a
+    # caller could pass a real file, satisfy the guard above, and still have the review run on
+    # nothing — with the flag now ASSERTING the opposite. That is strictly worse than the bug this
+    # issue fixes: an unattached review is bad, an unattached review carrying an explicit
+    # attached-and-verified claim is the defect class this epic exists to kill.
+    # Fail CLOSED on the combination until #832 threads context through both routes. Declaring the
+    # requirement is what trips this — a resume/supervised dispatch that makes no such claim is
+    # untouched, so nothing that works today regresses.
+    if args.requires_context:
+        _rc_route = None
+        if getattr(args, "resume_session_id", None):
+            _rc_route = "resume"
+        elif bool({"edit", "bash"} & set((snap.seat(args.seat).get("manifest") or {})
+                                         .get("tool_grants") or ())):
+            _rc_route = "supervised"
+        if _rc_route is not None:
+            return _emit(_err(EXIT_MALFORMED, "review_context_unsupported_route",
+                              f"--requires-context is not honoured on the {_rc_route} route: it "
+                              f"drops --context-file (#832), so the flag would assert a delivery "
+                              f"that does not happen; refusing rather than reviewing nothing",
+                              retryable=False, correlation_id=args.correlation_id))
+
     # #555 AC2 — ledger-aware choke-point (the ONE choke both the sync and supervised branches pass
     # through). Fail closed: a run whose expected-call ledger is run_closed refuses any NEW dispatch
     # BEFORE any spawn or audit append, and every accepted call is appended to the ledger
