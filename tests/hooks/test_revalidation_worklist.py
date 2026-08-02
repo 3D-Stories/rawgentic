@@ -59,11 +59,32 @@ class TestWhichChildrenAppear:
             state, HEAD, extractions={840: ([], "none")}, changed_by_child={840: set()})
         assert _by_number(items)[840]["from_sha"] == OLD
 
-    def test_a_child_stamped_at_the_current_head_does_NOT_appear(self):
+    def test_a_child_stamped_at_the_current_head_does_NOT_appear_WHEN_A_RECEIPT_ATTESTS_IT(self):
+        """**Tightened at Step-11 round 6 (High 3).** This used to skip on the stamp alone. That
+        made the gate's own refusal unclearable: a child stamped at the observed head under a
+        STALE or ABSENT receipt was skipped, the worklist came back empty, and the skill the
+        refusal names had nothing to audit and no way to advance the receipt. A stamp is a claim;
+        the receipt is the evidence behind it, and only evidence earns the skip."""
         state = _state([_iss(840, validated=HEAD)])
+        state["queue_revalidation"] = {
+            "version": 1, "extractor_version": 1, "validated_head": HEAD,
+            "children": {"840": {"body_hash": "9" * 64, "from_sha": BASE, "to_sha": HEAD,
+                                 "extraction": "paths", "depth": "quick",
+                                 "outcome": "still_valid",
+                                 "claims": [{"kind": "cause", "quoted_from_body": "x",
+                                             "checked_against": "y", "evidence": "z",
+                                             "verdict": "holds"}],
+                                 "validated_at": 1}}}
+        assert dl.revalidation_worklist(
+            state, HEAD, extractions={}, changed_by_child={}) == []
+
+    def test_the_same_stamp_with_NO_receipt_is_audited_again(self):
+        """The half that was missing, and the reason the old contract produced a dead end."""
         items = dl.revalidation_worklist(
-            state, HEAD, extractions={}, changed_by_child={})
-        assert items == []
+            _state([_iss(840, validated=HEAD)]), HEAD,
+            extractions={840: ([], "none")}, changed_by_child={840: set()})
+        assert [i["number"] for i in items] == [840]
+        assert items[0]["depth"] == "deep" and items[0]["baseline"] == "unavailable", items[0]
 
     def test_nothing_is_auto_cleared_even_when_no_cited_path_was_touched(self):
         """The owner ruling, asserted directly. Under the refuted design this child would have

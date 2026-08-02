@@ -84,7 +84,11 @@ For each issue the campaign advances to:
    ever observing `origin/main` — bypassing the #840 gate — and on an armed one it raises
    `QueueRevalidationRequired` instead of selecting. `next-child` is the caller that observes the
    head first and then selects. rc 0 → build that child; rc 3 → the campaign is done or every
-   remaining issue is parked/blocked; rc 6 → run `/rawgentic:revalidate-children` and retry;
+   remaining issue is parked/blocked; rc 6 → **read the reason before choosing a remedy** — a
+   stale-provenance refusal is cleared by `/rawgentic:revalidate-children`, but one naming a
+   `pending_disposition` is an OWNER decision that only
+   `record-child-outcome --status deferred|abandoned` clears, and re-running the skill for it
+   changes nothing (the refusal text names the exact command);
    rc 5 → stop, the head could not be observed; rc 2 → read stdout before deciding (see the
    table).
 2. **Run WF2 fresh** — invoke `/rawgentic:implement-feature <number>` as a brand

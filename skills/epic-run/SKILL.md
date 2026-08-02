@@ -148,9 +148,16 @@ put a list up by hand).
   claim. Closing the gap here is #845. On `complete` (every child merged) do Step 5; on
   `blocked` (unmerged children remain but none ready) leave the epic OPEN with an honest summary
   and end — never conflate `blocked` with `complete`. On **`revalidation_required`** (#840 — the
-  remaining queue has not been revalidated against the current `origin/main`) run
-  `/rawgentic:revalidate-children`, post any corrections, then retry the disposition; this is
-  neither `complete` nor `blocked` and must never be reported as either.
+  remaining queue has not been revalidated against the current `origin/main`) **READ THE REASON
+  BEFORE ACTING** (round-6 finding 4 — this used to say "run the skill and retry"
+  unconditionally, which is a no-op for one of the two reasons):
+  - **stale provenance** (a child never revalidated, or stamped against an older head) → run
+    `/rawgentic:revalidate-children`, post any corrections, then retry the disposition;
+  - **a `pending_disposition`** (revalidation concluded a child is obsolete) → this is an OWNER
+    decision and the skill CANNOT clear it. The refusal names the exact command:
+    `python3 hooks/launcher_lib.py record-child-outcome --issue <n> --status deferred|abandoned`.
+    Re-running the revalidation skill rediscovers the same marker for ever.
+  Either way this is neither `complete` nor `blocked` and must never be reported as either.
 - **Selecting the next child in the IN-SESSION loop goes through
   `python3 hooks/launcher_lib.py next-child --driver-state <f> --project-root <r>`** (#840),
   never by reading the state file and picking. That command observes `origin/main` itself and

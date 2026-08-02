@@ -555,6 +555,21 @@ def parse_changed_paths(diff_text: str) -> set[str]:
     return changed
 
 
+def _receipt_covers_child(state: dict, number: int, observed_head: str) -> bool:
+    """Does a CURRENT campaign receipt carry evidence for this child? PURE.
+
+    #840 Step-11 round 6, High 3. A `validated_against` stamp is a claim; the receipt is the
+    evidence behind it. Treating the stamp alone as "already done" let the head clause refuse a
+    campaign while `revalidation_worklist` returned nothing to do — the refusal named a skill that
+    had no work and so could never advance the receipt the gate demands.
+    """
+    reval = state.get("queue_revalidation")
+    if not isinstance(reval, dict) or reval.get("validated_head") != observed_head:
+        return False
+    children = reval.get("children")
+    return isinstance(children, dict) and str(number) in children
+
+
 def _baseline_usable(sha, unresolvable: frozenset) -> bool:
     """Can ``sha`` actually serve as the left endpoint of a diff? PURE.
 
@@ -629,8 +644,22 @@ def revalidation_worklist(state: dict, observed_head: str, extractions: dict,
         if effective[number] != "queued":
             continue
         stamped = issue.get("validated_against")
+        # **A stamp is evidence only when a CURRENT receipt vouches for it (round-6 High 3).**
+        # This used to skip on the stamp alone, which made the head clause's own refusal
+        # unclearable: a child stamped at the observed head under a STALE or ABSENT receipt was
+        # skipped, the worklist came back empty, and the skill the refusal names had nothing to
+        # audit and no way to advance the receipt. That is the fifth unrecoverable jam this issue
+        # has produced, and the first found by asking what the REMEDY does rather than what the
+        # refusal does.
+        covered = _receipt_covers_child(state, number, observed_head)
+        if stamped == observed_head and covered:
+            continue                           # validated at this head, and attested
         if stamped == observed_head:
-            continue                           # already validated against this exact head
+            # Audited again, and its stamp is NOT a baseline: there is no range to diff and
+            # nothing attesting it, so it must fall through to unavailable/deep below rather than
+            # produce an empty range that would buy `quick`.
+            stamped = None
+            base = None
         # A malformed stamp used to RAISE here (round-3 High 1). `observed_head` is validated
         # above, so the equality check needs no validation of its own, and an unusable stamp is
         # now a baseline problem — handled with the campaign base below — not a hard error.
@@ -971,8 +1000,40 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
     # I/O, and this module is pure. The revalidate-children skill annotates depth via
     # `revalidation_worklist`.
     outstanding: list[dict] = []
+    # The OWNER GATE, evaluated over EVERY child rather than the eligible ones (round-6 High 2,
+    # and it fixes round-6 Medium 4's ordering at the same time).
+    #
+    # Three things were wrong with reading it inside the eligible loop. It ran only for children
+    # that could themselves be selected — but a `pr_open` child SATISFIES A DEPENDENCY under
+    # `deps_satisfied_by: "pr_open"`, so an obsolete child could unblock somebody ELSE's work
+    # while never being selectable itself. It ran only for STAMPED children, and the skill's own
+    # contract says an obsolete child stays UNSTAMPED, so the legitimate shape was precisely the
+    # one skipped — the earlier guard caught only the internally contradictory stamped variant.
+    # And the `stamped is None` branch `continue`d first, so the refusal named "never revalidated"
+    # and sent the operator to a skill that cannot clear a pending marker.
+    #
+    # Read from DURABLE status: an `issue_state_probe` overlay must not be able to launder an
+    # owner decision that has not been taken. `_DISPOSED_STATUSES` is what settles it.
+    pending_flagged: set[int] = set()
+    for issue in state.get("issues", []):
+        if issue.get("status") in _DISPOSED_STATUSES:
+            continue
+        record = children.get(str(issue["number"]))
+        pending = record.get("pending_disposition") if isinstance(record, dict) else None
+        if pending is not None:
+            pending_flagged.add(issue["number"])
+            outstanding.append({
+                "number": issue["number"],
+                "validated_against": issue.get("validated_against"),
+                "reason": f"marked {pending} — needs an OWNER decision between 'deferred' and "
+                          "'abandoned'; a machine may not close a child, and re-running "
+                          "revalidate-children cannot clear this. Run: python3 "
+                          "hooks/launcher_lib.py record-child-outcome --issue "
+                          f"{issue['number']} --status deferred|abandoned"})
     for issue in eligible:
         number = issue["number"]
+        if number in pending_flagged:
+            continue                       # already reported by the owner-gate pass above
         stamped = issue.get("validated_against")
         if stamped is None:
             outstanding.append({"number": number, "validated_against": None,
@@ -983,13 +1044,6 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
             outstanding.append({"number": number, "validated_against": stamped,
                                 "reason": "revalidated against a stale head"})
             continue
-        record = children.get(str(number))
-        pending = record.get("pending_disposition") if isinstance(record, dict) else None
-        if pending is not None:
-            outstanding.append({"number": number, "validated_against": stamped,
-                                "reason": f"marked {pending} — needs an owner decision between "
-                                          "'deferred' and 'abandoned'; a machine may not close a "
-                                          "child"})
     reasons.extend(f"#{item['number']}: {item['reason']}" for item in outstanding)
     if reasons:
         error = QueueRevalidationRequired(
@@ -1596,7 +1650,19 @@ def handoff_reclaimable(state: dict, *, now_ts: int, lease_s: int) -> bool:
 
 
 def handoff_claim_is_live(state: dict, *, now_ts: int, lease_s: int) -> bool:
-    """Is there a live handoff claim at all — ANY generation? PURE.
+    """Is the CURRENT generation's handoff claim live? PURE.
+
+    **The name and this line were corrected at round 6.** Round 4 introduced this as "any
+    generation"; round 5 scoped it to the current generation (see below) and left the docstring
+    claiming otherwise — a function whose contract line contradicts its body is exactly the defect
+    class three rounds of this review have been spent removing.
+
+    **Known limit, tracked as #846 and NOT closed here.** Because completion is inferred from
+    `claim.generation != state.generation` rather than recorded, a claim that is genuinely still
+    running is invisible once a later generation is opened — and nothing stops `open_handoff`
+    from opening one, since it has never consulted `handoff_claim` at all (true before #840 PR 2;
+    verified by source). Closing that needs an explicit claim lifecycle, which is a change to
+    #665's design rather than to this gate.
 
     #840 Step-11 round 4, High 3. Round 3's precedence fix asked only about the CALLER's own
     generation, which left the dangerous interleaving open: a successor holding generation N+1

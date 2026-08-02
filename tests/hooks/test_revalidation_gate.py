@@ -1182,6 +1182,67 @@ class TestRound2Finding1TheFirstArmIsAlwaysPossible:
         assert dl.next_ready_issue(armed, observed_head=HEAD) == 1
 
 
+class TestRound6Finding3AStaleReceiptMustLeaveTheSkillSomethingToDo:
+    """**High — the fifth unrecoverable jam in this PR, and the one nobody had looked for.**
+    The head clause refuses whenever the receipt does not attest the observed head, and tells the
+    operator to run `/rawgentic:revalidate-children`. But `revalidation_worklist` skipped any
+    child whose stamp already equalled the observed head — regardless of whether the RECEIPT
+    covered it — so for a child stamped at the new head under a stale or absent receipt the
+    worklist came back empty. The skill then had nothing to audit and could not advance the
+    receipt the gate demands. Refused, with the documented remedy a no-op.
+
+    A stamp is only evidence if a current receipt vouches for it. Where it does not, the child is
+    audited again, and its stamp is NOT trusted as a baseline either: there is no range to diff
+    and nothing attesting it, so the range collapses to `head..head` with depth forced `deep`.
+    """
+
+    def _stale(self, **over):
+        state = _state(_iss(1, validated_against=HEAD), base_default_branch_sha=SENTINEL,
+                       reval=_reval(OLD, {"1": _receipt_child(to_sha=OLD)}))
+        state.update(over)
+        return state
+
+    def test_the_refusal_now_comes_with_work_to_do(self):
+        state = self._stale()
+        with pytest.raises(dl.QueueRevalidationRequired):
+            dl.next_ready_issue(state, observed_head=HEAD)
+        work = dl.revalidation_worklist(state, HEAD, extractions={1: ([], "none")},
+                                        changed_by_child={1: set()})
+        assert [w["number"] for w in work] == [1], \
+            "a refusal whose remedy produces an empty worklist can never be cleared"
+
+    def test_the_untrusted_stamp_is_not_used_as_a_baseline(self):
+        work = dl.revalidation_worklist(self._stale(), HEAD, extractions={1: ([], "none")},
+                                        changed_by_child={1: set()})
+        assert work[0]["from_sha"] == HEAD and work[0]["to_sha"] == HEAD, work[0]
+        assert work[0]["depth"] == "deep", "an unattested stamp must not buy `quick`"
+        assert work[0]["baseline"] == "unavailable", work[0]
+
+    def test_the_same_holds_when_the_receipt_is_absent_entirely(self):
+        state = _state(_iss(1, validated_against=HEAD), base_default_branch_sha=SENTINEL)
+        with pytest.raises(dl.QueueRevalidationRequired):
+            dl.next_ready_issue(state, observed_head=HEAD)
+        work = dl.revalidation_worklist(state, HEAD, extractions={1: ([], "none")},
+                                        changed_by_child={1: set()})
+        assert [w["number"] for w in work] == [1] and work[0]["depth"] == "deep", work
+
+    def test_a_CURRENT_receipt_still_skips_the_child(self):
+        """The negative twin, and it is the common case — without it the fix would re-audit every
+        already-validated child on every run, which is the cost the stamp exists to avoid."""
+        state = _state(_iss(1, validated_against=HEAD),
+                       reval=_reval(HEAD, {"1": _receipt_child()}))
+        assert dl.revalidation_worklist(state, HEAD, extractions={},
+                                        changed_by_child={}) == []
+
+    def test_a_current_receipt_that_does_not_COVER_the_child_still_audits_it(self):
+        """A receipt at the right head but carrying no entry for this child vouches for nothing."""
+        state = _state(_iss(1, validated_against=HEAD), _iss(2, validated_against=HEAD),
+                       reval=_reval(HEAD, {"2": _receipt_child()}))
+        work = dl.revalidation_worklist(state, HEAD, extractions={1: ([], "none")},
+                                        changed_by_child={1: set()})
+        assert [w["number"] for w in work] == [1], work
+
+
 class TestRound4Finding1ThePolicyKnobReachesSelection:
     """**High.** `fresh_session_handoff` called `next_ready_issue` without `deps_satisfied_by`,
     so it took the `"merged"` default and the persisted `policy.deps_satisfied_by` was silently
@@ -1367,6 +1428,71 @@ class TestRound3Finding5AStampedObsoleteChildIsNotValidatorValid:
                                            "2": _receipt_child()}))
         with pytest.raises(dl.QueueRevalidationRequired):
             dl.next_ready_issue(state, "pr_open", observed_head=HEAD)
+
+    def test_an_UNSTAMPED_obsolete_child_also_cannot_unblock_a_dependent(self):
+        """**Round-6 High 2 — my round-5 fix caught only the shape that cannot legitimately
+        occur.** I keyed the guard on `stamped == head`, i.e. the internally contradictory
+        stamped-plus-pending record. But the skill's own contract says an obsolete child stays
+        UNSTAMPED, so the legitimate shape is exactly the one the guard skipped: unstamped,
+        `pending_disposition`, status `pr_open`. It sailed through validation and satisfied its
+        dependent's dependency, and the test I wrote to prove the effect-on-others behaviour
+        pinned the impossible fixture instead of the real one.
+
+        The pending marker now refuses for any durably-undisposed child whether or not it is
+        stamped, and whether or not it is itself eligible — because eligibility governs what may
+        be SELECTED, and this is about what a child lets somebody else do."""
+        state = _state(_iss(1, "pr_open"),                        # no stamp: the LEGITIMATE shape
+                       _iss(2, depends_on=[1], validated_against=HEAD),
+                       policy={"deps_satisfied_by": "pr_open"},
+                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete"),
+                                           "2": _receipt_child()}))
+        with pytest.raises(dl.QueueRevalidationRequired):
+            dl.next_ready_issue(state, "pr_open", observed_head=HEAD)
+        # The owner's disposition opens the GATE — the refusal is gone. #2 is then correctly
+        # PARKED rather than selected, because an `abandoned` prerequisite does not satisfy a
+        # dependency (docs/multi-issue-driver.md, advance rule). My first draft asserted #2 was
+        # selected; the suite caught it. Both halves matter: an obsolete child must not unblock
+        # its dependent, and disposing of it must not silently unblock it either.
+        disposed = dl.record_child_outcome(state, 1, "abandoned")
+        assert dl.next_ready_issue(disposed, "pr_open", observed_head=HEAD) is None
+
+    def test_a_probe_overlay_cannot_launder_an_undisposed_obsolete_child(self):
+        """Round-6 High 2, second half. Effective status is what selection filters on, so an
+        overlay that reports a `queued` obsolete child as merged used to remove it from the
+        eligible set and with it the pending check. The marker is read from DURABLE status, so
+        the overlay cannot launder an owner decision that has not been made."""
+        state = _state(_iss(1), _iss(2, depends_on=[1], validated_against=HEAD),
+                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete"),
+                                           "2": _receipt_child()}))
+        with pytest.raises(dl.QueueRevalidationRequired):
+            dl.next_ready_issue(state, observed_head=HEAD,
+                                issue_state_probe=lambda n: "confirmed_merged" if n == 1 else "unknown")
+
+    def test_MERGED_may_unblock_a_dependent_but_pr_open_may_not(self):
+        """Why `merged` is in the exemption and `pr_open` is not — the distinction the round-5
+        fix turns on, and the one I flagged as most likely to be wrong before checking it.
+
+        Both statuses satisfy a dependency under the `pr_open` policy, so the mechanical shape is
+        identical. The difference is what the status MEANS. A merged child has landed: its change
+        is in `main`, so its dependent's prerequisite is genuinely met and the stale obsolete
+        marker is bookkeeping about a decision events overtook. An open PR the owner was asked to
+        write off may never land at all, so treating it as satisfied hands out work built on
+        something that might be abandoned.
+
+        Exempting `merged` is therefore not the same hole as exempting `pr_open`, and this test
+        exists so nobody 'tidies' them into one rule in either direction."""
+        def _state_with(status):
+            return _state(_iss(1, status, validated_against=HEAD),
+                          _iss(2, depends_on=[1], validated_against=HEAD),
+                          policy={"deps_satisfied_by": "pr_open"},
+                          reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete"),
+                                              "2": _receipt_child()}))
+        merged = _state_with("merged")
+        assert dl.validate_queue_revalidation(merged) is True
+        assert dl.next_ready_issue(merged, "pr_open", observed_head=HEAD) == 2, \
+            "a child that actually landed really does satisfy its dependent"
+        with pytest.raises(dl.QueueRevalidationRequired):
+            dl.next_ready_issue(_state_with("pr_open"), "pr_open", observed_head=HEAD)
 
     @pytest.mark.parametrize("status", ["queued", "pr_open", "in_progress"])
     def test_every_refusing_status_has_a_way_out(self, status):
