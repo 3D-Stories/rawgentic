@@ -1129,6 +1129,11 @@ QUEUE_REVALIDATED_STEP = "queue_revalidated"
 # means "run WITHOUT corroboration". A plain `None` default cannot tell those apart, and the
 # difference decides whether a stale-file sibling jams the rung. Defined above its use because a
 # default argument is evaluated at definition time (the same trap `runner` documents below).
+# Canonical decimal ASCII, matching the receipt validator. `"01"`, `"001"` and the Unicode
+# digit `"١"` all pass `str.isdigit()` and all `int()` to the same number.
+_CANONICAL_ISSUE_KEY_RE = re.compile(r"\A(?:0|[1-9][0-9]*)\Z")
+
+
 _DERIVE_PROBE = object()
 
 
@@ -3460,11 +3465,24 @@ def _cmd_rebuild_receipt(args) -> int:
             print(f"refusing: {args.audited} must hold a JSON object of "
                   "{issue number: record}", file=sys.stderr)
             return 2
-        try:
-            audited = {int(key): value for key, value in raw.items()}
-        except (TypeError, ValueError) as exc:
-            print(f"refusing: {args.audited} has a non-numeric issue key: {exc}", file=sys.stderr)
-            return 2
+        # **Canonical keys, and collisions REFUSED (round-11).** `{int(key): value}` mapped
+        # `"1"` and `"01"` to the same integer, so one record silently won, the command returned
+        # rc 0, and the gate then selected that child on evidence the operator never intended to
+        # supply. Losing audit evidence while REPORTING SUCCESS is the worst failure mode this
+        # command has, and it is the same non-canonical-key defect the receipt validator already
+        # refuses — this path simply had its own conversion.
+        audited = {}
+        for key, value in raw.items():
+            if not (isinstance(key, str) and _CANONICAL_ISSUE_KEY_RE.match(key)):
+                print(f"refusing: {args.audited} key {key!r} is not a canonical issue number "
+                      "(ASCII decimal, no leading zeros)", file=sys.stderr)
+                return 2
+            number = int(key)
+            if number in audited:
+                print(f"refusing: {args.audited} names issue #{number} more than once; two "
+                      "records cannot both be the evidence for one child", file=sys.stderr)
+                return 2
+            audited[number] = value
 
     def _mutate(state):
         return driver.rebuild_receipt(state, head, audited)

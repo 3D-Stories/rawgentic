@@ -283,12 +283,17 @@ document getting wrong, having previously said "`/rawgentic:revalidate-children`
 else":
 
 - **Stale provenance** (the receipt attests an older head, or an eligible child is unstamped) →
-  `/rawgentic:revalidate-children`, and nothing else. Re-running it is the whole remedy.
-- **A pending disposition** (revalidation concluded a child is obsolete) → **only the OWNER
-  clears it**, with
-  `python3 hooks/launcher_lib.py record-child-outcome --issue <n> --status deferred|abandoned`.
-  Re-running the revalidation skill rediscovers the same marker and changes nothing, because
-  choosing between `deferred` and `abandoned` is deliberately not a machine's decision.
+  `/rawgentic:revalidate-children`, and nothing else. Re-running it is the whole remedy, and while
+  #848 is open it is the ONLY reason this gate refuses.
+- **A pending disposition** used to be a second, owner-only reason. That clause was CUT (#848) —
+  a marker now gates nothing and this gate never refuses because of one. When #848 lands, this
+  bullet returns: only the owner clears it, and re-running the revalidation skill rediscovers the
+  same marker for ever, because choosing between `deferred` and `abandoned` is deliberately not a
+  machine's decision.
+
+Neither bullet covers a CALLER or ENVIRONMENT failure — an absent `campaign_context`, an unreadable
+state file, an unobservable head. Those are refusals of the rung's producer rather than of the
+queue, and no amount of revalidation repairs them; the message says which one it is.
 
 **Selection in the IN-SESSION loop goes through `launcher_lib next-child`.** The driver's default
 mode is `single-session`, which never crosses a process boundary and so never calls `handoff`. Before

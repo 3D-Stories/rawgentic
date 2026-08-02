@@ -1,6 +1,6 @@
 ---
 name: revalidate-children
-description: Re-check an epic's remaining child issues against the current main after a merge, and write the receipt that lets the driver hand out the next child. Use when the queue-revalidation gate refuses ("refusing to hand out the next child", `revalidation_required`, rc 6 from `launcher_lib handoff`), after every merge inside an epic auto-run, when a handoff is refused at the `queue_revalidated` rung, or when the user says "revalidate the children", "re-check the remaining issues", "are the other issues still accurate", "did that merge rot the queue". Report-and-stamp only — it posts correction COMMENTS and never edits an issue body, and it never closes a child. Do NOT use to implement a child, to review code, or to re-run an audit whose receipt already attests the current head (it is a no-op then).
+description: Re-check an epic's remaining child issues against the current main after a merge, and write the receipt that lets the driver hand out the next child. Use when the queue-revalidation gate refuses ("refusing to hand out the next child", `revalidation_required`, rc 6 from `launcher_lib handoff`), after every merge inside an epic auto-run, when a handoff is refused at the `queue_revalidated` rung, or when the user says "revalidate the children", "re-check the remaining issues", "are the other issues still accurate", "did that merge rot the queue". Report-and-stamp only — it posts correction COMMENTS and never edits an issue body, and it never closes a child. Do NOT use to implement a child, to review code, or to re-run an audit when BOTH gate clauses are already satisfied — the receipt attests the current head AND every eligible child is stamped at it (it is a no-op only then; a current receipt alone is not enough, and an unstamped eligible child is exactly what this skill fixes).
 argument-hint: the campaign's driver-state path, or the epic number
 ---
 
@@ -59,9 +59,14 @@ equal to itself and opens the gate on a moved main.
 **3. Build the worklist.** The candidate set is every eligible child (effective status `queued`)
 that is **not already attested at the observed head** — and "attested" means BOTH a stamp and a
 current receipt covering it, not a stamp alone. Concretely, include a child when its
-`validated_against` is absent, differs from the observed head, **or** equals it while
-`queue_revalidation.validated_head != observed_head` or the receipt carries no entry for that
-child.
+`validated_against` is absent, differs from the observed head, **or** equals it while the
+receipt does not COVER that child. "Covers" means all three of: `queue_revalidation.validated_head
+== observed_head`, an entry exists for the child, AND that entry both passes
+`validate_revalidation_child` and carries `to_sha == observed_head`. A structurally invalid entry
+is not evidence — omitting the validity half is what made a `body_hash: "bad"` record look like
+coverage, so the child was excluded here and `revalidation_worklist` then raised
+`no extraction supplied for child #N` (round-11 finding). `driver_lib._receipt_covers_child` is
+the same predicate the code uses; call it rather than reimplementing this list.
 
 > **Round-7 finding 2 — this step used to say "absent or != the observed head", and that made the
 > gate unclearable.** A child stamped at the head under a stale or absent receipt was excluded
@@ -155,10 +160,10 @@ is not evidence.
 **Corrections are comments. Never edit an issue body.** The body stays as filed; the comment is the
 authority. State that in the comment.
 
-**`issue_obsolete` is not an outcome and never stamps a child.** Closing a child is an owner
-decision, so record the marker and let the gate keep refusing until an owner moves the child to
-`deferred` or `abandoned` via `launcher_lib record-child-outcome`. The machine's job here is to
-refuse, not to choose.
+**`issue_obsolete` is not an outcome.** Closing a child is an owner decision, so record the
+marker and REPORT it — never choose for them. Until #848 lands the marker is INFORMATIONAL: it
+gates nothing, and the child is stamped and selectable like any other. Say that plainly in your
+report, or an owner reads "obsolete" and assumes the queue is holding when it is not.
 
 **7. Write the receipt with the `rebuild-receipt` command.** Do NOT assemble it by hand and do
 NOT call `driver_lib.rebuild_receipt` yourself — it is PURE, so calling it changes no file, and

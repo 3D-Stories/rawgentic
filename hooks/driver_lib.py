@@ -720,7 +720,24 @@ def revalidation_worklist(state: dict, observed_head: str, extractions: dict,
         # base was perfectly good. It fails toward more scrutiny, so it was never unsafe, but it
         # is provenance the receipt then records wrongly, and it is the sort of quiet
         # cross-contamination that is very hard to see later.
-        force_unavailable = stamped == observed_head and not covered
+        # **A stamp is a baseline only when something attests THAT stamp (round-11 High 2).**
+        # This used to check attestation only for a stamp equal to the observed head, so a child
+        # stamped at an OLDER head under a CURRENT receipt carrying no entry for it kept
+        # `baseline="stamp"` and bought `quick` — and `quick` takes citation claims as-is, so the
+        # missing evidence suppressed exactly the checks `deep` would have run. Failing toward
+        # LESS scrutiny is the one direction forbidden here.
+        #
+        # Scoped to campaigns that HAVE a receipt: a pre-#840 campaign has none, so nothing could
+        # attest any stamp, and forcing every child deep there would make the first arm — the
+        # migration path rounds 2 and 3 were spent making possible — expensive for every legacy
+        # campaign at once. `test_a_usable_base_and_stamp_are_still_used` is the twin that caught
+        # this fix being too broad on the first attempt.
+        if stamped is None:
+            force_unavailable = False
+        elif state.get("queue_revalidation") is not None:
+            force_unavailable = not _receipt_covers_child(state, number, stamped)
+        else:
+            force_unavailable = stamped == observed_head
         # A malformed stamp used to RAISE here (round-3 High 1). `observed_head` is validated
         # above, so the equality check needs no validation of its own, and an unusable stamp is
         # now a baseline problem — handled with the campaign base below — not a hard error.
@@ -1631,8 +1648,16 @@ def corrections_clause(state: dict, issue: int) -> str:
         parts.append(f" The correction comment is posted at {url} — the body itself is "
                      "deliberately NOT edited, so the comment is the authority.")
     if pending:
-        parts.append(f" This child is additionally marked {pending!r} and needs an owner decision "
-                     "between 'deferred' and 'abandoned' before any work starts.")
+        # **INFORMATIONAL, not a block (round-11, found by two lenses independently).** The
+        # `pending_disposition` owner gate was cut to #848, so a child carrying a marker is now
+        # SELECTED — and this sentence still told the successor an owner decision was required
+        # "before any work starts". An unattended successor reads the prompt, not the code, so it
+        # stalled on a gate that no longer exists. The marker is still surfaced, because the owner
+        # does need to see it; it just no longer claims to stop anything.
+        parts.append(f" NOTE, not a blocker: an earlier revalidation marked this child {pending!r}."
+                     " That marker is INFORMATIONAL until #848 lands — it does not gate this work."
+                     " Proceed, and flag it to the owner in your summary so they can decide"
+                     " whether the child is still worth doing.")
     return "".join(parts)
 
 

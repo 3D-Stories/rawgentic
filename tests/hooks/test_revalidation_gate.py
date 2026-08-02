@@ -772,7 +772,12 @@ class TestTheCorrectionConsumer:
     def test_an_obsolete_marked_child_says_so_in_the_prompt(self):
         clause = dl.corrections_clause(
             _state(_iss(1), reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")})), 1)
-        assert "issue_obsolete" in clause and "owner decision" in clause
+        # INVERTED with the owner-gate cut (#848): the marker is surfaced but explicitly
+        # non-blocking. It used to say an owner decision was needed "before any work
+        # starts", which stalled an unattended successor on a gate that no longer exists.
+        assert "issue_obsolete" in clause, clause
+        assert "not a blocker" in clause, clause
+        assert "before any work starts" not in clause, clause
 
 
 # --------------------------------------------------------------------------- #
@@ -1828,3 +1833,93 @@ class TestRound10TheRemainingTwoFindingsInTheShippedHalf:
         state["issues"] = [{"number": "not-an-int", "status": "queued"}]
         with pytest.raises(dl.DriverStateError):
             dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE, observed_head=HEAD)
+
+
+class TestRound11AnUnattestedStampIsNotABaseline:
+    """**Round 11, High 2.** A `validated_against` stamp was trusted as the left endpoint of the
+    diff without checking that anything attested THAT stamp. A child stamped at an old head under
+    a CURRENT receipt carrying no entry for it therefore got `baseline="stamp"` and `depth="quick"`
+    — and `quick` explicitly takes citation claims as-is, so dropped or corrupt evidence suppressed
+    exactly the checks `deep` would have run. That is failing toward LESS scrutiny, the one
+    direction this design forbids.
+
+    `rebuild_receipt(state, HEAD, {})` produces this state on its own: it drops a record attesting
+    an older head and leaves the matching stamp behind."""
+
+    def _unattested_stale_stamp(self):
+        return _state(_iss(1, validated_against=OLD),
+                      reval=_reval(HEAD, {}), base_default_branch_sha=None)
+
+    def test_an_unattested_stale_stamp_forces_deep(self):
+        work = dl.revalidation_worklist(self._unattested_stale_stamp(), HEAD,
+                                        extractions={1: ([], "none")}, changed_by_child={1: set()})
+        assert len(work) == 1
+        assert work[0]["baseline"] == "unavailable", work[0]
+        assert work[0]["depth"] == "deep", work[0]
+        assert work[0]["from_sha"] == HEAD, work[0]
+
+    def test_an_ATTESTED_stamp_is_still_a_usable_baseline(self):
+        """The negative twin, and the reason this is not just 'always go deep': the ordinary
+        incremental case — the receipt attests the same head the child is stamped at — must keep
+        its narrow range, or `quick` never applies and the affordability lever is gone."""
+        state = _state(_iss(1, validated_against=OLD),
+                       reval=_reval(OLD, {"1": _receipt_child(to_sha=OLD)}))
+        work = dl.revalidation_worklist(state, HEAD, extractions={1: ([], "none")},
+                                        changed_by_child={1: set()})
+        assert work[0]["baseline"] == "stamp", work[0]
+        assert work[0]["from_sha"] == OLD, work[0]
+
+    def test_a_malformed_stamp_also_fails_toward_more_scrutiny(self):
+        state = _state(_iss(1, validated_against="abc"), reval=_reval(HEAD, {}))
+        work = dl.revalidation_worklist(state, HEAD, extractions={1: ([], "none")},
+                                        changed_by_child={1: set()})
+        assert work[0]["depth"] == "deep", work[0]
+
+
+class TestRound11TheRebuildCLIRefusesCollidingKeys:
+    """**Round 11 (two lenses).** `_cmd_rebuild_receipt` converted `audited` keys with
+    `{int(key): value}`, so `"1"` and `"01"` collapsed to the same integer: one record silently
+    won, the command returned rc 0, and the gate then selected that child on evidence the operator
+    never meant to supply. Losing audit evidence while REPORTING SUCCESS is the worst failure mode
+    this command has, and it is the same non-canonical-key defect the receipt validator already
+    refuses — this path just had its own conversion.
+
+    Driven through the real CLI, because the jam matrix exercises the pure helper and would not
+    have caught it (round-11 Medium, and now stated honestly in that file's docstring)."""
+
+    def _campaign(self, tmp_path, audited):
+        work, head = _repo_with_origin(tmp_path)
+        path = _write_state(tmp_path, _state(_iss(1)))
+        audited_path = tmp_path / "audited.json"
+        audited_path.write_text(json.dumps(audited(head)), encoding="utf-8")
+        return work, head, path, audited_path
+
+    def _record_at(self, head):
+        rec = _receipt_child(to_sha=head)
+        rec["from_sha"] = OLD
+        return rec
+
+    def test_two_spellings_of_one_issue_are_REFUSED(self, tmp_path):
+        work, head, path, audited_path = self._campaign(
+            tmp_path, lambda h: {"1": self._record_at(h), "01": self._record_at(h)})
+        rc = ll.main(["rebuild-receipt", "--driver-state", str(path),
+                      "--project-root", str(work), "--audited", str(audited_path)])
+        assert rc == 2, rc
+
+    def test_a_non_canonical_key_alone_is_REFUSED(self, tmp_path):
+        work, head, path, audited_path = self._campaign(
+            tmp_path, lambda h: {"01": self._record_at(h)})
+        rc = ll.main(["rebuild-receipt", "--driver-state", str(path),
+                      "--project-root", str(work), "--audited", str(audited_path)])
+        assert rc == 2, rc
+
+    def test_the_canonical_spelling_still_works(self, tmp_path):
+        """The negative twin — refusing collisions must not refuse the ordinary call."""
+        work, head, path, audited_path = self._campaign(
+            tmp_path, lambda h: {"1": self._record_at(h)})
+        rc = ll.main(["rebuild-receipt", "--driver-state", str(path),
+                      "--project-root", str(work), "--audited", str(audited_path)])
+        assert rc == 0, rc
+        persisted = json.loads(path.read_text(encoding="utf-8"))
+        assert persisted["queue_revalidation"]["validated_head"] == head
+        assert list(persisted["queue_revalidation"]["children"]) == ["1"]

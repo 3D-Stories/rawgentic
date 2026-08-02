@@ -18,10 +18,18 @@ remedy the message never mentioned is a jam delivered one step at a time.
 
 Nothing here asserts a message's wording. It asserts that the message WORKS.
 
-The remedies are executed through the same production entry points an operator would use:
-``record_child_outcome`` is the CLI's own function, and ``_simulate_revalidate_children`` builds
-the worklist and then hands it to ``driver_lib.rebuild_receipt`` — the production helper the skill
-itself calls. That indirection is deliberate: a harness that re-implements the procedure in its
+The remedies are executed through the production LIBRARY functions — ``record_child_outcome``
+and ``driver_lib.rebuild_receipt``.
+
+**They are NOT driven through the CLI, and that limit is stated here because it was overclaimed
+once (round-11 Medium).** This file used to say it exercised "the same production entry points an
+operator would use". It does not: `launcher_lib rebuild-receipt` owns argument parsing, the
+canonical-key check, locking, the fresh head observation, the atomic write and the disk re-read,
+and NONE of that is covered here — a reviewer no-op'd `_cmd_rebuild_receipt` and all 3840 states
+still passed. That is exactly how the colliding-`audited`-keys defect lived outside this sweep.
+CLI behaviour is covered by mutation-sensitive tests in `test_revalidation_gate.py`
+(`TestRound11TheRebuildCLIRefusesCollidingKeys`); broadening the sweep itself to the CLI boundary
+is tracked separately. That indirection is deliberate: a harness that re-implements the procedure in its
 own words tests the harness, and the receipt's drop/clear rules are exactly where this issue kept
 going wrong.
 
