@@ -225,12 +225,49 @@ stays *unstamped* and carries `pending_disposition: "issue_obsolete"` until an o
 **Corrections are COMMENTS, never body edits.** A child's body is its author's statement of the
 problem; the run annotates it, it does not rewrite it underneath them.
 
-> **Status: the machinery above is INERT.** It computes and validates; nothing refuses anything
-> yet. `QueueRevalidationRequired` is defined but never raised, and `next_ready_issue` is
-> unchanged. The enforcement — the head-and-provenance gate, the `queue_revalidated` rung on the
-> pane-handoff ladder, and `handoff_pending.queue` — lands in the follow-up PR, deliberately as
-> one atomic change. Shipping the refusal before the mechanism that clears it would jam a live
-> campaign between two PRs.
+### The gate is LIVE (#840 PR 2)
+
+Three layers, in increasing order of authority.
+
+**1. Selection.** `next_ready_issue(state, ..., observed_head=<sha>)` raises
+`QueueRevalidationRequired` when the receipt's `validated_head` differs from the observed head, when
+any eligible child's `validated_against` differs from it, or when any eligible child carries a
+`pending_disposition`. It **raises** rather than returning `None`, because `None` already means
+"nothing ready" and is reported as *the epic finished* — announcing completion over a stale queue is
+strictly worse than refusing. `fresh_session_handoff` surfaces it as an explicit
+`revalidation_required` disposition carrying the outstanding worklist; `launcher_lib handoff` exits
+**6** for it, distinct from a clean `complete`.
+
+**2. `observed_head` must be FRESHLY OBSERVED.** `launcher_lib.observe_head(repo_root)` runs
+`git -C <root> fetch origin` then `git -C <root> rev-parse origin/main`, checks BOTH return codes,
+and validates the output is a full 40-character SHA. It is the only permitted source. A cached SHA —
+or `validated_head` itself — would satisfy both refusal clauses after `main` had moved, and would
+silently defeat the abrupt-death recovery, since a crashed predecessor's stale head compares equal to
+itself. `launcher_lib handoff` exits **5** when the head cannot be observed.
+
+**3. The handoff ladder.** `queue_revalidated` is the FIRST rung of the mid-child ladder — the queue
+must be revalidated before a successor is spawned to inherit it. Its result is produced by the
+launcher reading the durable receipt (`produce_queue_revalidated`), never supplied by a caller: an
+agent asserting its own homework is the vacuous pass this whole mechanism exists to prevent. Because
+`evaluate_verifications` treats an unreported step as FAILED, a missing or stale receipt means the
+handoff produces **no successor** and the predecessor stays alive and guarded.
+
+`handoff_pending.queue` carries the ordered child list plus `validated_head`, and `handoff_claim`
+validates the **complete ordered payload** against durable state at claim time — order included,
+because order decides which child runs next.
+
+**Recovery from abrupt death.** A session killed abruptly runs neither `perform_handoff` nor
+`retire_predecessor`, so the rung never fires for that case. It is covered at layer 1 instead: the
+successor's FIRST `next_ready_issue` refuses, because a crashed predecessor left `validated_head`
+behind the head it died at.
+
+**What clears it:** `/rawgentic:revalidate-children`, and nothing else.
+
+**Enforcement activates per campaign, once a receipt exists.** A campaign carrying no
+`queue_revalidation` behaves exactly as it did before #840 — `launcher_lib handoff` says so on
+stderr rather than staying silent, and `handoff_pending` keeps its exact three-key legacy shape. This
+is a stated limit: run `/rawgentic:revalidate-children` once to arm a campaign, and from then on the
+gate is real.
 
 ## DEFER taxonomy
 

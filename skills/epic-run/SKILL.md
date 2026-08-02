@@ -129,7 +129,14 @@ put a list up by hand).
   after starting the child (a claim that crashes before `started` is reclaimed after the lease, so
   a failed takeover never strands the run). On `complete` (every child merged) do Step 5; on
   `blocked` (unmerged children remain but none ready) leave the epic OPEN with an honest summary
-  and end — never conflate `blocked` with `complete`. **The terminal-backend verdict is part of
+  and end — never conflate `blocked` with `complete`. On **`revalidation_required`** (#840 — the
+  remaining queue has not been revalidated against the current `origin/main`) run
+  `/rawgentic:revalidate-children`, post any corrections, then retry the disposition; this is
+  neither `complete` nor `blocked` and must never be reported as either. `launcher_lib handoff`
+  exits **6** for it and **5** when the head cannot be observed at all. **After EVERY merge, the
+  remaining children need revalidating before the next one starts** — that is what the gate
+  enforces, and it is the tax this epic's own 2026-08-02 audit measured at 14 rotted bodies out of
+  23. **The terminal-backend verdict is part of
   this decision, not a later one (#611).** Resolve it first —
   `python3 hooks/launcher_lib.py select-mode --terminal-backend <backend> [--herdr-available]
   [--launcher-herdr]` — and pass it as `fresh_session_available`'s `launch_mode`. Deciding it

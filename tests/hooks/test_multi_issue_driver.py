@@ -147,9 +147,18 @@ def test_doc_documents_queue_revalidation_840():
     # must trip here, because the whole gate collapses to theatre without it.
     assert "The intersection sets DEPTH, never whether to look" in text
     assert "Nothing is auto-cleared." in text
-    # The inert-status warning: a reader must not conclude the guard is live.
-    assert "the machinery above is INERT" in text
-    assert "`QueueRevalidationRequired` is defined but never raised" in text
+    # PR 2 INVERTS this pair. PR 1's pins required the doc to say the machinery was inert and that
+    # `QueueRevalidationRequired` is never raised; both are now false, so keeping them passing
+    # would make the doc lie in the one place a reader checks whether the guard is real. The
+    # replacement pins the live contract, and specifically the three facts a reader could get
+    # wrong: that selection RAISES rather than returning None, that the head must be freshly
+    # observed, and that only one skill clears the gate.
+    assert "### The gate is LIVE (#840 PR 2)" in text
+    assert "It **raises** rather than returning `None`" in text
+    assert "must be FRESHLY OBSERVED" in text
+    assert "**What clears it:** `/rawgentic:revalidate-children`, and nothing else." in text
+    # The limit must be stated, not implied: a receipt-less campaign is NOT gated.
+    assert "Enforcement activates per campaign, once a receipt exists." in text
     # An obsolete child must not read as a stampable outcome.
     assert "`issue_obsolete` is not an `outcome`" in text
     # Corrections are annotations, not rewrites.
