@@ -286,6 +286,67 @@ def validate_revalidation_child(record) -> bool:
     return True
 
 
+# Statuses `git diff --name-status` emits. R (rename) and C (copy) carry TWO paths; the rest
+# carry one. That asymmetry is the whole reason this function exists — measured by probe on
+# 2026-08-02, not read from documentation: `git mv` + commit yields
+# `R100<TAB>old_name.py<TAB>new_name.py`, three tab-separated fields, where an `M` row has two.
+# A parser assuming two fields would take `old_name.py` as the STATUS and lose the old path.
+_DIFF_ONE_PATH_STATUSES = frozenset({"A", "D", "M", "T", "U", "X", "B"})
+_DIFF_TWO_PATH_STATUSES = frozenset({"R", "C"})
+
+
+def parse_changed_paths(diff_text: str) -> set[str]:
+    """Changed repository paths from ``git diff --name-status -M`` output. PURE.
+
+    A rename contributes BOTH its old and its new path. Both matter: a child citing the old
+    path and a child citing the new one are each affected by the rename, and dropping either
+    would under-report the changed set — which biases a child toward `quick` when it needs
+    `deep`. Failing toward LESS scrutiny is the one direction this design must never take, so
+    every malformed row raises instead of being skipped.
+
+    An EMPTY diff is not an error: a merge that changed nothing is legitimate. A diff that
+    cannot be READ is an error. Keeping those distinguishable is the point — "no data" must
+    never quietly become "no changes".
+
+    `-M` is retained at the call site only so behaviour does not depend on a repo-local
+    `diff.renames=false`; git enables rename detection by default, so the `R` row appears
+    either way (probed 2026-08-02, correcting an earlier claim in the design).
+    """
+    if not isinstance(diff_text, str):
+        raise DriverStateError(
+            f"diff text must be a string, got {type(diff_text).__name__}")
+    changed: set[str] = set()
+    for lineno, raw in enumerate(diff_text.splitlines(), start=1):
+        line = raw.rstrip("\n")
+        if not line.strip():
+            continue
+        fields = line.split("\t")
+        status = fields[0].strip()
+        letter = status[:1].upper()
+        if len(fields) < 2:
+            raise DriverStateError(
+                f"diff line {lineno}: expected tab-separated status and path, got {line!r}")
+        if letter in _DIFF_TWO_PATH_STATUSES:
+            if len(fields) < 3:
+                raise DriverStateError(
+                    f"diff line {lineno}: status {status!r} is a rename/copy and must carry "
+                    f"BOTH an old and a new path, got {line!r} — a half-read rename "
+                    "under-reports the changed set")
+            paths = fields[1:3]
+        elif letter in _DIFF_ONE_PATH_STATUSES:
+            paths = fields[1:2]
+        else:
+            raise DriverStateError(
+                f"diff line {lineno}: unrecognised status {status!r} — refusing to guess how "
+                "many paths it carries")
+        for path in paths:
+            path = path.strip()
+            if not path:
+                raise DriverStateError(f"diff line {lineno}: empty path field in {line!r}")
+            changed.add(path)
+    return changed
+
+
 def parse_depends_on(body: str) -> list[int]:
     """Return the sorted, de-duplicated issue numbers this body depends on.
 
