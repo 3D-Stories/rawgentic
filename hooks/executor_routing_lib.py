@@ -3212,7 +3212,10 @@ def _do_dispatch(args) -> int:
     # Fail CLOSED on the combination until #832 threads context through both routes. Declaring the
     # requirement is what trips this — a resume/supervised dispatch that makes no such claim is
     # untouched, so nothing that works today regresses.
-    if args.requires_context:
+    # Re-review F1: gated on the review role, exactly like the guard above. Ungated, an ordinary
+    # non-review dispatch would ignore `--requires-context` while a resume/supervised non-review
+    # dispatch rejected it with a review-specific error — a split contract nobody declared.
+    if role == "review" and args.requires_context:
         _rc_route = None
         if getattr(args, "resume_session_id", None):
             _rc_route = "resume"
