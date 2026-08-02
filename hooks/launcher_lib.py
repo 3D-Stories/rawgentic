@@ -2752,6 +2752,15 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             out["reason"] = (f"refusing teardown: verification {failed_early!r} has not passed — "
                              "the predecessor stays alive and still guarded, and no claim is "
                              "acked so a later generation can still take over cleanly")
+            # **Carry the ACTIONABLE reason into the caller-visible field (round-9 Medium 2).**
+            # `produce_queue_revalidated` returns a reason that names the exact remedy, and it
+            # was being filed only into `steps[].note` — which `_cmd_retire_predecessor` does not
+            # project into its JSON. So the operator saw `queue_revalidated: false` and no way to
+            # clear it, and retrying reproduced the same opaque refusal. The predecessor was
+            # never in danger; the person holding it just had nothing to do.
+            if failed_early == QUEUE_REVALIDATED_STEP and revalidation_reason:
+                out["reason"] += f". {revalidation_reason}"
+                out["revalidation_reason"] = revalidation_reason
             return out
 
         def _git(*rev_args) -> str | None:
@@ -3410,6 +3419,72 @@ def _cmd_next_child(args) -> int:
         return 3
     print(json.dumps({"outcome": "ready", "next_issue": disposition["next_issue"],
                       "observed_head": observed_head}, indent=2))
+    return 0
+
+
+def _cmd_rebuild_receipt(args) -> int:
+    """Persist a rebuilt `queue_revalidation` receipt, under the lock, against a FRESH head.
+
+    Round-9 High 4 and B3. `driver_lib.rebuild_receipt` is pure and returns a new state; the skill
+    documented `new_state = rebuild_receipt(state, head, audited)` and then never said how to
+    write it, so the prescribed remedy could not be followed to the end — the file was untouched,
+    the skill's own validation command validated the unchanged (receipt-less) file and printed
+    `receipt OK`, and selection still refused. Worse, the obvious way to write it — rebuild from
+    the snapshot read at step 1, then replace the file — is a lost update: a concurrent
+    `record-child-outcome` committed during the audit is erased by the atomic replace, and the
+    lock cannot repair a read taken before it.
+
+    So the rebuild happens INSIDE `_locked_state_update`, against the state read under that lock,
+    not against whatever the caller last saw. The caller supplies EVIDENCE (`--audited`, a JSON
+    object of `{issue number: record}`), never a replacement state.
+
+    The head is observed here too, for the reason the whole gate exists: a caller-supplied head
+    can be stale, and a receipt attesting a head nobody confirmed is the vacuous pass this
+    feature was built to remove.
+    """
+    driver = _driver_lib()
+    try:
+        head = observe_head(getattr(args, "project_root", None) or ".")
+    except LauncherError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 5
+    audited: dict = {}
+    if args.audited:
+        try:
+            with open(args.audited, encoding="utf-8") as fh:
+                raw = json.load(fh)
+        except (OSError, ValueError) as exc:
+            print(f"refusing: cannot read {args.audited}: {exc}", file=sys.stderr)
+            return 2
+        if not isinstance(raw, dict):
+            print(f"refusing: {args.audited} must hold a JSON object of "
+                  "{issue number: record}", file=sys.stderr)
+            return 2
+        try:
+            audited = {int(key): value for key, value in raw.items()}
+        except (TypeError, ValueError) as exc:
+            print(f"refusing: {args.audited} has a non-numeric issue key: {exc}", file=sys.stderr)
+            return 2
+
+    def _mutate(state):
+        return driver.rebuild_receipt(state, head, audited)
+
+    try:
+        _locked_state_update(args.driver_state, _mutate)
+    except driver.DriverStateError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 6
+    except (OSError, ValueError) as exc:
+        print(f"refusing: cannot update {args.driver_state}: {exc}", file=sys.stderr)
+        return 2
+    # Re-read from DISK and validate what actually landed. "It returned a good object" is not
+    # "the file on disk is good", and this command exists precisely because that gap was real.
+    try:
+        driver.validate_queue_revalidation(_locked_state_read(args.driver_state))
+    except driver.DriverStateError as exc:
+        print(f"refusing: the persisted receipt does not validate: {exc}", file=sys.stderr)
+        return 6
+    print(json.dumps({"validated_head": head, "audited": sorted(audited)}))
     return 0
 
 
@@ -4237,6 +4312,16 @@ def main(argv: list[str] | None = None) -> int:
                       help="skip the GitHub issue-state corroboration (#695); the driver-state "
                            "file's own statuses are then trusted")
 
+    p_rr = sub.add_parser("rebuild-receipt",
+                          help="rebuild and PERSIST the queue_revalidation receipt under the "
+                               "state lock, against a freshly observed origin/main")
+    p_rr.add_argument("--driver-state", required=True)
+    p_rr.add_argument("--project-root", default=".",
+                      help="repo whose origin/main is observed for the head")
+    p_rr.add_argument("--audited",
+                      help="JSON file holding {issue number: record} for the children audited "
+                           "this pass; omit when nothing needed auditing")
+
     p_rco = sub.add_parser("record-child-outcome",
                            help="write a child's terminal status back to its campaign queue")
     p_rco.add_argument("--issue", type=int, required=True)
@@ -4293,6 +4378,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_retire_predecessor(args)
         if args.cmd == "next-child":
             return _cmd_next_child(args)
+        if args.cmd == "rebuild-receipt":
+            return _cmd_rebuild_receipt(args)
         if args.cmd == "record-child-outcome":
             return _cmd_record_child_outcome(args)
         if args.cmd == "read-goal-condition":

@@ -159,6 +159,11 @@ border-left:4px solid var(--accent);border-radius:12px;padding:4px 20px 14px;mar
 <header>
 <div class="eyebrow">rawgentic design artifact · updated 2026-08-02 00:17 MDT</div>
 <h1>Design — #840: re-validate remaining children after every merge</h1>
+<blockquote>
+<p><strong>SUPERSEDED AS A NORMATIVE SPEC — 2026-08-02, round-9 Medium 3.</strong> This document records the design as it stood BEFORE nine review rounds. It is kept as history and must NOT be followed as an implementation contract: it names <code>driver_state.observe_head</code> (no such module exists — production uses <code>launcher_lib.observe_head</code>), defines only the head and eligible-stamp clauses (the live gate has a THIRD, wider clause on any durably-undisposed child carrying a <code>pending_disposition</code>), shows <code>revalidation_worklist</code> without <code>issue_state_probe</code> or <code>unresolvable_shas</code>, and states that only children whose stamp differs from the head enter the worklist — which is false, and following the old text recreates the jam round 7 fixed.</p>
+<p><strong>The live contract is the code and its tests:</strong> <code>hooks/driver_lib.py</code>, <code>skills/revalidate-children/SKILL.md</code>, and <code>tests/hooks/test_revalidation_jam_matrix.py</code>.</p>
+</blockquote>
+
 
 </header>
 <main>

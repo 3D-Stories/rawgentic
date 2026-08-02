@@ -163,17 +163,38 @@ decision, so record the marker and let the gate keep refusing until an owner mov
 `deferred` or `abandoned` via `launcher_lib record-child-outcome`. The machine's job here is to
 refuse, not to choose.
 
-**7. Write the receipt with `driver_lib.rebuild_receipt`, under the state lock.** Do NOT assemble
-it by hand — this step was prose until round 8, and prose is where three review rounds found
-defects, because every session re-derives "which records survive" slightly differently.
+**7. Write the receipt with the `rebuild-receipt` command.** Do NOT assemble it by hand and do
+NOT call `driver_lib.rebuild_receipt` yourself — it is PURE, so calling it changes no file, and
+rebuilding from the state you read back in step 1 silently erases anything another session
+committed while you were auditing (a `record-child-outcome` landing mid-audit is the real case).
+The command re-reads the state under the lock, observes `origin/main` itself, rebuilds against
+that, writes atomically, then re-reads from disk and validates what actually landed:
 
-```python
-new_state = driver_lib.rebuild_receipt(state, observed_head, audited)
+```bash
+python3 hooks/launcher_lib.py rebuild-receipt \
+  --driver-state <state.json> --project-root . --audited audited.json
 ```
 
-`audited` is `{issue_number: record}` — one entry per child you actually looked at, each record
-carrying `to_sha == observed_head`. The function REBUILDS the receipt from evidence rather than
-editing it in place, which is what makes the gate recoverable:
+`audited.json` holds `{"<issue number>": <record>}` for the children you actually looked at —
+omit the flag entirely when nothing needed auditing, which is legitimate and still arms the
+campaign. Exit 0 prints the validated head; **6** means the rebuild was refused (the message
+names the remedy — a live `pending_disposition` needs the owner FIRST); **5** means the head
+could not be observed.
+
+Build each record with the constructor, never by hand — the validator requires eight fields and
+a `body_hash` over a specific normalization, which is why hand-built records failed:
+
+```python
+driver_lib.build_revalidation_record(
+    body=<the issue body you just read>, from_sha=<item["from_sha"]>, to_sha=<observed_head>,
+    extraction=<item["extraction"]>, depth=<item["depth"]>, claims=[...],
+    validated_at=<epoch int>, outcome="still_valid")          # or pending_disposition=...
+```
+
+It hashes `normalize_issue_body(body)` for you and validates the record before returning it.
+
+The command REBUILDS the receipt from evidence rather than editing it in place, which is what
+makes the gate recoverable:
 
 - a record that no longer validates, or that attests a different head, is **dropped** — it is not
   evidence, and carrying it forward once made a corrupt entry unrecoverable for any child the
@@ -181,19 +202,19 @@ editing it in place, which is what makes the gate recoverable:
 - a stamp whose evidence was dropped, or that names no usable commit, is **cleared** — the stamp
   is the claim and the record is the evidence, so the claim must never outlive it;
 - a child whose record carries a `pending_disposition` is recorded but **never stamped**;
+- a child whose durable status is undisposed and that carries a live `pending_disposition`
+  **BLOCKS the rebuild entirely** (exit 6). Rebuilding would destroy an owner obligation nobody
+  has discharged, and dropping a marker is how a dependent got handed out with no decision. Get
+  the owner's outcome first, then rebuild — the refusal prints the exact command;
 - an EMPTY `audited` still advances `validated_head`. That is correct, not a shortcut: a campaign
   whose children are all merged or in flight has nothing to audit, and the head clause refuses it
   regardless — so if this could not arm it, the gate would be shut for good on the mid-child
   handoff it exists to serve.
 
-It validates its own output before returning, so it can never be the source of a receipt the gate
-then refuses.
-
-Validate before you rely on it:
-
-```bash
-python3 -c "import sys,json; sys.path.insert(0,'hooks'); import driver_lib; driver_lib.validate_queue_revalidation(json.load(open('<state>'))); print('receipt OK')"
-```
+The command validates the PERSISTED file after writing it, so exit 0 means the receipt on disk is
+structurally valid. It does **not** promise selection will then succeed: an incomplete audit
+leaves eligible children stamped at an older head, and the gate refuses that on purpose. Step 8
+is what confirms the gate actually opened.
 
 That call also checks the LINKAGE — a child stamped at `validated_head` with no receipt entry is
 refused, which is exactly the fabricated-provenance case.

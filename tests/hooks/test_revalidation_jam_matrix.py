@@ -110,18 +110,36 @@ def _simulate_revalidate_children(state, observed_head, probe=None):
     return dl.rebuild_receipt(state, observed_head, audited)
 
 
-def _apply_remedy(state, message, observed_head, probe):
-    """Execute what the refusal literally tells the operator to do. Returns the new state."""
-    outcomes = _STATUS_RE.findall(message)
-    if outcomes:
-        new = state
+def _apply_remedy(state, exc, observed_head, probe):
+    """Execute what the refusal tells the operator to do. Returns ``(new state, actions taken)``.
+
+    **Dispatches on the STRUCTURAL `remedy` attribute, never on the message text (round-9 High
+    3).** The old version substring-matched `revalidate-children`, which is corruption-controlled
+    — a receipt whose `version` field held that literal string produced a refusal naming nothing
+    runnable, and this harness scored it recoverable. The guard and its test shared one blind
+    spot, so text matching is gone from both sides.
+    """
+    message = str(exc)
+    declared = getattr(exc, "remedy", None)
+    if declared not in {"owner", "revalidate", "both"}:
+        raise AssertionError(
+            f"the refusal declares no structural remedy ({declared!r}), so an operator has "
+            f"nothing to act on:\n  {message}")
+    actions = set()
+    new = state
+    if declared in {"owner", "both"}:
+        outcomes = _STATUS_RE.findall(message)
+        if not outcomes:
+            raise AssertionError(
+                f"remedy {declared!r} promises an owner write-back but the message prints no "
+                f"record-child-outcome command:\n  {message}")
         for number, status in outcomes:
             new = dl.record_child_outcome(new, int(number), status.split("|")[0])
-        return new
-    if "revalidate-children" in message or "revalidation skill" in message:
-        return _simulate_revalidate_children(state, observed_head, probe)
-    raise AssertionError(
-        f"the refusal names NO executable remedy, so it is a jam:\n  {message}")
+        actions.add("owner")
+    if declared in {"revalidate", "both"}:
+        new = _simulate_revalidate_children(new, observed_head, probe)
+        actions.add("revalidate")
+    return new, actions
 
 
 def drive_to_open(state, observed_head=HEAD, probe=None, max_steps=3):
@@ -132,13 +150,27 @@ def drive_to_open(state, observed_head=HEAD, probe=None, max_steps=3):
     8's Medium 1. A state needing more than three is a remedy chain no operator would follow.
     """
     steps = []
+    disclosed = None
     for _ in range(max_steps):
         try:
             dl.next_ready_issue(state, observed_head=observed_head, issue_state_probe=probe)
             return steps
         except dl.DriverStateError as exc:
             steps.append(str(exc))
-            state = _apply_remedy(state, str(exc), observed_head, probe)
+            state, actions = _apply_remedy(state, exc, observed_head, probe)
+            # **Every action must have been DISCLOSED by the FIRST refusal (round-9 Medium 1).**
+            # Bounding the chain at 3 proved only that it converges — a first message naming one
+            # remedy, followed by a second naming another, converged happily and reproduced round
+            # 8's Medium 1 defect while this guard stayed green. A remedy delivered one
+            # undisclosed step at a time is the same failure as a remedy that does nothing; the
+            # operator walks away after the first one.
+            if disclosed is None:
+                disclosed = {"owner", "revalidate"} if getattr(exc, "remedy", None) == "both" \
+                    else {getattr(exc, "remedy", None)}
+            elif not actions <= disclosed:
+                raise AssertionError(
+                    f"the first refusal disclosed {sorted(disclosed)} but a later step required "
+                    f"{sorted(actions - disclosed)}. Chain:\n  " + "\n  ".join(steps)) from exc
     try:
         dl.next_ready_issue(state, observed_head=observed_head, issue_state_probe=probe)
     except dl.DriverStateError as exc:
@@ -254,7 +286,7 @@ class TestTheMatrixIsNotVacuous:
         `drive_to_open` must FAIL rather than pass quietly."""
         state = _build("queued", None, "absent", None)
         with pytest.raises(AssertionError, match="never opened"):
-            _no_op = lambda s, _m, _h, _p: s                        # noqa: E731
+            _no_op = lambda s, _e, _h, _p: (s, set())               # noqa: E731
             saved, globals()["_apply_remedy"] = _apply_remedy, _no_op
             try:
                 drive_to_open(state, HEAD, None)
@@ -356,10 +388,129 @@ class TestTheSwallowedValidatorRefusalOpensNoHole:
             callable_probe = (lambda _n, _p=probe: _p) if probe else None
             try:
                 dl.next_ready_issue(state, observed_head=HEAD, issue_state_probe=callable_probe)
-            except dl.DriverStateError:
-                continue                       # still refused, as it must be
+            except dl.DriverStateError as exc:
+                # **The refusal must come from the OWNER-GATE pass, not from the `preempted`
+                # re-raise (round-9 Medium 2).** The first version of this test accepted any
+                # `DriverStateError`, and a reviewer proved it passed against a surrogate gate
+                # that only re-ran the validator and never executed the superset pass at all —
+                # so the test asserting the invariant did not test the invariant. The owner-gate
+                # pass is identified by the structured `outstanding` list it attaches; the
+                # validator's own refusal carries none.
+                if getattr(exc, "outstanding", None) is None:
+                    leaks += 1
+                    examples.append(f"{label} (refused by the PREEMPTED validator, not the "
+                                    f"owner-gate pass)")
+                continue
             leaks += 1
-            examples.append(label)
+            examples.append(f"{label} (SELECTABLE)")
         assert checked > 0, "no state reached the swallowed branch — this sweep proves nothing"
         assert not leaks, (f"{leaks}/{checked} states are refused by the receipt validator but "
                            f"SELECTABLE through the gate: {examples[:10]}")
+
+
+def _live_owner_gate(state):
+    """Issue numbers whose durable status is undisposed AND whose receipt carries a pending
+    marker under ANY key spelling. Deliberately does NOT use `children.get(str(n))` — that is
+    the lookup round-9 H2 proved unreliable, so a safety property must not inherit it."""
+    reval = state.get("queue_revalidation")
+    children = reval.get("children") if isinstance(reval, dict) else None
+    if not isinstance(children, dict):
+        return set()
+    marked = {}
+    for key, record in children.items():
+        if not isinstance(record, dict):
+            continue
+        pending = record.get("pending_disposition")
+        if not (isinstance(pending, str) and pending):
+            continue
+        try:
+            marked[int(str(key))] = pending
+        except (TypeError, ValueError):
+            continue
+    return {issue["number"] for issue in state.get("issues", [])
+            if issue["number"] in marked
+            and issue.get("status") not in dl._DISPOSED_STATUSES}
+
+
+class TestTheGateNeverOpensOverALiveOwnerDecision:
+    """**The SAFETY half of the sweep — round 9 H1 exists because this was missing.**
+
+    The recoverability sweep asks only "does the gate OPEN?". Round 9 found a fix that opened it
+    by DESTROYING the owner's obligation: `rebuild_receipt` dropped a `pending_disposition` and
+    the dependent was released with nobody having decided anything. The recoverability sweep
+    scored that as a PASS, because the gate did open.
+
+    A recoverability property with no safety counterpart actively rewards laundering. Two lenses
+    found this independently and the sweep found neither, which is a design error in the sweep.
+
+    The property: while a durably-undisposed child carries a pending marker, NOTHING an operator
+    can run — least of all the prescribed remedy — may make the queue selectable. Only a durable
+    owner outcome retires it."""
+
+    def _marked(self, first_status="pr_open", record_head=HEAD, malformed=False, key="1"):
+        record = _record(to_sha=record_head, pending="issue_obsolete", malformed=malformed)
+        return {"version": 1, "campaign": "c", "epic": 756, "project": "p", "generation": 1,
+                "base_default_branch_sha": OLD,
+                "issues": [{"number": 1, "status": first_status},
+                           {"number": 2, "status": "queued", "validated_against": HEAD,
+                            "depends_on": [1]}],
+                "queue_revalidation": {"version": 1, "extractor_version": 1,
+                                       "validated_head": HEAD,
+                                       "children": {key: record, "2": _record()}}}
+
+    @pytest.mark.parametrize("policy", ["merged", "pr_open"])
+    @pytest.mark.parametrize("record_head,malformed,label", [
+        (HEAD, False, "valid current marker"),
+        (OLD, False, "marker on a stale-head record"),
+        (HEAD, True, "marker on a malformed record"),
+    ])
+    def test_only_an_owner_write_back_may_retire_the_obligation(
+            self, policy, record_head, malformed, label):
+        """Recording an outcome legitimately retires the marker — that IS the remedy. What must
+        never retire it is the revalidation skill, which is a machine auditing bodies. So the
+        chain is walked and each step is judged by WHICH remedy it ran."""
+        state = self._marked(record_head=record_head, malformed=malformed)
+        assert _live_owner_gate(state) == {1}, label
+        for _ in range(3):
+            try:
+                dl.next_ready_issue(state, deps_satisfied_by=policy, observed_head=HEAD)
+            except dl.DriverStateError as exc:
+                message = str(exc)
+                owner_write_back = bool(_STATUS_RE.search(message))
+                try:
+                    state, _actions = _apply_remedy(state, exc, HEAD, None)
+                except (AssertionError, dl.DriverStateError):
+                    return                     # refused to launder: correct
+                if owner_write_back:
+                    return                     # the owner decided; the obligation is properly gone
+                assert _live_owner_gate(state) == {1}, (
+                    f"{label} under {policy}: the revalidation remedy RETIRED a live owner "
+                    f"decision — no owner recorded an outcome for #1")
+                continue
+            raise AssertionError(
+                f"{label} under {policy}: the queue became selectable while #1 still carries a "
+                f"live pending_disposition and its durable status is undisposed")
+
+    @pytest.mark.parametrize("key", ["1", "01", "001"])
+    def test_the_marker_holds_however_its_receipt_key_is_spelled(self, key):
+        """Round 9 H2: `"01"` passed validation but every consumer looked up `"1"`."""
+        state = self._marked(key=key)
+        with pytest.raises(dl.DriverStateError):
+            dl.next_ready_issue(state, deps_satisfied_by="pr_open", observed_head=HEAD)
+
+    def test_an_audit_cannot_stand_in_for_the_owners_decision(self):
+        """A clean audited record must not overwrite a live marker — that is a machine closing a
+        child, which this design forbids everywhere else."""
+        state = self._marked()
+        try:
+            rebuilt = dl.rebuild_receipt(state, HEAD, {1: _record()})
+        except dl.DriverStateError:
+            return                             # refused: correct
+        assert _live_owner_gate(rebuilt) == {1}, \
+            "an audited record replaced a live pending_disposition"
+
+    def test_recording_the_outcome_IS_what_retires_it(self):
+        """The negative twin — the gate must not become impossible to clear."""
+        cleared = dl.record_child_outcome(self._marked(), 1, "deferred")
+        assert _live_owner_gate(cleared) == set()
+        dl.next_ready_issue(cleared, deps_satisfied_by="pr_open", observed_head=HEAD)
