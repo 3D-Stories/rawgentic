@@ -214,49 +214,27 @@ def classify_seat(seat: str) -> str:
     raise MalformedConfig(f"unknown seat {seat!r} (wired: {sorted(WIRED_SEATS)}; driver-only: {sorted(DRIVER_ONLY)})")
 
 
-# #826: the machine-readable requirement the four WF review sites emit. This is the PRIMARY
-# signal — deterministic, immune to rewording, and zero false positives. It is not the ONLY signal,
-# because the defect is a caller who FORGOT to attach the artifact, and a caller who forgets the
-# attachment can equally forget the marker; the prose backstop below covers those briefs.
-CONTEXT_REQUIRED_MARKER: Final[str] = "<!-- rawgentic:requires-context -->"
-
-# The prose backstop. Derived from this repo's own run tree, and NARROWED after the Step-11 review
-# measured the first attempt: of 10 historical dispatches the original list flagged, FIVE were false
-# positives — and the split was perfectly clean. Every false positive matched a `below`-family
-# phrase (`below (the full`, `the diff below`) on a 314-756 line brief that INLINED the artifact;
-# every true positive matched `attached` on a 51-68 line brief too short to inline anything.
-# `below` denotes material INSIDE the brief, which is the opposite of the signal wanted, so it is
-# gone. That alone took the false-positive rate on the historical corpus from 5/10 to 0/5.
-_ATTACHMENT_REFERENCE_RE: Final = re.compile(r"\battached\b|supplied as context", re.IGNORECASE)
-# ...but "attached" also appears in negations and in provenance asides that reference something
-# NOT being handed to this dispatch. A false positive REFUSES a live dispatch, so these veto.
-_ATTACHMENT_NEGATION_RE: Final = re.compile(
-    r"\b(?:no|not|nothing|none)\b[^.\n]{0,40}\battached\b"      # "no files are attached"
-    r"|\battached\b[^.\n]{0,20}\bto the issue\b"                 # provenance, not this dispatch
-    r"|\binlined?\b|\bfollows? (?:after|below)\b|\breproduced here\b",
-    re.IGNORECASE)
-
-
-def prompt_references_attachment(prompt) -> bool:
-    """True when ``prompt`` refers to EXTERNAL material this dispatch was supposed to attach (#826).
-
-    Answers only that narrow question — it does not decide whether a dispatch is legitimate; the
-    caller pairs it with a content test on the context. A non-str prompt is False: this predicate is
-    not the place to fail closed (that would refuse every malformed-prompt dispatch on an unrelated
-    ground), and the callers' own trust-boundary reads already reject one.
-    """
-    if not isinstance(prompt, str):
-        return False
-    if not _ATTACHMENT_REFERENCE_RE.search(prompt):
-        return False
-    return not _ATTACHMENT_NEGATION_RE.search(prompt)
-
-
-def prompt_requires_context(prompt) -> bool:
-    """Does this brief require an attached artifact? Marker first, prose backstop second (#826)."""
-    if isinstance(prompt, str) and CONTEXT_REQUIRED_MARKER in prompt:
-        return True
-    return prompt_references_attachment(prompt)
+# #826: the review-context requirement is carried OUT OF BAND, as a typed dispatch flag
+# (`--requires-context` → `requires_context: bool`). Owner decision 2026-08-01.
+#
+# Three review rounds refuted three DIFFERENT prose heuristics, each for its own reason:
+#   round 1  a phrase list — OVER-inclusive: of 10 historical dispatches it flagged, FIVE were
+#            false positives, every one a `below`-family brief that INLINED the artifact. A false
+#            positive REFUSES a live dispatch.
+#   round 2  the narrowed list — UNDER-inclusive: it misses "the provided spec", "uploaded
+#            document", "attachment".
+#   round 3  an HTML-comment marker — FORGEABLE: the marker is an unrestricted substring, so
+#            artifact data quoting it sets a control signal. Artifact content must never be able
+#            to move a guard, which is the same control/data confusion #829 existed to close.
+#
+# The conclusion after three rounds is that the brief's WORDING is the wrong input: it is authored
+# prose, and prose cannot be both complete and unforgeable. A typed flag is deterministic,
+# unparseable and un-forgeable.
+#
+# The counter-argument, answered rather than ignored: a caller who forgets `--context-file` can
+# equally forget `--requires-context`. True — but a forgotten flag is a STATIC property of the call
+# sites, checkable by a test that reads them (see `tests/hooks/test_wf_review_sites.py`), whereas a
+# wrong prose guess is only ever discoverable in production. Checkable beats clever.
 
 
 def has_usable_context(context) -> bool:
@@ -814,6 +792,7 @@ def dispatch_seat(
     effort: Optional[str],
     timeout: float,
     context: tuple,
+    requires_context: bool = False,
     snapshot,
     quota,
     audit,
@@ -863,15 +842,21 @@ def dispatch_seat(
         return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
                     correlation_id=correlation_id, audit_path=str(audit.path))
 
-    # #826: a review brief that references attached material MUST carry it. Refused here —
+    # #826: a review dispatch DECLARED to need an artifact MUST carry it. Refused here —
     # pre-receipt, pre-check_pre, mirroring the build seat's gate_file_required below — because a
     # review dispatched with nothing to review still returns a verdict, and the gate reads that
     # verdict as a pass. Fail-CLOSED by repo CLAUDE.md §3: this is a correctness boundary, not
     # convenience routing. Scoped to the review role; other seats are untouched.
-    if role == "review" and prompt_requires_context(prompt) and not has_usable_context(context):
+    #
+    # `requires_context` is a TYPED flag from the caller, never inferred from the brief's prose
+    # (see the module-level #826 note: three heuristics refuted, three different ways). It defaults
+    # False, so a caller that does not declare the requirement is not guessed at — the four WF
+    # review sites declare it, and a static test asserts they do.
+    if role == "review" and requires_context and not has_usable_context(context):
         return _err(EXIT_MALFORMED, "review_context_required",
-                    f"review seat {seat!r} requires an attached artifact but none has usable "
-                    f"content (--context-file); a review of nothing still returns a verdict",
+                    f"review seat {seat!r} was dispatched with --requires-context but no context "
+                    f"item has usable content (--context-file); a review of nothing still returns "
+                    f"a verdict the gate reads as a pass",
                     retryable=False, correlation_id=correlation_id, audit_path=str(audit.path))
 
     # #464 §E: authenticate the build gate ONCE (pre-loop, pre-receipt). Missing evidence is a
@@ -3210,11 +3195,11 @@ def _do_dispatch(args) -> int:
     # reach launch unguarded and the ordinary path had already minted a ledger entry before
     # refusing. Placed here it covers the ordinary, resume AND supervised routes, before anything
     # is minted. The `dispatch_seat` check stays as defense in depth for direct library callers.
-    if role == "review" and prompt_requires_context(prompt) and not has_usable_context(context):
+    if role == "review" and args.requires_context and not has_usable_context(context):
         return _emit(_err(EXIT_MALFORMED, "review_context_required",
-                          f"review seat {args.seat!r} requires an attached artifact but none has "
-                          f"usable content (--context-file); a review of nothing still returns a "
-                          f"verdict the gate reads as a pass",
+                          f"review seat {args.seat!r} was dispatched with --requires-context but "
+                          f"no context item has usable content (--context-file); a review of "
+                          f"nothing still returns a verdict the gate reads as a pass",
                           retryable=False, correlation_id=args.correlation_id))
 
     # #555 AC2 — ledger-aware choke-point (the ONE choke both the sync and supervised branches pass
@@ -3299,6 +3284,7 @@ def _do_dispatch(args) -> int:
         seat=args.seat, prompt=prompt, run_id=args.run_id,
         correlation_id=args.correlation_id, author_provider=args.author_provider,
         effort=args.effort, timeout=args.timeout, context=context,
+        requires_context=args.requires_context,
         snapshot=snap, quota=quota, audit=audit, capture_root=paths["capture_root"],
         routing=pe.routing, enforce=pe.enforce, run_seat=pe.run_seat, dispatch_real=pe.dispatch_real,
         gate_decision=gate_decision, plan_context=plan_context,
@@ -3829,6 +3815,10 @@ def main(argv: Optional[list] = None) -> int:
     d.add_argument("--prompt-file", required=True, dest="prompt_file")
     d.add_argument("--run-id", required=True, dest="run_id")
     d.add_argument("--context-file", action="append", dest="context_file")
+    # #826: the review-context requirement, declared OUT OF BAND by the caller. Typed, so artifact
+    # text can never forge it and prose rewording can never evade it. Default False — the flag
+    # DECLARES a requirement, it never guesses one (module-level #826 note).
+    d.add_argument("--requires-context", action="store_true", dest="requires_context")
     d.add_argument("--gate-file", dest="gate_file")          # #464 §E: #429 GateDecision JSON (build seat)
     d.add_argument("--plan-file", dest="plan_file")          # #470 §2b: live impl-plan.md; context minted internally
     d.add_argument("--correlation-id", dest="correlation_id")

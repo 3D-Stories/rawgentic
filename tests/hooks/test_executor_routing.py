@@ -2947,6 +2947,10 @@ def _dispatch_args(ws, run_id="run1", cid="wf2:step2", seat="analysis"):
     a.seat = seat; a.prompt_file = None; a.run_id = run_id; a.context_file = None
     a.correlation_id = cid; a.author_provider = None; a.effort = None; a.timeout = 5.0
     a.workspace = ws; a.project = "rawgentic"; a.gate_file = None; a.plan_file = None
+    # #826: argparse's store_true always sets this, so the stand-in must too — a fixture that
+    # omits it would let a wiring regression in the review-context guard pass as an AttributeError
+    # in one unrelated test instead of failing the guard's own tests.
+    a.requires_context = False
     return a
 
 
@@ -4568,26 +4572,17 @@ def test_landing_identity_fields_mirror_enforce():
 
 
 # --- #826: a review seat cannot be dispatched with nothing attached -----------------------------
-# The defect: a Step-4/8a/11 review brief that says "review the attached design" dispatched with an
-# EMPTY context is a quality gate that passes while reviewing nothing. Measured at 3a017dd9 over
-# this repo's own run tree: 167 review-seat observations, 117 with empty context_hashes, 10 of
-# those carrying an attachment-referencing prompt. Guard mirrors the build seat's
+# The defect: a Step-4/8a/11 review dispatch that needs an artifact but carries an EMPTY context is
+# a quality gate that passes while reviewing nothing. Measured at 3a017dd9 over this repo's own run
+# tree: 167 review-seat observations, 117 with empty context_hashes, 10 of those carrying an
+# attachment-referencing prompt — re-measured after the Step-11 review, the real defect class is
+# ~5, not 10 (five of the ten INLINED their artifact). Guard mirrors the build seat's
 # gate_file_required/plan_context_required precedent — refuse pre-receipt, EXIT_MALFORMED.
-_RC_REFERENCING = [
-    "Review the attached design. Report findings only.",
-    "Review the design document supplied as CONTEXT below (the full markdown).",
-    "# Step 8a review\n\nReview the attached diff for silent failures.",
-    "The design is supplied as context below (the full markdown of the design doc).",
-]
-# REVERSED by the Step-11 measurement: "the diff below" was in the flagged list on the first pass
-# and every historical dispatch it matched turned out to INLINE its diff (756 lines in one case).
-# `below` denotes material inside the brief, so it is now correctly self-contained.
-_RC_SELF_CONTAINED = [
-    "Judge the diff below against the plan.",
-    "hi",
-    "# WF2 Step 11 review\n\nHere is the complete diff, inlined:\n\n```\n--- a/x\n+++ b/x\n```\n",
-    "Assess whether the plan's tasks each carry a riskLevel. Plan text follows inline.",
-]
+#
+# The prompt-corpus fixtures that used to live here are GONE with the prose heuristics they fed
+# (owner decision 2026-08-01 — see the typed-flag block at the end of this section). They are not
+# worth keeping as documentation: a corpus of briefs is only meaningful to a mechanism that reads
+# briefs, and nothing reads them any more.
 
 
 def _rc_dispatch(tmp_path, *, seat="review", prompt, context=(), **kw):
@@ -4600,6 +4595,7 @@ def _rc_dispatch(tmp_path, *, seat="review", prompt, context=(), **kw):
         # an anthropic reviewer over openai-authored work
         author_provider=kw.pop("author_provider", "openai"), effort=None, timeout=5.0,
         context=tuple(context),
+        requires_context=kw.pop("requires_context", False),
         snapshot=_snapshot(), quota=qc, audit=audit, capture_root=str(tmp_path / "runs"),
         routing=routing, enforce=enforce, run_seat=run_seat,
         dispatch_real=kw.pop("dispatch_real", _stub()),
@@ -4607,100 +4603,71 @@ def _rc_dispatch(tmp_path, *, seat="review", prompt, context=(), **kw):
     return res, audit
 
 
-@pytest.mark.parametrize("prompt", _RC_REFERENCING)
-def test_prompt_references_attachment_true(prompt):
-    assert er.prompt_references_attachment(prompt) is True
+# --- #826 FINAL ARCHITECTURE: a typed dispatch flag, not prose inference -------------------------
+# Owner decision 2026-08-01 (AskUserQuestion, session d51c4f64): three review rounds refuted three
+# DIFFERENT prose heuristics — under-inclusive, over-inclusive, and forgeable. Prose inference is
+# the wrong architecture. The requirement is now carried OUT OF BAND as a typed flag
+# (`--requires-context`), which artifact text cannot forge and a static test can verify.
+
+def test_prose_inference_machinery_is_gone():
+    """The three refuted heuristics must not survive as dead code a future caller could re-enable.
+
+    Each name below WAS the mechanism of one refuted round: the marker substring (forgeable — an
+    artifact quoting the marker sets the control signal), and the phrase predicate (both
+    over-inclusive on `below`-family briefs and under-inclusive on "the provided spec").
+    """
+    for gone in ("prompt_requires_context", "prompt_references_attachment",
+                 "CONTEXT_REQUIRED_MARKER"):
+        assert not hasattr(er, gone), (
+            f"{gone} still exists — prose inference was refuted and removed by owner decision; "
+            f"leaving it importable invites a fourth heuristic")
 
 
-@pytest.mark.parametrize("prompt", _RC_SELF_CONTAINED)
-def test_prompt_references_attachment_false(prompt):
-    assert er.prompt_references_attachment(prompt) is False
-
-
-def test_prompt_references_attachment_handles_non_str():
-    # fail-closed on a malformed prompt would refuse every dispatch; the predicate answers the
-    # narrow question only, and a non-str simply does not reference an attachment.
-    assert er.prompt_references_attachment(None) is False
-
-
-def test_review_attachment_prompt_without_context_exit2_no_receipt(tmp_path):
-    res, audit = _rc_dispatch(tmp_path, prompt="Review the attached design. Report findings only.")
+def test_typed_flag_without_context_is_refused(tmp_path):
+    res, audit = _rc_dispatch(tmp_path, prompt="# Step 4 brief\nJudge it.", requires_context=True)
     assert res["ok"] is False and res["exit"] == er.EXIT_MALFORMED
     assert res["error"]["code"] == "review_context_required"
-    assert audit.records() == []  # refused pre-check_pre: no receipt minted, no process spawned
+    assert audit.records() == []  # refused pre-check_pre: no receipt, no spawn
 
 
-def test_review_attachment_prompt_with_context_proceeds(tmp_path):
-    res, _ = _rc_dispatch(tmp_path, prompt="Review the attached design.",
-                          context=("# Design\n\nthe actual design bytes\n",))
+def test_typed_flag_with_context_proceeds(tmp_path):
+    res, _ = _rc_dispatch(tmp_path, prompt="# Step 4 brief\nJudge it.", requires_context=True,
+                          context=("# Design\nreal bytes\n",))
     assert res["ok"] is True, res
 
 
-def test_review_self_contained_prompt_without_context_proceeds(tmp_path):
-    # the 107 legitimate contextless review dispatches must not regress
-    res, _ = _rc_dispatch(tmp_path, prompt=_RC_SELF_CONTAINED[1])
+def test_without_the_flag_prose_no_longer_triggers_the_guard(tmp_path):
+    """THE BEHAVIOURAL INVERSION, and the point of the redesign.
+
+    This exact prompt was REFUSED by the prose backstop. It must now proceed: the brief's wording
+    is no longer a control signal, so a caller who inlines an artifact while saying "attached"
+    can never be spuriously refused. The cost is that forgetting the flag is not caught here —
+    that is what the static WF-site test below covers, and a forgotten flag is findable by a test
+    in a way a wrong guess never was.
+    """
+    res, _ = _rc_dispatch(tmp_path, prompt="Review the attached design. Report findings only.")
     assert res["ok"] is True, res
 
 
-def test_non_review_seat_attachment_prompt_without_context_unaffected(tmp_path):
-    # scoped to the seat that has the defect; a plan-seat brief is untouched
-    res, _ = _rc_dispatch(tmp_path, seat="plan", prompt="Review the attached design.")
-    assert res["ok"] is True, res
-
-
-# --- #826 redesign after the Step-11 findings ---------------------------------------------------
-# F4: the original phrase list flagged 10 historical dispatches and FIVE were false positives —
-# every one of them matched a `below`-family pattern while every true positive matched `attached`.
-# The `below` patterns denote material INSIDE the brief, which is the opposite of the signal wanted.
-# F2: `not context` tested cardinality, so an empty file yielded ("",) and slipped through while
-# still minting a context_hashes entry.
-_RC_INLINED_BRIEFS = [
-    "Apply the quality-bar rubric to the DESIGN DOCUMENT inlined below (the full text follows "
-    "after the rubric):\n\n# The design\n...",
-    "# Step 11 review\n\nJudge the diff below against the plan.\n\ndiff --git a/x b/x\n+y\n",
-    "Review the design supplied as context below? No — it is inlined here in full.",
-]
-_RC_NEGATED = [
-    "No files are attached; everything you need is in this brief.",
-    "The spec is attached to the issue for humans; the relevant excerpt is reproduced here.",
-]
-
-
-@pytest.mark.parametrize("prompt", _RC_INLINED_BRIEFS)
-def test_an_inlined_brief_is_not_treated_as_an_attachment_reference(prompt):
-    """The 5 historical false positives: long briefs that INLINE the artifact must not refuse."""
-    assert er.prompt_references_attachment(prompt) is False
-
-
-@pytest.mark.parametrize("prompt", _RC_NEGATED)
-def test_negated_or_provenance_mentions_do_not_count(prompt):
-    assert er.prompt_references_attachment(prompt) is False
-
-
-def test_the_explicit_marker_is_the_primary_signal():
-    """Prose sniffing is the backstop; the four WF sites emit a machine-readable requirement."""
-    assert er.prompt_requires_context(f"# Brief\n{er.CONTEXT_REQUIRED_MARKER}\nreview it") is True
-    assert er.prompt_requires_context("# Brief\nreview the attached design") is True   # backstop
-    assert er.prompt_requires_context("# Brief\neverything is inline here") is False
-
-
-def test_marker_with_no_context_is_refused(tmp_path):
-    res, audit = _rc_dispatch(
-        tmp_path, prompt=f"# Step 4 brief\n{er.CONTEXT_REQUIRED_MARKER}\nJudge it.")
-    assert res["ok"] is False and res["exit"] == er.EXIT_MALFORMED
-    assert res["error"]["code"] == "review_context_required"
-    assert audit.records() == []
-
-
-def test_a_whitespace_only_context_item_is_not_context(tmp_path):
-    """F2: an empty --context-file yields ("",) — cardinality is not content."""
+def test_whitespace_only_context_still_fails_the_typed_flag(tmp_path):
+    """F2 survives the redesign: cardinality is not content."""
     for empty in ("", "   \n\t  \n"):
-        res, _ = _rc_dispatch(tmp_path, prompt="Review the attached design.", context=(empty,))
+        res, _ = _rc_dispatch(tmp_path, prompt="# brief", requires_context=True, context=(empty,))
         assert res["ok"] is False, f"empty context {empty!r} slipped through"
         assert res["error"]["code"] == "review_context_required"
 
 
-def test_a_real_item_alongside_an_empty_one_is_accepted(tmp_path):
-    res, _ = _rc_dispatch(tmp_path, prompt="Review the attached design.",
-                          context=("", "# Design\nreal bytes\n"))
+def test_non_review_seat_with_the_flag_is_unaffected(tmp_path):
+    res, _ = _rc_dispatch(tmp_path, seat="plan", prompt="# brief", requires_context=True)
     assert res["ok"] is True, res
+
+
+def test_dispatch_cli_exposes_requires_context():
+    """The flag must exist on the real CLI surface — a typed requirement nobody can pass is
+    decoration. Black-box via subprocess per docs/testing.md, since the parser is built inside
+    ``main()`` and there is no factory to import."""
+    cli = str(Path(er.__file__).resolve())
+    r = subprocess.run([sys.executable, cli, "dispatch", "--help"],
+                       capture_output=True, text=True, check=False)
+    assert r.returncode == 0, r.stderr
+    assert "--requires-context" in r.stdout, r.stdout
