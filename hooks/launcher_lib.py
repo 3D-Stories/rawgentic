@@ -1162,6 +1162,61 @@ def herdr_available(which=shutil.which) -> bool:
     return which("herdr") is not None
 
 
+# #840 — the ONLY permitted source of `observed_head`.
+_OBSERVED_HEAD_RE = re.compile(r"\A[0-9a-f]{40}\Z")
+
+
+def observe_head(repo_root: str, *, runner=_default_runner,
+                 remote_ref: str = "origin/main") -> str:
+    """Freshly observe the campaign's tracking head. The ONE source of `observed_head`.
+
+    It lives HERE and not in `driver_lib` because `driver_lib` promises no I/O, and that promise
+    is enforced by a source grep for `import subprocess`/`subprocess.run`
+    (`tests/hooks/test_driver_state_write_back.py:295-301`). The design named the wrapper
+    `driver_state.observe_head`; there is no such module, and putting it in `driver_lib` would
+    fail that grep. `launcher_lib` already owns the I/O and the injected-`runner` pattern.
+
+    **Why a wrapper at all, rather than letting callers pass a SHA.** Both pass-3 reviewers
+    found independently that requiring the argument without binding it to a live observation is
+    no guard: a caller could pass a cached SHA — or `validated_head` itself — and satisfy both
+    refusal clauses after `main` had moved. That also silently defeated the abrupt-death
+    recovery, since a crashed predecessor's stale head compares equal to itself.
+
+    **Both return codes are checked, and `-C <repo_root>` is on BOTH commands.** r2 omitted
+    `-C` on the fetch; a reviewer correctly flagged that as able to update a different checkout,
+    or to fail outside a repository, while leaving the target stale. A rc-0 `rev-parse` whose
+    stdout is not a full 40-char SHA is also refused — provenance that cannot be read is not
+    provenance.
+
+    Fail-CLOSED, deliberately against this module's usual convenience-fails-open rule (§3 of the
+    repo manual): what this feeds is a gate on handing out work, so a fetch outage must refuse
+    rather than return a head it could not confirm. The caller reports the refusal; nothing
+    proceeds on a guess.
+    """
+    if not isinstance(repo_root, str) or not repo_root.strip():
+        raise LauncherError("observe_head needs a repository root; got "
+                            f"{repo_root!r}")
+    fetch = runner(["git", "-C", repo_root, "fetch", "origin"])
+    if getattr(fetch, "returncode", 1) != 0:
+        raise LauncherError(
+            f"refusing to observe the head: `git -C {repo_root} fetch origin` exited "
+            f"{getattr(fetch, 'returncode', 'unknown')} — a stale head would make every "
+            "freshness comparison compare equal to itself and open the gate on a moved main: "
+            f"{(getattr(fetch, 'stderr', '') or '').strip()[:400]}")
+    rev = runner(["git", "-C", repo_root, "rev-parse", remote_ref])
+    if getattr(rev, "returncode", 1) != 0:
+        raise LauncherError(
+            f"refusing to observe the head: `git -C {repo_root} rev-parse {remote_ref}` exited "
+            f"{getattr(rev, 'returncode', 'unknown')}: "
+            f"{(getattr(rev, 'stderr', '') or '').strip()[:400]}")
+    head = (getattr(rev, "stdout", "") or "").strip()
+    if not _OBSERVED_HEAD_RE.match(head):
+        raise LauncherError(
+            f"refusing to observe the head: `rev-parse {remote_ref}` succeeded but printed "
+            f"{head!r}, which is not a full 40-character lowercase SHA")
+    return head
+
+
 def _poll_for(check, *, attempts: int, delay_s: float, sleeper,
               max_wall_s: float | None = None, now=time.monotonic) -> bool:
     """Bounded wait for an on-disk artifact. Returns False when it never appears.
@@ -3043,20 +3098,51 @@ def _driver_lib():
     return driver_lib
 
 
-def resume_prompt_for_state(state: dict, project: str | None = None) -> str | None:
-    """The canonical resume prompt for the next ready child, or None when nothing is ready.
+def resume_prompt_for_state(state: dict, project: str | None = None, *,
+                            repo_root: str | None = None) -> dict:
+    """The canonical resume decision for the next ready child, as a RESULT OBJECT.
 
-    Deliberately delegated to `driver_lib._build_resume_prompt` via `fresh_session_handoff`
-    rather than written here: the successor must rebuild from durable state, and two copies of
-    that wording would drift. `None` means the campaign is complete or blocked — there is
-    nothing to hand off, and the caller must not spawn a successor with no work.
+    Returns ``{"outcome": <disposition outcome>, "prompt": str | None, ...}``. `prompt` is
+    non-None only for ``ready``.
+
+    **#840 changed the return type, and the reason is the whole point of the gate.** This used to
+    return ``str | None`` and collapse EVERY non-ready disposition into ``None``, with a docstring
+    saying `None` meant "complete or blocked". A revalidation refusal returning `None` would
+    therefore have been reported to the operator as *the epic finished* while the queue was stale
+    — announcing completion is strictly worse than refusing, so `revalidation_required` has to be
+    representable here rather than flattened.
+
+    ``repo_root`` (#840) is what makes the head FRESHLY OBSERVED rather than merely supplied:
+    `observe_head` runs the fetch and the rev-parse itself. A campaign carrying a
+    `queue_revalidation` receipt REFUSES without it — an optional enforcement input is a bypass.
+
+    The prompt wording stays delegated to `driver_lib._build_resume_prompt` via
+    `fresh_session_handoff`: the successor must rebuild from durable state, and two copies of that
+    wording would drift.
     """
     driver_lib = _driver_lib()
+    observed_head = None
+    if repo_root is not None:
+        # Module-global lookup on purpose — the dataflow test patches `observe_head` to a sentinel
+        # and proves the sentinel is what reaches the comparison, which a locally-bound reference
+        # would defeat.
+        observed_head = observe_head(repo_root)
+    elif state.get("queue_revalidation") is not None:
+        raise LauncherError(
+            "this campaign carries a queue_revalidation receipt, so a resume decision needs a "
+            "repo_root to freshly observe the head; refusing to decide without one")
     disposition = driver_lib.fresh_session_handoff(
-        state, mode=driver_lib.FRESH_SESSION_MODE, project=project)
-    if disposition.get("outcome") != "ready":
-        return None
-    return disposition["resume_prompt"]
+        state, mode=driver_lib.FRESH_SESSION_MODE, project=project,
+        observed_head=observed_head)
+    outcome = disposition.get("outcome")
+    result: dict = {"outcome": outcome,
+                    "prompt": disposition.get("resume_prompt") if outcome == "ready" else None}
+    if outcome == "revalidation_required":
+        result["worklist"] = disposition.get("worklist", [])
+        result["observed_head"] = disposition.get("observed_head")
+        result["validated_head"] = disposition.get("validated_head")
+        result["reason"] = disposition.get("reason")
+    return result
 
 
 def _cmd_record_child_outcome(args) -> int:
@@ -3193,10 +3279,43 @@ def _cmd_handoff(args) -> int:
     if probe is None:
         print("note: issue-state corroboration is OFF — the driver-state file's own status is "
               "being trusted (#695)", file=sys.stderr)
+    # #840 — the freshly observed head, supplied HERE for the same reason #695's probe is: an
+    # enforcement input that no caller threads in ships dead.
+    #
+    # It is observed only when the campaign carries a `queue_revalidation` receipt. That is the
+    # SAME discriminator the payload uses (design §8) and it is a deliberate, stated limit rather
+    # than an oversight: every pre-#840 campaign has no receipt and must keep behaving exactly as
+    # it does, so enforcement activates for a campaign once the revalidate-children skill has run
+    # against it. A receipt-carrying campaign is then hard-gated — `next_ready_issue` REFUSES if
+    # this observation is missing, so there is no path that quietly skips it.
+    observed_head = None
+    if state.get("queue_revalidation") is not None:
+        try:
+            observed_head = observe_head(getattr(args, "project_root", None) or ".")
+        except LauncherError as exc:
+            # Fail-CLOSED. Without a confirmed head every freshness comparison would compare a
+            # stale value against itself and open the gate on a moved main.
+            print(f"refusing: {exc}", file=sys.stderr)
+            return 5
+    else:
+        print("note: queue-revalidation enforcement is OFF for this campaign — it carries no "
+              "queue_revalidation receipt; run /rawgentic:revalidate-children to arm it (#840)",
+              file=sys.stderr)
     disposition = driver_lib.fresh_session_handoff(state, mode=mode,
                                                   project=getattr(args, "project", None),
                                                   include_bind=False,
-                                                  issue_state_probe=probe)
+                                                  issue_state_probe=probe,
+                                                  observed_head=observed_head)
+    if disposition.get("outcome") == "revalidation_required":
+        # Its OWN rc, distinct from a clean `complete` (design §6). A refusal reported through the
+        # generic "no handoff" branch below would be indistinguishable from a finished epic, which
+        # is the single failure this gate exists to prevent.
+        print(json.dumps({"outcome": "revalidation_required",
+                          "observed_head": disposition.get("observed_head"),
+                          "validated_head": disposition.get("validated_head"),
+                          "worklist": disposition.get("worklist", []),
+                          "reason": disposition.get("reason")}, indent=2))
+        return 6
     if disposition.get("outcome") != "ready":
         print(f"no handoff: campaign disposition is {disposition.get('outcome')!r} "
               f"(session_mode {mode!r})")

@@ -792,8 +792,96 @@ def effective_issue_statuses(issues, issue_state_probe=None) -> tuple[dict, dict
     return effective, overlaid
 
 
+def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict) -> None:
+    """The #840 head-and-provenance gate. Raises `QueueRevalidationRequired`, or returns.
+
+    Refuse when EITHER clause fails (design §4, both required — pass-2 findings #1 and #2):
+
+        observed_head != queue_revalidation.validated_head
+        any eligible child's validated_against != observed_head
+        any eligible child carries a pending_disposition
+
+    The head clause alone was r2's design and both reviewers refuted it: a brand-new campaign
+    sitting at its base head, or a newly-added unstamped child at an unmoved head, would hand out
+    work with no provenance at all. The per-child clause alone is equally insufficient — stamps
+    can be advanced without the receipt advancing atomically, and then every child *looks*
+    current while nothing attests the queue as a whole.
+
+    `pending_disposition` is the owner gate. Revalidation may conclude a child is obsolete, but
+    closing a child is an owner decision, so the machine's job is to REFUSE rather than choose
+    between `deferred` and `abandoned`. It is read from the receipt because that is where §3 puts
+    it, and it holds regardless of the child's stamps — an obsolete child that is otherwise fully
+    stamped and current must still not be handed out.
+
+    Eligibility is EFFECTIVE status, not durable status: a `queued` entry the probe confirms
+    already merged must not jam the queue on a revalidation nobody can meaningfully perform.
+
+    Nothing is refused when no child is eligible. There is no work to hand out in that case, so a
+    refusal could only strand a finished or fully-parked campaign.
+    """
+    eligible = [i for i in state.get("issues", []) if effective[i["number"]] == "queued"]
+    if not eligible:
+        return
+    validate_validated_against(observed_head)
+    reval = state.get("queue_revalidation")
+    validated_head = None
+    children: dict = {}
+    if reval is not None:
+        # Validates the receipt AND its linkage to the per-child stamps, so a fabricated stamp
+        # with no evidence behind it fails here rather than passing the gate.
+        validate_queue_revalidation(state)
+        validated_head = reval.get("validated_head")
+        children = reval.get("children") or {}
+    reasons: list[str] = []
+    if validated_head != observed_head:
+        reasons.append(
+            f"the campaign receipt attests {validated_head!r}, not the observed head "
+            f"{observed_head!r}" if validated_head is not None else
+            f"the campaign carries no revalidation receipt for the observed head "
+            f"{observed_head!r}")
+    # The outstanding set is structured, not just prose, because `fresh_session_handoff` has to
+    # hand the successor a worklist and this is the only place that knows which children are in
+    # it. `depth` is deliberately NOT computed here: it needs the changed-file sets, which are
+    # I/O, and this module is pure. The revalidate-children skill annotates depth via
+    # `revalidation_worklist`.
+    outstanding: list[dict] = []
+    for issue in eligible:
+        number = issue["number"]
+        stamped = issue.get("validated_against")
+        if stamped is None:
+            outstanding.append({"number": number, "validated_against": None,
+                                "reason": "never revalidated"})
+            continue
+        validate_validated_against(stamped)
+        if stamped != observed_head:
+            outstanding.append({"number": number, "validated_against": stamped,
+                                "reason": "revalidated against a stale head"})
+            continue
+        record = children.get(str(number))
+        pending = record.get("pending_disposition") if isinstance(record, dict) else None
+        if pending is not None:
+            outstanding.append({"number": number, "validated_against": stamped,
+                                "reason": f"marked {pending} — needs an owner decision between "
+                                          "'deferred' and 'abandoned'; a machine may not close a "
+                                          "child"})
+    reasons.extend(f"#{item['number']}: {item['reason']}" for item in outstanding)
+    if reasons:
+        error = QueueRevalidationRequired(
+            "refusing to hand out the next child: the remaining queue has not been revalidated "
+            f"against {observed_head}. " + "; ".join(reasons) +
+            ". Run the revalidate-children skill, post any corrections, then retry.")
+        # Carried on the exception so `fresh_session_handoff` can surface a worklist without
+        # re-deriving it — and so the refusal is never reduced to an opaque string the caller has
+        # to parse.
+        error.observed_head = observed_head
+        error.validated_head = validated_head
+        error.outstanding = outstanding
+        raise error
+
+
 def next_ready_issue(state: dict, deps_satisfied_by: str = "merged",
-                     issue_state_probe=None) -> int | None:
+                     issue_state_probe=None, *,
+                     observed_head: str | None = None) -> int | None:
     """Return the first queued issue whose dependencies are satisfied, else None.
 
     "First" is queue order (the ``issues`` list order). A dependency counts as
@@ -827,6 +915,20 @@ def next_ready_issue(state: dict, deps_satisfied_by: str = "merged",
     by_num = {i["number"]: i for i in issues}
     numset = set(by_num)
     effective, _overlaid = effective_issue_statuses(issues, issue_state_probe)
+    # #840 — the gate runs BEFORE selection, because a stale queue must refuse whether or not
+    # something happens to be ready. The discriminator is the STATE, never the argument: an
+    # optional enforcement input is a bypass, and this repo has already shipped that exact defect
+    # once (`tests/hooks/test_driver_state_write_back.py:304-306` documents an optional probe that
+    # shipped dead). So a campaign that opted into revalidation and is then queried with no
+    # observation is REFUSED rather than silently waved through.
+    if observed_head is not None:
+        _refuse_unrevalidated_queue(state, observed_head, effective)
+    elif state.get("queue_revalidation") is not None:
+        raise DriverStateError(
+            "this campaign carries a queue_revalidation receipt, so selection requires a freshly "
+            "observed head (launcher_lib.observe_head). Selecting without one would skip the "
+            "freshness gate entirely — pass observed_head, or explicitly None only for a campaign "
+            "that predates #840 and has no receipt")
     for issue in issues:
         if effective[issue["number"]] != "queued":
             continue
@@ -1057,7 +1159,8 @@ def _build_resume_prompt(state: dict, next_issue: int, project=None,
 
 
 def fresh_session_handoff(state: dict, *, mode: str, project=None,
-                          include_bind: bool = True, issue_state_probe=None) -> dict:
+                          include_bind: bool = True, issue_state_probe=None,
+                          observed_head: str | None = None) -> dict:
     """Decide the process-boundary handoff after a child reaches a terminal outcome (#569).
 
     Returns an explicit disposition (NEVER a bare None — design §4 [2]):
@@ -1068,6 +1171,14 @@ def fresh_session_handoff(state: dict, *, mode: str, project=None,
       queued dependency-satisfied child exists (``generation`` is the monotonic claim token).
     - ``{"outcome": "blocked"}`` when unmerged children remain but none is ready (all
       deferred/abandoned/dependency-blocked) — the epic stays OPEN; NEVER conflated with complete.
+    - ``{"outcome": "revalidation_required", "worklist", "observed_head", "reason"}`` (#840) when
+      the remaining queue has not been revalidated against ``observed_head``.
+
+    #840, and this is the whole reason selection RAISES instead of returning ``None``: every
+    non-``ready`` outcome used to collapse into ``None`` at `resume_prompt_for_state`, which
+    reports it as "complete or blocked". A stale queue announced to the operator as *the epic
+    finished* is the worst failure available here, so `revalidation_required` is its own explicit
+    disposition and is never conflated with `blocked`.
     """
     if mode != FRESH_SESSION_MODE:
         return {"outcome": "single_session"}
@@ -1081,8 +1192,17 @@ def fresh_session_handoff(state: dict, *, mode: str, project=None,
     if issues and all(effective[i["number"]] == "merged" for i in issues):
         return {"outcome": "complete"}
     # This is the ONE production selection site, so the probe has to arrive here or the
-    # corroboration is dead code. `_cmd_handoff` supplies the real `gh api graphql` probe.
-    nxt = next_ready_issue(state, issue_state_probe=issue_state_probe)
+    # corroboration is dead code. `_cmd_handoff` supplies the real `gh api graphql` probe, and
+    # (#840) the freshly observed head from `launcher_lib.observe_head`.
+    try:
+        nxt = next_ready_issue(state, issue_state_probe=issue_state_probe,
+                               observed_head=observed_head)
+    except QueueRevalidationRequired as exc:
+        return {"outcome": "revalidation_required",
+                "worklist": getattr(exc, "outstanding", []),
+                "observed_head": getattr(exc, "observed_head", observed_head),
+                "validated_head": getattr(exc, "validated_head", None),
+                "reason": str(exc)}
     if nxt is not None:
         chosen = project or state.get("project")
         if not valid_project_name(chosen):

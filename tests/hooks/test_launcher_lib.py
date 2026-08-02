@@ -682,7 +682,11 @@ class TestHandoffCLI:
         state = json.loads(_state(tmp_path).read_text(encoding="utf-8"))
         disposition = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE)
         assert disposition["outcome"] == "ready"
-        assert ll.resume_prompt_for_state(state, project=PROJECT) == disposition["resume_prompt"]
+        # #840 made this a result object rather than `str | None`, so a revalidation refusal
+        # could stop being reported as "the epic finished". The prompt itself is unchanged.
+        result = ll.resume_prompt_for_state(state, project=PROJECT)
+        assert result["outcome"] == "ready", result
+        assert result["prompt"] == disposition["resume_prompt"]
         assert "612" in disposition["resume_prompt"]
 
     def test_the_condition_can_be_read_verbatim_from_a_transcript(self, tmp_path) -> None:

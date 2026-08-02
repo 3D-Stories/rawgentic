@@ -169,15 +169,33 @@ class TestQueueRevalidationRequiredExists:
         DriverStateError keeps every existing `except DriverStateError` caller correct."""
         assert issubclass(dl.QueueRevalidationRequired, dl.DriverStateError)
 
-    def test_pr1_never_raises_it_from_next_ready_issue(self):
-        """The design gate refused a split that shipped the gate before its clearing
-        mechanism. This asserts PR 1 really is inert: selection still behaves exactly as it
-        did, even on a state carrying revalidation provenance."""
+    def test_pr2_raises_it_rather_than_selecting_from_an_unrevalidated_queue(self):
+        """**Inverted by PR 2 — deliberately, and this note is the record of why.**
+
+        PR 1 asserted the opposite (`next_ready_issue(state) == 840`) because the design gate
+        refused a split that shipped the gate before its clearing mechanism: between the two PRs
+        a live campaign must never jam. PR 2 ships the clearing mechanism, so the inert
+        assertion becomes the wrong contract and is replaced rather than left passing — a guard
+        that no longer describes the code is worse than no guard.
+
+        The child here is unstamped, so it has no provenance at all: exactly AC1's case.
+        """
         state = {"schema_version": 2, "campaign": "c", "epic": 1,
                  "issues": [{"number": 840, "status": "queued", "depends_on": []}],
                  "queue_revalidation": {"version": 1, "extractor_version": 1,
                                         "validated_head": OTHER_SHA, "children": {}}}
-        assert dl.next_ready_issue(state) == 840
+        with pytest.raises(dl.QueueRevalidationRequired):
+            dl.next_ready_issue(state, observed_head=OTHER_SHA)
+
+    def test_a_campaign_with_a_receipt_may_not_select_without_an_observation(self):
+        """The same state queried with no observed head. An optional enforcement input is a
+        bypass, so this refuses instead of falling back to the legacy path."""
+        state = {"schema_version": 2, "campaign": "c", "epic": 1,
+                 "issues": [{"number": 840, "status": "queued", "depends_on": []}],
+                 "queue_revalidation": {"version": 1, "extractor_version": 1,
+                                        "validated_head": OTHER_SHA, "children": {}}}
+        with pytest.raises(dl.DriverStateError):
+            dl.next_ready_issue(state)
 
 
 class TestReviewFindingsReceiptIntegrity:
