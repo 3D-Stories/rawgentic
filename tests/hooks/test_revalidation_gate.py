@@ -1923,3 +1923,118 @@ class TestRound11TheRebuildCLIRefusesCollidingKeys:
         persisted = json.loads(path.read_text(encoding="utf-8"))
         assert persisted["queue_revalidation"]["validated_head"] == head
         assert list(persisted["queue_revalidation"]["children"]) == ["1"]
+
+
+def _corrected(to_sha=HEAD, validated_at=1_754_000_000, url="https://example.invalid/c/1"):
+    """A record carrying SUCCESSOR-FACING evidence: a broken claim plus a correction comment."""
+    rec = _receipt_child(to_sha=to_sha, verdict="broken")
+    rec["outcome"] = "body_corrected"
+    rec["correction_comment"] = url
+    rec["validated_at"] = validated_at
+    return rec
+
+
+class TestRound12EvidenceTheSuccessorNeedsIsNeverSilentlyDropped:
+    """**Round 12, found independently by two lenses, and in the half this PR still ships.**
+
+    `rebuild_receipt` drops any record that does not attest the head being validated. For the
+    ACTIVE `in_progress` child that deleted its `body_corrected` record — and the worklist is
+    `queued`-only, so nothing re-supplied it. `produce_queue_revalidated` then reported the rung
+    PASSED, so the rung authorised the handoff and eventually the teardown while the successor
+    lost the mandatory correction and resumed from the stale body.
+
+    That is #840's own thesis defeated on the exact one-`in_progress` path the feature serves.
+
+    Both halves are required. Refusing alone would be another unrecoverable jam — the operator
+    needs a way to supply the replacement, which is why the child also becomes a worklist
+    candidate."""
+
+    def _active_corrected(self):
+        return _state(_iss(1, "in_progress", validated_against=OLD),
+                      reval=_reval(OLD, {"1": _corrected(to_sha=OLD)}))
+
+    def test_the_correction_is_in_the_prompt_before_any_rebuild(self):
+        """Baseline — without this the test below could pass for the wrong reason."""
+        assert "CORRECTION for #1" in dl.corrections_clause(self._active_corrected(), 1)
+
+    def test_rebuilding_REFUSES_to_drop_it(self):
+        with pytest.raises(dl.DriverStateError) as exc:
+            dl.rebuild_receipt(self._active_corrected(), HEAD, {})
+        message = str(exc.value)
+        assert "#1" in message, message
+        assert "revalidate-children" in message, message
+        assert getattr(exc.value, "remedy", None) == "revalidate", message
+
+    def test_the_worklist_OFFERS_that_child_so_the_refusal_is_clearable(self):
+        """The remedy half. A `queued`-only worklist is what made the evidence unreplaceable."""
+        work = dl.revalidation_worklist(self._active_corrected(), HEAD,
+                                        extractions={1: ([], "none")}, changed_by_child={1: set()})
+        assert [item["number"] for item in work] == [1], work
+
+    def test_and_supplying_the_replacement_keeps_the_correction(self):
+        """Executing the prescribed remedy must reach a good state AND retain the evidence."""
+        rebuilt = dl.rebuild_receipt(self._active_corrected(), HEAD, {1: _corrected(to_sha=HEAD)})
+        assert "CORRECTION for #1" in dl.corrections_clause(rebuilt, 1)
+        assert rebuilt["queue_revalidation"]["validated_head"] == HEAD
+
+    def test_a_child_with_NO_successor_facing_evidence_is_still_dropped_freely(self):
+        """The negative twin — this must not become 'never drop anything', which would resurrect
+        the corrupt-record jam round 8 closed."""
+        state = _state(_iss(1, "in_progress", validated_against=OLD),
+                       reval=_reval(OLD, {"1": _receipt_child(to_sha=OLD)}))
+        rebuilt = dl.rebuild_receipt(state, HEAD, {})
+        assert rebuilt["queue_revalidation"]["children"] == {}
+
+    def test_a_DISPOSED_child_may_lose_its_record(self):
+        """Nobody will be handed a merged child, so its correction has no consumer left."""
+        state = _state(_iss(1, "merged", validated_against=OLD),
+                       reval=_reval(OLD, {"1": _corrected(to_sha=OLD)}))
+        assert dl.rebuild_receipt(state, HEAD, {})["queue_revalidation"]["children"] == {}
+
+    def test_an_OLDER_audit_cannot_overwrite_a_newer_same_head_record(self):
+        """Round 12 lens B. The lock serialises WRITES; it does not order EVIDENCE. A session
+        holding a record prepared earlier could replace a newer correction at the same head."""
+        newer = _state(_iss(1), reval=_reval(HEAD, {"1": _corrected(to_sha=HEAD,
+                                                                   validated_at=200)}))
+        older = _receipt_child(to_sha=HEAD)
+        older["validated_at"] = 100
+        with pytest.raises(dl.DriverStateError, match="older"):
+            dl.rebuild_receipt(newer, HEAD, {1: older})
+
+    def test_a_NEWER_audit_replaces_it_normally(self):
+        """The negative twin — ordinary re-auditing must still work."""
+        state = _state(_iss(1), reval=_reval(HEAD, {"1": _corrected(to_sha=HEAD,
+                                                                   validated_at=100)}))
+        fresh = _receipt_child(to_sha=HEAD)
+        fresh["validated_at"] = 200
+        rebuilt = dl.rebuild_receipt(state, HEAD, {1: fresh})
+        assert rebuilt["queue_revalidation"]["children"]["1"]["validated_at"] == 200
+
+
+class TestRound12LiteralDuplicateJsonKeys:
+    """**Round 12.** The round-11 canonical-key fix catches `"1"` versus `"01"` but not `"1"`
+    twice in the same object: `json.load` silently keeps the last BEFORE the check can see either.
+    Audit evidence is discarded while the command reports success and opens the gate — the same
+    defect the round-11 fix was written for, one layer earlier in the pipeline.
+
+    Written with literal duplicate JSON TEXT, because a Python dict cannot express it — which is
+    exactly why the round-11 test missed it."""
+
+    def test_duplicate_properties_are_REFUSED(self, tmp_path):
+        work, head = _repo_with_origin(tmp_path)
+        path = _write_state(tmp_path, _state(_iss(1)))
+        rec = json.dumps(_receipt_child(to_sha=head))
+        audited = tmp_path / "audited.json"
+        audited.write_text(f'{{"1": {rec}, "1": {rec}}}', encoding="utf-8")
+        rc = ll.main(["rebuild-receipt", "--driver-state", str(path),
+                      "--project-root", str(work), "--audited", str(audited)])
+        assert rc == 2, rc
+
+    def test_a_single_property_still_works(self, tmp_path):
+        work, head = _repo_with_origin(tmp_path)
+        path = _write_state(tmp_path, _state(_iss(1)))
+        audited = tmp_path / "audited.json"
+        audited.write_text(json.dumps({"1": _receipt_child(to_sha=head)}), encoding="utf-8")
+        rc = ll.main(["rebuild-receipt", "--driver-state", str(path),
+                      "--project-root", str(work), "--audited", str(audited)])
+        assert rc == 0, rc

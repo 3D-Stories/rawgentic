@@ -3455,9 +3455,23 @@ def _cmd_rebuild_receipt(args) -> int:
         return 5
     audited: dict = {}
     if args.audited:
+        # **Duplicate PROPERTIES are refused at decode time (round 12).** The canonical-key check
+        # below catches `"1"` versus `"01"`, but `json.load` silently keeps the LAST of two
+        # identical `"1"` properties before any check can see either — so evidence was discarded
+        # while the command reported success and opened the gate. A Python dict cannot express
+        # that shape, which is exactly why the round-11 test missed it.
+        def _no_duplicate_keys(pairs):
+            seen = set()
+            for key, _value in pairs:
+                if key in seen:
+                    raise ValueError(f"duplicate property {key!r} — two records cannot both be "
+                                     "the evidence for one child")
+                seen.add(key)
+            return dict(pairs)
+
         try:
             with open(args.audited, encoding="utf-8") as fh:
-                raw = json.load(fh)
+                raw = json.load(fh, object_pairs_hook=_no_duplicate_keys)
         except (OSError, ValueError) as exc:
             print(f"refusing: cannot read {args.audited}: {exc}", file=sys.stderr)
             return 2

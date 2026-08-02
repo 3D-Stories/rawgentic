@@ -592,6 +592,28 @@ def parse_changed_paths(diff_text: str) -> set[str]:
     return changed
 
 
+def carries_successor_evidence(record) -> bool:
+    """Does this record hold something the SUCCESSOR still needs? PURE.
+
+    #840 round 12, found independently by two lenses. `rebuild_receipt` drops any record that does
+    not attest the head being validated — and for the active `in_progress` child that deleted its
+    `body_corrected` record, which is the ONLY place `corrections_clause` can read the correction
+    from. The worklist is `queued`-only, so nothing re-supplied it; the rung then reported PASSED
+    and the successor resumed from the stale body the correction existed to fix.
+
+    "Successor-facing" is exactly what `corrections_clause` renders: a broken claim, a correction
+    comment, or a pending disposition. Deliberately NOT "any record" — dropping ordinary
+    `still_valid` evidence is how a corrupt entry becomes recoverable (round 8), and this must not
+    become "never drop anything".
+    """
+    if not isinstance(record, dict):
+        return False
+    if record.get("correction_comment") or record.get("pending_disposition"):
+        return True
+    return any(isinstance(claim, dict) and claim.get("verdict") == "broken"
+               for claim in (record.get("claims") or []))
+
+
 def _receipt_covers_child(state: dict, number: int, observed_head: str) -> bool:
     """Does a CURRENT campaign receipt carry evidence for this child? PURE.
 
@@ -695,10 +717,21 @@ def revalidation_worklist(state: dict, observed_head: str, extractions: dict,
     unresolvable = frozenset(unresolvable_shas or ())
     effective, _overlaid = effective_issue_statuses(issues, issue_state_probe)
     work: list[dict] = []
+    reval_children = ((state.get("queue_revalidation") or {}).get("children") or {}) \
+        if isinstance(state.get("queue_revalidation"), dict) else {}
     for issue in issues:
         number = issue["number"]
         if effective[number] != "queued":
-            continue
+            # **A non-queued child still needs auditing when it holds successor-facing evidence
+            # (round 12).** The worklist being `queued`-only is what made the active child's
+            # correction unreplaceable: `rebuild_receipt` dropped the record and nothing could
+            # produce a new one, so refusing the drop alone would have been another
+            # unrecoverable jam. A DISPOSED child is exempt — nobody will be handed it, so its
+            # correction has no consumer left.
+            record = reval_children.get(str(number)) if isinstance(reval_children, dict) else None
+            if not (carries_successor_evidence(record)
+                    and issue.get("status") not in _DISPOSED_STATUSES):
+                continue
         stamped = issue.get("validated_against")
         # **A stamp is evidence only when a CURRENT receipt vouches for it (round-6 High 3).**
         # This used to skip on the stamp alone, which made the head clause's own refusal
@@ -934,8 +967,41 @@ def rebuild_receipt(state: dict, observed_head: str, audited: dict) -> dict:
                 continue                       # unreadable, so not evidence
             if record.get("to_sha") == observed_head:
                 children[key] = copy.deepcopy(record)
+    # **Refuse to DROP evidence the successor still needs (round 12).** Everything above kept a
+    # prior record only when it attests `observed_head`; for the active child that silently
+    # deleted the correction `corrections_clause` reads. Scoped to UNDISPOSED children, and to
+    # records that actually carry successor-facing evidence, so ordinary stale or corrupt records
+    # are still dropped freely — that dropping is what makes a corrupt entry recoverable.
+    prior_map = prior_children if isinstance(prior_children, dict) else {}
+    for issue in state.get("issues", []):
+        number = issue["number"]
+        if issue.get("status") in _DISPOSED_STATUSES or int(number) in {
+                int(k) for k in audited}:
+            continue
+        record = prior_map.get(str(number))
+        if carries_successor_evidence(record) and str(number) not in children:
+            error = DriverStateError(
+                f"refusing to rebuild the receipt: child #{number} is still active and its record "
+                "carries evidence the successor needs (a correction, a broken claim or a pending "
+                "disposition), and this rebuild would drop it. Re-audit that child against the "
+                "observed head and supply its replacement record — the revalidate-children skill "
+                "lists it")
+            error.remedy = "revalidate"
+            raise error
     for number, record in audited.items():
         validate_revalidation_child(record)
+        # **An OLDER audit may not replace a NEWER record at the SAME head (round 12).** The
+        # state lock serialises WRITES; it does not order EVIDENCE. A session holding a record
+        # prepared before another session's correction landed would otherwise overwrite it, and
+        # both are legitimately "at the observed head".
+        existing = children.get(str(int(number)))
+        if isinstance(existing, dict):
+            was, now = existing.get("validated_at"), record.get("validated_at")
+            if _is_int(was) and _is_int(now) and now < was:
+                raise DriverStateError(
+                    f"refusing the audit record for child #{number}: it was validated at {now} "
+                    f"but the receipt already holds evidence validated at {was}, which is newer. "
+                    "Re-audit against the observed head rather than replaying an older pass")
         if record.get("to_sha") != observed_head:
             # **This is the NORMAL case of `main` moving mid-audit, not a caller bug — so it
             # names a remedy (round-10, all three lenses).** It used to state only the mismatch,
