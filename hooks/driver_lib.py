@@ -347,6 +347,68 @@ def parse_changed_paths(diff_text: str) -> set[str]:
     return changed
 
 
+def revalidation_worklist(state: dict, observed_head: str, extractions: dict,
+                          changed_by_child: dict, issue_state_probe=None) -> list[dict]:
+    """Which remaining children need a look against ``observed_head``, and how hard a one. PURE.
+
+    **Owner ruling 2026-08-02: the cited-paths intersection decides HOW HARD to look, never
+    WHETHER.** Every eligible child not stamped at the current head appears here. Nothing is
+    auto-cleared.
+
+    The refuted earlier design cleared a child whose cited files a merge had not touched. Both
+    pass-2 reviewers refuted it independently as an incomplete dependency model, and #835 is
+    the standing proof: its body was wrong about the *cause*, not about a filename, so a path
+    filter would have cleared it — and #835 is one of the three incidents that caused #840 to
+    be filed at all.
+
+    ``depth`` is ``"deep"`` when the body could not be confidently read (`extraction` is not
+    ``"paths"``) or when its cited paths intersect what changed; ``"quick"`` otherwise. Both
+    still get a look; only the required work differs.
+
+    Eligibility is EFFECTIVE status, not durable status: a `queued` entry the probe confirms
+    already merged must not block the queue on a revalidation nobody can meaningfully perform.
+    A probe outage conservatively keeps the child eligible, matching
+    `effective_issue_statuses`' own never-veto-on-outage rule.
+
+    ``extractions``/``changed_by_child`` are INJECTED — this module does no I/O. A MISSING
+    entry raises rather than defaulting: an absent extraction would silently produce `quick`,
+    which fails toward LESS scrutiny, and that is the one direction this design must never
+    take. "No data" must never read as "no changes".
+    """
+    validate_validated_against(observed_head)
+    issues = state.get("issues", [])
+    _numbers(issues)
+    base = state.get("base_default_branch_sha")
+    effective, _overlaid = effective_issue_statuses(issues, issue_state_probe)
+    work: list[dict] = []
+    for issue in issues:
+        number = issue["number"]
+        if effective[number] != "queued":
+            continue
+        stamped = issue.get("validated_against")
+        if stamped is not None:
+            validate_validated_against(stamped)
+            if stamped == observed_head:
+                continue                       # already validated against this exact head
+        if number not in extractions:
+            raise DriverStateError(
+                f"no extraction supplied for child #{number} — refusing to default it, because "
+                "an absent extraction would silently produce depth 'quick' and fail toward less "
+                "scrutiny")
+        if number not in changed_by_child:
+            raise DriverStateError(
+                f"no changed-file set supplied for child #{number} — 'no data' must never read "
+                "as 'no changes'")
+        cited, extraction = extractions[number]
+        changed = changed_by_child[number]
+        intersects = bool(set(cited or ()) & set(changed or ()))
+        depth = "deep" if (extraction != "paths" or intersects) else "quick"
+        work.append({"number": number, "depth": depth, "extraction": extraction,
+                     "from_sha": stamped if stamped is not None else base,
+                     "to_sha": observed_head})
+    return work
+
+
 def parse_depends_on(body: str) -> list[int]:
     """Return the sorted, de-duplicated issue numbers this body depends on.
 
