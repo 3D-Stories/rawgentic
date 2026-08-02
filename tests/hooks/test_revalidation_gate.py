@@ -1329,6 +1329,35 @@ class TestRound3Finding5AStampedObsoleteChildIsNotValidatorValid:
         assert dl.validate_queue_revalidation(
             dl.record_child_outcome(jammed, 1, disposition)) is True
 
+    @pytest.mark.parametrize("status", ["in_progress", "pr_open", "merged",
+                                        "deferred", "abandoned"])
+    def test_narrowing_to_queued_opens_no_hole_because_nothing_else_is_selectable(self, status):
+        """The question the round-4 narrowing actually turns on, answered by enumeration rather
+        than by argument. The invariant now reads DURABLE status while selection reads EFFECTIVE
+        status, so "scoped to queued" is only safe if every OTHER status is unselectable anyway —
+        otherwise the fix for the jam would re-open the hole round 3 closed.
+
+        It holds: for each non-`queued` status the receipt validates AND the child cannot be
+        selected, so a leftover stamp beside a pending marker cannot hand anyone stale work."""
+        state = _state(_iss(1, status, validated_against=HEAD),
+                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
+        assert dl.validate_queue_revalidation(state) is True
+        assert dl.next_ready_issue(state, observed_head=HEAD) is None, \
+            f"a {status!r} child must not be selectable, or narrowing the invariant is a bypass"
+
+    def test_the_probe_overlay_case_is_refused_but_still_recoverable(self):
+        """The one shape where durable and effective status genuinely disagree: the file says
+        `queued`, the issue is really merged. The invariant fires on the durable value, so the
+        campaign IS refused — and that is acceptable only because recording the real outcome
+        clears it. Checked, not assumed: an unrecoverable refusal here would be the fourth jam."""
+        state = _state(_iss(1, validated_against=HEAD),
+                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
+        with pytest.raises(dl.QueueRevalidationRequired):
+            dl.next_ready_issue(state, observed_head=HEAD,
+                                issue_state_probe=lambda _n: "confirmed_merged")
+        assert dl.validate_queue_revalidation(
+            dl.record_child_outcome(state, 1, "merged")) is True
+
     def test_a_QUEUED_child_is_still_refused(self):
         """The negative twin. Narrowing the invariant to selectable children must not narrow it
         to nothing — a `queued` child carrying both is the case the invariant exists for."""
