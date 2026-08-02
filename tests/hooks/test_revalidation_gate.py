@@ -1182,6 +1182,69 @@ class TestRound2Finding1TheFirstArmIsAlwaysPossible:
         assert dl.next_ready_issue(armed, observed_head=HEAD) == 1
 
 
+class TestRound4Finding1ThePolicyKnobReachesSelection:
+    """**High.** `fresh_session_handoff` called `next_ready_issue` without `deps_satisfied_by`,
+    so it took the `"merged"` default and the persisted `policy.deps_satisfied_by` was silently
+    discarded (`queue.schema.json` defines it; `docs/multi-issue-driver.md` documents the
+    stacked-PR flow that depends on it).
+
+    Concrete failure: a headless campaign with `deps_satisfied_by: "pr_open"`, child #1 `pr_open`
+    and queued child #2 depending on #1. The advance rule says #2 is ready and the direct call
+    agrees — but every path through `next-child` reported `blocked`/rc 3, which the driver reads
+    as "nothing left". The documented flow stalls permanently, and #840's own gate work is what
+    routed selection through that path.
+    """
+
+    def _stacked(self, **policy):
+        return _state(_iss(1, "pr_open"), _iss(2, depends_on=[1], validated_against=HEAD),
+                      reval=_reval(HEAD, {"2": _receipt_child()}),
+                      policy=policy or {"deps_satisfied_by": "pr_open"})
+
+    def test_the_pure_selector_and_the_disposition_agree(self):
+        state = self._stacked()
+        assert dl.next_ready_issue(state, "pr_open", observed_head=HEAD) == 2, \
+            "fixture check: the advance rule really does consider #2 ready"
+        disp = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE,
+                                        project="rawgentic", observed_head=HEAD)
+        assert disp["outcome"] == "ready" and disp["next_issue"] == 2, disp
+
+    def test_the_default_is_unchanged_when_no_policy_is_set(self):
+        """The negative twin: absent policy must still mean `merged`, or every campaign silently
+        loosens to the stacked-PR rule — the opposite defect and a far worse one."""
+        state = _state(_iss(1, "pr_open"), _iss(2, depends_on=[1], validated_against=HEAD),
+                       reval=_reval(HEAD, {"2": _receipt_child()}))
+        assert dl.next_ready_issue(state, observed_head=HEAD) is None
+        disp = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE,
+                                        project="rawgentic", observed_head=HEAD)
+        assert disp["outcome"] == "blocked", disp
+
+    @pytest.mark.parametrize("bad", ["", "PR_OPEN", "anything", 7, None, True])
+    def test_an_unusable_policy_value_falls_back_to_the_STRICTER_default(self, bad):
+        """Fail toward strictness, and never toward a jam. `pr_open` is the LOOSER rule, so a
+        value that cannot be read must not buy it — but raising would strand a campaign over a
+        typo, which is the unrecoverable-migration class rounds 2-4 kept finding."""
+        state = self._stacked(deps_satisfied_by=bad)
+        assert dl.campaign_deps_satisfied_by(state) == "merged"
+        disp = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE,
+                                        project="rawgentic", observed_head=HEAD)
+        assert disp["outcome"] == "blocked", disp
+
+    def test_next_child_end_to_end_honours_the_policy(self, tmp_path):
+        """The reviewer asked for this one specifically: the pure function agreeing proves
+        nothing about the CLI the driver actually runs."""
+        work, head = _repo_with_origin(tmp_path)
+        state = _state(_iss(1, "pr_open"), _iss(2, depends_on=[1], validated_against=head),
+                       reval=_reval(head, {"2": _receipt_child(to_sha=head)}),
+                       policy={"deps_satisfied_by": "pr_open"})
+        path = _write_state(tmp_path, state)
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "next-child", "--driver-state", str(path),
+             "--project-root", str(work), "--no-probe"],
+            capture_output=True, text=True, check=False)
+        assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
+        assert json.loads(proc.stdout)["next_issue"] == 2, proc.stdout
+
+
 class TestRound3Finding5AStampedObsoleteChildIsNotValidatorValid:
     """**Medium.** `validate_revalidation_child` already refuses `pending_disposition` together
     with an `outcome`, because a stamped child is selectable and an obsolete child must stay
@@ -1235,6 +1298,42 @@ class TestRound3Finding5AStampedObsoleteChildIsNotValidatorValid:
     def test_an_ordinary_stamped_child_is_still_fine(self):
         """The other twin — without it the fix could refuse every stamp and still pass above."""
         assert dl.validate_queue_revalidation(self._armed()) is True
+
+    def test_the_OWNER_DISPOSITION_actually_clears_it(self):
+        """**Round-4 High 4 — the defect my own round-3 fix created.** The refusal tells the owner
+        to record `deferred` or `abandoned`. `record_child_outcome` changes only the issue STATUS
+        and leaves the stamp in place, so the invariant kept firing afterwards and the campaign was
+        jammed for good: receipt validation runs before eligibility, and the revalidation skill
+        skips a child that is no longer eligible, so re-running it repaired nothing either.
+
+        A refusal whose own documented remedy does not clear it is not a guard, it is a trap — the
+        same unrecoverable-migration class as round-2 finding 1 and round-3 finding 1. Asserting
+        the exception type alone could never have caught this; only driving the whole
+        `queued -> owner disposition -> gate opens` round trip does."""
+        jammed = _state(_iss(1, validated_against=HEAD),
+                        reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
+        with pytest.raises(dl.QueueRevalidationRequired):
+            dl.next_ready_issue(jammed, observed_head=HEAD)
+        disposed = dl.record_child_outcome(jammed, 1, "abandoned")
+        # The receipt itself must now validate — the child is no longer selectable, so a stamp
+        # beside its pending marker is no longer a contradiction.
+        assert dl.validate_queue_revalidation(disposed) is True
+        # And selection must reach a real verdict instead of raising for ever.
+        assert dl.next_ready_issue(disposed, observed_head=HEAD) is None
+
+    @pytest.mark.parametrize("disposition", ["deferred", "abandoned"])
+    def test_both_documented_dispositions_clear_it(self, disposition):
+        """The refusal names both; both must work, or the message is half true."""
+        jammed = _state(_iss(1, validated_against=HEAD),
+                        reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
+        assert dl.validate_queue_revalidation(
+            dl.record_child_outcome(jammed, 1, disposition)) is True
+
+    def test_a_QUEUED_child_is_still_refused(self):
+        """The negative twin. Narrowing the invariant to selectable children must not narrow it
+        to nothing — a `queued` child carrying both is the case the invariant exists for."""
+        with pytest.raises(dl.QueueRevalidationRequired):
+            dl.validate_queue_revalidation(self._armed(pending="issue_obsolete"))
 
 
 class TestRound3Finding1UnusableBaselinesAreAlsoRecoverable:

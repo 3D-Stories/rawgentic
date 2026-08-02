@@ -125,9 +125,19 @@ put a list up by hand).
   because a bare bind enters the switch skill's list mode and waits for a human, and the
   launcher closes the successor's pane when `project_switched` exhausts at 120 s. Without it the
   disposition is `no_project` and NOTHING is persisted (deliberately, so a refusal cannot strand
-  a bumped `generation`). On
-  `ready` persist the handoff via `driver_lib.open_handoff(state, disp, now_ts=)` (bumps the
-  monotonic `generation` + writes `handoff_pending`) and end; the durable launcher — which must
+  a bumped `generation`).
+  **On `ready` the `handoff` command performs the whole boundary itself — do NOT call
+  `driver_lib.open_handoff` after it** (corrected at Step-11 round 4, High 2; the instruction to
+  do so described a transaction that does not exist). `handoff` observes the head, computes the
+  disposition and, when it is `ready`, goes straight into `perform_handoff`: it splits the pane,
+  launches the successor and — unless `--no-teardown` — retires the predecessor, then prints an
+  `ok` report (rc 0 ok, 4 the ladder refused, 3 nothing ready, 5 head unobservable, 6 revalidate
+  first). It returns no disposition object for you to persist, and there is no `disp` to pass on.
+  **Known gap, stated rather than papered over:** this boundary writes no `handoff_pending`, so
+  it carries no generation/claim fence — that mechanism belongs to `mid-child-handoff`, which
+  does call `open_handoff`. Two `handoff` invocations for the same child can therefore each
+  launch a successor. Tracked as #845; until it is closed, never run `handoff` twice for
+  one boundary on the assumption the second is a no-op. Then the durable launcher — which must
   POSITIVELY advertise no-`--resume` support (`fresh_session_available`'s `fresh_launch_supported`
   probe) — starts a FRESH `claude -p` **with NO `--resume`** for the successor. The successor
   `driver_lib.handoff_claim`s under the launcher flock (exactly-one-successor), rebuilds position

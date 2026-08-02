@@ -214,8 +214,9 @@ _VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
 # handoff can be verified at all.
 #
 # `owner` records which side can produce each piece of evidence, and it is load-bearing rather
-# than documentation: the predecessor can prove the first four about the successor it just
-# launched, but the last two are the SUCCESSOR's own (a rebuild receipt and its claim). A
+# than documentation: the predecessor can prove the first FIVE about the successor it just
+# launched — four before #840, which inserted the predecessor-owned `queue_revalidated` at
+# position 1 — but the last two are the SUCCESSOR's own (a rebuild receipt and its claim). A
 # predecessor-side gate that demanded all seven could never pass, and — worse — a full ladder
 # handed to `teardown_allowed` on the predecessor side would authorise a predecessor to retire
 # ITSELF after four checks, which is precisely the ownership inversion approach C was rejected
@@ -1460,7 +1461,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
 
     A ladder carrying successor-owned checks forces `teardown` OFF. For a mid-child handoff the
     predecessor is the thing being retired, and retirement is the SUCCESSOR's call — letting the
-    predecessor close its own pane after the four checks it can make is the ownership inversion
+    predecessor close its own pane after the five checks it can make is the ownership inversion
     approach C was rejected for, and it is how "the predecessor cannot observe whether the
     successor really took over" becomes unrecoverable.
 
@@ -2630,11 +2631,14 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
                 claim_state["verdict"] = "already_ours"
                 return None
             claim_state["verdict"] = "refused"
-            # #840 Step-11 round 3, High 3: WHY it refused, decided from the same state the
-            # decision was made on and inside the same lock — a re-read afterwards could observe a
-            # claim that appeared or expired in between and mis-attribute the refusal.
-            claim_state["live_claim"] = driver_lib.handoff_claim_blocked_by_live_claim(
-                s, generation, now_ts=now, lease_s=lease_s)
+            # #840 Step-11 rounds 3 and 4: the COMPLETE refusal reason, decided from this one
+            # locked snapshot. Round 3 asked only about the caller's own generation and re-read
+            # the state afterwards for the queue half; round 4 showed both were wrong. A live
+            # claimant on a SUPERSEDED generation was invisible, and the second read could
+            # observe a claim that appeared or expired in between. Both halves now come from `s`.
+            claim_state["live_claim"] = driver_lib.handoff_claim_is_live(
+                s, now_ts=now, lease_s=lease_s)
+            claim_state["queue_current"] = driver_lib.handoff_queue_is_current(s)
             return None
 
         _locked_state_update(driver_state_path, _claim)
@@ -2644,13 +2648,13 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             # situations with different remedies, and reporting both as "a foreign or live claim"
             # sent the operator looking for a competing session that does not exist.
             #
-            # Round 3, High 3: but the payload diagnostic may only speak when a live claim did NOT
-            # cause the refusal. `handoff_claim` tests the claim FIRST, so with both wrong the
-            # claim is the reason — and "no claim was ever created, open a new generation" would
-            # then invite a competitor alongside a claimant that is still working.
-            if not claim_state.get("live_claim") \
-                    and not driver_lib.handoff_queue_is_current(
-                        _locked_state_read(driver_state_path)):
+            # Rounds 3 and 4, High 3: the payload diagnostic may speak ONLY when no live claim
+            # caused the refusal — on ANY generation, not merely this caller's. `handoff_claim`
+            # tests the claim before the payload, and a live claimant on a SUPERSEDED generation
+            # is still somebody working. "No claim was ever created, open a new generation" is
+            # the one instruction that can put a competitor beside them, so it is gated on the
+            # strongest available evidence that nobody is in there.
+            if not claim_state.get("live_claim") and not claim_state.get("queue_current", True):
                 out["queue_changed"] = True
                 out["reason"] = (
                     f"could not claim generation {generation} — the campaign queue changed after "
@@ -2661,8 +2665,11 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
                     "the claim lease does not apply, because no claim was ever created")
             else:
                 out["reason"] = ("could not claim generation "
-                                 f"{generation} — a foreign or live claim holds it; the run "
-                                 "continues in place and the predecessor stays alive and guarded")
+                                 f"{generation} — a live or foreign claim holds this campaign "
+                                 "(possibly on a later generation than the one this session "
+                                 "captured); the run continues in place and the predecessor "
+                                 "stays alive and guarded. Do NOT open another generation — "
+                                 "a claimant may be working right now")
             return out
 
         # --- 4. verify from the SUCCESSOR's own artifacts ---

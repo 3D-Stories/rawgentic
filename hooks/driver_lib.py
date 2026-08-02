@@ -439,9 +439,18 @@ def validate_queue_revalidation(state: dict) -> bool:
         # the receipt asserted an obsolete child had been cleared. Selection refuses it anyway on
         # the pending marker, so this closes an invariant hole rather than a bypass; but a receipt
         # is exactly the artifact whose invariants have to hold on their own.
+        #
+        # **Scoped to `queued` (round-4 High 4).** Unscoped, this refusal outlived its own
+        # remedy: `record_child_outcome` moves the STATUS to `deferred`/`abandoned` and leaves the
+        # stamp untouched, so the invariant kept firing after the owner had done exactly what the
+        # message asked, and re-running the revalidation skill could not help either — it skips a
+        # child that is no longer eligible. The campaign was then unrecoverable, which is the very
+        # class of defect rounds 2 and 3 were spent removing. The invariant is about
+        # SELECTABILITY, so it applies only where selection can happen; once a child is disposed
+        # of it is not selectable and a leftover stamp asserts nothing.
         record = parsed.get(issue["number"])
         if record is not None and record.get("pending_disposition") is not None \
-                and stamped == head:
+                and stamped == head and issue.get("status") == "queued":
             # `QueueRevalidationRequired`, NOT a bare `DriverStateError`, and the difference is
             # load-bearing. It subclasses `DriverStateError`, so every structural caller keeps
             # working — but `_refuse_unrevalidated_queue` already refuses this exact shape as the
@@ -977,6 +986,29 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
         raise error
 
 
+def campaign_deps_satisfied_by(state: dict) -> str:
+    """The campaign's persisted `policy.deps_satisfied_by`, or the strict default. PURE.
+
+    #840 Step-11 round 4, High 1. `fresh_session_handoff` took `next_ready_issue`'s `"merged"`
+    default and silently discarded the persisted policy, so the documented headless stacked-PR
+    flow (`deps_satisfied_by: "pr_open"`, dependents advance once their prerequisite has an open
+    PR) reported `blocked` — which the driver reads as "nothing left" and stops on. #840's own
+    gate work is what routed selection through that path, so it shipped the regression.
+
+    **An unusable value falls back to `"merged"`, the STRICTER rule, rather than raising.**
+    `pr_open` is the looser of the two, so a value nobody can read must not buy it; and raising
+    would strand a whole campaign over a typo in a knob, which is the unrecoverable class this
+    issue has now hit three times. Fail toward strictness, never toward a jam.
+    """
+    policy = state.get("policy")
+    if not isinstance(policy, dict):
+        return "merged"
+    value = policy.get("deps_satisfied_by")
+    if isinstance(value, str) and not isinstance(value, bool) and value in _SATISFIED_BY:
+        return value
+    return "merged"
+
+
 def next_ready_issue(state: dict, deps_satisfied_by: str = "merged",
                      issue_state_probe=None, *,
                      observed_head: str | None = None) -> int | None:
@@ -1375,7 +1407,10 @@ def fresh_session_handoff(state: dict, *, mode: str, project=None,
     # corroboration is dead code. `_cmd_handoff` supplies the real `gh api graphql` probe, and
     # (#840) the freshly observed head from `launcher_lib.observe_head`.
     try:
-        nxt = next_ready_issue(state, issue_state_probe=issue_state_probe,
+        # The campaign's own policy, not this function's default (round-4 High 1): dropping it
+        # here turned every `pr_open` stacked-PR campaign into a permanent `blocked`.
+        nxt = next_ready_issue(state, campaign_deps_satisfied_by(state),
+                               issue_state_probe=issue_state_probe,
                                observed_head=observed_head)
     except QueueRevalidationRequired as exc:
         return {"outcome": "revalidation_required",
@@ -1541,6 +1576,27 @@ def handoff_reclaimable(state: dict, *, now_ts: int, lease_s: int) -> bool:
     return _is_int(claimed_at) and (now_ts - claimed_at) > lease_s
 
 
+def handoff_claim_is_live(state: dict, *, now_ts: int, lease_s: int) -> bool:
+    """Is there a live handoff claim at all — ANY generation? PURE.
+
+    #840 Step-11 round 4, High 3. Round 3's precedence fix asked only about the CALLER's own
+    generation, which left the dangerous interleaving open: a successor holding generation N+1
+    is invisible to a stale successor still asking about N, so the payload diagnostic spoke and
+    told the operator to open yet another generation — beside a claimant that is actively
+    working. Generation is the right fence for WHO MAY CLAIM; it is the wrong question for
+    "is somebody in there right now".
+
+    Live means started, or claimed and still inside its lease. A never-started claim past its
+    lease is reclaimable (#665's crash-recovery rule) and is deliberately NOT live — otherwise
+    one crashed successor would mask every genuine queue change from then on.
+    """
+    claim = state.get("handoff_claim")
+    if not isinstance(claim, dict):
+        return False
+    return bool(claim.get("started")) or not handoff_reclaimable(
+        state, now_ts=now_ts, lease_s=lease_s)
+
+
 def handoff_claim_blocked_by_live_claim(state: dict, generation: int, *, now_ts: int,
                                         lease_s: int) -> bool:
     """Is a LIVE (started, or claimed-and-still-within-lease) claim holding ``generation``? PURE.
@@ -1556,8 +1612,7 @@ def handoff_claim_blocked_by_live_claim(state: dict, generation: int, *, now_ts:
     claim = state.get("handoff_claim")
     if not isinstance(claim, dict) or claim.get("generation") != generation:
         return False
-    return bool(claim.get("started")) or not handoff_reclaimable(
-        state, now_ts=now_ts, lease_s=lease_s)
+    return handoff_claim_is_live(state, now_ts=now_ts, lease_s=lease_s)
 
 
 def handoff_claim(state: dict, generation: int, *, claimant: str, now_ts: int,

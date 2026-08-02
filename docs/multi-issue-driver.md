@@ -514,9 +514,18 @@ durable state alone.
 independent successor). The driver gets the disposition from `launcher_lib handoff`,
 which calls `driver_lib.fresh_session_handoff(state, mode=..., observed_head=...)` with a head it
 observed itself (#840 — an armed campaign refuses a disposition computed without one).
-It returns an explicit disposition — never a `None` sentinel:
+It computes an explicit disposition — never a `None` sentinel:
 
-- `ready` → write `handoff_pending` (`generation` id + `next_issue`) to `.driver-state` and end.
+- `ready` → **the command performs the boundary itself**: it splits the pane, launches the
+  successor and (unless `--no-teardown`) retires the predecessor, then prints an `ok` report.
+  It does **not** return the disposition and does **not** call `open_handoff`, so there is
+  nothing for a caller to persist afterwards. *(Corrected at Step-11 round 4, High 2 — this
+  document and `skills/epic-run/SKILL.md` both described a two-step "get the disposition, then
+  `open_handoff` it" flow that production never implemented. Following it launched the successor
+  before anything durable was written and then looked for a `disp` that does not exist.)*
+  **Known gap:** because nothing is persisted here, this boundary has no generation/claim fence —
+  that belongs to `mid-child-handoff`, which does call `open_handoff`. Two `handoff` invocations
+  for one boundary can each launch a successor. Tracked as #845.
 - `complete` (ONLY when every child is `merged`) → run the wrap-up (close the epic).
 - `blocked` (unmerged children remain but none is ready — all deferred/abandoned/dep-blocked) →
   leave the epic OPEN with an honest summary and end. **`blocked` is never conflated with
@@ -613,7 +622,7 @@ builds its own list. Its resume prompt is built by `driver_lib._build_mid_child_
 next to #569's `_build_resume_prompt` for the same reason: two copies of that wording would
 drift.
 
-**Teardown is successor-driven and verified against six on-disk artifacts**, and on every refusal BEFORE the clear the
+**Teardown is successor-driven and verified against seven on-disk artifacts**, and on every refusal BEFORE the clear the
 predecessor is left alive AND still guarded. After a confirmed clear the honest statement is narrower: a
 refusal leaves it alive but possibly unguarded, and a re-armed predecessor is never closed. `.driver-state` writes on this path go through
 one locked read-modify-write helper (`plan_lib.file_lock` on a stable sidecar). The full ladder,

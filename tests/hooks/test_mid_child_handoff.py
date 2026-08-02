@@ -382,7 +382,8 @@ def _world(tmp_path, *, marker_gen=GEN, succ_goal_rows=None, registry_project="r
     return world
 
 
-def _write_state(tmp_path, world, *, pend_over=None, position_over=None, claim=None):
+def _write_state(tmp_path, world, *, pend_over=None, position_over=None, claim=None,
+                 state_over=None):
     pend = {"generation": GEN, "next_issue": ISSUE, "written_ts": 1,
             "kind": dl.MID_CHILD_HANDOFF_KIND, "cancelled": False, "teardown_phase": None,
             "position": _position(world, **(position_over or {})),
@@ -404,6 +405,9 @@ def _write_state(tmp_path, world, *, pend_over=None, position_over=None, claim=N
     state["handoff_pending"] = pend
     if claim is not None:
         state["handoff_claim"] = claim
+    # `state_over` lands LAST so a test can supersede the campaign generation (round-4 High 3)
+    # without the payload derivation above already having used the new value.
+    state.update(state_over or {})
     p = tmp_path / "state.json"
     p.write_text(json.dumps(state), encoding="utf-8")
     return p
@@ -553,7 +557,9 @@ class TestRetireRefusesBeforeAnythingDestructive:
         out = _retire(state, world, tmp_path)
         assert out["outcome"] == "claim_refused"
         assert out.get("queue_changed") is not True, out["reason"]
-        assert "foreign or live claim" in out["reason"]
+        assert "claim holds this campaign" in out["reason"]
+        assert "new generation" not in out["reason"], \
+            "the one instruction that can spawn a competitor beside a live claimant"
         self._assert_nothing_destructive(world)
 
     def test_a_live_foreign_claim_outranks_a_tampered_queue_payload(self, tmp_path):
@@ -568,8 +574,51 @@ class TestRetireRefusesBeforeAnythingDestructive:
         out = _retire(state, world, tmp_path)
         assert out["outcome"] == "claim_refused"
         assert out.get("queue_changed") is not True, out["reason"]
-        assert "foreign or live claim" in out["reason"]
+        assert "claim holds this campaign" in out["reason"]
+        assert "new generation" not in out["reason"], \
+            "the one instruction that can spawn a competitor beside a live claimant"
         self._assert_nothing_destructive(world)
+
+    def test_a_live_claim_on_a_SUPERSEDED_generation_still_outranks(self, tmp_path):
+        """**Round-4 High 3 — the hole left by my round-3 fix.** The live-claim check asked only
+        about the caller's OWN requested generation. So the dangerous interleaving survived:
+
+          * this successor captured generation N and passed the identity checks;
+          * generation N+1 was opened and a DIFFERENT successor claimed and started it;
+          * the queue then moved, making the payload stale.
+
+        `handoff_claim` refuses N on the generation fence, the live-claim predicate for N is
+        False because the live claim names N+1, and the payload is stale — so the operator was
+        still told "no claim was ever created, open a new generation" while a successor was
+        actively working. Any live claim outranks the payload diagnostic, whatever generation it
+        names: the message must never invite a competitor."""
+        world = _world(tmp_path)
+        state = _write_state(
+            tmp_path, world,
+            claim={"generation": GEN + 1, "claimant": "newer-successor",
+                   "claimed_at": 999, "started": True},
+            pend_over={"queue": None},
+            state_over={"generation": GEN + 1})
+        out = _retire(state, world, tmp_path)
+        assert out["outcome"] == "claim_refused"
+        assert out.get("queue_changed") is not True, out["reason"]
+        assert "new generation" not in out["reason"], \
+            "the one instruction that can spawn a competitor beside a live claimant"
+        self._assert_nothing_destructive(world)
+
+    def test_an_expired_unstarted_claim_is_NOT_treated_as_live(self, tmp_path):
+        """The other side of the boundary, or the fix would report every stale record as a live
+        claimant and hide real queue changes for ever. A claim past its lease that never started
+        is reclaimable — #665's own crash-recovery rule — so it must not outrank anything."""
+        world = _world(tmp_path)
+        state = _write_state(
+            tmp_path, world,
+            claim={"generation": GEN, "claimant": "crashed", "claimed_at": 1,
+                   "started": False},
+            pend_over={"queue": None})
+        out = _retire(state, world, tmp_path, now_ts=1_000_000)
+        assert out["outcome"] == "claim_refused"
+        assert out["queue_changed"] is True, out["reason"]
 
     def test_a_stale_payload_with_NO_live_claim_still_reports_the_queue_change(self, tmp_path):
         """The negative twin — without it the fix could simply delete the `queue_changed` branch
