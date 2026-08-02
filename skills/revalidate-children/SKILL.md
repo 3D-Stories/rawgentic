@@ -52,9 +52,13 @@ and any existing `queue_revalidation`.
 python3 -c "import sys; sys.path.insert(0,'hooks'); import launcher_lib; print(launcher_lib.observe_head('.'))"
 ```
 
-That wrapper runs `git -C . fetch origin` then `git -C . rev-parse origin/main` and checks BOTH
-return codes. Do not substitute a cached SHA, `HEAD`, or `validated_head` — a stale value compares
-equal to itself and opens the gate on a moved main.
+That wrapper runs `git -C . fetch origin +refs/heads/main:refs/remotes/origin/main` then
+`git -C . rev-parse origin/main`, and checks BOTH return codes. The refspec is explicit on
+purpose: a bare `git fetch origin` obeys the repo's configured `remote.origin.fetch`, so a narrow
+or filtered clone returns rc 0 WITHOUT advancing the tracking ref and the rev-parse hands back a
+stale SHA that passes as freshly observed. Do not substitute a cached SHA, `HEAD`, or
+`validated_head` either — a stale value compares equal to itself and opens the gate on a moved
+main.
 
 **3. Build the worklist.** The candidate set is every eligible child (effective status `queued`)
 that is **not already attested at the observed head** — and "attested" means BOTH a stamp and a
@@ -67,6 +71,18 @@ is not evidence — omitting the validity half is what made a `body_hash: "bad"`
 coverage, so the child was excluded here and `revalidation_worklist` then raised
 `no extraction supplied for child #N` (round-11 finding). `driver_lib._receipt_covers_child` is
 the same predicate the code uses; call it rather than reimplementing this list.
+
+**Also include every UNDISPOSED, NON-`queued` child whose receipt record carries successor-facing
+evidence** — `driver_lib.carries_successor_evidence(record)`: a broken claim, a correction
+comment, or a `pending_disposition`. This half is not optional and it is not an edge case. It is
+the live one-`in_progress` path this feature exists to serve: `rebuild_receipt` REFUSES to drop
+such a record without a replacement, and only this candidate rule can produce that replacement.
+A `queued`-only candidate set yields `{}` for both input maps, and `revalidation_worklist` then
+raises `DriverStateError: no extraction supplied for child #N` — so the refusal's own printed
+remedy cannot clear the refusal. A DISPOSED child is exempt: nobody will be handed it, so its
+correction has no consumer left. `driver_lib.revalidation_worklist` applies exactly this union;
+derive your `extractions` and `changed_by_child` maps from it rather than from a status filter of
+your own, or they will not cover what the worklist demands.
 
 > **Round-7 finding 2 — this step used to say "absent or != the observed head", and that made the
 > gate unclearable.** A child stamped at the head under a stale or absent receipt was excluded
@@ -199,7 +215,8 @@ makes the gate recoverable:
 
 - a record that no longer validates, or that attests a different head, is **dropped** — it is not
   evidence, and carrying it forward once made a corrupt entry unrecoverable for any child the
-  worklist does not audit (it audits eligible children only);
+  worklist does not audit (it audits every eligible child, PLUS every undisposed non-`queued`
+  child carrying successor-facing evidence — see step 3; it is not eligible-only);
 - a stamp whose evidence was dropped, or that names no usable commit, is **cleared** — the stamp
   is the claim and the record is the evidence, so the claim must never outlive it;
 - a `pending_disposition` is carried forward as EVIDENCE of what the audit found, and the child

@@ -997,11 +997,27 @@ def rebuild_receipt(state: dict, observed_head: str, audited: dict) -> dict:
         existing = children.get(str(int(number)))
         if isinstance(existing, dict):
             was, now = existing.get("validated_at"), record.get("validated_at")
-            if _is_int(was) and _is_int(now) and now < was:
-                raise DriverStateError(
-                    f"refusing the audit record for child #{number}: it was validated at {now} "
-                    f"but the receipt already holds evidence validated at {was}, which is newer. "
-                    "Re-audit against the observed head rather than replaying an older pass")
+            if _is_int(was) and _is_int(now):
+                if now < was:
+                    raise DriverStateError(
+                        f"refusing the audit record for child #{number}: it was validated at "
+                        f"{now} but the receipt already holds evidence validated at {was}, which "
+                        "is newer. Re-audit against the observed head rather than replaying an "
+                        "older pass")
+                # **Round 13, found by all six reviewers.** `validated_at` is an integer epoch
+                # SECOND, so two audits prepared inside the same second TIE — and the round-12
+                # guard above, testing only `<`, let the incoming one win on a tie. That is the
+                # same evidence loss round 12 existed to close. Equality orders nothing, so it
+                # is only safe when there is nothing to order: an IDENTICAL record is a retry of
+                # a write that may have been interrupted, and must still succeed or a rebuild
+                # could never be re-run. Anything else at the same instant is refused.
+                if now == was and record != existing:
+                    raise DriverStateError(
+                        f"refusing the audit record for child #{number}: it and the receipt's "
+                        f"existing evidence are both stamped {now}, so they are unordered — an "
+                        "equal timestamp cannot decide which is later, and the existing record "
+                        "differs. Re-audit against the observed head so the replacement carries "
+                        "a strictly later validated_at")
         if record.get("to_sha") != observed_head:
             # **This is the NORMAL case of `main` moving mid-audit, not a caller bug — so it
             # names a remedy (round-10, all three lenses).** It used to state only the mismatch,

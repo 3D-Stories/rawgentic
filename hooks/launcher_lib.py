@@ -1309,11 +1309,25 @@ def observe_head(repo_root: str, *, runner=_default_runner,
     if not isinstance(repo_root, str) or not repo_root.strip():
         raise LauncherError("observe_head needs a repository root; got "
                             f"{repo_root!r}")
-    fetch = runner(["git", "-C", repo_root, "fetch", "origin"])
+    # #840 round-13: the fetch MUST name the refspec it intends to update. A bare
+    # `git fetch origin` obeys the repo's configured `remote.<name>.fetch`; a narrow or
+    # filtered configuration that excludes this branch returns rc 0 WITHOUT advancing the
+    # tracking ref, and the rev-parse below then hands back a STALE sha that satisfies the
+    # freshness clause this function exists to enforce. rc 0 is only freshness evidence when
+    # the command was told exactly which ref to advance. Found by the neutral-brief review
+    # probe; the three adversarial lenses had all cleared this clause.
+    remote, _, branch = (remote_ref or "").partition("/")
+    if not remote or not branch or "/" in branch:
+        raise LauncherError(
+            f"refusing to observe the head: remote_ref {remote_ref!r} does not split into "
+            "exactly <remote>/<branch>, so no explicit refspec can be derived — and guessing "
+            "one would silently restore the unqualified fetch this refuses")
+    refspec = f"+refs/heads/{branch}:refs/remotes/{remote}/{branch}"
+    fetch = runner(["git", "-C", repo_root, "fetch", remote, refspec])
     if getattr(fetch, "returncode", 1) != 0:
         raise LauncherError(
-            f"refusing to observe the head: `git -C {repo_root} fetch origin` exited "
-            f"{getattr(fetch, 'returncode', 'unknown')} — a stale head would make every "
+            f"refusing to observe the head: `git -C {repo_root} fetch {remote} {refspec}` "
+            f"exited {getattr(fetch, 'returncode', 'unknown')} — a stale head would make every "
             "freshness comparison compare equal to itself and open the gate on a moved main: "
             f"{(getattr(fetch, 'stderr', '') or '').strip()[:400]}")
     rev = runner(["git", "-C", repo_root, "rev-parse", remote_ref])
@@ -2269,11 +2283,44 @@ def _atomic_write(path: str, text: str) -> None:
     atomic_write_lib.atomic_write_text(path, text)
 
 
+def _no_duplicate_keys(pairs):
+    """Refuse a JSON object carrying the same property twice.
+
+    `json.load` keeps the LAST of two identical properties and silently discards the first.
+    For a campaign receipt that means two contradictory records for one child collapse to
+    whichever happened to be written last, and the gate then opens on the survivor at rc 0
+    with the other's evidence — a correction, a broken claim — simply gone.
+
+    Round 12 installed this on the `--audited` decode only. Round 13 (all six reviewers,
+    adversarial and neutral, each by executed reproduction) found the four DURABLE driver-state
+    decodes still on plain `json.load`, which is where selection and teardown actually read.
+    One hardened path out of five is not a guard. This is now the single definition."""
+    seen = set()
+    for key, _value in pairs:
+        if key in seen:
+            raise ValueError(f"duplicate property {key!r} — two records cannot both be "
+                             "the evidence for one child")
+        seen.add(key)
+    return dict(pairs)
+
+
+def _load_state_strict(fh, *, source: str = "driver state") -> dict:
+    """The ONE decoder for driver state and audit evidence. Duplicate properties and a
+    non-object document are both DATA refusals (`ValueError`), never a traceback: every
+    caller already maps `ValueError` to its documented rc-2 refusal."""
+    doc = json.load(fh, object_pairs_hook=_no_duplicate_keys)
+    if not isinstance(doc, dict):
+        raise ValueError(
+            f"{source} must be a JSON object mapping the campaign's fields; got "
+            f"{type(doc).__name__}")
+    return doc
+
+
 def _locked_state_read(path: str) -> dict:
     """Read driver state while holding the same lock every writer here takes."""
     with _plan_lib().file_lock(path):
         with open(path, encoding="utf-8") as fh:
-            return json.load(fh)
+            return _load_state_strict(fh)
 
 
 def _locked_state_update(path: str, mutate):
@@ -2292,7 +2339,7 @@ def _locked_state_update(path: str, mutate):
     """
     with _plan_lib().file_lock(path):
         with open(path, encoding="utf-8") as fh:
-            state = json.load(fh)
+            state = _load_state_strict(fh)
         new = mutate(state)
         if new is None:
             return None
@@ -3372,7 +3419,7 @@ def _cmd_next_child(args) -> int:
     driver_lib = _driver_lib()
     try:
         with open(args.driver_state, encoding="utf-8") as fh:
-            state = json.load(fh)
+            state = _load_state_strict(fh, source=args.driver_state)
     except (OSError, ValueError) as exc:
         print(f"refusing: cannot read {args.driver_state}: {exc}", file=sys.stderr)
         return 2
@@ -3460,24 +3507,14 @@ def _cmd_rebuild_receipt(args) -> int:
         # identical `"1"` properties before any check can see either — so evidence was discarded
         # while the command reported success and opened the gate. A Python dict cannot express
         # that shape, which is exactly why the round-11 test missed it.
-        def _no_duplicate_keys(pairs):
-            seen = set()
-            for key, _value in pairs:
-                if key in seen:
-                    raise ValueError(f"duplicate property {key!r} — two records cannot both be "
-                                     "the evidence for one child")
-                seen.add(key)
-            return dict(pairs)
-
+        # The duplicate-property and non-object checks are the module-level
+        # `_load_state_strict` (#840 round 13) — this used to carry its own nested copy, which
+        # is how four other decode paths were left unprotected.
         try:
             with open(args.audited, encoding="utf-8") as fh:
-                raw = json.load(fh, object_pairs_hook=_no_duplicate_keys)
+                raw = _load_state_strict(fh, source=args.audited)
         except (OSError, ValueError) as exc:
             print(f"refusing: cannot read {args.audited}: {exc}", file=sys.stderr)
-            return 2
-        if not isinstance(raw, dict):
-            print(f"refusing: {args.audited} must hold a JSON object of "
-                  "{issue number: record}", file=sys.stderr)
             return 2
         # **Canonical keys, and collisions REFUSED (round-11).** `{int(key): value}` mapped
         # `"1"` and `"01"` to the same integer, so one record silently won, the command returned
@@ -3588,7 +3625,7 @@ def _cmd_handoff(args) -> int:
     """
     driver_lib = _driver_lib()
     with open(args.driver_state, encoding="utf-8") as fh:
-        state = json.load(fh)
+        state = _load_state_strict(fh, source=args.driver_state)
 
     # #665 — the `kind` discriminator is a CLOSED allowlist, checked FIRST.
     #

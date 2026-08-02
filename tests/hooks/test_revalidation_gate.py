@@ -212,6 +212,51 @@ class TestObserveHead:
         with pytest.raises(ll.LauncherError):
             ll.observe_head("/repo", runner=self._runner(rev_out=bad))
 
+    # --- #840 round-13 neutral-probe finding: an unqualified fetch is not freshness ---
+
+    def test_the_fetch_carries_an_explicit_refspec_for_the_tracked_branch(self):
+        """`git fetch origin` obeys `remote.origin.fetch`. Under a narrow refspec that
+        excludes the branch it returns rc 0 WITHOUT updating the tracking ref, so the
+        following `rev-parse` yields a STALE sha that then passes as freshly observed —
+        defeating the freshness clause this function exists to enforce. rc 0 only means
+        "fresh" if the fetch was told exactly which ref to update."""
+        calls = []
+        ll.observe_head("/repo", runner=self._runner(calls=calls))
+        fetch = calls[0]
+        assert "+refs/heads/main:refs/remotes/origin/main" in fetch, (
+            f"unqualified fetch cannot establish freshness: {fetch}")
+
+    def test_a_narrow_refspec_repo_cannot_return_the_stale_sha(self):
+        """Behavioural twin of the structural assertion above. This runner models a repo
+        whose configured refspec excludes `main`: a BARE `fetch origin` succeeds and leaves
+        the tracking ref stale, while a fetch naming the refspec advances it."""
+        stale, fresh = "a" * 40, "b" * 40
+        state = {"ref": stale}
+
+        def run(argv, *_a, **_kw):
+            if "fetch" in argv:
+                if any(a.startswith("+refs/heads/") for a in argv):
+                    state["ref"] = fresh          # explicit refspec updates the ref
+                return type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            return type("P", (), {"returncode": 0, "stdout": state["ref"] + "\n",
+                                  "stderr": ""})()
+
+        assert ll.observe_head("/repo", runner=run) == fresh
+
+    def test_a_non_default_remote_ref_derives_its_own_refspec(self):
+        """The refspec is derived from `remote_ref`, never hard-coded to origin/main."""
+        calls = []
+        ll.observe_head("/repo", remote_ref="upstream/release",
+                        runner=self._runner(calls=calls))
+        assert "+refs/heads/release:refs/remotes/upstream/release" in calls[0], calls[0]
+
+    @pytest.mark.parametrize("bad_ref", ["main", "origin/", "/main", "", "origin/a/b/c/d"])
+    def test_an_unparseable_remote_ref_refuses_rather_than_guessing(self, bad_ref):
+        """A remote_ref we cannot split into remote+branch cannot yield a refspec, and a
+        guess would silently reintroduce the unqualified fetch. Fail closed."""
+        with pytest.raises(ll.LauncherError):
+            ll.observe_head("/repo", remote_ref=bad_ref, runner=self._runner())
+
 
 class TestTheObservedHeadDataflow:
     """Assert the DATAFLOW, not that a source test exists.
@@ -2010,6 +2055,30 @@ class TestRound12EvidenceTheSuccessorNeedsIsNeverSilentlyDropped:
         rebuilt = dl.rebuild_receipt(state, HEAD, {1: fresh})
         assert rebuilt["queue_revalidation"]["children"]["1"]["validated_at"] == 200
 
+    # --- round 13: the round-12 fix rejected only `now < was`, so equality still lost ---
+
+    def test_an_EQUAL_timestamp_differing_record_is_refused_as_unordered(self):
+        """**Round 13 — found independently by all six reviewers, adversarial and neutral.**
+        `validated_at` is an integer epoch SECOND, so two audits prepared within the same
+        second tie. The round-12 guard rejected only `now < was`, so on a tie the incoming
+        record won unconditionally — reinstating the exact evidence loss round 12 closed:
+        the correction vanishes and the child is selected at rc 0."""
+        newer = _state(_iss(1), reval=_reval(HEAD, {"1": _corrected(to_sha=HEAD,
+                                                                   validated_at=200)}))
+        tie = _receipt_child(to_sha=HEAD)          # a DIFFERENT record — no correction
+        tie["validated_at"] = 200
+        with pytest.raises(dl.DriverStateError, match="unordered|same"):
+            dl.rebuild_receipt(newer, HEAD, {1: tie})
+
+    def test_an_EQUAL_timestamp_IDENTICAL_record_is_an_idempotent_replay(self):
+        """The negative twin, and the reason equality is not simply banned: re-supplying the
+        SAME record at the same instant is a retry, not a conflict, and must still succeed —
+        otherwise an interrupted rebuild could never be re-run."""
+        rec = _corrected(to_sha=HEAD, validated_at=200)
+        state = _state(_iss(1), reval=_reval(HEAD, {"1": rec}))
+        rebuilt = dl.rebuild_receipt(state, HEAD, {1: json.loads(json.dumps(rec))})
+        assert rebuilt["queue_revalidation"]["children"]["1"]["validated_at"] == 200
+
 
 class TestRound12LiteralDuplicateJsonKeys:
     """**Round 12.** The round-11 canonical-key fix catches `"1"` versus `"01"` but not `"1"`
@@ -2038,3 +2107,125 @@ class TestRound12LiteralDuplicateJsonKeys:
         rc = ll.main(["rebuild-receipt", "--driver-state", str(path),
                       "--project-root", str(work), "--audited", str(audited)])
         assert rc == 0, rc
+
+
+class TestRound13TheDocumentedRemedyActuallyClearsItsOwnRefusal:
+    """**Round 13 — all six reviewers, adversarial and neutral, each by executed reproduction.**
+
+    Round 12 taught `revalidation_worklist` to include an undisposed NON-`queued` child that
+    carries successor-facing evidence, so `rebuild_receipt`'s new refusal would be clearable.
+    The SKILL's step 3 was not updated with it: it still derived candidates as eligible/`queued`
+    only. On the live one-`in_progress` path that yields `{}` for both input maps, and the
+    worklist then raises `no extraction supplied for child #N` — so the remedy the refusal
+    PRINTS cannot clear the refusal. Seventh instance of this issue's dominant defect class.
+
+    This test executes the DOCUMENTED procedure rather than hand-feeding the maps, which is
+    precisely how the round-12 test missed it."""
+
+    @staticmethod
+    def _live_mid_child_state(old, head):
+        """One `in_progress` child, stamped at the OLD head, whose record carries a correction.
+        `main` has since moved to `head`."""
+        rec = _corrected(to_sha=old)
+        return _state(_iss(1, "in_progress", validated_against=old),
+                      reval=_reval(old, {"1": rec}))
+
+    @staticmethod
+    def _candidates_per_documented_rule(state, head):
+        """Step 3 as written: eligible children not attested at the head, UNION every
+        undisposed non-`queued` child whose record carries successor-facing evidence."""
+        children = (state.get("queue_revalidation") or {}).get("children") or {}
+        out = []
+        for issue in state["issues"]:
+            n = issue["number"]
+            rec = children.get(str(n))
+            if issue["status"] == "queued":
+                if not dl._receipt_covers_child(state, n, head):
+                    out.append(n)
+            elif dl.carries_successor_evidence(rec) and issue["status"] not in (
+                    "merged", "abandoned", "deferred"):
+                out.append(n)
+        return out
+
+    def test_following_step_3_literally_supplies_what_the_worklist_demands(self):
+        old, head = "a" * 40, "b" * 40
+        state = self._live_mid_child_state(old, head)
+
+        cands = self._candidates_per_documented_rule(state, head)
+        assert cands == [1], f"the documented rule must reach the active child, got {cands}"
+
+        extractions = {n: ([], "none") for n in cands}
+        changed = {n: set() for n in cands}
+        work = dl.revalidation_worklist(state, head, extractions, changed)
+        assert [w["number"] for w in work] == [1], work
+
+    def test_the_queued_only_rule_is_what_used_to_jam(self):
+        """The negative twin, pinning WHY the union is load-bearing rather than decorative:
+        derive candidates the OLD way and the documented call still raises."""
+        old, head = "a" * 40, "b" * 40
+        state = self._live_mid_child_state(old, head)
+        queued_only = [i["number"] for i in state["issues"] if i["status"] == "queued"]
+        assert queued_only == [], queued_only
+        with pytest.raises(dl.DriverStateError, match="no extraction supplied"):
+            dl.revalidation_worklist(state, head, {}, {})
+
+
+class TestRound13TheStrictDecoderCoversEveryDriverStatePath:
+    """**Round 13 — all six reviewers, adversarial and neutral.** Round 12 put the
+    duplicate-property hook on the `--audited` decode ONLY. Every DURABLE driver-state read
+    kept plain `json.load`, which keeps the LAST of two identical properties. So the receipt
+    that actually gates selection and teardown still collapsed silently: a state carrying an
+    old-head record and a current-head record under two `"1"` keys decoded to whichever came
+    last, and the gate opened at rc 0 with the correction gone.
+
+    One decode path was hardened out of five. These pin the other four."""
+
+    @staticmethod
+    def _dup_state(tmp_path, head):
+        """Literal duplicate JSON TEXT — a Python dict cannot express the defective shape."""
+        rec = json.dumps(_receipt_child(to_sha=head))
+        body = json.dumps(_state(_iss(1, validated_against=head), reval=_reval(head, {})))
+        # Splice a SECOND "1" property into the receipt's children object. The document must
+        # stay VALID JSON — otherwise rc 2 arrives from the parser and the test proves nothing
+        # about duplicate handling. Asserted below before it is ever used.
+        assert '"children": {}' in body, body
+        doc = body.replace('"children": {}', f'"children": {{"1": {rec}, "1": {rec}}}', 1)
+        json.loads(doc)          # valid JSON, and json.load silently keeps the LAST "1"
+        assert doc.count('"1":') == 2, doc
+        path = tmp_path / "dup-state.json"
+        path.write_text(doc, encoding="utf-8")
+        return path
+
+    def test_locked_state_read_refuses_duplicate_properties(self, tmp_path):
+        path = tmp_path / "s.json"
+        path.write_text('{"campaign": "c", "issues": [], "issues": []}', encoding="utf-8")
+        with pytest.raises(ValueError):
+            ll._locked_state_read(str(path))
+
+    def test_locked_state_read_still_reads_ordinary_state(self, tmp_path):
+        """Negative twin — the strict loader must not break the normal path."""
+        path = _write_state(tmp_path, _state(_iss(1)))
+        assert ll._locked_state_read(str(path))["issues"][0]["number"] == 1
+
+    def test_next_child_refuses_duplicate_properties_rather_than_selecting(self, tmp_path):
+        work, head = _repo_with_origin(tmp_path)
+        path = self._dup_state(tmp_path, head)
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "next-child", "--driver-state", str(path),
+             "--project-root", str(work), "--no-probe"],
+            capture_output=True, text=True, check=False)
+        assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
+
+    def test_next_child_refuses_non_object_state_without_a_traceback(self, tmp_path):
+        """Neutral-probe Medium. A valid JSON `[]` decoded fine, then `fresh_session_handoff`
+        raised `AttributeError: 'list' object has no attribute 'get'` — an uncaught traceback
+        where the documented contract is an rc-2 data refusal."""
+        work, _head = _repo_with_origin(tmp_path)
+        path = tmp_path / "list-state.json"
+        path.write_text("[]", encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "next-child", "--driver-state", str(path),
+             "--project-root", str(work), "--no-probe"],
+            capture_output=True, text=True, check=False)
+        assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
+        assert "Traceback" not in proc.stderr, proc.stderr
