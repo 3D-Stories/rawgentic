@@ -134,3 +134,23 @@ def test_doc_documents_fresh_session_per_child():
     assert "session_mode" in text and "fresh-session" in text
     assert "skip the `--resume` attempt" in text or "MUST skip the `--resume`" in text
     assert "handoff_claim" in text and "fail-open" in text.lower()
+
+
+def test_doc_documents_queue_revalidation_840():
+    # #840: the driver doc carries the revalidation state shape AND the fact that PR 1 is
+    # inert. Anchored to one canonical sentence per claim rather than to counts, per the
+    # repo's drift-guard convention (§4 mistake 6).
+    text = _doc()
+    assert "## Queue revalidation (#840)" in text
+    assert "validated_against" in text and "queue_revalidation" in text
+    # The owner ruling is the load-bearing prose — a future edit that reinstates auto-clear
+    # must trip here, because the whole gate collapses to theatre without it.
+    assert "The intersection sets DEPTH, never whether to look" in text
+    assert "Nothing is auto-cleared." in text
+    # The inert-status warning: a reader must not conclude the guard is live.
+    assert "the machinery above is INERT" in text
+    assert "`QueueRevalidationRequired` is defined but never raised" in text
+    # An obsolete child must not read as a stampable outcome.
+    assert "`issue_obsolete` is not an `outcome`" in text
+    # Corrections are annotations, not rewrites.
+    assert "Corrections are COMMENTS, never body edits" in text

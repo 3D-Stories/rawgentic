@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design — #840: re-validate remaining children after every merge</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#667279;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+.tpl-design .dz-lead{background:var(--surface);border:1px solid var(--line);
+border-left:4px solid var(--accent);border-radius:12px;padding:4px 20px 14px;margin:6px 0 26px}
+.tpl-design .dz-lead>p:first-child{font-size:17.5px;line-height:1.55;color:var(--ink);font-weight:550}
+/* A today/proposed pair is TWO ROOTS in one `nodes compare` block, so the
+   grid goes on the top-level list. Two separate fences cannot pair — each is
+   its own wrapper with a single child. */
+@media(min-width:720px){.tpl-design .dz-compare>ul{grid-template-columns:1fr 1fr}}
+.tpl-design .dz-compare{background:var(--code);border-radius:12px;padding:10px 14px}
+.tpl-design .dz-decision>.blk-callout{border-left-color:var(--accent);background:var(--req-c-bg)}
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-08-02 00:17 MDT</div>
+<h1>Design — #840: re-validate remaining children after every merge</h1>
+
+</header>
+<main>
+<div class="dz-lead"><p><strong>Issue:</strong> #840 (epic #756, Tier 1, owner-ordered FIRST) <strong>Author:</strong> WF2, session f704bd0c, 2026-08-02. <strong>Revision 4</strong> — supersedes r3 after the pass-3 gate (self-review 2 High / 2 Med / 1 Low + adversarial 6 High / 3 Med, 3 of them ambiguous). The <code>design</code> loop-back budget was already 2/2, and three ambiguous findings made the #798 budget-exhausted self-close ineligible, so the gate ESCALATED to the owner. Both escalated questions were answered (§4a &quot;what a look is&quot;, §8 the mandatory correction consumer) and the full finding set was applied together, per the ambiguity-breaker contract. Loop-back budget: <strong>design 2/2 (exhausted), spec_tighten 0/2, global 2/3.</strong> <strong>Base:</strong> <code>origin/main</code> <code>3d4e1607</code>, v3.116.2. Every claim read from a tree verified identical to <code>origin/main</code> (0/0 ahead/behind, no tracked modifications).</p>
+<hr></div>
+<h2>1. The problem</h2>
+<p>Every merge moves <code>main</code> under every child that has not started. Their bodies were written against older code, so file:line citations, root-cause claims and acceptance criteria rot. Nothing notices.</p>
+<p>Measured: the 2026-08-02 audit of epic #756 found <strong>14 of 23</strong> open children carrying claims that no longer held; three had already cost real work (#838&#x27;s design written against an unmerged branch, #839&#x27;s recorded fix shape invalidated by a <code>credential_ref</code> fact nobody re-checked, #835&#x27;s body naming a root cause that turned out to be wrong).</p>
+<p>Two weaker designs were rejected by the owner: a revalidation <em>step</em> in the epic-run skill (prose is skipped exactly under the pressure that makes children stale), and revalidate-after-every-merge (only helps a session that SURVIVES; this epic has ended three sessions mid-child).</p>
+<h2>2. THE PREMISE — owner ruling 2026-08-02, and why r1/r2 were wrong</h2>
+<p>r1 and r2 both made the cited-paths ∩ changed-files intersection an <strong>auto-clear</strong>: a child whose cited files the merge did not touch was stamped valid without anyone looking.</p>
+<p>Both pass-2 reviewers independently refused that, for the same reason: <strong>intersection is an incomplete dependency model.</strong> A merge can invalidate a root-cause claim, an API assumption or an AC through a file the child never cites. <strong>#835 is the live proof</strong> — its body was wrong about the <em>cause</em>, not about a filename, so a path filter would have cleared it. That is exactly the rot this issue exists to stop.</p>
+<p><strong>Owner ruling: the intersection decides HOW HARD to look, never WHETHER to look.</strong></p>
+<ul>
+<li>Every <strong>eligible</strong> remaining child must carry <code>validated_against == &lt;current head&gt;</code> to be</li>
+</ul>
+<p>  selectable. Nothing is ever cleared without a look.</p>
+<ul>
+<li>The intersection survives as a <strong>depth hint</strong>: <code>deep</code> when the merge touched a cited path or the</li>
+</ul>
+<p>  body could not be parsed; <code>quick</code> otherwise.</p>
+<p>This is strictly simpler than r2 and it resolves six of the pass-2 findings outright, because the extraction no longer has to be a completeness proof. Rename edge cases, unparseable bodies and citation ambiguity now only mis-set a <em>priority</em>, never wave a child through.</p>
+<p>It also supersedes the issue body&#x27;s &quot;a child needs revalidation <strong>only if</strong> those sets intersect&quot; and subsumes the earlier AC2 ruling (a citation-free body was already required to go to the worklist; now every child does).</p>
+<h2>3. State — normative, no ellipses</h2>
+<p>Per-child, on each <code>issues[]</code> entry:</p>
+<pre><code>&quot;validated_against&quot;: &quot;&lt;40-char sha&gt;&quot;      # absent =&gt; never validated</code></pre>
+<p>Campaign-level:</p>
+<pre><code>&quot;queue_revalidation&quot;: {
+  &quot;version&quot;: 1,
+  &quot;extractor_version&quot;: 1,
+  &quot;validated_head&quot;: &quot;&lt;40-char sha&gt;&quot;,      # advanced ATOMICALLY, only when every eligible child is stamped
+  &quot;children&quot;: {
+    &quot;&lt;number&gt;&quot;: {
+      &quot;body_hash&quot;: &quot;&lt;sha256 of the normalized body read at revalidation time&gt;&quot;,
+      &quot;from_sha&quot;: &quot;&lt;sha&gt;&quot;, &quot;to_sha&quot;: &quot;&lt;sha&gt;&quot;,
+      &quot;extraction&quot;: &quot;paths&quot; | &quot;none&quot; | &quot;ambiguous&quot;,
+      &quot;depth&quot;: &quot;deep&quot; | &quot;quick&quot;,
+      &quot;outcome&quot;: &quot;still_valid&quot; | &quot;body_corrected&quot;,
+      &quot;pending_disposition&quot;: &quot;issue_obsolete&quot; | null,
+      &quot;claims&quot;: [ &lt;claim record, see §4a&gt; ],
+      &quot;correction_comment&quot;: &quot;&lt;url&gt;&quot; | null,
+      &quot;validated_at&quot;: &lt;int epoch&gt;
+    }
+  }
+}</code></pre>
+<p><strong><code>claims</code> and <code>pending_disposition</code> are part of the normative shape</strong> (verifier finding #1 — r4 added both in later sections while calling §3 &quot;normative, no ellipses&quot;, leaving an implementation nowhere specified to persist them). Types and rules:</p>
+<ul>
+<li><code>claims</code>: a non-empty list of §4a claim records. <strong>Empty or absent ⇒ the child is not stamped</strong>,</li>
+</ul>
+<p>  enforced by the same raising type check as <code>validated_against</code>.</p>
+<ul>
+<li><code>pending_disposition</code>: <code>&quot;issue_obsolete&quot;</code> or absent/null. Non-null ⇒ the child is treated as</li>
+</ul>
+<p>  outstanding by <code>next_ready_issue</code> regardless of its stamps. <strong>Cleared only by an owner-driven   transition</strong> to <code>deferred</code> or <code>abandoned</code> via <code>record_child_outcome</code> (<code>:342</code>), both of which leave   the effective-<code>queued</code> population so selection skips them at <code>:323</code>. There is no self-clearing   path — that is the point of it being an owner gate.</p>
+<ul>
+<li><code>issue_obsolete</code> is therefore NOT a value of <code>outcome</code>; it lives only in <code>pending_disposition</code>,</li>
+</ul>
+<p>  so a stamped child can never carry it.</p>
+<p>Nothing in <code>driver_lib</code> rejects a new key: <code>validate_driver_state</code> (<code>:834-907</code>) iterates only <code>number</code>/<code>status</code>/<code>depends_on</code> with no unknown-key branch, and <code>docs/driver-state/queue.schema.json</code> sets <code>additionalProperties: true</code> at both levels. So <strong>no schema bump is needed and a malformed value would pass silently</strong> — therefore the gate type-checks <code>validated_against</code> itself, in the raising style of <code>_in_queue_deps:148-151</code>, not the error-accumulating style of <code>validate_driver_state</code>.</p>
+<p><strong>Eligible statuses (pass-2 finding #8, the ambiguous one — now defined).</strong> Eligible = <strong>effective</strong> status <code>queued</code>, not durable status (pass-3 finding #4). <code>merged</code> and <code>abandoned</code> are terminal (<code>TERMINAL_STATUSES</code>, <code>:339</code>); <code>deferred</code> is parked; <code>in_progress</code>/<code>pr_open</code> are the active child the run already holds in context. Eligibility is derived from the SAME <code>effective_issue_statuses</code> map selection uses (<code>:244-286</code>) — r3 used durable status while acknowledging two paragraphs later that the probe can confirm a <code>queued</code> entry already merged without writing state, so an externally-closed child would have stayed eligible and blocked the queue forever on a revalidation nobody could meaningfully perform. A probe failure conservatively retains the durable <code>queued</code> status, matching that function&#x27;s existing never-veto-on-outage rule.</p>
+<p><strong>A missing entry in any injected map is NOT an empty set</strong> — it raises, so &quot;no data&quot; can never be read as &quot;no changes&quot;.</p>
+<p><strong><code>issue_obsolete</code> must remove the child from selection (pass-3, both reviewers independently).</strong> r3 made it a valid stamped outcome while eligibility stayed <code>queued</code> and the gate opened once SHAs matched — so revalidation could conclude a child was obsolete, stamp it, advance <code>validated_head</code>, and then hand that obsolete child out to be implemented. Corrected: <code>issue_obsolete</code> is <strong>not a stampable terminal outcome</strong>. It leaves the child unstamped and records <code>pending_disposition: &quot;issue_obsolete&quot;</code>, which <code>next_ready_issue</code> treats as outstanding — the queue stays refused until an owner decides between <code>deferred</code> and <code>abandoned</code>. Closing a child is an owner decision, so the machine&#x27;s job is to refuse, not to choose. A mutation-sensitive test asserts an obsolete-marked child can never be returned by <code>next_ready_issue</code>.</p>
+<h2>4. What triggers the gate</h2>
+<p>r2 keyed it on a <code>stale_since</code> marker written by <code>record_child_outcome</code>. The pass-1 gate found the bypass: <code>effective_issue_statuses</code> (<code>:244-286</code>) can overlay a <code>queued</code> child to <code>merged</code> from the GitHub probe <strong>without writing anything</strong>. A marker somebody has to write is not fail-closed.</p>
+<p><strong>Trigger = head movement AND per-child provenance</strong>, both required (pass-2 findings #1, #2):</p>
+<pre><code>refuse if  observed_head != queue_revalidation.validated_head
+       or  any eligible child&#x27;s validated_against != observed_head</code></pre>
+<p>The second clause is what closes AC1 and AC3b: r2&#x27;s head-only check let a brand-new campaign at its base head, or a newly-added unstamped child at an unchanged head, hand out work with no provenance at all.</p>
+<p><strong><code>observed_head</code> must be FRESHLY OBSERVED, not merely supplied (pass-3, both reviewers independently).</strong> r3 required the argument but never bound it to a live observation, so a caller could pass a cached SHA — or <code>validated_head</code> itself — and satisfy <em>both</em> refusal clauses after main had moved. That also silently defeated the abrupt-death recovery in the next paragraph, since a crashed predecessor&#x27;s stale head would compare equal to itself.</p>
+<p>Corrected: <strong>one production selection wrapper</strong> owns the observation. <code>driver_state.observe_head(repo_root)</code> runs <code>git -C &lt;repo_root&gt; fetch origin</code> then <code>git -C &lt;repo_root&gt; rev-parse origin/main</code>, checks <strong>both</strong> return codes, and returns the full 40-char SHA. Every campaign selection goes through it; <code>next_ready_issue</code> receives its result and nothing else. The call-site source test pins that the wrapper — not a literal, not a state field — is what feeds the parameter. Integration test: advance the tracking head while state retains the old one, and prove selection refuses.</p>
+<p><strong><code>observed_head</code> is REQUIRED on campaign paths, not optional (pass-2 finding #1).</strong> r2 made it optional &quot;for compatibility&quot;, which both reviewers called a silent bypass — and this repo has already shipped that exact defect once: <code>tests/hooks/test_driver_state_write_back.py:304-306</code> documents an optional input that shipped dead because nothing threaded it into <code>fresh_session_handoff</code>. So:</p>
+<ul>
+<li><code>next_ready_issue(..., observed_head)</code> and <code>fresh_session_handoff(..., observed_head)</code> take it.</li>
+<li>Every <strong>campaign</strong> call site passes it, asserted by a source-level call-site test — the pattern</li>
+</ul>
+<p>  <code>tests/hooks/test_wf_review_sites.py</code> already uses to pin <code>--requires-context</code>. Adding a campaign   caller without it fails CI.</p>
+<ul>
+<li>Non-campaign callers use an <strong>explicit</strong> legacy contract (<code>observed_head=None</code> meaning</li>
+</ul>
+<p>  &quot;not a campaign selection&quot;), never silent omission.</p>
+<p><strong>Recovery from abrupt death (adversarial finding).</strong> A session killed abruptly runs neither <code>perform_handoff</code> nor <code>retire_predecessor</code>, so the ladder rung never fires for the very scenario it was added for. That case is covered here, not there: the successor&#x27;s <strong>first</strong> <code>next_ready_issue</code> call is itself the recovery gate, because a crashed predecessor left <code>validated_head</code> behind the head it died at. No separate startup gate is needed, and saying so is the point — r2 left it unstated.</p>
+<h2>4a. What &quot;a look&quot; IS — owner ruling 2026-08-02 (pass-3 finding C)</h2>
+<p>r3 left this undefined, and a reviewer correctly showed that made the whole gate theatre: an agent could fetch all 24 bodies, stamp every child <code>still_valid</code>, and satisfy the gate having validated nothing. <strong>The owner ruled: name the claim, check it, quote the proof.</strong></p>
+<p>A child may be stamped ONLY when the revalidation produced, per claim, an evidence record:</p>
+<pre><code>&quot;claims&quot;: [ { &quot;kind&quot;: &quot;citation&quot; | &quot;cause&quot; | &quot;ac&quot;,
+              &quot;quoted_from_body&quot;: &quot;&lt;the claim, verbatim from the body&gt;&quot;,
+              &quot;checked_against&quot;: &quot;&lt;path&gt;@&lt;sha&gt;&quot; | &quot;&lt;no-file: reasoning&gt;&quot;,
+              &quot;evidence&quot;: &quot;&lt;verbatim quote from `git show origin/main:&lt;path&gt;`, or the explicit &quot;
+                          &quot;statement that the claim no longer holds&gt;&quot;,
+              &quot;verdict&quot;: &quot;holds&quot; | &quot;broken&quot; } ]</code></pre>
+<ul>
+<li><strong><code>deep</code></strong> (the merge touched a cited path, or extraction was <code>ambiguous</code>): every claim of all</li>
+</ul>
+<p>  three kinds is checked.</p>
+<ul>
+<li><strong><code>quick</code></strong> (nothing cited was touched): the <strong>cause</strong> and <strong>ac</strong> claims are checked; citation</li>
+</ul>
+<p>  claims are taken as-is. This is the affordability lever, and it is honest — it drops the class of   check the merge is least likely to have invalidated, never the class #835 failed on.</p>
+<p><strong>A stamp with an empty <code>claims</code> list is refused</strong>, fail-closed, by the same type check that validates <code>validated_against</code>. That is what makes &quot;everyone got a look&quot; a fact rather than a claim. <code>outcome</code> is then derived, not asserted: all <code>holds</code> → <code>still_valid</code>; any <code>broken</code> → <code>body_corrected</code> (a correction comment is posted) or <code>issue_obsolete</code>.</p>
+<p>This is exactly the procedure the 2026-08-02 audit ran by hand — the pass that found 14 of 23 children rotted — so it is a mechanisation of a method already proven on this epic, not a new one.</p>
+<h2>5. The worklist</h2>
+<pre><code>revalidation_worklist(state, observed_head, extractions, changed_by_child) -&gt; list[WorkItem]</code></pre>
+<p>Pure. Returns one <code>WorkItem{number, depth, extraction, from_sha, to_sha}</code> per eligible child whose <code>validated_against != observed_head</code>. <strong><code>observed_head</code> is an explicit input</strong> (pass-3 adversarial): r3 omitted it while depending on it, so the function could not have determined staleness or populated <code>to_sha</code> without reading an unstated value. <code>depth = &quot;deep&quot;</code> when <code>extraction != &quot;paths&quot;</code> <strong>or</strong> the child&#x27;s cited paths intersect its changed set; <code>&quot;quick&quot;</code> otherwise.</p>
+<p><code>cited_paths(body) -&gt; (paths, extraction)</code> scans inline code spans, fenced blocks, markdown link targets and explicit <code>path:line</code>, <code>path#Lx</code>, <code>path@line</code> forms; strips line/range suffixes; normalizes separators and <code>./</code>; rejects absolute paths and traversal. A candidate counts only if it <strong>resolves in either endpoint&#x27;s tree</strong> — supplied as a fact, so <code>driver_lib</code> keeps its no-I/O promise (enforced by the source grep at <code>tests/hooks/test_driver_state_write_back.py:295-299</code>).</p>
+<p>Ranges are <strong>per child, cumulative</strong>: from that child&#x27;s own <code>validated_against</code> to current head (the campaign base when never validated). Not last-merge-only — that misses the crash gap, the skipped-merge gap and the multi-session gap, which are the cases #840 exists for. Changed sets are computed rename-aware (<code>--name-status -M</code>, probed below) and carry <strong>both</strong> old and new paths.</p>
+<h2>6. Refusal and propagation</h2>
+<p><code>next_ready_issue</code> raises <code>QueueRevalidationRequired(DriverStateError)</code> — it does <strong>not</strong> return <code>None</code>. <code>None</code> already means &quot;nothing ready&quot;, and <code>resume_prompt_for_state</code> (<code>:3046-3059</code>) collapses every non-ready disposition into <code>None</code> with a docstring saying it means &quot;complete or blocked&quot;. A refusal returning <code>None</code> would be reported as <strong>&quot;epic finished&quot;</strong> while the queue is stale. Raising matches the module&#x27;s own precedent (<code>topo_sort_issues</code> raises <code>DependencyCycleError</code>).</p>
+<p>Propagation, defined explicitly (pass-2 finding #5 — r2 said only &quot;will be updated&quot;, which an implementation could satisfy while keeping the exact collapse):</p>
+<ul>
+<li><code>fresh_session_handoff</code> catches it and returns <code>{&quot;outcome&quot;: &quot;revalidation_required&quot;, &quot;worklist&quot;: [...]}</code>.</li>
+<li><code>resume_prompt_for_state</code> returns a <strong>result object</strong> <code>{outcome, prompt}</code> rather than <code>str | None</code>,</li>
+</ul>
+<p>  so <code>revalidation_required</code> is representable. A test asserts <code>revalidation_required</code> can never   produce <code>None</code>.</p>
+<ul>
+<li><code>_cmd_handoff</code> (<code>:3196-3203</code>) gets its own rc, distinct from a clean <code>complete</code>.</li>
+<li><code>skills/epic-run/SKILL.md:114-132</code> handles the new disposition.</li>
+</ul>
+<h2>7. The enforcement precondition and the ladder rung</h2>
+<p><code>perform_handoff</code>&#x27;s signature (<code>:1251-1263</code>) carries no driver-state path or repo root, and it is deliberately shared with <code>ad-hoc-handoff</code> (<code>:3290-3298</code>, calling it at <code>:3404-3425</code>), which has no campaign state — so a literally unconditional check would break every valid ad-hoc handoff.</p>
+<p><strong>An explicit <code>campaign_context</code> parameter</strong> (<code>{driver_state_path, repo_root, generation}</code>). Present ⇒ the receipt check runs, fail-closed. Absent ⇒ the ad-hoc case, check does not run. The omission is made a <strong>static property of the call sites</strong>, asserted by the same source-level test that pins <code>observed_head</code>. <code>retire_predecessor</code> already has <code>position[&quot;repo_root&quot;]</code> and campaign state in scope; no signature change.</p>
+<p><strong>The rung:</strong> <code>{&quot;step&quot;: &quot;queue_revalidated&quot;, &quot;owner&quot;: &quot;predecessor&quot;, &quot;artifact&quot;: ...}</code>, placed FIRST in <code>_MID_CHILD_VERIFICATION_STEPS</code> — the queue must be revalidated <em>before</em> a successor is spawned to inherit it, exactly the owner&#x27;s &quot;inserted right before the pane-handoff&quot;. The rung <strong>reports</strong> the precondition&#x27;s decision; it does not enforce it.</p>
+<p><strong>Why the producer is mandatory</strong>, confirmed at four sites: <code>perform_handoff</code> takes <code>gate_steps = _predecessor_steps(ladder)</code> (<code>:1362</code>), gating at <code>:1699</code> and <code>:1722</code>; <code>retire_predecessor</code> takes <code>_predecessor_steps(mid_child_verification_steps())</code> (<code>:2500</code>), gating at <code>:2501</code>; <code>evaluate_verifications</code> is fail-closed on an unreported step (<code>:1113-1114</code>, <code>:1139</code>). <strong>A rung with no producer makes every mid-child handoff and every teardown fail closed</strong> — not inert, a landmine that arms itself the moment #835 ships.</p>
+<p><strong>Freshness:</strong> the producer runs <code>git -C &lt;repo_root&gt; fetch origin</code> then <code>git -C &lt;repo_root&gt; rev-parse origin/main</code>, <strong>checking both return codes</strong>. r2 omitted <code>-C</code> on the fetch, which a reviewer correctly flagged as able to update a different checkout or fail outside a repository while leaving the target stale. A fetch failure is fail-closed: no verdict ⇒ rung fails ⇒ predecessor stays alive.</p>
+<p><strong>Body-mutation detection: CLAIM WITHDRAWN (pass-1 finding F2).</strong> r1 claimed the receipt&#x27;s <code>body_hash</code> would catch a body edited after revalidation while also forbidding the verifier from re-fetching bodies; those cannot both hold. Rather than put a network call in the teardown path — where a blip strands a live predecessor — the guarantee is dropped and no test asserts it. <code>body_hash</code> remains as evidence the <em>revalidation skill</em> reads on its next pass, where fetching is already happening. The reduced claim goes in the changelog, not only here.</p>
+<h2>8. <code>handoff_pending.queue</code> — producers and consumer</h2>
+<p><strong>Producers (pass-2 finding #3 — r2 named none).</strong> <code>fresh_session_handoff</code> and <code>mid_child_handoff</code> each construct the canonical <strong>ordered</strong> queue snapshot under the same state lock that already guards their disposition, and put it on the disposition. <code>open_handoff</code> then copies <code>queue</code> through <strong>only when present</strong>, exactly as <code>kind</code>/<code>position</code> are (<code>:615-620</code>) — mandatory, not stylistic: <code>tests/hooks/test_driver_lib.py:618</code> and <code>:791</code> both assert the written record equals <code>{&quot;generation&quot;, &quot;next_issue&quot;, &quot;written_ts&quot;}</code> exactly, and <code>:791</code>&#x27;s docstring calls that the #569 contract.</p>
+<p><strong>Consumer.</strong> <code>handoff_claim</code> (<code>:677-712</code>) validates at claim time under the generation fence it already enforces. r2 said &quot;head and membership&quot;, which a reviewer refuted: that admits a reordered queue or falsified per-child fields. Corrected — the claim validates the <strong>complete ordered payload</strong>: exact order (order is load-bearing, <code>docs/multi-issue-driver.md:241-246</code>), every declared field against durable state, plus <code>validated_head</code> and <code>generation</code>. Any mismatch fails the claim.</p>
+<p>Payload per child: <code>{number, status, validated_against, extraction, depth, outcome, correction_comment}</code>. <code>outcome</code> is carried because r3 omitted it, which left claim-time validation unable to see an obsolete child (pass-3 adversarial).</p>
+<p><strong><code>queue</code> is REQUIRED for a campaign disposition, not optional (pass-3 ambiguous finding 1).</strong> r3 made propagation optional at the persistence boundary, so a producer that dropped <code>queue</code> would have <code>open_handoff</code> silently write the legacy three-key shape, bypassing ordered-payload validation.</p>
+<p><strong>The discriminator is NOT <code>kind</code> — r4 got this wrong and the verifier caught it (finding #2).</strong> Confirmed at source: <code>fresh_session_handoff</code>&#x27;s ready disposition is <code>{outcome, next_issue, generation, campaign, resume_prompt}</code> (<code>driver_lib.py:593-596</code>) — <strong>no <code>kind</code></strong> — while only <code>mid_child_handoff</code> sets one (<code>:828</code>). Yet <code>fresh_session_handoff</code> IS a campaign producer. So keying on <code>kind</code> would either break <code>tests/hooks/test_driver_lib.py:618</code>/<code>:791</code> (which pin exactly three persisted keys on that very path) or silently drop the campaign queue and bypass claim-time validation. Both outcomes are wrong.</p>
+<p><strong>Corrected discriminator: an explicit revalidation-enabled marker</strong> — the campaign state carries a valid <code>queue_revalidation</code> object (equivalently, the caller supplied <code>campaign_context</code>). So:</p>
+<ul>
+<li>state HAS <code>queue_revalidation</code> ⇒ <code>queue</code> is mandatory on the disposition; its absence RAISES at</li>
+</ul>
+<p>  <code>open_handoff</code>.</p>
+<ul>
+<li>state LACKS it (every pre-#840 campaign, and both pinned tests&#x27; fixtures) ⇒ the legacy shape is</li>
+</ul>
+<p>  written byte-identically, exactly as <code>:618</code> and <code>:791</code> assert.</p>
+<p>This also makes the two pinned tests a genuine regression guard for old states rather than an obstacle, and it does not depend on a field the campaign path never sets.</p>
+<h2>8a. The two remaining ambiguous findings, resolved</h2>
+<p><strong><code>cat-file -e</code> non-zero must distinguish absence from failure (pass-3 ambiguous finding 2).</strong> The probe showed rc 0 for present and rc 128 with <code>fatal: path &#x27;&lt;p&gt;&#x27; does not exist in &#x27;&lt;ref&gt;&#x27;</code> for absent. But rc 128 also covers an invalid ref and a corrupt repository, and a process-launch error is not an exit code at all. Treating &quot;non-zero&quot; as &quot;absent&quot; would silently downgrade an operational failure into &quot;this citation does not resolve&quot;, which mis-sets <code>depth</code> toward <code>quick</code> — the wrong direction. So: <strong>absence is recognised ONLY by rc 128 whose stderr matches the <code>does not exist in</code> form for the exact path queried.</strong> Every other non-zero, and any launch error, is an operational failure → the child&#x27;s extraction is <code>ambiguous</code> → <code>depth: deep</code>. Fail toward more scrutiny, never less.</p>
+<p><strong>The <code>resume_prompt_for_state</code> return-type change needs a complete caller migration (pass-3 ambiguous finding 3).</strong> It is a breaking change from <code>str | None</code> to a result object, and r3 named only two consumers, which a reviewer correctly called unverifiable from the text. The implementation step is therefore mechanical and stated here: enumerate every caller with <code>grep -rn &quot;resume_prompt_for_state&quot; hooks/ skills/ tests/</code>, migrate each, and add a call-site source test pinning the enumeration so a new caller on the old contract fails CI. If the enumeration turns out to be large enough that migration is riskier than the fix, the fallback is to keep the existing signature and add a <strong>sibling</strong> function for the campaign path — decided at implementation time against the real caller count, not guessed now.</p>
+<p><strong><code>correction_comment</code> gets a MANDATORY consumer — owner ruling 2026-08-02 (pass-3 finding D).</strong> Three consecutive reviewer passes raised the same objection, and the third put it plainest: the design knowingly stamps a child as revalidated while leaving its authoritative body stale, so a selection path that ignores the resume prompt hands the implementer the same invalid root-cause claims. r3 deferred this to a follow-up; worse, it <em>claimed</em> the follow-up was filed when nothing had been (pass-3 finding, correct — I wrote it and filed nothing).</p>
+<p>The owner ruled it <strong>in scope</strong>. So:</p>
+<ul>
+<li><code>next_ready_issue</code> returning child N is not sufficient on its own. The campaign&#x27;s child-start path</li>
+</ul>
+<p>  MUST load that child&#x27;s <code>queue_revalidation.children[N]</code> record and present its <code>claims</code> evidence   and any <code>correction_comment</code> URL to the implementing agent <strong>before implementation begins</strong>.</p>
+<ul>
+<li>**Enforcement lives in the PROMPT BUILDER, not in skill prose (verifier finding #3 — r4 was wrong,</li>
+</ul>
+<p>  and its &quot;honest limit&quot; understated the gap).<strong> Confirmed at source: the fresh-session boundary   ends the skill and launches a new <code>claude -p</code> session, and the canonical successor prompt built by   <code>_build_resume_prompt</code> (<code>driver_lib.py:524-551</code>) carries no correction presentation at all — the   string <code>correction</code> appears </strong>zero times in the entire module**. Pinning only   <code>skills/epic-run/SKILL.md</code> would let a source test prove the prose step exists while every   production successor bypassed it. Presentation itself was not assured, not merely unproven.</p>
+<ul>
+<li>Corrected: **<code>_build_resume_prompt</code> and <code>_build_mid_child_resume_prompt</code> render the child&#x27;s</li>
+</ul>
+<p>  <code>claims</code> evidence and any <code>correction_comment</code> inline**, so the successor receives them in the   very prompt that starts it — the one path every fresh successor provably takes. Every production   child-start path is enumerated and pinned, not just the epic-run step.</p>
+<ul>
+<li>The honest limit, now correctly scoped: the successor is <em>handed</em> the corrections mechanically; no</li>
+</ul>
+<p>  claim is made that it provably read them. That is a limit on attention, not on delivery — which is   a materially weaker limit than the one r4 claimed.</p>
+<h2>9. Failure modes</h2>
+<table>
+<thead><tr><th>Failure</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td><code>observed_head</code> != <code>validated_head</code></td><td>raise → <code>revalidation_required</code></td></tr>
+<tr><td>any eligible child unstamped or stamped at a different head</td><td>raise → <code>revalidation_required</code></td></tr>
+<tr><td>campaign call site omits <code>observed_head</code>/<code>campaign_context</code></td><td>CI failure (source-level call-site test)</td></tr>
+<tr><td>body unparseable, or cites nothing</td><td>child still in the worklist, <code>depth: deep</code></td></tr>
+<tr><td>missing entry in an injected map</td><td>raises — never read as &quot;no changes&quot;</td></tr>
+<tr><td><code>git -C &lt;root&gt; fetch</code> non-zero</td><td>no verdict → rung fails → predecessor stays alive</td></tr>
+<tr><td>receipt absent / <code>validated_head</code> stale</td><td>rung fails → handoff refused</td></tr>
+<tr><td>session dies abruptly</td><td>successor&#x27;s first <code>next_ready_issue</code> is the recovery gate (§4)</td></tr>
+<tr><td>ad-hoc handoff (no <code>campaign_context</code>)</td><td>check does not run; pinned by the call-site test</td></tr>
+</tbody>
+</table>
+<h2>10. Security implications</h2>
+<p>No new external input crosses a trust boundary. Issue bodies are already-untrusted text, read only for path extraction; extracted strings are set-intersected against <code>git diff</code> output and never used to open a file, build a path, or reach a shell. The path regex is anchored and bounded against catastrophic backtracking on a hostile body. The receipt lives in the campaign state file, already trusted (it holds <code>handoff_claim</code>), and is bound to live git state rather than to its own assertion. Signing was considered and rejected: code that can write the state file can copy a signing secret. Forgery resistance comes from independent recomputation.</p>
+<h2>Platform / external dependencies</h2>
+<p>Every entry below was <strong>probed live against this repo on 2026-08-02</strong>, running the exact invocation the design ships. r2&#x27;s entries cited skill documentation, which a reviewer correctly refused — <code>docs</code> is not an accepted evidence kind, and a generic runner is not the exact API on the exact object.</p>
+<p>platform_apis:</p>
+<ul>
+<li>api: <code>git -C &lt;repo_root&gt; fetch origin</code> then <code>git -C &lt;repo_root&gt; rev-parse origin/main</code></li>
+</ul>
+<p>  feasibility: verified via spike — run 2026-08-02 on <code>/home/rocky00717/rawgentic/projects/rawgentic</code>:   fetch rc 0, rev-parse rc 0 printing <code>3d4e1607d2ccb7178956f9afa05ab0dbb0cbe25d</code>   failure: fail-loud</p>
+<ul>
+<li>api: <code>git -C &lt;repo_root&gt; cat-file -e &lt;ref&gt;:&lt;path&gt;</code> for endpoint path resolution</li>
+</ul>
+<p>  feasibility: verified via spike — 2026-08-02: <code>origin/main:hooks/context_meter.py</code> → rc 0;   <code>origin/main:hooks/does_not_exist.py</code> → rc 128 with <code>fatal: path ... does not exist in &#x27;origin/main&#x27;</code>.   Present and absent are cleanly distinguishable by exit code   failure: fail-loud</p>
+<ul>
+<li>api: <code>git -C &lt;repo_root&gt; show &lt;ref&gt;:&lt;path&gt;</code> for content retrieval by the skill</li>
+</ul>
+<p>  feasibility: verified via spike — 2026-08-02: <code>git show origin/main:hooks/context_meter.py</code> → rc 0   returning real file content. (Distinct from the in-repo <code>git show --name-only</code> call sites, which   do NOT prove <code>&lt;ref&gt;:&lt;path&gt;</code> retrieval — the reviewer&#x27;s point, accepted)   failure: fail-loud</p>
+<ul>
+<li>api: <code>git -C &lt;repo_root&gt; diff --name-status -M &lt;base&gt;..&lt;head&gt;</code> for the rename-aware changed set</li>
+</ul>
+<p>  feasibility: verified via spike — 2026-08-02, TWO probes. (1) over <code>origin/main~1..origin/main</code>   → rc 0 with <code>M</code>-status rows for five real paths. (2) a reviewer correctly refused (1) as not   proving rename handling, so a real rename was constructed and probed: <code>git mv</code> + commit yields   <code>R100&lt;TAB&gt;old_name.py&lt;TAB&gt;new_name.py</code>, rc 0. <strong>Correction to r3&#x27;s claim:</strong> the R row appears   with AND without <code>-M</code> (git enables rename detection by default), so <code>-M</code> is retained only to be   independent of a repo-local <code>diff.renames=false</code>, not because it is what surfaces renames. The   load-bearing fact r3 never stated: <strong>an <code>R</code> row has THREE tab-separated fields where <code>M</code>/<code>A</code>/<code>D</code>   rows have two</strong>, so the parser must handle both shapes or it misreads every rename. Both paths go   into the changed set.   failure: fail-loud</p>
+<ul>
+<li>api: <code>gh issue view &lt;n&gt; --json body</code> for authoritative body retrieval</li>
+</ul>
+<p>  feasibility: verified via spike — 2026-08-02 against issue #797, returned its body (used to   disprove this design&#x27;s own fixture claim, §12)   failure: fail-loud   surface: a failed fetch leaves the child in the worklist and logs; it never stamps</p>
+<ul>
+<li>api: <code>gh issue comment &lt;n&gt; --body-file &lt;f&gt;</code> to post a correction comment</li>
+</ul>
+<p>  feasibility: verified via spike — 2026-08-02 against issue #840, rc 0, returned   <code>https://github.com/3D-Stories/rawgentic/issues/840#issuecomment-5155519800</code>   failure: fail-loud   surface: a failed post leaves the child unstamped, so the gate stays closed on it</p>
+<h2>11. Multi-PR decomposition</h2>
+<p>r1&#x27;s split was harmful (PR 1 carried the lock, PR 2 the key; a live campaign would jam between them). Corrected — neither PR is harmful alone:</p>
+<ul>
+<li><strong>PR 1 — inert machinery, no gate.</strong> <code>cited_paths</code>, <code>revalidation_worklist</code>, the</li>
+</ul>
+<p>  <code>queue_revalidation</code> shape and its type checks, <code>QueueRevalidationRequired</code> (defined, not raised),   and their tests including the AC5 fixtures. Refuses nothing. <code>Part of #840</code>.</p>
+<ul>
+<li><strong>PR 2 — enforcement, atomically.</strong> The head+provenance gate and its propagation, the</li>
+</ul>
+<p>  <code>observe_head</code> selection wrapper, the ladder rung and its producer, the payload producers +   consumer, the <strong>mandatory correction consumer at child start</strong>, the <code>revalidate-children</code> skill   with full registration, and the three call-site source tests. <code>Closes #840</code>.</p>
+<p><strong><code>skills/revalidate-children/SKILL.md</code> does not exist yet</strong> — verified 2026-08-02: <code>ls skills/revalidate-children</code> → no such directory, and <code>git show origin/main:skills/revalidate-children/SKILL.md</code> → <em>does not exist in &#x27;origin/main&#x27;</em>. It is specified in the owner&#x27;s design comment on #840 and is created by PR 2. Registration spans up to seven surfaces plus computed count guards and is executed via the <code>add-skill</code> workspace skill, which is authoritative; <code>revalidate-children</code> sorts between <code>peer-consult</code> and <code>run-feedback</code>.</p>
+<h2>12. Test plan</h2>
+<p><strong>Red before green (AC6).</strong> The AC2, AC3a, AC3b and AC4a tests are written and run against the pre-implementation tree, and their observed failures recorded in session notes, before any implementation lands. This is separate from sabotage-sensitivity; both are demonstrated.</p>
+<p><strong>Mutation-sensitive — test the PRODUCER, never an injected rung result:</strong></p>
+<table>
+<thead><tr><th>Test</th><th>Must fail when</th></tr></thead>
+<tbody>
+<tr><td>ready child + one unstamped eligible child → raises</td><td>the per-child provenance clause is deleted</td></tr>
+<tr><td>ready child + <code>observed_head</code> ahead of <code>validated_head</code> → raises</td><td>the head comparison is deleted</td></tr>
+<tr><td>every other predecessor rung passes, receipt missing/stale → teardown refused, predecessor live</td><td>either call site&#x27;s precondition is deleted</td></tr>
+<tr><td>a valid receipt makes launcher code REPORT the rung passed</td><td>the producer is stubbed to a constant</td></tr>
+<tr><td>an unreported canonical rung stays fail-closed</td><td><code>evaluate_verifications</code>&#x27; fail-closed branch changes</td></tr>
+<tr><td>a reordered or field-falsified <code>handoff_pending.queue</code> fails the claim</td><td>claim-time ordered validation is deleted</td></tr>
+<tr><td>a stamp carrying an empty <code>claims</code> list is refused</td><td>the evidence check is deleted</td></tr>
+<tr><td>tracking head advances while state keeps the old head → selection refuses</td><td><code>observe_head</code> is replaced by a cached/state-derived value</td></tr>
+<tr><td>a campaign disposition missing <code>queue</code> raises at <code>open_handoff</code></td><td>the mandatory-<code>queue</code> branch is deleted</td></tr>
+<tr><td>a pre-#840 state (no <code>queue_revalidation</code>) still writes exactly three keys</td><td>the legacy branch regresses</td></tr>
+<tr><td>an <code>R</code> (rename) diff row puts BOTH paths in the changed set</td><td>the 3-field row shape is not handled</td></tr>
+</tbody>
+</table>
+<p><strong>Four rows rewritten because the verifier proved they would stay GREEN under their own sabotage.</strong> That is precisely the failure this epic exists to eliminate, so they are corrected rather than quietly kept:</p>
+<table>
+<thead><tr><th>Row (rewritten)</th><th>Why the r4 version was blind</th><th>What it asserts now</th></tr></thead>
+<tbody>
+<tr><td><code>observed_head</code> provenance</td><td>asserted a source test EXISTS, so deleting that test made it vacuous</td><td>assert the <strong>dataflow</strong>: patch <code>observe_head</code> to a sentinel and prove the sentinel reaches the comparison — a state-derived or cached value fails</td></tr>
+<tr><td>obsolete child never selected</td><td>the independent unstamped-provenance refusal blocked it anyway, so deleting the obsolete check left it green</td><td>build a child that is <strong>otherwise fully stamped and current</strong>, differing ONLY by <code>pending_disposition</code> — now only the obsolete check can refuse it</td></tr>
+<tr><td>operational <code>cat-file</code> failure</td><td>asserted <code>depth == &quot;deep&quot;</code>, but a misclassification to <code>extraction: &quot;none&quot;</code> <strong>also</strong> yields <code>deep</code>, so the wrong path passed</td><td>assert <code>extraction == &quot;ambiguous&quot;</code> directly, not the depth it happens to imply</td></tr>
+<tr><td>child start presents corrections</td><td>asserted a source test EXISTS, and pinned only epic-run prose</td><td>assert the <strong>built prompt string</strong> from <code>_build_resume_prompt</code> CONTAINS the claim evidence and the <code>correction_comment</code> URL — the artifact the successor actually receives</td></tr>
+</tbody>
+</table>
+<p>The lesson these four share, worth stating because it recurs: <strong>a test that asserts another test exists, or that asserts a value some other rule already forces, is not mutation-sensitive.</strong> Assert the artifact, and construct the case so the guard under test is the only thing that can fail it.</p>
+<p><strong>AC5 fixtures — recomputed from the real bodies, because r2 got one wrong.</strong> r2 asserted #797 has &quot;no resolvable repo paths → <code>none</code>&quot;. <strong>Disproved at source:</strong> #797 cites <code>hooks/context_meter.py:84-85</code> and <code>git show origin/main:hooks/context_meter.py</code> has real content at exactly those lines, so its true classification is <code>paths</code>. Every fixture&#x27;s expected classification is recomputed against the captured body and the endpoint trees, and the body hash recorded, before any is frozen. Candidates: #838 (dense <code>path:line</code>), #835 (prose-heavy, wrong root-cause claim — the case the ruling exists for), #734 (single code-block citation), #763 (<code>depends on #N</code> prose plus paths), plus one genuinely path-free body identified by measurement rather than assumption.</p>
+<p>Table-driven extraction cases beyond the fixtures: markdown links, code spans, fenced blocks, line anchors, renames, deletions, traversal attempts, absolute paths, URLs, glob-like citations, malformed markdown.</p>
+
+</main>
+<footer>Last updated: 2026-08-02 00:17 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
