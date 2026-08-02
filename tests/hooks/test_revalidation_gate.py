@@ -698,3 +698,80 @@ class TestTheClaimTimeConsumer:
         new = dl.open_handoff(state, disp, now_ts=1000)
         ok, _new = dl.handoff_claim(new, 2, claimant="succ", now_ts=1)
         assert ok is True
+
+
+# --------------------------------------------------------------------------- #
+# §12 rewritten row — the MANDATORY correction consumer at child start
+# --------------------------------------------------------------------------- #
+
+CORRECTION_URL = "https://github.com/3D-Stories/rawgentic/issues/840#issuecomment-1"
+
+
+def _broken_claim():
+    return {"kind": "cause",
+            "quoted_from_body": "next_ready_issue is at hooks/driver_lib.py:289",
+            "checked_against": f"hooks/driver_lib.py@{HEAD}",
+            "evidence": "line 289 is mid-docstring; the function is now at :795",
+            "verdict": "broken"}
+
+
+def _corrected_child():
+    return {"body_hash": BODY_HASH, "from_sha": OLD, "to_sha": HEAD, "extraction": "paths",
+            "depth": "deep", "outcome": "body_corrected", "claims": [_broken_claim()],
+            "correction_comment": CORRECTION_URL, "validated_at": 1_754_000_000}
+
+
+class TestTheCorrectionConsumer:
+    """Assert the BUILT PROMPT STRING, not that a source test exists.
+
+    The r4 version of this row asserted a source test existed and pinned only epic-run prose, so
+    deleting that test made it vacuous and the successor could still be handed nothing. What
+    matters is the artifact the successor actually receives.
+    """
+
+    def test_the_fresh_session_prompt_carries_the_evidence_and_the_url(self):
+        state = _state(_iss(1, validated_against=HEAD),
+                       reval=_reval(HEAD, {"1": _corrected_child()}))
+        disp = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE, project="rawgentic",
+                                        observed_head=HEAD)
+        assert disp["outcome"] == "ready", disp
+        prompt = disp["resume_prompt"]
+        assert "driver_lib.py:289" in prompt, prompt
+        assert "the function is now at :795" in prompt, prompt
+        assert CORRECTION_URL in prompt, prompt
+
+    def test_the_mid_child_prompt_carries_it_too(self):
+        state = _state(_iss(1, "in_progress", validated_against=HEAD),
+                       reval=_reval(HEAD, {"1": _corrected_child()}))
+        position = {"issue": 1, "step": "8", "branch": "feat/x", "test_baseline": "1/0",
+                    "predecessor_pane": "w1:p1", "predecessor_session": "s1",
+                    "goal_condition": "keep going", "project": "rawgentic",
+                    "project_path": "/p", "repo_root": "/p"}
+        prompt = dl.mid_child_handoff(state, position=position)["resume_prompt"]
+        assert CORRECTION_URL in prompt and "the function is now at :795" in prompt, prompt
+
+    def test_a_still_valid_child_adds_nothing(self):
+        """A correction clause on a child with nothing wrong would train agents to ignore it."""
+        state = _state(_iss(1, validated_against=HEAD),
+                       reval=_reval(HEAD, {"1": _receipt_child()}))
+        disp = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE, project="rawgentic",
+                                        observed_head=HEAD)
+        assert "CORRECTION" not in disp["resume_prompt"]
+
+    def test_a_pre_840_prompt_is_unchanged(self):
+        state = _state(_iss(1, "merged"), _iss(2))
+        disp = dl.fresh_session_handoff(state, mode=dl.FRESH_SESSION_MODE, project="rawgentic")
+        assert "CORRECTION" not in disp["resume_prompt"]
+
+    def test_the_evidence_is_rendered_not_merely_linked(self):
+        """A bare URL is an instruction to go and read something, which an unattended successor
+        may not do. The quoted evidence IS the correction."""
+        clause = dl.corrections_clause(
+            _state(_iss(1), reval=_reval(HEAD, {"1": _corrected_child()})), 1)
+        assert "line 289 is mid-docstring" in clause
+        assert "deliberately NOT edited" in clause
+
+    def test_an_obsolete_marked_child_says_so_in_the_prompt(self):
+        clause = dl.corrections_clause(
+            _state(_iss(1), reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")})), 1)
+        assert "issue_obsolete" in clause and "owner decision" in clause

@@ -1129,6 +1129,46 @@ def _lead_with_bind(body: str, project, include_bind: bool) -> str:
     return body[:1].upper() + body[1:]
 
 
+def corrections_clause(state: dict, issue: int) -> str:
+    """The correction a successor MUST see before it builds child ``issue``. ``""`` when none.
+
+    #840's mandatory correction consumer. Posting a correction comment does not repair the issue
+    body, and before this nothing surfaced one to the implementing agent — measured:
+    ``grep -c correction hooks/driver_lib.py`` was **0**. So an agent could pass the freshness gate
+    and then build from the exact stale claim the revalidation had already caught. The 2026-08-02
+    owner ruling put the consumer IN SCOPE for that reason, and it lives in the prompt BUILDERS
+    because the prompt is the only artifact the successor is guaranteed to receive.
+
+    It renders the evidence, not just a link: the claim verbatim from the body, what it was checked
+    against, and what the check found. A bare URL is an instruction to go and read something, which
+    an unattended successor may not do; the quoted evidence is the correction itself.
+    """
+    reval = state.get("queue_revalidation") or {}
+    record = (reval.get("children") or {}).get(str(issue))
+    if not isinstance(record, dict):
+        return ""
+    broken = [c for c in (record.get("claims") or [])
+              if isinstance(c, dict) and c.get("verdict") == "broken"]
+    pending = record.get("pending_disposition")
+    url = record.get("correction_comment")
+    if not broken and not pending:
+        return ""
+    parts = [f" CORRECTION for #{issue} — its body carries claims that were checked against the "
+             "current main and FOUND STALE. Do NOT build from them, and do not treat the body as "
+             "authoritative where it conflicts with this:"]
+    for index, claim in enumerate(broken, start=1):
+        parts.append(
+            f" ({index}) the body claims {claim.get('quoted_from_body')!r}; checked against "
+            f"{claim.get('checked_against')}; found: {claim.get('evidence')}.")
+    if url:
+        parts.append(f" The correction comment is posted at {url} — the body itself is "
+                     "deliberately NOT edited, so the comment is the authority.")
+    if pending:
+        parts.append(f" This child is additionally marked {pending!r} and needs an owner decision "
+                     "between 'deferred' and 'abandoned' before any work starts.")
+    return "".join(parts)
+
+
 def _build_resume_prompt(state: dict, next_issue: int, project=None,
                          include_bind: bool = True) -> str:
     """The canonical idempotent, state-re-deriving resume prompt for a fresh session (no
@@ -1154,6 +1194,9 @@ def _build_resume_prompt(state: dict, next_issue: int, project=None,
         "from durable state, never in-context memory; never re-do a merged/closed child; restate "
         "the run's auth grant. On a blocker, post the ERROR comment and end so the next fresh "
         "session continues."
+        # #840 — appended, never interleaved: the bind must stay first (#682) and the correction
+        # must survive whether or not the bind travels inside the prompt (#694).
+        + corrections_clause(state, next_issue)
     )
     return _lead_with_bind(body, project, include_bind)
 
@@ -1490,6 +1533,9 @@ def _build_mid_child_resume_prompt(state: dict, position: dict, generation: int,
         "rebuilt, retire the predecessor LAST via "
         "`python3 hooks/launcher_lib.py retire-predecessor`. On a blocker, post the ERROR "
         "comment on the child issue and end so the next session can continue."
+        # #840 — the mid-child successor resumes the SAME child, so it needs that child's
+        # correction just as much as a fresh-session successor needs the next child's.
+        + corrections_clause(state, position["issue"])
     )
     return (f"{mid_child_marker(position['issue'], generation)} "
             f"{_lead_with_bind(body, position.get('project') or '', include_bind)}")
