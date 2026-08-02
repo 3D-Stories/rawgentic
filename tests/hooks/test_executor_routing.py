@@ -2947,6 +2947,10 @@ def _dispatch_args(ws, run_id="run1", cid="wf2:step2", seat="analysis"):
     a.seat = seat; a.prompt_file = None; a.run_id = run_id; a.context_file = None
     a.correlation_id = cid; a.author_provider = None; a.effort = None; a.timeout = 5.0
     a.workspace = ws; a.project = "rawgentic"; a.gate_file = None; a.plan_file = None
+    # #826: argparse's store_true always sets this, so the stand-in must too — a fixture that
+    # omits it would let a wiring regression in the review-context guard pass as an AttributeError
+    # in one unrelated test instead of failing the guard's own tests.
+    a.requires_context = False
     return a
 
 
@@ -4565,3 +4569,187 @@ def test_landing_identity_fields_mirror_enforce():
     # mirrored constants get drift guards (repo convention): the hooks-side writer dedup and
     # the enforce-side reconcile conflict detection must key on the SAME immutable identity.
     assert er._LANDING_IDENTITY_FIELDS == enforce.LANDING_IDENTITY_FIELDS
+
+
+# --- #826: a review seat cannot be dispatched with nothing attached -----------------------------
+# The defect: a Step-4/8a/11 review dispatch that needs an artifact but carries an EMPTY context is
+# a quality gate that passes while reviewing nothing. Measured at 3a017dd9 over this repo's own run
+# tree: 167 review-seat observations, 117 with empty context_hashes, 10 of those carrying an
+# attachment-referencing prompt — re-measured after the Step-11 review, the real defect class is
+# ~5, not 10 (five of the ten INLINED their artifact). Guard mirrors the build seat's
+# gate_file_required/plan_context_required precedent — refuse pre-receipt, EXIT_MALFORMED.
+#
+# The prompt-corpus fixtures that used to live here are GONE with the prose heuristics they fed
+# (owner decision 2026-08-01 — see the typed-flag block at the end of this section). They are not
+# worth keeping as documentation: a corpus of briefs is only meaningful to a mechanism that reads
+# briefs, and nothing reads them any more.
+
+
+def _rc_dispatch(tmp_path, *, seat="review", prompt, context=(), **kw):
+    """dispatch_seat with a caller-chosen prompt + context (the module's _dispatch pins both)."""
+    qc = QuotaCoordinator(tmp_path / "permits", {"claude": 2, "codex": 4, "zhipu": 2})
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    res = er.dispatch_seat(
+        seat=seat, prompt=prompt, run_id="run1", correlation_id=kw.pop("cid", "wf2:step4"),
+        # the review seat's cross-model invariant needs a non-author provider (see :302) —
+        # an anthropic reviewer over openai-authored work
+        author_provider=kw.pop("author_provider", "openai"), effort=None, timeout=5.0,
+        context=tuple(context),
+        requires_context=kw.pop("requires_context", False),
+        snapshot=_snapshot(), quota=qc, audit=audit, capture_root=str(tmp_path / "runs"),
+        routing=routing, enforce=enforce, run_seat=run_seat,
+        dispatch_real=kw.pop("dispatch_real", _stub()),
+    )
+    return res, audit
+
+
+# --- #826 FINAL ARCHITECTURE: a typed dispatch flag, not prose inference -------------------------
+# Owner decision 2026-08-01 (AskUserQuestion, session d51c4f64): three review rounds refuted three
+# DIFFERENT prose heuristics — under-inclusive, over-inclusive, and forgeable. Prose inference is
+# the wrong architecture. The requirement is now carried OUT OF BAND as a typed flag
+# (`--requires-context`), which artifact text cannot forge and a static test can verify.
+
+def test_prose_inference_machinery_is_gone():
+    """The three refuted heuristics must not survive as dead code a future caller could re-enable.
+
+    Each name below WAS the mechanism of one refuted round: the marker substring (forgeable — an
+    artifact quoting the marker sets the control signal), and the phrase predicate (both
+    over-inclusive on `below`-family briefs and under-inclusive on "the provided spec").
+    """
+    for gone in ("prompt_requires_context", "prompt_references_attachment",
+                 "CONTEXT_REQUIRED_MARKER"):
+        assert not hasattr(er, gone), (
+            f"{gone} still exists — prose inference was refuted and removed by owner decision; "
+            f"leaving it importable invites a fourth heuristic")
+
+
+def test_typed_flag_without_context_is_refused(tmp_path):
+    res, audit = _rc_dispatch(tmp_path, prompt="# Step 4 brief\nJudge it.", requires_context=True)
+    assert res["ok"] is False and res["exit"] == er.EXIT_MALFORMED
+    assert res["error"]["code"] == "review_context_required"
+    assert audit.records() == []  # refused pre-check_pre: no receipt, no spawn
+
+
+def test_typed_flag_with_context_proceeds(tmp_path):
+    res, _ = _rc_dispatch(tmp_path, prompt="# Step 4 brief\nJudge it.", requires_context=True,
+                          context=("# Design\nreal bytes\n",))
+    assert res["ok"] is True, res
+
+
+def test_without_the_flag_prose_no_longer_triggers_the_guard(tmp_path):
+    """THE BEHAVIOURAL INVERSION, and the point of the redesign.
+
+    This exact prompt was REFUSED by the prose backstop. It must now proceed: the brief's wording
+    is no longer a control signal, so a caller who inlines an artifact while saying "attached"
+    can never be spuriously refused. The cost is that forgetting the flag is not caught here —
+    that is what the static WF-site test below covers, and a forgotten flag is findable by a test
+    in a way a wrong guess never was.
+    """
+    res, _ = _rc_dispatch(tmp_path, prompt="Review the attached design. Report findings only.")
+    assert res["ok"] is True, res
+
+
+def test_whitespace_only_context_still_fails_the_typed_flag(tmp_path):
+    """F2 survives the redesign: cardinality is not content."""
+    for empty in ("", "   \n\t  \n"):
+        res, _ = _rc_dispatch(tmp_path, prompt="# brief", requires_context=True, context=(empty,))
+        assert res["ok"] is False, f"empty context {empty!r} slipped through"
+        assert res["error"]["code"] == "review_context_required"
+
+
+def test_non_review_seat_with_the_flag_is_unaffected(tmp_path):
+    res, _ = _rc_dispatch(tmp_path, seat="plan", prompt="# brief", requires_context=True)
+    assert res["ok"] is True, res
+
+
+def test_dispatch_cli_exposes_requires_context():
+    """The flag must exist on the real CLI surface — a typed requirement nobody can pass is
+    decoration. Black-box via subprocess per docs/testing.md, since the parser is built inside
+    ``main()`` and there is no factory to import."""
+    cli = str(Path(er.__file__).resolve())
+    r = subprocess.run([sys.executable, cli, "dispatch", "--help"],
+                       capture_output=True, text=True, check=False)
+    assert r.returncode == 0, r.stderr
+    assert "--requires-context" in r.stdout, r.stdout
+
+
+# --- #826 Step-11 F2: test the CHOKE POINT, not only the defense-in-depth copy ------------------
+# Round 3 of this issue was rejected for exactly this: asserting a property while testing something
+# other than the thing that provides it. The production guard lives in `_do_dispatch` because that
+# is the ONE place the ordinary, resume and supervised routes all pass through; `dispatch_seat`'s
+# copy is defense in depth for direct library callers and is NOT reached by resume or supervised.
+# Deleting the `_do_dispatch` guard must therefore fail tests here, not only in the section above.
+
+def _rc_cli_args(tmp_path, ws, *, seat="review", requires_context=True, context_text=None):
+    a = _dispatch_args(ws, seat=seat)
+    p = tmp_path / "brief.md"
+    p.write_text("# review brief\nJudge it.", encoding="utf-8")
+    a.prompt_file = str(p)
+    a.requires_context = requires_context
+    if context_text is not None:
+        c = tmp_path / "ctx.md"
+        c.write_text(context_text, encoding="utf-8")
+        a.context_file = [str(c)]
+    return a
+
+
+def _ledger_lines(repo, run_id="run1"):
+    f = _run_dir(repo, run_id) / "expected-calls.jsonl"
+    return f.read_text(encoding="utf-8").splitlines() if f.exists() else []
+
+
+def test_chokepoint_refuses_BEFORE_the_ledger_append(tmp_path, capsys):
+    """The discriminating assertion, and the only one that distinguishes the two guards.
+
+    `dispatch_seat`'s defense-in-depth copy also returns `review_context_required`, so asserting
+    the error code alone passes even with the `_do_dispatch` guard deleted — verified by
+    sabotage. What ONLY the choke point gives is refusal before `append_expected`, so the
+    expected-call ledger must gain no row for this dispatch.
+    """
+    ws, repo = _analysis_project(tmp_path)
+    assert er.main(["begin-run", "--run-id", "run1", "--workspace", ws,
+                    "--project", "rawgentic"]) == er.EXIT_OK
+    capsys.readouterr()
+    before = _ledger_lines(repo)
+    a = _rc_cli_args(tmp_path, ws, seat="review")
+    rc = er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_MALFORMED, out
+    assert out["error"]["code"] == "review_context_required", out
+    after = _ledger_lines(repo)
+    assert after == before, (
+        "the refusal happened AFTER the expected-call ledger append — that is the "
+        "dispatch_seat copy, not the _do_dispatch choke point this guard claims to be")
+
+
+def test_chokepoint_refuses_requires_context_on_the_resume_route(tmp_path, capsys):
+    """F1: resume drops --context-file (#832), so the flag would assert a delivery that never
+    happens. Refuse the COMBINATION rather than review nothing under a true-looking claim."""
+    ws, repo = _analysis_project(tmp_path)
+    assert er.main(["begin-run", "--run-id", "run1", "--workspace", ws,
+                    "--project", "rawgentic"]) == er.EXIT_OK
+    capsys.readouterr()
+    a = _rc_cli_args(tmp_path, ws, seat="review", context_text="# real artifact bytes\n")
+    a.resume_session_id = "sess-abc"
+    rc = er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_MALFORMED, out
+    assert out["error"]["code"] == "review_context_unsupported_route", out
+    assert "resume" in out["error"]["message"]
+
+
+def test_chokepoint_leaves_dispatches_that_make_no_claim_alone(tmp_path, capsys):
+    """The refusal is triggered by DECLARING the requirement. A resume dispatch that makes no such
+    claim must be untouched, or this guard would break every existing resume."""
+    ws, repo = _analysis_project(tmp_path)
+    assert er.main(["begin-run", "--run-id", "run1", "--workspace", ws,
+                    "--project", "rawgentic"]) == er.EXIT_OK
+    capsys.readouterr()
+    a = _rc_cli_args(tmp_path, ws, seat="analysis", requires_context=False)
+    a.resume_session_id = "sess-abc"
+    er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out)
+    # it may fail for unrelated downstream reasons in this fixture; what must NOT happen is our
+    # refusal firing on a dispatch that never declared the requirement
+    code = (out.get("error") or {}).get("code")
+    assert code not in ("review_context_required", "review_context_unsupported_route"), out

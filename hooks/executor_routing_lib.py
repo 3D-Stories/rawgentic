@@ -214,6 +214,44 @@ def classify_seat(seat: str) -> str:
     raise MalformedConfig(f"unknown seat {seat!r} (wired: {sorted(WIRED_SEATS)}; driver-only: {sorted(DRIVER_ONLY)})")
 
 
+# #826: the review-context requirement is carried OUT OF BAND, as a typed dispatch flag
+# (`--requires-context` → `requires_context: bool`). Owner decision 2026-08-01.
+#
+# Three review rounds refuted three DIFFERENT prose heuristics, each for its own reason:
+#   round 1  a phrase list — OVER-inclusive: of 10 historical dispatches it flagged, FIVE were
+#            false positives, every one a `below`-family brief that INLINED the artifact. A false
+#            positive REFUSES a live dispatch.
+#   round 2  the narrowed list — UNDER-inclusive: it misses "the provided spec", "uploaded
+#            document", "attachment".
+#   round 3  an HTML-comment marker — FORGEABLE: the marker is an unrestricted substring, so
+#            artifact data quoting it sets a control signal. Artifact content must never be able
+#            to move a guard, which is the same control/data confusion #829 existed to close.
+#
+# The conclusion after three rounds is that the brief's WORDING is the wrong input: it is authored
+# prose, and prose cannot be both complete and unforgeable. A typed flag is deterministic,
+# unparseable and un-forgeable.
+#
+# The counter-argument, answered rather than ignored: a caller who forgets `--context-file` can
+# equally forget `--requires-context`. True — but a forgotten flag is a STATIC property of the call
+# sites, checkable by a test that reads them (see `tests/hooks/test_wf_review_sites.py`), whereas a
+# wrong prose guess is only ever discoverable in production. Checkable beats clever.
+
+
+def has_usable_context(context) -> bool:
+    """At least one context item with non-whitespace content (#826 review F2).
+
+    ``not context`` tested CARDINALITY: an empty or whitespace-only ``--context-file`` yields
+    ``("",)``, which satisfied a cardinality test, passed the guard, and still minted a
+    ``context_hashes`` entry — the same defect one layer down.
+    """
+    if not context:
+        return False
+    for item in context:
+        if isinstance(item, str) and item.strip():
+            return True
+    return False
+
+
 _WS_ABSENT: Final[object] = object()  # sentinel: workspace file genuinely absent (#474)
 
 
@@ -754,6 +792,7 @@ def dispatch_seat(
     effort: Optional[str],
     timeout: float,
     context: tuple,
+    requires_context: bool = False,
     snapshot,
     quota,
     audit,
@@ -802,6 +841,23 @@ def dispatch_seat(
     except routing.RoutingError as e:
         return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
                     correlation_id=correlation_id, audit_path=str(audit.path))
+
+    # #826: a review dispatch DECLARED to need an artifact MUST carry it. Refused here —
+    # pre-receipt, pre-check_pre, mirroring the build seat's gate_file_required below — because a
+    # review dispatched with nothing to review still returns a verdict, and the gate reads that
+    # verdict as a pass. Fail-CLOSED by repo CLAUDE.md §3: this is a correctness boundary, not
+    # convenience routing. Scoped to the review role; other seats are untouched.
+    #
+    # `requires_context` is a TYPED flag from the caller, never inferred from the brief's prose
+    # (see the module-level #826 note: three heuristics refuted, three different ways). It defaults
+    # False, so a caller that does not declare the requirement is not guessed at — the four WF
+    # review sites declare it, and a static test asserts they do.
+    if role == "review" and requires_context and not has_usable_context(context):
+        return _err(EXIT_MALFORMED, "review_context_required",
+                    f"review seat {seat!r} was dispatched with --requires-context but no context "
+                    f"item has usable content (--context-file); a review of nothing still returns "
+                    f"a verdict the gate reads as a pass",
+                    retryable=False, correlation_id=correlation_id, audit_path=str(audit.path))
 
     # #464 §E: authenticate the build gate ONCE (pre-loop, pre-receipt). Missing evidence is a
     # malformed input (exit 2); a tampered/stale gate is an enforcement denial (exit 4). Either way
@@ -3133,6 +3189,46 @@ def _do_dispatch(args) -> int:
     except (OSError, ValueError) as e:
         return _emit(_err(EXIT_INTERNAL, "runtime_init_failed", str(e), retryable=False,
                           correlation_id=args.correlation_id))
+    # #826 review F3: the REAL choke point for the review-context guard. `dispatch_seat` is too
+    # late — `_do_dispatch` appends the expected-call ledger record below, and `--resume-session-id`
+    # returns via `_run_resume` WITHOUT ever calling `dispatch_seat`, so a resumed review could
+    # reach launch unguarded and the ordinary path had already minted a ledger entry before
+    # refusing. Placed here it covers the ordinary, resume AND supervised routes, before anything
+    # is minted. The `dispatch_seat` check stays as defense in depth for direct library callers.
+    if role == "review" and args.requires_context and not has_usable_context(context):
+        return _emit(_err(EXIT_MALFORMED, "review_context_required",
+                          f"review seat {args.seat!r} was dispatched with --requires-context but "
+                          f"no context item has usable content (--context-file); a review of "
+                          f"nothing still returns a verdict the gate reads as a pass",
+                          retryable=False, correlation_id=args.correlation_id))
+
+    # #826 Step-11 F1: `--requires-context` is a POSITIVE assertion that the artifact reached the
+    # provider. On the resume and supervised routes it would be a false one — `_run_resume` and
+    # `_run_supervised` are handed `prompt` ONLY and drop `context` on the floor (#832, open). So a
+    # caller could pass a real file, satisfy the guard above, and still have the review run on
+    # nothing — with the flag now ASSERTING the opposite. That is strictly worse than the bug this
+    # issue fixes: an unattached review is bad, an unattached review carrying an explicit
+    # attached-and-verified claim is the defect class this epic exists to kill.
+    # Fail CLOSED on the combination until #832 threads context through both routes. Declaring the
+    # requirement is what trips this — a resume/supervised dispatch that makes no such claim is
+    # untouched, so nothing that works today regresses.
+    # Re-review F1: gated on the review role, exactly like the guard above. Ungated, an ordinary
+    # non-review dispatch would ignore `--requires-context` while a resume/supervised non-review
+    # dispatch rejected it with a review-specific error — a split contract nobody declared.
+    if role == "review" and args.requires_context:
+        _rc_route = None
+        if getattr(args, "resume_session_id", None):
+            _rc_route = "resume"
+        elif bool({"edit", "bash"} & set((snap.seat(args.seat).get("manifest") or {})
+                                         .get("tool_grants") or ())):
+            _rc_route = "supervised"
+        if _rc_route is not None:
+            return _emit(_err(EXIT_MALFORMED, "review_context_unsupported_route",
+                              f"--requires-context is not honoured on the {_rc_route} route: it "
+                              f"drops --context-file (#832), so the flag would assert a delivery "
+                              f"that does not happen; refusing rather than reviewing nothing",
+                              retryable=False, correlation_id=args.correlation_id))
+
     # #555 AC2 — ledger-aware choke-point (the ONE choke both the sync and supervised branches pass
     # through). Fail closed: a run whose expected-call ledger is run_closed refuses any NEW dispatch
     # BEFORE any spawn or audit append, and every accepted call is appended to the ledger
@@ -3215,6 +3311,7 @@ def _do_dispatch(args) -> int:
         seat=args.seat, prompt=prompt, run_id=args.run_id,
         correlation_id=args.correlation_id, author_provider=args.author_provider,
         effort=args.effort, timeout=args.timeout, context=context,
+        requires_context=args.requires_context,
         snapshot=snap, quota=quota, audit=audit, capture_root=paths["capture_root"],
         routing=pe.routing, enforce=pe.enforce, run_seat=pe.run_seat, dispatch_real=pe.dispatch_real,
         gate_decision=gate_decision, plan_context=plan_context,
@@ -3745,6 +3842,10 @@ def main(argv: Optional[list] = None) -> int:
     d.add_argument("--prompt-file", required=True, dest="prompt_file")
     d.add_argument("--run-id", required=True, dest="run_id")
     d.add_argument("--context-file", action="append", dest="context_file")
+    # #826: the review-context requirement, declared OUT OF BAND by the caller. Typed, so artifact
+    # text can never forge it and prose rewording can never evade it. Default False — the flag
+    # DECLARES a requirement, it never guesses one (module-level #826 note).
+    d.add_argument("--requires-context", action="store_true", dest="requires_context")
     d.add_argument("--gate-file", dest="gate_file")          # #464 §E: #429 GateDecision JSON (build seat)
     d.add_argument("--plan-file", dest="plan_file")          # #470 §2b: live impl-plan.md; context minted internally
     d.add_argument("--correlation-id", dest="correlation_id")
