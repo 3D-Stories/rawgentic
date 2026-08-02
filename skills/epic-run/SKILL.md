@@ -132,7 +132,14 @@ put a list up by hand).
   and end — never conflate `blocked` with `complete`. On **`revalidation_required`** (#840 — the
   remaining queue has not been revalidated against the current `origin/main`) run
   `/rawgentic:revalidate-children`, post any corrections, then retry the disposition; this is
-  neither `complete` nor `blocked` and must never be reported as either. `launcher_lib handoff`
+  neither `complete` nor `blocked` and must never be reported as either.
+- **Selecting the next child in the IN-SESSION loop goes through
+  `python3 hooks/launcher_lib.py next-child --driver-state <f> --project-root <r>`** (#840),
+  never by reading the state file and picking. That command observes `origin/main` itself and
+  is the only in-session path the freshness gate can see: `single-session` mode does not cross
+  a process boundary, so it never calls `handoff`, and before this the default mode advanced
+  on a stale queue. rc 0 = ready (`next_issue` on stdout), 3 = nothing ready, 5 = the head
+  could not be observed, 6 = revalidate first (worklist on stdout). `launcher_lib handoff`
   exits **6** for it and **5** when the head cannot be observed at all. **After EVERY merge, the
   remaining children need revalidating before the next one starts** — that is what the gate
   enforces, and it is the tax this epic's own 2026-08-02 audit measured at 14 rotted bodies out of

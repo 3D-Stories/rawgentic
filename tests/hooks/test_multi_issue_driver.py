@@ -157,8 +157,15 @@ def test_doc_documents_queue_revalidation_840():
     assert "It **raises** rather than returning `None`" in text
     assert "must be FRESHLY OBSERVED" in text
     assert "**What clears it:** `/rawgentic:revalidate-children`, and nothing else." in text
-    # The limit must be stated, not implied: a receipt-less campaign is NOT gated.
-    assert "Enforcement activates per campaign, once a receipt exists." in text
+    # The review round INVERTED this pin. It previously required the doc to state the
+    # per-campaign activation limit; the Step-11 review called that limit opt-in theatre and the
+    # owner closed it, so the doc must now state that the gate is universal AND name the migration
+    # consequence, which is the thing an operator will actually hit.
+    assert "The gate is UNIVERSAL" in text
+    assert "refuses until\n`/rawgentic:revalidate-children` has run against it once" in text
+    # The in-session loop's gated selection path must be documented, or the default mode silently
+    # keeps selecting unguarded (Step-11 finding 2).
+    assert "`launcher_lib next-child`" in text
     # An obsolete child must not read as a stampable outcome.
     assert "`issue_obsolete` is not an `outcome`" in text
     # Corrections are annotations, not rewrites.

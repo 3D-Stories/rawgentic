@@ -263,11 +263,31 @@ behind the head it died at.
 
 **What clears it:** `/rawgentic:revalidate-children`, and nothing else.
 
-**Enforcement activates per campaign, once a receipt exists.** A campaign carrying no
-`queue_revalidation` behaves exactly as it did before #840 — `launcher_lib handoff` says so on
-stderr rather than staying silent, and `handoff_pending` keeps its exact three-key legacy shape. This
-is a stated limit: run `/rawgentic:revalidate-children` once to arm a campaign, and from then on the
-gate is real.
+**Selection in the IN-SESSION loop goes through `launcher_lib next-child`.** The driver's default
+mode is `single-session`, which never crosses a process boundary and so never calls `handoff`. Before
+#840's review round that loop had no gated way to pick a child — the skill read state itself, and
+`fresh_session_handoff` returned `single_session` before selection, so an armed campaign with a stale
+receipt advanced anyway. Moving the gate above the mode check was necessary but not sufficient: a
+pure function cannot fetch. `next-child` is the caller that observes. Exit codes match `handoff`:
+
+| rc | meaning |
+|---|---|
+| 0 | a child is ready; `next_issue` on stdout |
+| 3 | nothing ready (`complete` / `blocked`) |
+| 5 | the head could not be observed — fail-closed |
+| 6 | the queue needs revalidation; the worklist is on stdout |
+
+**The gate is UNIVERSAL — a campaign with no receipt is refused, not waved through.** An earlier
+revision activated enforcement per campaign, once a receipt existed. The Step-11 cross-model review
+called that opt-in theatre and it was right: nothing in the code created the first receipt or produced
+the refusal that would prompt anyone to, so every pre-#840 campaign and every new one stayed
+ungated. Owner decision 2026-08-02 closed it. A refusal is recoverable by one command; silent
+selection is the one failure direction this design forbids.
+
+Consequence, stated rather than discovered: **an existing campaign refuses until
+`/rawgentic:revalidate-children` has run against it once.** That is the migration, and it is
+deliberate. `handoff_pending` still keeps its exact three-key legacy shape for a campaign with no
+receipt, so nothing about the persisted record changes until a campaign is armed.
 
 ## DEFER taxonomy
 
