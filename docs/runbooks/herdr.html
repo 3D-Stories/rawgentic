@@ -325,7 +325,7 @@ python3 hooks/launcher_lib.py retire-predecessor \
 <table>
 <thead><tr><th>#</th><th>check</th><th>artifact</th><th>who proves it</th></tr></thead>
 <tbody>
-<tr><td>1</td><td><code>queue_revalidated</code></td><td><code>.driver-state</code>: a <code>queue_revalidation</code> receipt whose <code>validated_head</code> equals a <strong>freshly observed</strong> <code>origin/main</code> (<code>launcher_lib.observe_head</code>), with every eligible child stamped at that head and none carrying a <code>pending_disposition</code> (#840)</td><td>predecessor</td></tr>
+<tr><td>1</td><td><code>queue_revalidated</code></td><td><code>.driver-state</code>: a <code>queue_revalidation</code> receipt whose <code>validated_head</code> equals a <strong>freshly observed</strong> <code>origin/main</code> (<code>launcher_lib.observe_head</code>), with every <strong>eligible</strong> child stamped at that head and no <strong>durably-undisposed</strong> child carrying a <code>pending_disposition</code> — the two clauses have different scopes on purpose (#840)</td><td>predecessor</td></tr>
 <tr><td>2</td><td><code>spawned</code></td><td><code>herdr pane get &lt;new&gt;</code> yields a non-empty <code>agent_session.value</code>, which the predecessor <strong>records</strong> into <code>handoff_pending.successor</code></td><td>predecessor</td></tr>
 <tr><td>3</td><td><code>project_switched</code></td><td><code>session_registry.jsonl</code>: ONE line carrying the new session id <strong>and</strong> the recorded project <strong>and</strong> project_path</td><td>predecessor</td></tr>
 <tr><td>4</td><td><code>prompt_landed</code></td><td>successor transcript: the generation-bound handoff marker, matched as a plain <strong>substring</strong></td><td>predecessor</td></tr>

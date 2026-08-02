@@ -1837,3 +1837,343 @@ class TestRound2Finding5TheMidChildContextIsPinnedAtRUNTIME:
                                           f"substring test but disables the rung's producer"
         assert context["driver_state_path"] == str(path)
         assert context["repo_root"] == str(work)
+
+
+class TestRound8H1TheProducerMustSeeWhatSelectionSees:
+    """**Round 8, High 1.** `produce_queue_revalidated` called `next_ready_issue` WITHOUT the
+    `issue_state_probe`, so the ladder rung and the selection it gates disagreed about the queue.
+
+    The divergence is not cosmetic — it is the sixth unrecoverable jam in this issue. A durably
+    `queued` sibling the probe confirms merged is invisible to the probe-less call, which refuses
+    `#1: never revalidated` and sends the operator to a skill that cannot help: the documented
+    worklist call raises on the missing extraction, and supplying the probe returns an EMPTY
+    worklist because the child is (correctly) not eligible. Nothing the operator can run advances
+    the receipt the rung demands.
+
+    The probe is DERIVED inside the producer rather than accepted as an optional argument callers
+    must remember — #695's own finding, that an optional corroboration nobody threads in ships
+    dead, applies to this call site exactly as it did to selection."""
+
+    def _merged_sibling_state(self):
+        """#1 durably queued and UNSTAMPED but really merged; #2 stamped, attested, depends on #1."""
+        return _state(_iss(1), _iss(2, validated_against=HEAD, depends_on=[1]),
+                      reval=_reval(HEAD, {"2": _receipt_child()}))
+
+    def test_the_producer_passes_when_the_probe_clears_the_stale_sibling(self, tmp_path):
+        work, head = _repo_with_origin(tmp_path)
+        state = _state(_iss(1), _iss(2, validated_against=head, depends_on=[1]),
+                       reval=_reval(head, {"2": _receipt_child(to_sha=head)}))
+        path = _write_state(tmp_path, state)
+        passed, reason = ll.produce_queue_revalidated(
+            {"driver_state_path": str(path), "repo_root": str(work)},
+            issue_state_probe=lambda n: "confirmed_merged" if n == 1 else "unknown")
+        assert passed is True, reason
+
+    def test_the_negative_twin_without_corroboration_it_still_refuses(self, tmp_path):
+        """Proves the probe is what changes the verdict, not the fixture being trivially green."""
+        work, head = _repo_with_origin(tmp_path)
+        state = _state(_iss(1), _iss(2, validated_against=head, depends_on=[1]),
+                       reval=_reval(head, {"2": _receipt_child(to_sha=head)}))
+        path = _write_state(tmp_path, state)
+        passed, reason = ll.produce_queue_revalidated(
+            {"driver_state_path": str(path), "repo_root": str(work)},
+            issue_state_probe=lambda _n: "unknown")
+        assert passed is False
+        assert "#1" in reason, reason
+
+    def test_the_producer_derives_a_probe_when_none_is_injected(self, tmp_path, monkeypatch):
+        """The anti-dead-corroboration guard. An injectable probe that no production caller
+        supplies is the exact shape #695 shipped once already, so the DEFAULT must derive one."""
+        work, head = _repo_with_origin(tmp_path)
+        path = _write_state(tmp_path, _state(
+            _iss(1), _iss(2, validated_against=head, depends_on=[1]),
+            reval=_reval(head, {"2": _receipt_child(to_sha=head)})))
+        asked = []
+        monkeypatch.setattr(ll, "_issue_state_probe_for",
+                            lambda root: (asked.append(root),
+                                          lambda n: "confirmed_merged" if n == 1 else "unknown")[1])
+        passed, reason = ll.produce_queue_revalidated(
+            {"driver_state_path": str(path), "repo_root": str(work)})
+        assert asked == [str(work)], f"the producer never derived a probe: {asked!r}"
+        assert passed is True, reason
+
+    def test_the_documented_skill_call_takes_the_probe_and_leaves_no_phantom_work(self):
+        """The remedy half. With the probe threaded through, the worklist names only the child
+        that genuinely needs a look — never the merged sibling the operator cannot revalidate."""
+        state = _state(_iss(1), _iss(2), reval=_reval(HEAD, {}))
+        work = dl.revalidation_worklist(
+            state, HEAD, extractions={2: ([], "none")}, changed_by_child={2: set()},
+            issue_state_probe=lambda n: "confirmed_merged" if n == 1 else "unknown")
+        assert [item["number"] for item in work] == [2], work
+
+
+class TestRound8H2TheValidatorMustNotPreemptTheWorkingRemedy:
+    """**Round 8, High 2 — round 7's High 3 was only half fixed.** The probe-aware remedy lives in
+    `_refuse_unrevalidated_queue`, but `validate_queue_revalidation` runs FIRST and raises its own
+    `QueueRevalidationRequired` for the STAMPED-plus-pending shape, carrying the `deferred |
+    abandoned` text round 7 proved unsafe. Round 7's fixture left #1 unstamped, so the validator
+    never fired and the bug stayed hidden.
+
+    Recording `abandoned` here opens the gate and PARKS #2; recording the truth releases it."""
+
+    def _stamped_obsolete_with_dependent(self):
+        return _state(_iss(1, validated_against=HEAD),
+                      _iss(2, validated_against=HEAD, depends_on=[1]),
+                      reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete"),
+                                          "2": _receipt_child()}))
+
+    def test_a_stamped_probe_merged_child_is_told_to_record_MERGED(self):
+        probe = (lambda n: "confirmed_merged" if n == 1 else "unknown")
+        with pytest.raises(dl.QueueRevalidationRequired) as exc:
+            dl.next_ready_issue(self._stamped_obsolete_with_dependent(),
+                                observed_head=HEAD, issue_state_probe=probe)
+        assert "--status merged" in str(exc.value), str(exc.value)
+
+    def test_and_executing_that_remedy_releases_the_dependent(self):
+        probe = (lambda n: "confirmed_merged" if n == 1 else "unknown")
+        cleared = dl.record_child_outcome(self._stamped_obsolete_with_dependent(), 1, "merged")
+        assert dl.next_ready_issue(cleared, observed_head=HEAD, issue_state_probe=probe) == 2
+
+    def test_the_stamped_shape_is_still_REFUSED_when_nothing_corroborates_it(self):
+        """The negative twin. Swallowing the validator's refusal must not make the shape
+        selectable — an obsolete stamped child is exactly what must never be handed out."""
+        with pytest.raises(dl.QueueRevalidationRequired) as exc:
+            dl.next_ready_issue(self._stamped_obsolete_with_dependent(), observed_head=HEAD)
+        assert "deferred|abandoned" in str(exc.value), str(exc.value)
+
+    def test_the_standalone_validator_keeps_its_own_invariant(self):
+        """`validate_queue_revalidation` is a public receipt validator with its own contract: a
+        stamped child carrying a pending marker is an incoherent receipt however it is reached."""
+        with pytest.raises(dl.QueueRevalidationRequired):
+            dl.validate_queue_revalidation(self._stamped_obsolete_with_dependent())
+
+
+class TestRound8H3AMalformedReceiptEntryIsNotEvidence:
+    """**Round 8, High 3.** `_receipt_covers_child` equated KEY PRESENCE with attestation, so a
+    structurally invalid current record counted as covering its child: selection refused with a
+    hard data error while `revalidation_worklist` returned nothing to rebuild. That is the same
+    refusal-with-no-remedy shape round 6's High 3 closed for absent receipts, reopened for
+    corrupt ones."""
+
+    def _malformed(self):
+        bad = _receipt_child()
+        bad["body_hash"] = "bad"
+        return _state(_iss(1, validated_against=HEAD), reval=_reval(HEAD, {"1": bad}))
+
+    def test_a_malformed_current_record_does_not_cover_its_child(self):
+        assert dl._receipt_covers_child(self._malformed(), 1, HEAD) is False
+
+    def test_the_worklist_therefore_has_work_to_do(self):
+        work = dl.revalidation_worklist(self._malformed(), HEAD,
+                                        extractions={1: ([], "none")},
+                                        changed_by_child={1: set()})
+        assert [item["number"] for item in work] == [1], work
+
+    def test_the_refusal_names_the_remedy_that_rebuilds_it(self):
+        with pytest.raises(dl.DriverStateError) as exc:
+            dl.next_ready_issue(self._malformed(), observed_head=HEAD)
+        assert "revalidate-children" in str(exc.value), str(exc.value)
+
+    def test_and_executing_that_remedy_opens_the_gate(self):
+        """Rebuilding the entry is what the skill does; the gate must then pass."""
+        state = self._malformed()
+        state["queue_revalidation"]["children"]["1"] = _receipt_child()
+        assert dl.next_ready_issue(state, observed_head=HEAD) == 1
+
+    def test_a_record_attesting_a_different_head_does_not_cover_either(self):
+        state = _state(_iss(1, validated_against=HEAD),
+                       reval=_reval(HEAD, {"1": _receipt_child(to_sha=OLD)}))
+        assert dl._receipt_covers_child(state, 1, HEAD) is False
+
+    def test_the_valid_current_record_still_covers_its_child(self):
+        """The negative twin — the round-6 fix must not become 'nothing is ever covered'."""
+        state = _state(_iss(1, validated_against=HEAD), reval=_reval(HEAD, {"1": _receipt_child()}))
+        assert dl._receipt_covers_child(state, 1, HEAD) is True
+
+
+class TestRound8M1AStaleHeadStillNeedsRevalidation:
+    """**Round 8, Medium 1.** Round 7 made the closing instruction conditional, but derived
+    `needs_revalidation` from the per-child `outstanding` list only. A STALE receipt head with a
+    pending-only outstanding set therefore printed "re-running it will change nothing" — while
+    the stale head is precisely what re-running fixes. Executing the printed remedy left the gate
+    refusing, and only then did it ask for revalidation."""
+
+    def _stale_head_pending_only(self):
+        return _state(_iss(1), reval=_reval(OLD, {"1": _receipt_child(to_sha=OLD,
+                                                                     pending="issue_obsolete")}))
+
+    def test_the_refusal_names_BOTH_remedies(self):
+        with pytest.raises(dl.QueueRevalidationRequired) as exc:
+            dl.next_ready_issue(self._stale_head_pending_only(), observed_head=HEAD)
+        text = str(exc.value)
+        assert "Two different remedies are needed" in text, text
+        assert "re-running it will change nothing" not in text, text
+
+    def test_the_owner_write_back_is_prescribed_BEFORE_revalidation(self):
+        """Order is load-bearing: disposing a child changes what the queue contains, so
+        revalidating first would stamp a child the owner is about to close."""
+        with pytest.raises(dl.QueueRevalidationRequired) as exc:
+            dl.next_ready_issue(self._stale_head_pending_only(), observed_head=HEAD)
+        text = str(exc.value)
+        suffix = text[text.index("Two different remedies are needed"):]
+        assert suffix.index("record the owner's outcome") \
+            < suffix.index("run the revalidate-children skill"), suffix
+
+    def test_a_pending_only_refusal_at_a_CURRENT_head_keeps_its_round7_wording(self):
+        """The negative twin — round 7's fix must survive. Here the receipt head IS current, so
+        revalidation genuinely would change nothing."""
+        state = _state(_iss(1), reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
+        with pytest.raises(dl.QueueRevalidationRequired) as exc:
+            dl.next_ready_issue(state, observed_head=HEAD)
+        assert "re-running it will change nothing" in str(exc.value), str(exc.value)
+
+
+class TestRound8RebuildReceiptIsTheArmingProcedure:
+    """**Round 8 sweep.** `rebuild_receipt` is SKILL.md step 7 made executable. It exists because
+    the step was prose, and prose is where three of this issue's eight review rounds found
+    defects: a paragraph describing which records survive a rebuild is re-derived, slightly
+    differently, by every session that reads it.
+
+    Its rules are the ones the sweep proved cannot be left implicit."""
+
+    def _reval(self, **kw):
+        return _reval(**kw)
+
+    def test_an_unreadable_record_is_dropped_rather_than_carried_forward(self):
+        """The 39-state jam. A corrupt record for a NON-eligible child was never rewritten,
+        because the worklist only audits eligible ones — so the campaign refused for ever."""
+        bad = _receipt_child()
+        bad["body_hash"] = "bad"
+        state = _state(_iss(1, "merged"), reval=_reval(HEAD, {"1": bad}))
+        rebuilt = dl.rebuild_receipt(state, HEAD, {})
+        assert rebuilt["queue_revalidation"]["children"] == {}
+        assert dl.validate_queue_revalidation(rebuilt) is True
+
+    def test_a_record_attesting_another_head_is_dropped(self):
+        state = _state(_iss(1, "merged"), reval=_reval(HEAD, {"1": _receipt_child(to_sha=OLD)}))
+        assert dl.rebuild_receipt(state, HEAD, {})["queue_revalidation"]["children"] == {}
+
+    def test_a_stamp_whose_evidence_was_dropped_is_cleared(self):
+        """The stamp is the claim, the record is the evidence. Losing the evidence must lose the
+        claim — otherwise the linkage invariant refuses a state this function just produced."""
+        bad = _receipt_child()
+        bad["body_hash"] = "bad"
+        state = _state(_iss(1, "merged", validated_against=HEAD), reval=_reval(HEAD, {"1": bad}))
+        rebuilt = dl.rebuild_receipt(state, HEAD, {})
+        assert "validated_against" not in rebuilt["issues"][0]
+
+    def test_an_unusable_stamp_is_cleared_so_the_remedy_cannot_crash(self):
+        """810 states. `rebuild_receipt` left a malformed stamp in place and then refused its own
+        output at the fail-closed validation, turning the documented remedy into a traceback."""
+        state = _state(_iss(1, validated_against="abc"))
+        rebuilt = dl.rebuild_receipt(state, HEAD, {1: _receipt_child()})
+        assert rebuilt["issues"][0]["validated_against"] == HEAD
+
+    def test_an_empty_audit_still_advances_the_head(self):
+        """A campaign whose children are all merged or in flight has nothing to audit, but the
+        head clause refuses it unconditionally — so it must still be armable, or the gate is shut
+        for good on the mid-child handoff it exists to serve."""
+        state = _state(_iss(1, "in_progress"))
+        rebuilt = dl.rebuild_receipt(state, HEAD, {})
+        assert rebuilt["queue_revalidation"]["validated_head"] == HEAD
+        assert dl.next_ready_issue(rebuilt, observed_head=HEAD) is None
+
+    def test_an_audited_child_is_stamped(self):
+        state = _state(_iss(1))
+        rebuilt = dl.rebuild_receipt(state, HEAD, {1: _receipt_child()})
+        assert rebuilt["issues"][0]["validated_against"] == HEAD
+        assert dl.next_ready_issue(rebuilt, observed_head=HEAD) == 1
+
+    def test_a_pending_child_is_recorded_but_NEVER_stamped(self):
+        """A stamped child is selectable, so one awaiting an owner decision must stay unstamped —
+        and stamping it would trip the receipt's own coherence invariant."""
+        state = _state(_iss(1))
+        rebuilt = dl.rebuild_receipt(
+            state, HEAD, {1: _receipt_child(pending="issue_obsolete")})
+        assert "validated_against" not in rebuilt["issues"][0]
+        assert dl.validate_queue_revalidation(rebuilt) is True
+
+    def test_it_never_mutates_the_state_it_was_given(self):
+        state = _state(_iss(1, validated_against=OLD), reval=_reval(OLD, {}))
+        before = json.dumps(state, sort_keys=True)
+        dl.rebuild_receipt(state, HEAD, {1: _receipt_child()})
+        assert json.dumps(state, sort_keys=True) == before
+
+    def test_an_audit_record_for_the_wrong_head_is_REFUSED(self):
+        """Fail-closed on the caller's own mistake: a record computed against another head would
+        make the receipt attest a validation that never happened at this one."""
+        with pytest.raises(dl.DriverStateError, match="attests"):
+            dl.rebuild_receipt(_state(_iss(1)), HEAD, {1: _receipt_child(to_sha=OLD)})
+
+    def test_a_malformed_audit_record_is_REFUSED(self):
+        bad = _receipt_child()
+        del bad["claims"]
+        with pytest.raises(dl.DriverStateError):
+            dl.rebuild_receipt(_state(_iss(1)), HEAD, {1: bad})
+
+
+class TestRound8EveryReceiptRefusalNamesItsRemedy:
+    """**Round 8 sweep, 280 states.** Every bare `DriverStateError` out of the receipt validator
+    named nothing an operator could run. The fix is a wrapper at the function boundary rather than
+    a patch per `raise` — which is the difference between fixing this class and fixing one more
+    instance of it."""
+
+    @pytest.mark.parametrize("broken,label", [
+        ({"version": 2, "extractor_version": 1, "validated_head": HEAD, "children": {}},
+         "unsupported version"),
+        ({"version": 1, "extractor_version": 1, "validated_head": "not-a-sha", "children": {}},
+         "malformed head"),
+        ({"version": 1, "extractor_version": 1, "validated_head": HEAD, "children": []},
+         "children not an object"),
+        ({"version": 1, "extractor_version": 1, "validated_head": HEAD, "children": {"x": {}}},
+         "key is not a number"),
+        ({"version": 1, "extractor_version": 1, "validated_head": HEAD, "children": {"1": "e"}},
+         "record is not an object"),
+        ({"version": 1, "extractor_version": 1, "validated_head": HEAD,
+          "children": {"1": _receipt_child(to_sha=OLD)}}, "record attests another head"),
+        ({"version": 1, "extractor_version": 1, "validated_head": HEAD, "children": {}},
+         "stamped with no evidence"),
+    ])
+    def test_the_refusal_names_the_revalidation_skill(self, broken, label):
+        state = _state(_iss(1, validated_against=HEAD), reval=broken)
+        with pytest.raises(dl.DriverStateError) as exc:
+            dl.validate_queue_revalidation(state)
+        assert "revalidate-children" in str(exc.value), f"{label}: {exc.value}"
+
+    def test_the_owner_gate_refusal_is_NOT_rewritten(self):
+        """The negative twin. `QueueRevalidationRequired` already carries the remedy that works
+        for it — an owner write-back — and must not be told to run the skill instead."""
+        state = _state(_iss(1, validated_against=HEAD),
+                       reval=_reval(HEAD, {"1": _receipt_child(pending="issue_obsolete")}))
+        with pytest.raises(dl.QueueRevalidationRequired) as exc:
+            dl.validate_queue_revalidation(state)
+        assert "revalidate-children" not in str(exc.value), str(exc.value)
+
+    def test_a_valid_receipt_still_passes(self):
+        state = _state(_iss(1, validated_against=HEAD), reval=_reval(HEAD, {"1": _receipt_child()}))
+        assert dl.validate_queue_revalidation(state) is True
+
+
+class TestRound8AnUnusableStampIsStaleProvenanceNotACrash:
+    """**Round 8 sweep, 24 states.** The gate hard-errored on `validated_against: "abc"` while
+    `revalidation_worklist` had already been taught at round-3 High 1 to treat exactly that value
+    as a baseline problem. Two halves of one feature disagreeing about whether a value is
+    recoverable is how the operator ends up holding a traceback."""
+
+    def test_the_gate_reports_it_as_outstanding_rather_than_raising_a_data_error(self):
+        state = _state(_iss(1, validated_against="abc"))
+        with pytest.raises(dl.QueueRevalidationRequired) as exc:
+            dl.next_ready_issue(state, observed_head=HEAD)
+        assert "unusable stamp" in str(exc.value), str(exc.value)
+
+    def test_and_the_prescribed_remedy_clears_it(self):
+        state = _state(_iss(1, validated_against="abc"))
+        assert dl.next_ready_issue(dl.rebuild_receipt(state, HEAD, {1: _receipt_child()}),
+                                   observed_head=HEAD) == 1
+
+    def test_a_well_formed_stale_stamp_keeps_its_own_wording(self):
+        """The negative twin — 'unusable' must not swallow the ordinary stale case."""
+        state = _state(_iss(1, validated_against=OLD), reval=_reval(HEAD, {}))
+        with pytest.raises(dl.QueueRevalidationRequired) as exc:
+            dl.next_ready_issue(state, observed_head=HEAD)
+        assert "stale head" in str(exc.value), str(exc.value)

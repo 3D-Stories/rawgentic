@@ -34,6 +34,7 @@ experience shows hand-maintained state transitions are error-prone.
 Pure, stdlib-only, no I/O and no side effects — safe to import from the driver
 pattern, the test suite, or a ``python3 -c`` one-liner in the docs.
 """
+import copy
 import heapq
 import re
 
@@ -393,7 +394,36 @@ def validate_revalidation_child(record) -> bool:
     return True
 
 
+_RECEIPT_REMEDY = (" Run the revalidate-children skill to rebuild the receipt from evidence "
+                   "(it drops any record that no longer validates), then retry")
+
+
 def validate_queue_revalidation(state: dict) -> bool:
+    """Validate the campaign receipt, and make EVERY refusal name the remedy that clears it.
+
+    **The remedy is attached HERE, at the function boundary, not at each `raise` (round 8).** The
+    round-8 sweep drove all 810 reachable gate states through their own printed instructions and
+    found 280 that named nothing an operator could run — every one of them a bare `DriverStateError`
+    from this validator. An earlier fix in the same round had patched exactly one of those raise
+    sites, which is the mistake this whole PR keeps repeating: fix the instance, ship the twin.
+    A wrapper covers the raise sites that exist today AND the ones somebody adds later, which is
+    the only version of this fix that stays fixed.
+
+    `QueueRevalidationRequired` passes through untouched: it is the designed, recoverable refusal
+    and already carries its own remedy, which is an OWNER write-back rather than this skill.
+    """
+    try:
+        return _validate_queue_revalidation(state)
+    except QueueRevalidationRequired:
+        raise
+    except DriverStateError as exc:
+        message = str(exc)
+        if "revalidate-children" in message:
+            raise
+        raise DriverStateError(message.rstrip(".") + "." + _RECEIPT_REMEDY) from exc
+
+
+def _validate_queue_revalidation(state: dict) -> bool:
     """Validate the campaign-level receipt AND its linkage to `issues[].validated_against`.
 
     Added after the adversarial-diff review (2026-08-02) found that nothing validated the
@@ -562,12 +592,31 @@ def _receipt_covers_child(state: dict, number: int, observed_head: str) -> bool:
     evidence behind it. Treating the stamp alone as "already done" let the head clause refuse a
     campaign while `revalidation_worklist` returned nothing to do — the refusal named a skill that
     had no work and so could never advance the receipt the gate demands.
+
+    **Coverage requires a STRUCTURALLY VALID record, not a present key (round 8, High 3).** The
+    first fix asked only `str(number) in children`, which reopened the very jam it closed, one
+    layer down: a corrupt current record — `body_hash: "bad"` reproduces it — made selection die
+    inside `validate_queue_revalidation` with a hard data error while this function reported the
+    child covered, so the worklist came back empty and nothing the operator could run rebuilt the
+    entry. Key presence is not attestation. `to_sha` is checked here too: `validate_queue_revalidation`
+    enforces it against the receipt head, but the worklist path never runs that validator, so this
+    function cannot borrow its guarantee.
+
+    Fails toward MORE work: anything it cannot positively read as valid evidence becomes a
+    re-audit candidate, which costs a look and never hands out an unattested child.
     """
     reval = state.get("queue_revalidation")
     if not isinstance(reval, dict) or reval.get("validated_head") != observed_head:
         return False
     children = reval.get("children")
-    return isinstance(children, dict) and str(number) in children
+    if not isinstance(children, dict):
+        return False
+    record = children.get(str(number))
+    try:
+        validate_revalidation_child(record)
+    except DriverStateError:
+        return False
+    return record.get("to_sha") == observed_head
 
 
 def _baseline_usable(sha, unresolvable: frozenset) -> bool:
@@ -738,6 +787,84 @@ def revalidation_worklist(state: dict, observed_head: str, extractions: dict,
         work.append({"number": number, "depth": depth, "extraction": extraction,
                      "from_sha": from_sha, "to_sha": observed_head, "baseline": provenance})
     return work
+
+
+def rebuild_receipt(state: dict, observed_head: str, audited: dict) -> dict:
+    """Write the campaign receipt FROM EVIDENCE. PURE — returns a new state, mutates nothing.
+
+    This is `skills/revalidate-children/SKILL.md` step 7 made executable. It used to be prose, and
+    prose is where three of this issue's eight review rounds found defects — a step described in
+    English is a step every future session re-derives, slightly differently. The rules below are
+    the ones that were impossible to state safely in a paragraph:
+
+    * **A record that does not validate is not evidence, so it is DROPPED.** Carrying it forward
+      is what made a corrupt entry unrecoverable (round-8 sweep, 39 states): the worklist only
+      ever audits ELIGIBLE children, so a malformed record belonging to a `merged` or
+      `in_progress` child was never rewritten and `validate_queue_revalidation` refused for ever.
+      Rebuilding from evidence has no such blind spot — anything unreadable simply does not
+      survive into the new receipt.
+    * **A record attesting a different head is dropped too.** It says nothing about this one.
+    * **A stamp with no surviving record is CLEARED.** The linkage invariant refuses a child
+      stamped at the validated head with no evidence behind it, and after a drop that is exactly
+      what would be left. The stamp is the claim; the record is the evidence; losing the evidence
+      must lose the claim, never the other way round.
+    * **A child whose record carries a `pending_disposition` stays UNSTAMPED.** A stamped child is
+      selectable, and one awaiting an owner's decision must not be.
+
+    ``audited`` maps issue number to the record just produced for it — normally one entry per
+    `revalidation_worklist` item. An EMPTY ``audited`` is legitimate and still advances the head:
+    a campaign whose children are all merged or in flight has nothing to audit but must still be
+    armable, or the gate would be permanently shut on the mid-child handoff it exists to serve.
+
+    Fails CLOSED: the result is validated before it is returned, so this can never be the source
+    of a receipt the gate then refuses.
+    """
+    validate_validated_against(observed_head)
+    if not isinstance(audited, dict):
+        raise DriverStateError(f"audited must be a dict of number -> record, got "
+                               f"{type(audited).__name__}")
+    new = copy.deepcopy(state)
+    prior = state.get("queue_revalidation")
+    prior_children = prior.get("children") if isinstance(prior, dict) else None
+    children: dict[str, dict] = {}
+    if isinstance(prior_children, dict):
+        for key, record in prior_children.items():
+            if not (isinstance(key, str) and key.isdigit()):
+                continue                       # not an issue number; it attests nothing
+            try:
+                validate_revalidation_child(record)
+            except DriverStateError:
+                continue                       # unreadable, so not evidence
+            if record.get("to_sha") == observed_head:
+                children[key] = copy.deepcopy(record)
+    for number, record in audited.items():
+        validate_revalidation_child(record)
+        if record.get("to_sha") != observed_head:
+            raise DriverStateError(
+                f"the audit record for child #{number} attests {record.get('to_sha')!r}, not the "
+                f"head being validated ({observed_head!r})")
+        children[str(int(number))] = copy.deepcopy(record)
+    new["queue_revalidation"] = {"version": 1, "extractor_version": 1,
+                                 "validated_head": observed_head, "children": children}
+    for issue in new.get("issues", []):
+        key = str(issue["number"])
+        record = children.get(key)
+        if record is None:
+            stamped = issue.get("validated_against")
+            # An UNUSABLE stamp is cleared too, not only one matching the head. It names no
+            # commit, so it attests nothing — and leaving it made this very function refuse its
+            # own output at the fail-closed validation below, which turned the documented remedy
+            # into a crash for every campaign carrying one.
+            if stamped is not None and (stamped == observed_head
+                                        or not _baseline_usable(stamped, frozenset())):
+                del issue["validated_against"]     # the claim outlived its evidence
+            continue
+        if record.get("pending_disposition") is not None:
+            issue.pop("validated_against", None)
+        else:
+            issue["validated_against"] = observed_head
+    validate_queue_revalidation(new)
+    return new
 
 
 def parse_depends_on(body: str) -> list[int]:
@@ -943,7 +1070,13 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
 
         observed_head != queue_revalidation.validated_head
         any eligible child's validated_against != observed_head
-        any eligible child carries a pending_disposition
+        any DURABLY-UNDISPOSED child carries a pending_disposition
+
+    Note the scope difference on the third clause, and it is deliberate (round-6 High 2, restated
+    here at round-8 Medium 2 because this docstring still carried the old eligible-only wording
+    beside the corrected code). Stamp freshness is an ELIGIBLE-child question. The pending marker
+    is not: a `pr_open` child cannot be selected but can still SATISFY a dependency, so an
+    obsolete one would otherwise hand out somebody else's work.
 
     The head clause alone was r2's design and both reviewers refuted it: a brand-new campaign
     sitting at its base head, or a newly-added unstamped child at an unmoved head, would hand out
@@ -972,6 +1105,7 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
     reval = state.get("queue_revalidation")
     validated_head = None
     children: dict = {}
+    preempted: QueueRevalidationRequired | None = None
     if reval is not None:
         # Validated BEFORE any eligibility shortcut (Step-11 review finding 3, reproduced): the
         # old code returned early when nothing was eligible, so a receipt of
@@ -981,7 +1115,25 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
         #
         # This also checks the LINKAGE to the per-child stamps, so a fabricated stamp with no
         # evidence behind it fails here rather than passing the gate.
-        validate_queue_revalidation(state)
+        # **The owner-gate diagnostic wins over the validator's copy of it (round 8, High 2).**
+        # `validate_queue_revalidation` raises `QueueRevalidationRequired` for the STAMPED-plus-
+        # pending shape, carrying the `deferred | abandoned` wording round 7 proved unsafe for a
+        # child the probe confirms merged: recording `abandoned` opens the gate and PARKS every
+        # dependent. Round 7 fixed the remedy in the owner-gate pass BELOW, but this call runs
+        # first, so for a stamped child the fixed remedy was unreachable — round 7's own fixture
+        # left the child unstamped and never crossed it.
+        #
+        # Swallowing it is safe because the owner-gate pass reports a SUPERSET: the validator
+        # fires only on an undisposed child that is stamped at the head AND carries a pending
+        # marker, and the pass below reports every undisposed child carrying one, stamped or not.
+        # The `preempted` re-raise makes that reasoning falsifiable rather than trusted — if the
+        # superset claim ever stops holding, the refusal is restored instead of silently lost.
+        # Structural `DriverStateError`s still propagate untouched: those are not recoverable by
+        # an owner write-back.
+        try:
+            validate_queue_revalidation(state)
+        except QueueRevalidationRequired as exc:
+            preempted = exc
         validated_head = reval.get("validated_head")
         children = reval.get("children") or {}
     eligible = [i for i in state.get("issues", []) if effective[i["number"]] == "queued"]
@@ -1063,7 +1215,17 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
             outstanding.append({"number": number, "validated_against": None,
                                 "reason": "never revalidated"})
             continue
-        validate_validated_against(stamped)
+        # **An unusable stamp is STALE PROVENANCE, not a hard error (round-8 sweep).** This used
+        # to `validate_validated_against(stamped)` and raise, which killed selection with a bare
+        # data error naming no remedy — and `revalidation_worklist` had already stopped raising on
+        # exactly this value at round-3 High 1, so the gate and the skill disagreed about whether
+        # `"abc"` was recoverable. It is: the stamp claims a head it cannot name, which is a claim
+        # with no evidence, and rebuilding the receipt clears it.
+        if not _baseline_usable(stamped, frozenset()):
+            outstanding.append({"number": number, "validated_against": stamped,
+                                "reason": f"carries an unusable stamp {stamped!r}, so it names no "
+                                          "head it can be compared against"})
+            continue
         if stamped != observed_head:
             outstanding.append({"number": number, "validated_against": stamped,
                                 "reason": "revalidated against a stale head"})
@@ -1076,12 +1238,27 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
         # message contradicted itself and its last line was a no-op. The suffix now names only
         # the remedies that apply: revalidation for stale provenance, the owner's write-back for
         # a pending marker, and both only when both are genuinely outstanding.
-        needs_revalidation = any(i.get("kind") != "pending_disposition" for i in outstanding)
+        #
+        # **A STALE HEAD counts as needing revalidation, even with no stale-provenance child
+        # (round 8, Medium 1).** This was derived from `outstanding` alone, which holds per-child
+        # items only — so a stale receipt head plus a pending-only outstanding set printed
+        # "re-running it will change nothing" while the stale head was precisely what re-running
+        # fixes. Executing the printed remedy left the gate still refusing, and only then asked
+        # for revalidation: a two-step remedy delivered one step at a time, which is the same
+        # defect as a remedy that does nothing, spread over two attempts.
+        head_is_stale = validated_head != observed_head
+        needs_revalidation = head_is_stale or any(
+            i.get("kind") != "pending_disposition" for i in outstanding)
         needs_owner = any(i.get("kind") == "pending_disposition" for i in outstanding)
         if needs_revalidation and needs_owner:
-            suffix = (". Two different remedies are needed: run the revalidate-children skill for "
-                      "the stale-provenance children above, AND record the owner's outcome for "
-                      "the pending-disposition ones. Then retry.")
+            # **Owner write-back FIRST, revalidation second.** Disposing a child changes which
+            # children the queue still contains, so revalidating first would spend a full audit
+            # stamping a child the owner is about to close — and the stamp would then have to be
+            # thrown away. The order is the remedy, not presentation.
+            suffix = (". Two different remedies are needed, in this order: FIRST record the "
+                      "owner's outcome for the pending-disposition children above (a machine may "
+                      "not choose it), THEN run the revalidate-children skill for the remaining "
+                      "queue — disposing a child changes what is left to revalidate. Then retry.")
         elif needs_owner:
             suffix = (". Record the outcome named above — the revalidate-children skill CANNOT "
                       "clear a pending disposition, so re-running it will change nothing.")
@@ -1097,6 +1274,14 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
         error.validated_head = validated_head
         error.outstanding = outstanding
         raise error
+    if preempted is not None:
+        # The falsifiable half of the round-8 High 2 fix. Swallowing the validator's refusal is
+        # justified ONLY because the owner-gate pass above reports a superset of the shapes it
+        # fires on. If that ever stops being true, the swallow would silently make a stamped
+        # obsolete child SELECTABLE — the one outcome this gate exists to prevent — so the
+        # original refusal is restored instead of lost. Unreachable while the superset holds,
+        # which is exactly why it is cheap to keep.
+        raise preempted
 
 
 def campaign_deps_satisfied_by(state: dict) -> str:

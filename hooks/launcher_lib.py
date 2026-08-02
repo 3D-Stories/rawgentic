@@ -243,7 +243,9 @@ _MID_CHILD_VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
     {"step": "queue_revalidated", "owner": "predecessor",
      "artifact": ".driver-state -> a queue_revalidation receipt whose validated_head equals a "
                  "FRESHLY observed origin/main (launcher_lib.observe_head), with every eligible "
-                 "child stamped at that head and none carrying a pending_disposition. Produced by "
+                 "child stamped at that head and no DURABLY-UNDISPOSED child carrying a "
+                 "pending_disposition (the marker is checked wider than eligibility, because a "
+                 "pr_open child cannot be selected but can still satisfy a dependency). Produced by "
                  "the launcher reading the receipt — never satisfied by a caller-supplied rung "
                  "result, because an agent asserting its own homework is the vacuous pass this "
                  "whole issue exists to eliminate"},
@@ -1123,7 +1125,15 @@ def mid_child_verification_steps() -> list[dict[str, str]]:
 QUEUE_REVALIDATED_STEP = "queue_revalidated"
 
 
-def produce_queue_revalidated(campaign_context, *, runner=None) -> tuple[bool, str]:
+# "Nobody passed one, so derive the production probe" — distinct from an explicit `None`, which
+# means "run WITHOUT corroboration". A plain `None` default cannot tell those apart, and the
+# difference decides whether a stale-file sibling jams the rung. Defined above its use because a
+# default argument is evaluated at definition time (the same trap `runner` documents below).
+_DERIVE_PROBE = object()
+
+
+def produce_queue_revalidated(campaign_context, *, runner=None,
+                              issue_state_probe=_DERIVE_PROBE) -> tuple[bool, str]:
     """The `queue_revalidated` rung's PRODUCER. Reads the receipt; returns ``(passed, reason)``.
 
     This is deliberately launcher-owned rather than caller-supplied, which was the peer consult's
@@ -1176,8 +1186,21 @@ def produce_queue_revalidated(campaign_context, *, runner=None) -> tuple[bool, s
         head = observe_head(repo_root, runner=runner)
     except LauncherError as exc:
         return (False, str(exc))
+    # #840 round-8 High 1. The rung and the selection it gates must see the SAME queue. Without
+    # the probe this call disagreed with `fresh_session_handoff` about which children are still
+    # open: a durably `queued` sibling the probe confirms merged is eligible here and not there,
+    # so the rung refused `#N: never revalidated` on a child nobody can revalidate — the skill's
+    # worklist correctly returns nothing for it. Sixth unrecoverable jam, and the first one caused
+    # by two callers of the same function being given different evidence.
+    #
+    # DERIVED here rather than required from callers: #695's own finding is that an optional
+    # corroboration nobody threads in ships dead, and this producer has two production call sites
+    # (`perform_handoff`, `retire_predecessor`) that would each have to remember. The parameter
+    # exists for tests, which cannot reach a real `gh`; the default is the production path.
+    probe = (_issue_state_probe_for(repo_root)
+             if issue_state_probe is _DERIVE_PROBE else issue_state_probe)
     try:
-        driver_lib.next_ready_issue(state, observed_head=head)
+        driver_lib.next_ready_issue(state, observed_head=head, issue_state_probe=probe)
     except driver_lib.QueueRevalidationRequired as exc:
         return (False, str(exc))
     except driver_lib.DriverStateError as exc:

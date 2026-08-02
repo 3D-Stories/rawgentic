@@ -99,8 +99,15 @@ For each candidate, compute:
   multi-session gap, which are the cases this exists for.
 
 Then `driver_lib.revalidation_worklist(state, observed_head, extractions, changed_by_child,
-unresolvable_shas=<probed set>)` returns one item per child with a `depth` and a `baseline`
-provenance of `stamp`, `base` or `unavailable`. **A child carrying an unusable stamp does NOT fall
+issue_state_probe=<probe>, unresolvable_shas=<probed set>)` returns one item per child with a
+`depth` and a `baseline` provenance of `stamp`, `base` or `unavailable`.
+
+**Pass the `issue_state_probe`** — build it with
+`launcher_lib.build_issue_state_probe(launcher_lib.repo_from_git('.'))`. Without it a child that
+is durably `queued` but has really already merged counts as eligible, so the worklist asks you to
+revalidate an issue that is closed, and the gate and this skill end up disagreeing about what the
+queue contains (round-8 High 1). A repo it cannot derive degrades to "the file wins" — the skill
+still runs. **A child carrying an unusable stamp does NOT fall
 back to the campaign base** — that would date the range from a commit it was never validated at, and
 a wider-but-wrong range can buy `quick` on a real change. It goes straight to `unavailable`/`deep`.
 
@@ -156,10 +163,31 @@ decision, so record the marker and let the gate keep refusing until an owner mov
 `deferred` or `abandoned` via `launcher_lib record-child-outcome`. The machine's job here is to
 refuse, not to choose.
 
-**7. Write the receipt, atomically, and only when it is complete.** Under the state lock, write each
-child's `validated_against` and its `queue_revalidation.children["<n>"]` record, and advance
-`validated_head` to the observed head **only when every eligible child is stamped or marked**. A
-half-written receipt that advances the head would open the gate on children nobody looked at.
+**7. Write the receipt with `driver_lib.rebuild_receipt`, under the state lock.** Do NOT assemble
+it by hand — this step was prose until round 8, and prose is where three review rounds found
+defects, because every session re-derives "which records survive" slightly differently.
+
+```python
+new_state = driver_lib.rebuild_receipt(state, observed_head, audited)
+```
+
+`audited` is `{issue_number: record}` — one entry per child you actually looked at, each record
+carrying `to_sha == observed_head`. The function REBUILDS the receipt from evidence rather than
+editing it in place, which is what makes the gate recoverable:
+
+- a record that no longer validates, or that attests a different head, is **dropped** — it is not
+  evidence, and carrying it forward once made a corrupt entry unrecoverable for any child the
+  worklist does not audit (it audits eligible children only);
+- a stamp whose evidence was dropped, or that names no usable commit, is **cleared** — the stamp
+  is the claim and the record is the evidence, so the claim must never outlive it;
+- a child whose record carries a `pending_disposition` is recorded but **never stamped**;
+- an EMPTY `audited` still advances `validated_head`. That is correct, not a shortcut: a campaign
+  whose children are all merged or in flight has nothing to audit, and the head clause refuses it
+  regardless — so if this could not arm it, the gate would be shut for good on the mid-child
+  handoff it exists to serve.
+
+It validates its own output before returning, so it can never be the source of a receipt the gate
+then refuses.
 
 Validate before you rely on it:
 
