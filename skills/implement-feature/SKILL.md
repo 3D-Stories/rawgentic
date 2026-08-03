@@ -150,7 +150,8 @@ the default is inline TDD. What is retired is the executor seat, not subagents.
 **Cross-model review runs through ONE entry point** — `hooks/review_runner.py` (D179) —
 dispatched from a read-only harness subagent so the inline self-review and the cross-model
 review run in parallel. The subagent's ONLY job is to run one runner command and report back
-the result path plus the exit code; it must not edit files. Command shapes:
+the result path plus the exit code; it must not modify project files — its only permitted
+write is the runner's declared `--out` result file. Command shapes:
 
 ```bash
 # Text artifact (design/plan/spec/…): WF2 Step 4, WF5
@@ -230,6 +231,11 @@ blocker and STOP — never silently continue. The mechanics are mode-specific (#
 
 Either way the blocker is *posted*, so the goal guard clears honestly instead of the
 run hanging on an unsatisfiable "PR open with green CI".
+
+**Unattended waits:** in an unattended run, a step that WAITS for a user decision
+auto-resolves conservatively where its own text defines an auto-resolution (WF1-created
+issue confirmation, the lane/trivial suggestions); where none is defined, treat the wait
+as a blocker via this protocol — never an indefinite wait.
 </error-protocol>
 
 <termination-rule>

@@ -55,7 +55,8 @@ def test_runner_single_entry_point_in_shared_source():
     for verb in ("review-artifact --artifact", "review-code --base", "consult --artifact"):
         assert f"python3 hooks/review_runner.py {verb}" in shared, verb
     assert "dispatched from a read-only harness subagent" in shared
-    assert "it must not edit files" in shared
+    assert ("it must not modify project files — its only permitted write is the runner's "
+            "declared `--out` result file") in shared
 
 
 def test_runner_exit_codes_and_transport_policy_in_shared_source():

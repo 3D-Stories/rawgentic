@@ -8,7 +8,8 @@ the default is inline TDD. What is retired is the executor seat, not subagents.
 **Cross-model review runs through ONE entry point** — `hooks/review_runner.py` (D179) —
 dispatched from a read-only harness subagent so the inline self-review and the cross-model
 review run in parallel. The subagent's ONLY job is to run one runner command and report back
-the result path plus the exit code; it must not edit files. Command shapes:
+the result path plus the exit code; it must not modify project files — its only permitted
+write is the runner's declared `--out` result file. Command shapes:
 
 ```bash
 # Text artifact (design/plan/spec/…): WF2 Step 4, WF5

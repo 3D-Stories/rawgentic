@@ -91,7 +91,10 @@ Confirm this is the bug to fix, or provide corrections. Run the /goal command ab
 ```
 
 Wait for user confirmation before proceeding to Step 2 (and, in the same round-trip,
-whether they ran `/goal` or declined — see Step 1b; no second prompt).
+whether they ran `/goal` or declined — see Step 1b; no second prompt). In an unattended
+run (e.g. an epic-run child): a WF1-created issue auto-confirms and proceeds; a
+manually-created issue posts the summary as an issue comment and stops via the ERROR
+protocol — never an indefinite wait.
 
 ### Failure Modes
 

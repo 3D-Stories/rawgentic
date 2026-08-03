@@ -205,7 +205,7 @@ The egress warning text (destination(s) named, and any detected secret categorie
      --out "<PROJECT_ROOT>/.rawgentic-wf5-result.json" \
      --project-root "<PROJECT_ROOT>"
    ```
-   Under `both`, run TWO independent invocations — one `--backend gpt` (reviewer `gpt-5.6-sol`) and one `--backend glm` (omit `--reviewer`; it resolves `glm-5.2`) — with distinct `--out` paths. The result JSON is the machine-readable findings sidecar for embedded callers: `{status, diagnostic, reviewer_model, backend, input_sha256, head_sha, timing, findings, summary, error_class}`. Standalone WF5 runs are tokenless, so `diagnostic` is `true` — irrelevant here, because WF5 is report-only and authorizes nothing.
+   `--reviewer` is backend-specific: pass the pinned id for `gpt` (`gpt-5.6-sol` per the `<model-routing-resolve>` contract); for `glm`, OMIT the flag — the runner resolves `glm-5.2` itself, and that omission is the sanctioned form, not an oversight. Under `both`, run TWO independent invocations — one `--backend gpt` (with `--reviewer gpt-5.6-sol`) and one `--backend glm` (no `--reviewer`) — with distinct `--out` paths. The result JSON is the machine-readable findings sidecar for embedded callers: `{status, diagnostic, reviewer_model, backend, input_sha256, head_sha, timing, findings, summary, error_class}`. Standalone WF5 runs are tokenless, so `diagnostic` is `true` — irrelevant here, because WF5 is report-only and authorizes nothing.
 2. Interpret the exit code per invocation:
    - `0` → success; the result file holds validated findings + summary.
    - `2` → refused (identity/validation/oversize/config — no egress happened). STOP and relay `error_detail`.
@@ -287,7 +287,7 @@ Before declaring WF5 complete, verify ALL of the following. Print the checklist 
 2. [ ] Artifact validated (exists, under project root, type resolved)
 3. [ ] Selected backend's prerequisite satisfied (gpt: codex installed+authenticated; glm: zhipuai>=2.1.5 + key; both: >=1 ready, degradation warned)
 4. [ ] Egress notice printed (warn-only)
-5. [ ] Review invoked through `hooks/review_runner.py` with the resolved backend, a pinned `--reviewer`, and `--author-model`; exit code interpreted (fail-closed on 2/3/4; both-mode partial presented with the failure named)
+5. [ ] Review invoked through `hooks/review_runner.py` with the resolved backend, the backend-appropriate identity (`--reviewer gpt-5.6-sol` for gpt; flag omitted for glm — the runner resolves `glm-5.2`), and `--author-model`; exit code interpreted (fail-closed on 2/3/4; both-mode partial presented with the failure named)
 6. [ ] On success: report(s) written to <project>/docs/reviews/ and presented (both files under `both`)
 7. [ ] Artifact NOT modified (report-only invariant)
 
