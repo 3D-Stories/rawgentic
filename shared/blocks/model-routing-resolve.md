@@ -66,4 +66,7 @@ the ERROR protocol.
 filter, High-deferral discipline, the ambiguity circuit breaker, and the loop-back budget.
 Fix, defer with rationale, or decline with reason — never silently drop. Concurrency courtesy:
 keep ≤ 3 concurrent Claude subagents (token burn; a session-limit hit kills all in-flight
-agents with vacuous results).
+agents with vacuous results). A subagent or runner dispatch is never a gate bypass — every
+mandatory review gate runs with identical semantics whether a pass ran inline or through
+`hooks/review_runner.py`, and a review that may open a fix round carries a reopen token
+minted first.

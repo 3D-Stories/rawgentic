@@ -187,7 +187,9 @@ round ONLY when the run carried a reopen token minted first via
 `python3 hooks/plan_lib.py review-reopen --state-file claude_docs/.wf3-state/<issue>/loopback_counters.json --source review --out <token.json> --project-root .`
 — the mint debits the loop-back budget (see `LOOPBACK_BUDGET` in `<constants>`); exhaustion
 refuses and the gate escalates. A tokenless result carries `diagnostic: true` and MUST NOT open
-a fix round.
+a fix round. A subagent or runner dispatch is never a gate bypass — every mandatory review gate
+runs with identical semantics whether a pass ran inline or through `hooks/review_runner.py`,
+and a review that may open a fix round carries a reopen token minted first.
 
 **The vacuous-result gate — subagent results are hypotheses.** Before consuming any subagent
 result: the `--out` file exists and is non-empty; it parses as JSON with a `status` matching the

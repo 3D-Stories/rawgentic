@@ -72,7 +72,7 @@ The following steps are MANDATORY and must NEVER be skipped, abbreviated, or com
 | 1 | Receive Issue | Foundation — wrong issue = wrong implementation |
 | 2 | Analyze Codebase | Complexity classification drives all downstream decisions |
 | 3 | Design Solution | Architecture before code — always |
-| 4 | Quality Gate (Design) | Catches design flaws BEFORE implementation. The in-repo quality-bar rubric + the mechanical platform-feasibility gate (#226) run for all lanes; the full spine adds the opt-in adversarial-on-design + peer consult. |
+| 4 | Quality Gate (Design) | Catches design flaws BEFORE implementation. The in-repo quality-bar rubric + the platform-feasibility check (#226) run for all lanes; the full spine adds the opt-in adversarial-on-design + peer consult. |
 | 5 | Implementation Plan | Task decomposition enables TDD and progress tracking |
 | 7 | Create Branch | Git isolation is non-negotiable |
 | 8 | Implementation | The actual work |
@@ -208,7 +208,10 @@ the ERROR protocol.
 filter, High-deferral discipline, the ambiguity circuit breaker, and the loop-back budget.
 Fix, defer with rationale, or decline with reason — never silently drop. Concurrency courtesy:
 keep ≤ 3 concurrent Claude subagents (token burn; a session-limit hit kills all in-flight
-agents with vacuous results).
+agents with vacuous results). A subagent or runner dispatch is never a gate bypass — every
+mandatory review gate runs with identical semantics whether a pass ran inline or through
+`hooks/review_runner.py`, and a review that may open a fix round carries a reopen token
+minted first.
 </model-routing-resolve>
 
 <error-protocol>
@@ -389,20 +392,20 @@ this directive binds only where a spike is the evidence.
 </probe-before-design>
 
 <review-lens-routing>
-Review waves are model-tiered per lens (#491; the epic #475 profile measured ~9 opus
-reviewers per child where the mechanical lenses never needed the strong model). When
-dispatching review-role subagents at Step 4, Step 8a, and Step 11, select the model per
-LENS via `select_review_lens_model`: the security lens is pinned to the resolved
-review model, and the mechanical, ac_completeness, test_coverage, and bug_logic lenses
-ride the fast tier (default sonnet; per-project tunable via `modelRouting.reviewLenses`;
-the function lives in `hooks/model_routing_lib.py`, CLI `resolve --role review --lens <lens>`).
-The pins are hard: a `reviewLenses` override can never downgrade the security lens (the
-function ignores it with a warning), and never-Haiku holds on every path — haiku floors
-to sonnet inside the function, and an `inherit` resolution on a Haiku session dispatches
-`model: sonnet` at the site (the Step 8 delegation guard's rule). Lens map: Step 4
-self-review dispatch → security; Step 8a Reviewer 1 → mechanical, Reviewer 2
-(silent-failure hunt) → security; Step 11 Reviewer 1 → mechanical + bug_logic (fast
-tier), Reviewer 2 → architecture + security (strong; #492).
+Review lenses are BRIEF EMPHASIS, not model routing (#491's per-lens model tiering retired
+with the executor — D174; there is no per-lens model selection any more). Each review pass
+carries a LENS naming what it hunts: `mechanical` (style, imports, hardcoded credentials,
+off-by-one), `bug_logic` (logic errors, race conditions, silent failures), `security` (auth,
+injection, traversal, ReDoS — this lens caught the ReDoS + FIFO-DoS on #466), `architecture`
+(pattern breaks, missing sibling changes, backward compatibility), plus `ac_completeness`
+and `test_coverage` as Step 4/9 emphases. The pairing at every review site: the INLINE
+self-review carries the mechanical + bug_logic lenses; the cross-model runner pass carries
+the architecture + security lenses — the security lens is never the one dropped (#492), so
+in the small-standard lane's single-reviewer form the one reviewer carries it. Lens map:
+Step 4 self-review → security; Step 8a Reviewer 1 → mechanical, Reviewer 2 (silent-failure
+hunt) → security; Step 11 Reviewer 1 → mechanical + bug_logic, Reviewer 2 → architecture +
+security (#492). State each pass's lens in its brief as emphasis only — never a verdict
+instruction (`<review-severity>`).
 </review-lens-routing>
 
 <early-smoke-install>
@@ -469,7 +472,7 @@ read on demand by this contract:
   `<trivial-work-check>`, and `<learning-config>` blocks.
 - `references/state-and-resume.md` — the `<state-files>` and
   `<resumption-protocol>` contracts. Read before ANY resume, or before reading
-  or writing a session-scoped state file or the local (git-excluded) review-state pointer.
+  or writing a session-scoped state file.
 - `references/run-record.md` — the run-record schema. Read before the Step 16
   run-record assembly.
 - `references/whole-issue-delegation.md` — the whole-issue delegated-build
@@ -487,17 +490,17 @@ ordered spine is in `<happy-path>`; MANDATORY vs conditional is in
 - **Step 1b — AC-derived goal guard (`/goal`).** Build the goal text via `plan_lib.build_goal_text` and fold it into Step 1's confirmation; optional, never blocks. (read references/steps.md §1b before executing)
 - **Step 2 — Analyze codebase & classify complexity.** Map-first then parallel gather then synthesize; set the authoritative complexity, small-standard-lane eligibility, trivial-work check, and the parallelism probe. (read references/steps.md §2 before executing)
 - **Step 3 — Design solution architecture.** Produce the design doc incl. the mandatory `platform_apis:` feasibility declaration (#226), probing load-bearing platform APIs live first per `<probe-before-design>` (#490); optional cross-model peer consult, blind both ways; collapses to a brief note in the lane. (read references/steps.md §3 before executing)
-- **Step 4 — Quality gate: design critique.** the in-repo quality-bar rubric for all lanes (#190 retired the 3-judge panel; #205 replaced the reflexion dependency) + the mechanical platform-feasibility gate (`plan_lib.assert_feasibility_declared`, #226) + opt-in adversarial-on-design on the full spine; the breaker runs EXACTLY once. (read references/steps.md §4 before executing)
-- **Step 5 — Create implementation plan.** Decompose into risk-tagged tasks (`riskLevel`), parallel-group/files validation, verification strategy; checklist form in the lane. (read references/steps.md §5 before executing)
+- **Step 4 — Quality gate: design critique.** the in-repo quality-bar rubric for all lanes (#190 retired the 3-judge panel; #205 replaced the reflexion dependency) + the platform-feasibility check (#226) + opt-in adversarial-on-design (via the review runner) on the full spine; the breaker runs EXACTLY once. (read references/steps.md §4 before executing)
+- **Step 5 — Create implementation plan.** Decompose into risk-tagged tasks (`riskLevel`), optional parallel-group/files declarations, verification strategy; checklist form in the lane. (read references/steps.md §5 before executing)
 - **Step 6 — Quality gate: plan drift (conditional).** The quality-bar rubric + opt-in adversarial-on-plan; skipped when time-critical or in the lane. (read references/steps.md §6 before executing)
 - **Step 7 — Create feature branch.** Branch from a freshly-fetched `origin/<default>` and assert the base; never pull into the current checkout. (read references/steps.md §7 before executing)
-- **Step 8 — Implementation.** Execute the plan task-by-task (TDD/implement-verify), commit per task; early smoke-install after the first runnable commit on deploy-bearing projects (`<early-smoke-install>`, #494); optional per-task or whole-issue delegation, mid-flight risk promotion + a mid-flight platform-feasibility check for gate-bypassing changes (#226). (read references/steps.md §8 before executing)
-- **Step 8a — Per-task review (conditional).** Fires when any `riskLevel: high` task exists: ONE accumulated wave of 2 reviewers over the set of high-risk commits (#492), deferrals persisted, review log (one entry per covered task) + review-state pointer (local, git-excluded) updated. (read references/steps.md §8a before executing)
-- **Step 9 — Quality gate: implementation drift.** Alignment self-review (Part A) + evidence (Part B); P15 review-coverage assertion; runtime-surface feasibility — spike OR a deferred-to-target naming the likeliest-wrong claim (#226); lane runs evidence-only + the lane cross-check. (read references/steps.md §9 before executing)
+- **Step 8 — Implementation.** Execute the plan task-by-task (TDD/implement-verify), commit per task; early smoke-install after the first runnable commit on deploy-bearing projects (`<early-smoke-install>`, #494); inline TDD with optional worktree-subagent parallelism or whole-issue delegation, mid-flight risk promotion + a mid-flight platform-feasibility check for gate-bypassing changes (#226). (read references/steps.md §8 before executing)
+- **Step 8a — Per-task review (conditional).** Fires when any `riskLevel: high` task exists: ONE accumulated wave of 2 review passes (inline + runner) over the set of high-risk commits (#492), deferrals persisted, one coverage marker per covered task. (read references/steps.md §8a before executing)
+- **Step 9 — Quality gate: implementation drift.** Alignment self-review (Part A) + evidence (Part B); P15 review-coverage check; runtime-surface feasibility — spike OR a deferred-to-target naming the likeliest-wrong claim (#226); lane runs evidence-only + the lane cross-check. (read references/steps.md §9 before executing)
 - **Step 10 — Conditional memorization (background).** Runs in parallel with Step 11; never blocks. (read references/steps.md §10 before executing)
 - **Step 11 — Pre-PR code review.** 2-agent review (≥1 in the lane; #492) + opt-in adversarial diff review; severity-banded confidence, deferred-resolution exit gate. NON-NEGOTIABLE. (read references/steps.md §11 before executing)
 - **Step 11.5 — Tool-based security scan (pre-PR gate).** `hooks/security_scan.py` for secrets/SCA/SAST/IaC; fail-closed on real findings; visible skips, never a silent pass. (read references/steps.md §11.5 before executing)
-- **Step 12 — Create PR & push.** Join Steps 10+11, update README/docs, review-state gate, open the PR with the templated body. (read references/steps.md §12 before executing)
+- **Step 12 — Create PR & push.** Join Steps 10+11, update README/docs, review-completeness check, open the PR with the templated body. (read references/steps.md §12 before executing)
 - **Step 13 — CI verification (conditional).** Monitor/fix CI when `has_ci`; quarantine handled as a visible non-gate with a trust guard. (read references/steps.md §13 before executing)
 - **Step 14 — Merge & deploy (conditional).** Only on user-requested merge (unattended runs stop at the PR); pre-merge quarantine×protection contradiction checks. (read references/steps.md §14 before executing)
 - **Step 15 — Post-deploy verification (conditional).** Only if a deployment happened. (read references/steps.md §15 before executing)
@@ -517,27 +520,23 @@ telemetry gap; rc 2 = usage error). Full detail in `references/steps.md` §16.
 <completion-gate>
 Before declaring WF2 complete, verify the following. Items marked (conditional) only apply if the capability exists:
 
-1. [ ] Step markers logged for ALL executed steps in session notes
-2. [ ] Final step output (completion summary) presented to user
-3. [ ] Session notes updated with completion summary
-4. [ ] PR URL documented
-5. [ ] All commits pushed
-6. [ ] (conditional: has_ci) CI passed — **OR** (`ci_quarantined`) the quarantine notice (reason + run status, "not gating") is recorded in session notes + PR body. A legible skip, never a silent one; a quarantined run is never reported as green.
-7. [ ] (conditional: has_deploy) Deployment verified or manual deploy confirmed — auto-satisfied in an unattended run, where Steps 14/15 are skipped (PR is the terminal deliverable)
-8. [ ] (conditional: architecture changed) CLAUDE.md updated
-9. [ ] All Critical/High code review findings resolved
-10. [ ] (conditional: adversarialReview opt-in for implement-feature) A "### WF2 Step 11 — Adversarial Diff Review:" 4-state marker exists in session notes — opt-in ⇒ marker, unconditionally (skipped (<reason>) is a legitimate marker; silent omission is not; no gate-time diff recompute — a post-merge recompute sees an empty diff and would waive the check exactly in the merge path)
-11. [ ] Security scan (Step 11.5) ran; all blocking findings resolved (or, if no scanners were installed, the skips are recorded in session notes + PR body)
-12. [ ] Completion summary rendered via `work_summary.py` (Step 16) and the run-record persisted (rc 0) — or, if validation failed (rc 1), the telemetry gap is recorded in session notes
-13. [ ] (conditional: any `plan_lib.deferred_tasks(tasks)` — verification deferred to target, #138) Every deferred task is recorded on BOTH surfaces. **RUN the check; do not re-derive it (#796):**
+1. [ ] Step markers logged for ALL executed steps in session notes, and the completion summary presented to the user + recorded in session notes
+2. [ ] PR URL documented; all commits pushed
+3. [ ] (conditional: has_ci) CI passed — **OR** (`ci_quarantined`) the quarantine notice (reason + run status, "not gating") is recorded in session notes + PR body. A legible skip, never a silent one; a quarantined run is never reported as green.
+4. [ ] (conditional: has_deploy) Deployment verified or manual deploy confirmed — auto-satisfied in an unattended run, where Steps 14/15 are skipped (PR is the terminal deliverable)
+5. [ ] All Critical/High code review findings resolved
+6. [ ] (conditional: adversarialReview opt-in for implement-feature) A "### WF2 Step 11 — Adversarial Diff Review:" 4-state marker exists in session notes — opt-in ⇒ marker, unconditionally (skipped (<reason>) is a legitimate marker; silent omission is not; no gate-time diff recompute — a post-merge recompute sees an empty diff and would waive the check exactly in the merge path)
+7. [ ] Security scan (Step 11.5) ran; all blocking findings resolved (or, if no scanners were installed, the skips are recorded in session notes + PR body)
+8. [ ] Completion summary rendered via `work_summary.py` (Step 16) and the run-record persisted (rc 0) — or, if validation failed (rc 1), the telemetry gap is recorded in session notes
+9. [ ] (conditional: any `plan_lib.deferred_tasks(tasks)` — verification deferred to target, #138) Every deferred task is recorded on BOTH surfaces. **RUN the check; do not re-derive it (#796):**
     ```bash
     python3 hooks/plan_lib.py assert-pr-body \
       --plan-file <impl-plan.md> --pr-body-file <pr-body.md> \
-      [--gate-file <step8-gate.json>] [--record-file <run-record.json>] \
+      [--record-file <run-record.json>] \
       --project-root .
     ```
     `0` gate holds · `1` gate FAILS (findings on stdout) · `2` caller error. It executes both pure functions — `assert_pr_body_has_deferred_section` (the PR body carries the canonical `## Deferred verification` section) and, when `--record-file` is given, `assert_deferrals_recorded` (each recorded entry carries non-empty `task_id` + `reason` + `local_proxy` + `target_check`, and the plan↔record task ids match exactly: missing/duplicate/foreign ⇒ fail). Both were previously invoked NOWHERE in production, which is why the #781 H1 slip fired after merge.
-    Two refusals are caller errors rather than gate results, and both are deliberate: a plan that parses to **no tasks at all** is rc 2, never a vacuous pass (absence of tasks is a wrong path or a malformed plan, not a plan with nothing deferred); and with `--gate-file` the plan is bound to the gate's recorded `plan_digest`, so a plan revised after the gate was taken is refused — the same staleness rule `executor_routing_lib` enforces as `gate_stale_for_plan`.
+    One refusal is a caller error rather than a gate result, deliberately: a plan that parses to **no tasks at all** is rc 2, never a vacuous pass (absence of tasks is a wrong path or a malformed plan, not a plan with nothing deferred).
     rc 0 ⇒ gate satisfied-with-note. Any failure (an **unrecorded** deferral, evidence-less entry, or a missing PR section) ⇒ gate FAILURE — a deferral must never silently vanish into a pass.
 
 If ANY applicable item fails, complete it before declaring "WF2 complete."

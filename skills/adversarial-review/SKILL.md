@@ -158,7 +158,7 @@ Size:     <bytes> (cap <MAX_BYTES>)
 
 1. Check the SELECTED backend's prerequisite via the engine:
    ```bash
-   python3 hooks/adversarial_review_lib.py prereq --backend <resolved backend> [--headless]
+   python3 hooks/adversarial_review_lib.py prereq --backend <resolved backend>
    ```
 2. If the prerequisite check fails (exit 2), **STOP** and print the message verbatim. It tells the user how to install and authenticate:
    - gpt — install: `npm install -g @openai/codex`; authenticate: `codex login` (headless/CI: `printenv OPENAI_API_KEY | codex login --with-api-key`)

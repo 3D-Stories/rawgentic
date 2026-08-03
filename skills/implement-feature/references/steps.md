@@ -361,10 +361,7 @@ This is an optional guard, not a gate — it never blocks the workflow.
 
 ### Instructions
 
-**Execution model — map first, then parallel gather, then synthesize.** Step 2's wall-clock is dominated by its read analyses, but they are NOT all independent: **item 1 (component mapping) must run first**, because item 2 (dependency / blast-radius) and item 5 (existing-test inventory) operate on the mapped artifact list. So run item 1 first, then **fan out the remaining read-only analyses (items 2–6) as concurrent executor dispatches of the `analysis` seat** (background Bash invocations of the dispatch CLI; the ≤3-concurrent cap is preserved), passing each the component map from item 1 as **shared input**. One ordering constraint inside the fan-out: item 5 (existing-test inventory) should cover the *full* blast radius from item 2, not just item 1's initial map — so run items 2 → 5 as one **sequential executor dispatch** (dependency analysis, then test inventory over its expanded surface), while items 3, 4, and 6 are fully independent and run concurrently alongside it. This collapses ~5 sequential read passes into roughly one and loses no quality — each subagent goes deeper in its own lane. Items 7–8 (complexity classification, small-standard lane eligibility) are **synthesis** steps that run only after the **gather barrier** (all fan-out subagents returned), over the merged findings; the classification stays authoritative and still overrides any issue label. The issue's complexity hint from Step 1 chooses only the *orchestration cost*, never the workflow path or which gates run — for a trivially small change, skip the subagent spin-up and run items 1–6 inline (the same analyses, in the same order, feeding the same synthesis); otherwise fan out. If an analysis dispatch errors: under the declared LEGACY architecture fall back to running that single analysis inline (the per-analysis failure modes below still apply); under the EXECUTOR architecture (the default) retry the executor dispatch once and then surface the failure via the ERROR protocol — never a silent inline or Agent-tool downgrade (#474).
-
-<!-- model-routing: role=analysis -->
-Dispatch every Step 2 fan-out as a concurrent executor dispatch of the `analysis` seat per the `<model-routing-resolve>` contract (primary tier). Same briefs, same synthesis barrier as before — only the dispatch mechanism changes. Under the LEGACY architecture (declared, `defaultArchitecture: legacy`) the same briefs dispatch as generic analysis subagents via the Agent tool (no bundled analysis agent; `model: <analysis>` unless `inherit`; effort dual-path, always logged). Each DISPATCH line's producer is the executor result dict (`resolution=primary`) or — legacy architecture only — the Agent-tool subagent (`resolution=fallback`).
+**Execution model — map first, then parallel gather, then synthesize (D182).** Step 2's wall-clock is dominated by its read analyses, but they are NOT all independent: **item 1 (component mapping) must run first**, because item 2 (dependency / blast-radius) and item 5 (existing-test inventory) operate on the mapped artifact list. Run item 1 first, then — when the gather is BROAD — fan out the remaining read-only analyses (items 2–6) as concurrent **read-only harness subagents** (Agent tool, Explore-style; ≤3 concurrent) per the `<model-routing-resolve>` contract, passing each the component map from item 1 as **shared input**; a narrow gather runs items 1–6 inline in the same order (judgment by breadth — the point of the fan-out is keeping file dumps out of the main window, not ceremony). One ordering constraint inside the fan-out: item 5 (existing-test inventory) should cover the *full* blast radius from item 2, not just item 1's initial map — so run items 2 → 5 as one sequential subagent (dependency analysis, then test inventory over its expanded surface), while items 3, 4, and 6 are fully independent and run concurrently alongside it. Items 7–8 (complexity classification, small-standard lane eligibility) are **synthesis** steps that run only after the **gather barrier** (all fan-out subagents returned), over the merged findings; the classification stays authoritative and still overrides any issue label. Every subagent return gets the vacuous-result gate from `<model-routing-resolve>` (non-empty, shape parses, load-bearing claims spot-verified) before it is consumed. If a gather subagent dies or returns vacuous: re-run that single analysis inline (the per-analysis failure modes below still apply) — the gather is read-only, so inline is always a safe fallback.
 
 1. **Component mapping:** Using Serena MCP (`find_symbol`, `get_symbols_overview`) or Grep/Glob as fallback, identify all files and code that will need to change. Map the issue's "affected components" to actual project artifacts.
 
@@ -412,30 +409,12 @@ Dispatch every Step 2 fan-out as a concurrent executor dispatch of the `analysis
    readers are unchanged. Trivial changes (item 9) exit via `<trivial-work-check>`, which takes
    precedence over the lane.
 
-   **Path-cost estimate (#224) — emit BEFORE the lane surfacing (or, when the lane isn't
-   offered, at Step-2 completion), so the choice is informed.** Project the high-risk task
-   count as an explicit **lower bound**: P = count of item-2 blast-radius files matching
-   `plan_lib.any_high_risk_path` (path allowlist ONLY — the semantic risk criteria
-   (subprocess, module boundary, error-flow, deserialization, regex-on-untrusted) are
-   invisible before Step-5 task decomposition, and this counts components, not tasks).
-   Resolve the opt-in flags from the probes the spine already runs (`adversarial_review_lib
-   is-enabled`, peerConsult config); `diff_review=False` at Step 2 on both paths (unknowable
-   pre-diff; cancels in the comparison). Call `plan_lib.estimate_agents(P, lane=...)` for
-   BOTH paths and print one line:
-
-   `Path estimate: full spine ≈ N agents (~M min); small-standard lane ≈ K agents (~L min). (high-risk projected: ≥P — lower bound; the two paths' minutes always match under this wall model — the lane saves agent-cost, not wall time)`
-
-   The estimate is derived via plan_lib.estimate_agents — never hard-coded — and is an estimate, not a contract (loop-backs, Step-2 analysis fan-out, and whole-issue delegation
-   are not modeled). Log it UNCONDITIONALLY (interactive and headless — session notes are
-   the headless record) as a dedicated marker at Step-2 completion:
-   `### WF2 Step 2 — path estimate: full ≈ N agents ~M min · lane ≈ K agents ~L min (high-risk ≥P projected)`
-
 9. **Trivial-work check (the one Step 2 step that WAITS for a user decision):** Apply
    `<trivial-work-check>`. If the change is `trivial_work == true`, present the
    "do it directly vs. continue the full workflow" suggestion and WAIT for the user's
-   choice before proceeding to Step 3 (headless: auto-continue). The analysis from
+   choice before proceeding to Step 3 (unattended runs auto-continue). The analysis from
    items 1–8 still feeds Step 3 silently; only this suggestion (and the item-8 lane
-   surfacing) waits for input — the item-8 path estimate is print-and-continue.
+   surfacing) waits for input.
 
 10. **Worktree-isolation probe (#136 — parallelism capability).** Probe once so WF2 (and any outer multi-issue orchestrator) knows up front whether worktree-isolated concurrency is possible, instead of attempt-then-fail on an Agent-tool "not in a git repository" error:
     ```bash
@@ -446,7 +425,7 @@ Dispatch every Step 2 fan-out as a concurrent executor dispatch of the `analysis
 **Baseline record (per `<test-run-discipline>`, SKILL.md):** when `capabilities.has_tests`, run the FULL suite once now and record the baseline from the runner's final output (pass/fail/skip counts + failing test names) in session notes. This is the first of the exactly-two full-suite runs; Step 9's final gate diffs against it. If the current checkout is not the branch base that Step 7 will cut (e.g. a prior issue's feature branch), re-record after Step 7 — a baseline measured on foreign content is invalid. A baseline already recorded on content whose git tree hash equals the branch base carries as-is.
 
 ### Output
-Codebase analysis with complexity classification, small-standard lane eligibility (`small_standard_lane_eligible`), the `parallelism` capability (`worktree`/`serial-only`), and (for infrastructure projects) live environment probe results. Do NOT present to user — feeds into Step 3. User-visible surfaces: the item-8 lane suggestion (waits for input), the item-8 path estimate line (print-and-continue), and the item-9 trivial-work suggestion (waits for input).
+Codebase analysis with complexity classification, small-standard lane eligibility (`small_standard_lane_eligible`), the `parallelism` capability (`worktree`/`serial-only`), and (for infrastructure projects) live environment probe results. Do NOT present to user — feeds into Step 3. User-visible surfaces: the item-8 lane suggestion (waits for input) and the item-9 trivial-work suggestion (waits for input).
 
 ### Failure Modes
 - Serena MCP unavailable: fall back to Grep/Glob
@@ -507,8 +486,8 @@ Exit 0 → enabled; non-zero → skip silently (default; no temp file, no subpro
      only forces the *risk to be named*. A design can commit to a platform/framework API the
      project's own config does not permit and still pass every test-centric gate (the real
      call is silently denied on a surface CI never exercises) — this declaration closes that
-     silent gap. An **omitted** declaration is a Step-4 blocker
-     (`plan_lib.assert_feasibility_declared(None)` fails), so the omission cannot pass silently.
+     silent gap. An **omitted** declaration is a Step-4 blocker, so the omission cannot
+     pass silently.
 
      ```md
      ## Platform / external dependencies
@@ -526,17 +505,17 @@ Exit 0 → enabled; non-zero → skip silently (default; no temp file, no subpro
      Rules (this is the **canonical** contract; WF3 and the WF5 lens point here, they do not
      re-state it):
      - **`assumed` is Step-4-blocking.** `feasibility: assumed` may appear as an interim
-       drafting marker, but `assert_feasibility_declared` rejects it — a dependency assumed
-       from the API's mere existence is exactly the #226 failure. Prove it against this
-       project's real config before Step 4.
+       drafting marker, but the Step-4 gate rejects it — a dependency assumed from the
+       API's mere existence is exactly the #226 failure. Prove it against this project's
+       real config before Step 4.
      - **Working-precedent (AC3):** an `existing-call-site` proves feasibility ONLY for the
        **exact** API on the **exact** object kind and target surface (e.g. `window.setSize`
        proven on the main window does NOT prove it on an overlay window whose capability file
        differs). Otherwise cite a `capabilities-file` or run a `spike`.
      - **`docs` is not an accepted evidence kind.** Documentation proves an API *exists*, not
        that THIS project's config *permits* it — accepting docs is the exact #226 failure (docs
-       say `setSize` exists; the capability file denies it). `assert_feasibility_declared`
-       rejects `verified via docs`; cite the capabilities/manifest file, an exact call site, or
+       say `setSize` exists; the capability file denies it). The Step-4 gate rejects
+       `verified via docs`; cite the capabilities/manifest file, an exact call site, or
        a spike instead.
      - **Probe-before-claim (#490):** per `<probe-before-design>` (SKILL.md), a `spike` cited
        here must have exercised the EXACT invocation the design will ship, live, and the block
@@ -595,27 +574,31 @@ the `fast_path_eligible` alias):
 **Design self-review (quality-bar rubric, `references/quality-bar.md`) — all lanes:**
 
 <!-- model-routing: role=review -->
-Dispatch the design self-review as an executor `review` seat per the `<model-routing-resolve>`
-contract (primary tier) on the `security` lens per `<review-lens-routing>` (SKILL.md) — the
-design gate is a strong-model surface. **The design document is a REQUIRED input: dispatch with `--requires-context` (declaring the requirement) and `--context-file <design-doc>` (carrying it) (#826).** Declaring the requirement without a usable artifact is refused `review_context_required` at the dispatch choke-point — a review of nothing still returns a verdict this gate would read as a pass. Both flags are mandatory here and a static test asserts this site passes them. Under the LEGACY architecture (declared, `defaultArchitecture: legacy`) it dispatches as a
-`rawgentic:rawgentic-reviewer` subagent via the Agent tool (`model: <review>` unless `inherit`;
-effort dual-path, always logged; `resolution=fallback`). The quality-bar self-review is a single-pass, same-model check over the design:
+Run the design self-review INLINE per the `<model-routing-resolve>` contract — a single-pass,
+same-model check by the orchestrator over the design, on the `security` lens per
+`<review-lens-routing>` (SKILL.md). The cross-model layer at this gate is the opt-in
+adversarial-on-design sub-step (item 7), which dispatches
+`python3 hooks/review_runner.py review-artifact --artifact <design-doc> --type design
+--author-model <your model id> --reviewer <default per the contract> --out <result.json>
+--project-root .` from a read-only harness subagent. **The design document is a REQUIRED input: the runner's
+mandatory `--artifact` parameter carries it, so a route that cannot carry the bytes cannot be
+called (#826) — a review of nothing can never return a verdict this gate would read as a pass.**
+The quality-bar self-review is a single-pass, same-model check over the design:
 - Does the design respect existing patterns and project conventions, with appropriate
   dependencies (prefer existing libraries)?
 - Are all acceptance criteria addressed, edge cases and failure modes identified, and the
   implementation verifiable (tests if available, otherwise manual checks or scripts)?
 - Input validation at boundaries, credential handling (no hardcoded secrets),
   backward-compatibility or a migration plan, acceptable performance?
-- **Platform / external-dependency feasibility (#226):** run the mechanical gate —
-  `python3 -c "import sys;sys.path.insert(0,'hooks');from plan_lib import parse_feasibility_block,assert_feasibility_declared as A;ok,errs=A(parse_feasibility_block(open('<design-doc>').read()));print(ok,errs)"`.
-  A non-`ok` result is a **blocking** finding (Critical/High): an absent `platform_apis:`
-  declaration, an `assumed` dependency, weak/uncited evidence, or a `fail-silent` API with no
-  `surface:`. Beyond the mechanical check, judge credibility the parser cannot: does the cited
+- **Platform / external-dependency feasibility (#226):** an absent `platform_apis:`
+  declaration, an `assumed` dependency, weak/uncited evidence (`verified via docs`), or a
+  `fail-silent` API with no `surface:` is a **blocking** finding (Critical/High). Beyond
+  those mechanical checks, judge credibility: does the cited
   evidence actually prove the API works under THIS project's real config (does the named
   capability/manifest file truly grant it; is the call site the exact API on the exact object
   kind; did the spike exercise the real surface)? Probe-before-claim (`<probe-before-design>`,
   SKILL.md): a spike that exercised a proxy composition rather than the exact shipped
-  invocation is itself a blocking finding. And — the parser cannot see this — does the
+  invocation is itself a blocking finding. And — only judgment can see this — does the
   design **use** a platform API it failed to declare (a `platform_apis: none` that is actually
   false)? A used-but-undeclared API is itself the finding.
 - For WF1-validated issues: does the design align with the WF1-critiqued spec?
@@ -668,7 +651,7 @@ The self-review produces findings in the shape the gate consumes:
        --workspace .rawgentic_workspace.json --project <name> --skill implement-feature
      ```
      The command exits `0` when the review is enabled for this skill and `1` (or any non-zero) otherwise. If it exits non-zero, or `fast_path_eligible == true`, **skip silently** — behavior is byte-for-byte unchanged.
-   When both gates pass, dispatch the adversarial review **in parallel with the self-review** (write the design doc to a temp file under the project first if it only exists in session notes) — and dispatch it **with a findings sidecar**: run the engine with `--findings-json <sidecar under the project root>` (the `/rawgentic:adversarial-review` skill form must be given the same), because `loopback_class` is **sidecar-only** — `render_report_md` deliberately does not emit it, so a report-only dispatch would feed the #407 fold absent fields and silently degrade every adversarial finding to `untagged`. The review is **report-only** in its effects; bring its findings back into THIS gate at the **join barrier** described next, reading them from that sidecar:
+   When both gates pass, dispatch the adversarial review **in parallel with the self-review** (write the design doc to a temp file under the project first if it only exists in session notes): from a read-only harness subagent, run `python3 hooks/review_runner.py review-artifact --artifact <design-doc> --type design --author-model <your model id> --reviewer <default per the contract> [--backend <resolved backend>] --out <result.json> --project-root .` — dispatched TOKENLESS, so the result carries `diagnostic: true`. That is correct at THIS gate: the reopen authorization here is the fold's own `consume_loopback` machinery below (the same atomic budget the #855 token choke point debits), never the runner token. Under a `both` backend config, dispatch two runner invocations (one `--backend gpt`, one `--backend glm`, separate `--out` files) and merge their findings deterministically (dedupe key: evidence, location, category; on collision keep the higher severity, tie → higher confidence, tie → the gpt record). Apply the vacuous-result gate from `<model-routing-resolve>` to each result before consuming it; findings (including each finding's `loopback_class`, when present) are read from the result JSON's `findings` list. The review is **report-only** in its effects; bring its findings back into THIS gate at the **join barrier** described next. Resolve `<resolved backend>` first via `python3 hooks/adversarial_review_lib.py backend --workspace .rawgentic_workspace.json --project <name> --key adversarialReview` — exit 0 → stdout is the backend (`gpt`|`glm`|`both`; absent config → `gpt`); exit 2 (invalid config value) → abort this sub-step loudly, never default to gpt.
    - **Join barrier (single breaker):** once both the self-review and the review have returned, merge adversarial findings with the self-review findings into ONE list, tagging each with `source: self-review | adversarial`. Apply the ambiguity circuit breaker **exactly once** over the merged list — this IS the breaker deferred from item 6; never run a second, self-review-only breaker.
    - If the merged list contains one or more Critical/High findings, fold their
      `Loopback-class` tags via `plan_lib.classify_loopback_source(<classes>)` (#223) and
@@ -688,8 +671,8 @@ The self-review produces findings in the shape the gate consumes:
      is invoked by the orchestrator via `python3 -c`, the established gate-helper pattern.
      **Verifier-brief hardening (#407):** when a spec_tighten cheap pass was reached via
      ANY adversarial-sourced tag, the incremental verifier's brief must include the
-     originating Critical/High findings — read from the review's `--findings-json` sidecar
-     (the canonical normalized report), never a re-derivation — and the verifier must
+     originating Critical/High findings — read from the runner result JSON's `findings`
+     list (the canonical normalized report), never a re-derivation — and the verifier must
      confirm EACH is resolved by the applied amendment; any unresolved, omitted, or
      recategorized originating finding escalates to the full `design` path exactly like a
      new Critical/High finding.
@@ -700,9 +683,8 @@ The self-review produces findings in the shape the gate consumes:
      - Fold = `spec_tighten` → the **spec-tightening cheap path** (#223): consume
        `plan_lib.consume_loopback(<counters>, "spec_tighten")` and do NOT return to
        Step 3. Apply each finding's Recommendation directly to the affected design-doc
-       sections, then dispatch ONE incremental verifier on the executor `review` seat
-       (`<model-routing-resolve>` primary tier; LEGACY architecture: a `rawgentic:rawgentic-reviewer`
-       subagent) reviewing ONLY the changed
+       sections, then dispatch ONE incremental verifier as a read-only harness subagent
+       (Agent tool, per `<model-routing-resolve>`) reviewing ONLY the changed
        sections (quote before/after). A spec-tightening loop-back dispatches exactly one verifier over only the changed design sections and never returns to Step 3. Verifier verdict:
        - clean (no new Critical/High) → gate PASSES; continue to Step 5.
        - ANY new Critical/High finding (either class), or any `ambiguous`/conflicting
@@ -714,10 +696,10 @@ The self-review produces findings in the shape the gate consumes:
        - `spec_tighten` exhausted (per-source cap or global) → fall back to consuming
          `design` (full path) if it has budget; else the existing budget-exhausted
          STOP/ERROR protocol.
-   - **Disposition-ledger dispatch (#393, pass N ≥ 2).** Before invoking the engine: (1) if the issue's canonical `claude_docs/.wf2-state/<issue>/dispositions.jsonl` is absent or empty → dispatch exactly as today (pass 1, byte-identical). (2) Else fold it via `plan_lib.fold_dispositions` (last-write-wins by finding_key over `plan_lib.read_dispositions` output) and write the folded canonical JSONL to `.rawgentic-dispositions-<issue>-<token>.jsonl` under the project root (mode 0600; stale-sweep the glob first; the glob is also appended to `.git/info/exclude` on first use). (3) Invoke the engine with `--dispositions <temp path> --issue <n>` added to the existing invocation. (4) At the join: engine exit 6 → marker `failed (ledger integrity)` — an owner-visible loud abort of the adversarial layer, NEVER absorbed as a benign backend failure; any stderr notice beginning `ledger: degraded` — e.g. `ledger: degraded (<reason>, N lines skipped)` or the truncation form — → record the full phrase in the gate's marker tail (coverage ran, memory degraded, visible); key on the `ledger: degraded` prefix, not one template. (5) Apply the join backstop below over the returned findings vs the folded ledger. (6) Finally: delete the temp file on every handled exit path (the stale sweep covers unhandled termination).
+   - **Disposition-ledger fold (#393, pass N ≥ 2).** The runner carries no dispositions channel — since the M0 retreat the enforcement point is the orchestrator-side **join backstop**, not a prompt fence. At the join: (1) if the issue's canonical `claude_docs/.wf2-state/<issue>/dispositions.jsonl` is absent or empty → nothing to fold (pass 1). (2) Else fold it via `plan_lib.fold_dispositions` (last-write-wins by finding_key over `plan_lib.read_dispositions` output) and hold the folded view for the join backstop below — no temp file, no engine flag. (3) Apply the join backstop below over the returned findings vs the folded ledger. A ledger that fails to read (corrupt JSONL) is an owner-visible loud abort of the adversarial layer — marker `failed (ledger integrity)` — NEVER absorbed as a benign backend failure.
    - **Join backstop (#393):** compute each returned finding's identity via `plan_lib.compute_finding_key` AFTER stripping any valid `REOPENS <id>:` prefix with `plan_lib.strip_reopens` (hashing the prefixed text would make the matched-entry validation unreachable). A finding whose key exactly matches a DECLINED or DISSOLVED ledger entry with no valid REOPENS is auto-dissolved as re-litigation (logged with the entry id, never silently dropped); a match against an ADOPTED entry is surfaced as `possible failed remediation` and NEVER auto-dissolved (an adopted-but-regressed fix must resurface). A REOPENS exemption is valid only when the referenced id exists, equals the matched entry's id, and non-empty delta text follows the colon. Recall is byte-identical-only (honest bound); the prompt instruction is the primary mechanism.
    - **Gate-close persistence (#393):** at this gate's close, append each Critical/High finding's TERMINAL disposition (adopted | declined | dissolved) to the issue's `dispositions.jsonl` via `plan_lib.append_disposition` (identity fields + one-line reason + `decided_by`). Deferrals are NOT dispositions — an unresolved High stays in `deferrals.json` (the Step-11 re-presentation pipeline) and gets its ledger entry only at the gate close where it terminally resolves.
-   - **Codex failure is non-blocking (the review is additive — the self-review gate already ran).** On ANY non-success from the review (not installed, unauthenticated, timeout, error, parse error — including in headless mode), do NOT trigger the ERROR protocol and do NOT block the workflow: skip the adversarial layer, log the failure loudly in session notes (and, in headless mode, post a STATUS comment noting the review was skipped), and continue with the self-review result. **Because item 6 deferred the breaker when this sub-step is enabled, on any non-success you MUST still run the single ambiguity circuit breaker exactly once over the self-review-only findings before continuing — skipping the adversarial layer must not skip the breaker** (otherwise the breaker would run zero times). Never treat a failed external review as "passed", and never let its absence halt WF2. (Only the standalone `/rawgentic:adversarial-review` skill ERRORs on an unmet Codex prerequisite, because there the review is the entire task.)
+   - **Runner failure is non-blocking (the review is additive — the self-review gate already ran).** On ANY non-success from the runner (exit 2/3/4, a dead subagent, a vacuous or stale result — after the contract's one retry), do NOT trigger the ERROR protocol and do NOT block the workflow: skip the adversarial layer, log the failure loudly in session notes (and, in an unattended run, post a STATUS comment on the issue noting the review was skipped), and continue with the self-review result. **Because item 6 deferred the breaker when this sub-step is enabled, on any non-success you MUST still run the single ambiguity circuit breaker exactly once over the self-review-only findings before continuing — skipping the adversarial layer must not skip the breaker** (otherwise the breaker would run zero times). Never treat a failed external review as "passed", and never let its absence halt WF2. (Only the standalone `/rawgentic:adversarial-review` skill ERRORs on an unmet Codex prerequisite, because there the review is the entire task.)
    - **Concurrency tradeoff (accepted):** because the review now overlaps the self-review instead of waiting for it, a design that the self-review sends back to Step 3 may have spent one cross-model review call before the loop-back. That is a bounded, accepted cost (at most one such call per loop-back) in exchange for removing the serial wait on every gated run. Do NOT try to "save" the call by serializing — the latency win on the common (no-loopback) path is worth more than the occasional wasted call.
    - **Pipeline while the wave runs:** per `<review-pipelining>` (SKILL.md), draft the Step 5 implementation plan (non-committing) while this wave and the self-review are in flight; the gate verdict still waits for the join barrier, and a loop-back or breaker outcome revises or discards the draft.
    - Log a marker: `### WF2 Step 4 — Adversarial Review (#<issue>, invoked|skipped): <report path or skip reason>`.
@@ -787,11 +769,11 @@ form (run them when not in the lane).
    - VERIFY: Run a verification command (health check, syntax check, dry-run, or manual inspection)
    - Document what "verified" means for this task
 
-3. **Task ordering:** Make dependencies explicit. Parallel-eligible tasks share a `parallel_group` AND each declares the files it touches via a `- files: <comma-separated paths>` line, so disjointness can be proven mechanically:
-   - `- parallel_group: <group-id>` — tasks with the same id are candidates to run concurrently.
-   - `- files: <comma-separated paths>` — the exact files the task creates/modifies (concrete paths only; globs and directories cannot be proven disjoint).
+3. **Task ordering:** Make dependencies explicit. Genuinely-independent tasks MAY share a `parallel_group` AND each declares the files it touches via a `- files: <comma-separated paths>` line, so disjointness is reviewable:
+   - `- parallel_group: <group-id>` — tasks with the same id are candidates to run concurrently (via the optional Agent-tool worktree subagents of Step 8).
+   - `- files: <comma-separated paths>` — the exact files the task creates/modifies (concrete paths only; globs and directories cannot be judged disjoint).
 
-   After decomposition, call `plan_lib.validate_parallel_groups(tasks)`; it returns `(all_eligible, conflicts)`. A group is parallel-eligible ONLY when every member declares concrete `files` and the members' file sets are pairwise disjoint. Any conflict (overlap, missing files, glob, or directory) means that group is **not** parallel-eligible and **runs sequentially** — an un-provable group degrades to serial execution, never to a concurrent collision. Log conflicts to session notes. (Isolated *concurrent* execution of eligible groups is added in a follow-up; today eligible groups still execute sequentially but are validated so the contract is ready.)
+   A group is parallel-eligible ONLY when every member declares concrete `files` and the members' file sets are pairwise disjoint — judge this from the declarations; when in doubt the group runs sequentially (an un-provable group degrades to serial execution, never to a concurrent collision). The default remains serial, inline execution.
 
 3a. **Risk stratification (P15):** Tag every task with a `riskLevel: high|standard` field. Use **`high`** if ANY of the 8 criteria apply; otherwise `standard`. The 8 criteria (canonical list lives in `hooks/plan_lib.py::RISK_CRITERIA`):
 
@@ -810,30 +792,15 @@ form (run them when not in the lane).
    - Tasks lacking a `riskLevel` line **fail closed** (parse error → STOP).
    - OPTIONAL: `- parallel_group: <id>` and `- files: <comma-separated paths>` (see Task ordering above). These are purely additive — absent fields just mean the task is not parallel-eligible; they never affect the `riskLevel` fail-closed contract or the pre-P15 migration.
 
-   **Calibration check** — after task decomposition, compute the high-risk ratio and classify it. **Mind the real return shapes (#231 AC3 — each mismatch cost a round-trip):** `plan_lib.compute_risk_ratio(tasks)` returns a **3-tuple `(ratio, high_count, total_count)`**, NOT a bare float — unpack it and pass the SCALAR `ratio` (plus `total`) to `check_ratio_band`, never the whole tuple:
-
-   ```python
-   ratio, high, total = plan_lib.compute_risk_ratio(tasks)   # (float, int, int)
-   band = plan_lib.check_ratio_band(ratio, total)            # scalar ratio + int total
-   ```
-
-   (And `plan_lib.parse_tasks(md)` returns `list[Task]` **objects** — access attributes `t.id`, `t.title`, `t.risk_level`, `t.reason`, `t.parallel_group`, `t.files`, `t.deferral_reason`, NOT dict `t.get("risk_level")`.) Handle the `band` result:
-
-   - `skip` (N<3): silent.
-   - `pass` (ratio ≤ WARN_PCT/100, default 30%): silent.
-   - `implausible_zero` (ratio == 0 AND N≥5): log an info note: "0% high-risk on a complex feature is implausible — confirm." Continue.
-   - `warn` (WARN_PCT/100 < ratio ≤ HALT_PCT/100): log warning to session notes. Continue.
-   - `halt` (HALT_PCT/100 < ratio < 80%): STOP and ask user.
-   - `decompose` (ratio ≥ 80%): STOP and recommend plan decomposition. Treat as halt with a different framing.
-
-   The 15–30% high-risk ratio is the documented calibration target. Anything above the WARN band signals that the criteria are being over-applied (dilution returns).
+   **Calibration sanity (judgment, not a helper call):** the 15–30% high-risk ratio is the
+   documented calibration target. Materially above it signals the criteria are being
+   over-applied (dilution returns) — reconsider the tags before proceeding; 0% high-risk on
+   a complex feature is implausible — confirm it deliberately. (`plan_lib.parse_tasks(md)`
+   returns `list[Task]` **objects** — access attributes `t.id`, `t.title`, `t.risk_level`,
+   `t.reason`, `t.parallel_group`, `t.files`, `t.deferral_reason`, NOT dict
+   `t.get("risk_level")`.)
 
    **High-risk path allowlist:** A task touching any file whose path matches the regex allowlist in `plan_lib.DEFAULT_HIGH_RISK_PATH_PATTERNS` (auth, secret, .env, migration, crypto, jwt, session, oauth, csrf, token, credential, passport, middleware, lib/server/auth, security-, hooks/security) is auto-tagged `high` regardless of the agent's manual classification.
-
-   **Estimate refresh (#224):** the Step-2 path estimate used a projected lower bound; now
-   the REAL high-risk task count exists. Re-run `plan_lib.estimate_agents(high, lane=...)`
-   and, if it differs from the Step-2 line, print + log the updated
-   `### WF2 Step 5 — path estimate refresh: ...` one-liner.
 
 4. **Verification strategy per task:** Specify how each task is verified:
    - Test file + test cases (if test framework exists)
@@ -882,7 +849,7 @@ Apply ambiguity circuit breaker on findings. If clear: apply automatically.
 python3 hooks/adversarial_review_lib.py is-enabled \
   --workspace .rawgentic_workspace.json --project <name> --skill implement-feature
 ```
-The command exits `0` when enabled and non-zero otherwise; if non-zero, **skip silently**. When enabled, write the plan to a temp file under the project and invoke `/rawgentic:adversarial-review <plan-path> plan`. On a pass-N dispatch, apply the Step 4 item 7 disposition-ledger dispatch sequence (#393) here too — fold, temp-copy, `--dispositions`/`--issue`, exit-6/degraded join handling, backstop, finally-delete; the plan review shares the issue's ledger. It is report-only; merge its findings (tagged `source: adversarial`) with the self-review findings and apply the circuit breaker over the **merged** list (do not run two separate breakers). At this gate's close, persist each Critical/High finding's terminal disposition via `plan_lib.append_disposition` (Step 4's gate-close persistence sentence is canonical). If the merged list contains one or more Critical/High design-level flaws, consume **exactly one** existing `design` loop-back counter and return to Step 3 once with the unified constraints. **Codex failure is non-blocking** (additive review): on any non-success — including headless unmet-prerequisite — skip the adversarial layer, log loudly (headless: STATUS comment), and continue with the self-review result; never ERROR or block WF2. Log: `### WF2 Step 6 — Adversarial Review (#<issue>, invoked|skipped): <report path or skip reason>`.
+The command exits `0` when enabled and non-zero otherwise; if non-zero, **skip silently**. When enabled, write the plan to a temp file under the project and invoke `/rawgentic:adversarial-review <plan-path> plan`. On a pass-N dispatch, apply the Step 4 item 7 disposition-ledger fold (#393) here too — fold, join backstop, gate-close persistence; the plan review shares the issue's ledger. It is report-only; merge its findings (tagged `source: adversarial`) with the self-review findings and apply the circuit breaker over the **merged** list (do not run two separate breakers). At this gate's close, persist each Critical/High finding's terminal disposition via `plan_lib.append_disposition` (Step 4's gate-close persistence sentence is canonical). If the merged list contains one or more Critical/High design-level flaws, consume **exactly one** existing `design` loop-back counter and return to Step 3 once with the unified constraints. **Codex failure is non-blocking** (additive review): on any non-success — including headless unmet-prerequisite — skip the adversarial layer, log loudly (headless: STATUS comment), and continue with the self-review result; never ERROR or block WF2. Log: `### WF2 Step 6 — Adversarial Review (#<issue>, invoked|skipped): <report path or skip reason>`.
 
 ### Output
 Plan drift check result.
@@ -978,43 +945,33 @@ silently. In whole-issue delegation the branch typically only advances at collec
 runnable commit lands on the branch, before the receipt gates.
 
 <!-- model-routing: role=implementation -->
-**Executor architecture (the default): Step-8 plan tasks dispatch via the `build` seat per the `<model-routing-resolve>` seat table (gate + plan authenticated); full receipts-asserted adoption across every WF2/WF3 run is #762's acceptance surface.** A failed build attempt follows the ratified retry policy (#735, the `<model-routing-resolve>` emission rule): retry ONCE only on PROVEN death — a mutating attempt's death requires a VERIFIED kill; residue, an unverified kill, or a receipt with no observation goes DIRECTLY to the ERROR protocol, never a clean-and-retry — and the whole dispatch emits one canonical DISPATCH line (`outcome=retried|error`). Inline execution is not a sanctioned implementation path under the executor architecture.
+**Inline implementation (D174): the plan tasks are written in THIS session.** For each task:
+record the pre-task state (HEAD + the `git status --porcelain` dirty baseline) → implement the
+task inline, test-first per the loop above → commit, staging ONLY the task's files → assert the
+branch advanced with non-empty content (`git diff --name-only <pre-task sha>..HEAD`) → run the
+SCOPED suite for the task's area. No dispatch machinery, no seats, no per-task model routing
+(`<model-routing-resolve>`).
 
-**Optional implementation delegation (`implementation` role) — LEGACY architecture only (`defaultArchitecture: legacy`): every numbered item in this delegation procedure, including the clean-state restore-and-retry (item 4) and the never-blocks rule (item 5), applies ONLY under the declared legacy rollback. The executor build-seat paragraph below is the PRIMARY tier and is not part of this legacy block.** When routing resolved the `implementation` role to a non-`inherit` model, execute each plan task via a subagent instead of inline, subject to a per-task **clean-state boundary**. The resolved `implementation` model is a **CEILING, not a blanket assignment** — pick the cheapest sufficient model per task (issue #132), so a well-specified mechanical task is not built on the ceiling model when a cheaper one suffices. When the resolved `implementation` effort is non-`none`, apply the dual-path effort rule from `<model-routing-resolve>` (pass it only where the dispatch layer supports effort; always log it) — effort is role-wide from `<model-routing-resolve>`, not part of `select_impl_model`'s ceiling logic.
-
-**Executor build-seat dispatch (#470, primary tier).** On the primary tier every implementation dispatch routes through the executor `build` seat: `python3 hooks/executor_routing_lib.py dispatch --seat build ... --gate-file <gate.json> --plan-file <impl-plan.md>`. **The gate file is PRODUCED first** (Step-11 remediation): `python3 hooks/executor_routing_lib.py mint-gate --plan-file <impl-plan.md> --issue-complexity <trivial|standard|complex> --plan-est-lines <est> --out <gate.json>` — the producer derives the plan-side facts EXACTLY the way dispatch later re-derives them (aggregate riskLevel, distinct file count) and records the plan digest, so the freshness cross-check passes on a fresh plan by construction; re-run mint-gate whenever the plan is revised. Dispatch then takes BOTH the authenticated #429 gate decision AND the live implementation plan (`--plan-file`, never `--plan-context` — the CLI mints the plan context internally after authenticating the gate). The build seat binds the gate decision to the live plan by digest: `dispatch` recomputes the plan file's content digest and REFUSES on mismatch (`gate_stale_for_plan`, exit 4), so a revised plan mechanically forces re-running the complexity gate before any build-seat dispatch (§2b). Under the LEGACY architecture (declared, `defaultArchitecture: legacy`) the same brief dispatches as a `rawgentic:rawgentic-implementer` subagent via the Agent tool (`resolution=fallback`), and WF2 prose runs the complexity-gate step before that legacy-architecture build dispatch. Both tiers keep the per-task clean-state boundary, worktree isolation, and the collect-then-verify contract below unchanged — the executor seat is never a gate bypass.
-
-0. **Per-task model selection (ceiling semantics).** For each task, choose its dispatch model with:
-   ```bash
-   python3 -c "import sys; sys.path.insert(0,'hooks'); from model_routing_lib import select_impl_model; m,r=select_impl_model('<ceiling>','<riskLevel>','<complexity>'); print(m); print(r)"
-   ```
-   - `<ceiling>` = the resolved `implementation` value from `<model-routing-resolve>`.
-   - `<riskLevel>` = this task's `riskLevel` (`high`|`standard`) from the Step 5 plan.
-   - `<complexity>` = the **Step 2** authoritative complexity classification (`simple_change`|`standard_feature`|`complex_feature`) carried forward from Step 2 item 7; if it is unavailable/unknown in context, pass `standard_feature` (the conservative middle) and note that in the per-task log.
-   `select_impl_model` returns `(model, reason)`: high-risk **or** `complex_feature` → the ceiling; otherwise → `sonnet` (down-routed); a `haiku`/unknown ceiling floors to `sonnet` (rawgentic never routes coding to Haiku). Dispatch this task's subagent with `model: <model>`. **Never dispatch an implementation subagent with `model: haiku`** — if the resolved model is `inherit` and the session model is Haiku, pass `model: sonnet` instead.
-   **Log per task** in session notes: `impl task <id>: model <model> (<reason>), effort <effort|none>` — makes over/under-routing auditable.
-1. **Before dispatch:** record the pre-task state — current `HEAD`, the checked-out symbolic feature ref (`git symbolic-ref -q HEAD`; a detached HEAD REFUSES this mode — there is no feature ref to land on, #767), and the dirty BASELINE (`git status --porcelain`). A real orchestrator checkout is never clean (standing telemetry dirt, untracked working files); dispatch is dirt-tolerant because the seat's worktree is cut from `HEAD`, not from the dirty tree, and collision safety belongs to item 3's scoped landing check. The recorded ref and SHA are what item 3's landing asserts against.
-2. **Dispatch one implementation task-agent** — executor `build` seat under the default architecture; under the declared LEGACY architecture only, a `rawgentic:rawgentic-implementer` via the Agent tool (serial — one at a time; each task builds on the previous commit) with the per-task `model` from item 0 and the brief: the design doc, this plan task, the TDD requirement, project conventions, and the current test baseline. The definition carries the test-first/stage-only-your-files/report-honestly contract; a LEGACY-tier agent implements the task test-first and commits it, while an EXECUTOR-tier build agent implements and reports but structurally CANNOT commit (see item 3). Its `isolation: worktree` frontmatter keeps the mutation off the shared tree (fallback per `<model-routing-resolve>` when worktrees are unavailable).
-3. **After it returns — collect, then verify (two tiers, #767):**
-   - **EXECUTOR tier (the default):** a mutating executor build dispatch delivers UNCOMMITTED worktree work — the linked worktree's real gitdir lives under the MAIN repo's `.git/worktrees/<leaf>/` and that gitdir is read-only under containment, so the agent cannot commit (and the commit write-set spans the common `.git` — objects DB, refs — so widening the grant would expose the canonical repo; #767's live probe). Committing is the ORCHESTRATOR's job, in two steps. **(a) Promote** the work product onto a per-collection temp ref via the collection entry point: `python3 hooks/executor_routing_lib.py collect-work-product --run-id <run> --session-name <job> --target-ref refs/rawgentic/collect/<receipt-nonce> --expected-target-sha 0000000000000000000000000000000000000000 --expected-feature-ref <feature-ref recorded before dispatch> --kind code --promote-path <file> [--promote-path <file> …] --workspace <ws> --project <name>` — for `--kind code`, `--expected-feature-ref` is mandatory: collect authorizes the landing destination at collection time; use one `--promote-path` per declared task file (the staging backstop enforced as promote's fail-closed exact-path policy; binary-safe by candidate-tree construction; receipt+observation-authorized; the temp ref uses create semantics, so promote's CF-1 tip-guard does not bind here — the fast-forward in (b) is the branch-level guard; the CLI ENFORCES this exact ref+zero-SHA shape for exact-path collects, `invalid_collect_ref` otherwise). **(b) Land** it on the checked-out feature branch via the production verb: `python3 hooks/executor_routing_lib.py land-work-product --expected-ref <feature-ref recorded before dispatch> --pre-sha <recorded pre-task SHA> --new-sha <new_sha> --temp-ref refs/rawgentic/collect/<receipt-nonce> --run-id <run> --workspace <ws> --project <name>` — audited mode derives the repo from workspace+project; `--no-audit` is the explicit unaudited opt-out for standalone/ops use, never the WF2 path. It refuses ONLY when a path changed by `pre_sha..new_sha` is itself dirty in the checkout (`landing_dirty_paths`, naming the paths); unrelated dirt is tolerated, and git's own ff checkout-overwrite protection stays as the fail-loud backstop. It also asserts `git symbolic-ref -q HEAD` equals the feature ref recorded before dispatch, then tri-states on the ref's SHA — at the recorded pre-task SHA → `git merge --ff-only <new_sha>`; already exactly `new_sha` → already-landed (crash recovery), continue cleanup; anything else, a detached HEAD, or a different branch at the same SHA → REFUSE. Post-merge it asserts HEAD and the ref both equal exactly `new_sha`, appends a `landed_work_product` audit record AFTER the merge and BEFORE the CAS temp-ref delete, then CAS-deletes the temp ref (`git update-ref -d refs/rawgentic/collect/<receipt-nonce> <new_sha>`). An audit-append failure retains the temp ref; a re-run heals it. A bare `update-ref` on the checked-out feature branch is FORBIDDEN — it moves the ref while the files/index stay at the pre-task state, so the scoped suite would test stale code. This ratifies-and-supersedes the #735 ad-hoc diff-export collection (commit ba4ceec): same principle — the orchestrator lands the work — with the authorization, CAS, and binary fidelity the improvisation lacked.
-   - **LEGACY tier (Agent-tool worktree dispatches, which CAN commit):** the agent's commit lives in the shared object store but NOT on the feature branch — collect it first (cherry-pick or fast-forward the reported SHA onto the feature branch). Apply the staging backstop to the COLLECTED commit (`git show --name-only <sha>` ⊆ the task's declared `files`), not the main tree's staging area.
-   - **Either tier:** **assert the branch actually advanced** (`git rev-parse HEAD` differs from the recorded pre-task HEAD) **AND that the advance carries content** (`git diff --name-only <pre-task sha>..HEAD` is non-empty — an empty commit advances HEAD while every diff-scoped gate passes vacuously, #767 8a); a task whose work never lands is NOT done, and skipping this check would let the later diff-scoped gates (Step 8a, Step 11, secret scan) run over an empty diff and pass vacuously. The serial chain depends on it too: the next task's worktree is cut only after the work is on the branch. Then re-run the SCOPED suite for the task's area (per `<test-run-discipline>`, SKILL.md — the recorded-baseline diff belongs to Step 9's full-suite gate, which still runs in the orchestrator). On success (scoped tests green, only expected paths changed, work landed on the branch) → proceed to the next task. At this completed collect/land call site, emit exactly ONE canonical `DISPATCH` line per build-seat workflow dispatch, with outcome per the `<model-routing-resolve>` emission rule (`ok`/`retried`/`error`/`dead`); attempts never emit their own lines.
-4. **On failure or vacuous return — recovery is LANDING-STATE-AWARE (#762 Step 11; the item-1 dirty baseline is the authority on what was already there):**
-   - **No landing occurred** (executor tier — including a landing refusal): the shared checkout was never touched; the work lives in the isolated worktree/temp ref. **Restore NOTHING** — leave the checkout and every baseline path exactly as item 1 recorded them. A landing refused for `landing_dirty_paths` names the operator's own pre-existing edits: a `git checkout --` there would destroy exactly what the refusal protected. Clean up an orphaned collect temp ref only after confirming no landing record was appended for its nonce.
-   - **A landing already happened, then verification failed** (scoped suite red on the landed commit): do NOT checkout-restore — the branch advanced to the landed SHA and file-level restore cannot move HEAD back, so a "restore" reads from the failed commit itself. Treat it as the normal red-suite failure path: fix forward, or revert with a NEW commit after proving `git rev-parse HEAD` still equals the task's landed SHA; if baseline preservation cannot be proven, STOP for manual recovery.
-   - **LEGACY tier without isolation** (the only case where the agent mutated the shared checkout): restore ONLY the task's declared paths that the item-1 baseline recorded as CLEAN — `git checkout -- <those paths>`; a declared path the baseline recorded as DIRTY stops for manual recovery instead (never checkout-overwrite an operator edit). Remove ONLY the agent's reported untracked outputs after they are confirmed still-untracked and path-checked; never blanket-reset or clean a shared checkout.
-
-   Then **retry that task once at the CEILING model** (escalate: a down-routed task that struggled gets the configured maximum, dispatched the same clean-state way, or inline if the ceiling is `inherit`). Log the escalation. The recovery rules above run first, so the retry never operates on a half-mutated tree — and never on a tree from which an operator's recorded edits were "restored" away.
-5. Delegation can never block Step 8: a second failure falls through to the normal Step 8 failure handling.
-
-Under the LEGACY architecture, when the `implementation` role is `inherit`, Step 8 runs inline exactly as it did pre-#474 — no delegation (and if the session model is Haiku, dispatch any implementation subagent with `model: sonnet`).
-
-Under the LEGACY architecture, when the resolved `implementation` model equals the session/orchestrator model, inline execution is an expected, acceptable outcome — delegation exists for isolation and parallelism, not obligation. The #328 subagent-dispatch audit (`docs/reviews/subagent-dispatch-audit-2026-07-09.md`, PR #328) measured 6/6 genuine runs implementing inline even with `implementation: opus` configured, and judged that scope-by-design rather than a bug. This documents current intended behavior only — it deliberately does NOT settle the delegation policy; the audit's unrun falsification experiment (route `implementation` to `sonnet` and re-measure) remains open.
+**Optional worktree subagents for genuinely parallel tasks.** When Step 5 marked a
+parallel-eligible group AND `capabilities.parallelism == "worktree"` (Step 2 item 10), the
+group's tasks MAY dispatch as Agent-tool worktree subagents (isolation keeps each mutation off
+the shared tree; the agents commit in their own worktrees). This is judgment, never obligation
+— the default is inline and serial. For each collected subagent task:
+1. **Collect** the agent's commit onto the feature branch (cherry-pick or fast-forward the
+   reported SHA — the commit lives in the shared object store but NOT on the branch).
+2. **Staging backstop:** assert the collected commit's file set (`git show --name-only <sha>`)
+   ⊆ the task's declared `files`; STOP to reconcile if not.
+3. **Assert the branch advanced with content** (HEAD differs from the pre-task SHA AND the
+   diff is non-empty — an empty commit lets every diff-scoped gate pass vacuously, #767), then
+   run the SCOPED suite. Apply the vacuous-result gate from `<model-routing-resolve>` to the
+   agent's report before trusting any claim in it.
+4. **On failure or a vacuous return:** the shared checkout was never touched (the work lives
+   in the agent's worktree) — restore nothing, and re-run that task INLINE. A subagent can
+   never block Step 8: inline is always the fallback.
 
 <!-- whole-issue-delegation: #133 -->
-**Optional WHOLE-ISSUE delegated build sub-mode (`wholeIssueDelegation`, default-off).** Per-task delegation above still runs the full per-task ceremony (dispatch, scoped-suite re-run, diff) in the orchestrator's own loop, so an orchestrator working a backlog bloats fast. When opted in, Step 8 instead hands ONE build-subagent the whole branch and validates a structured **receipt** — the *typing* is delegated, the *gating* is not. **Trust boundary:** the builder never self-certifies; every gate re-runs in the orchestrator against the real tree, and a receipt claim is a hypothesis until confirmed. **Executor-architecture fail-closed gate (#767):** this sub-mode's receipt contract requires agent-authored per-task commits (`task_shas`) that a contained executor build agent structurally cannot produce: its gitdir is read-only under containment, and the commit write-set spans the common `.git`. Collection shipped in #767 and #762 wires landing; neither supplies executor-tier whole-issue receipts. Under the EXECUTOR architecture (the default), an enabled `wholeIssueDelegation` logs the skip loudly and falls back to the normal per-task Step 8 until issue #779 ships executor-tier receipts; the brief/receipt contract applies to the LEGACY architecture only. Read `references/whole-issue-delegation.md` in full before using this mode — it holds the build-subagent brief template, the receipt schema, and the validation/fallback contract; the block below is only the spine.
+**Optional WHOLE-ISSUE delegated build sub-mode (`wholeIssueDelegation`, default-off).** Inline implementation above keeps the full per-task ceremony (implement, scoped-suite re-run, diff) in the orchestrator's own loop, so an orchestrator working a backlog bloats fast. When opted in, Step 8 instead hands ONE build-subagent the whole branch and validates a structured **receipt** — the *typing* is delegated, the *gating* is not. **Trust boundary:** the builder never self-certifies; every gate re-runs in the orchestrator against the real tree, and a receipt claim is a hypothesis until confirmed. The build-subagent is an Agent-tool WORKTREE subagent — it authors the per-task commits the receipt names (`task_shas`) in its own worktree, off the shared tree. Read `references/whole-issue-delegation.md` in full before using this mode — it holds the build-subagent brief template, the receipt schema, and the validation/fallback contract; the block below is only the spine.
 
-1. **Architecture gate (#767, fail-closed — FIRST, before anything else in this sub-mode).** Under the EXECUTOR architecture (the default), this sub-mode does not run: log `### WF2 Step 8 — whole-issue delegation (#<issue>, skipped: executor architecture — falls back to the normal per-task Step 8)` and jump back to the per-task loop above. Every numbered item below is LEGACY-architecture-only.
 1b. **Enablement gate.** Only when enabled for this skill:
    ```bash
    python3 hooks/adversarial_review_lib.py is-enabled \
@@ -1024,22 +981,22 @@ Under the LEGACY architecture, when the resolved `implementation` model equals t
    Exit `0` → enabled; non-zero → **skip silently** and run Step 8 exactly as above (per-task or inline). An explicit invocation opt-out also skips.
 2. **Pre-flight clean-worktree gate (data-loss guard).** Require `git status --porcelain` empty. If the operator has ANY staged/unstaged/untracked work, do NOT enter this mode — log it and fall back to the normal per-task Step 8. The reject path must be able to discard the builder's output without touching pre-existing operator files.
 3. **Record** `branch_base_sha` (`git rev-parse HEAD`) and the pre-build test baseline (`{before:{passed,failed}}`).
-4. **Dispatch ONE build-subagent (LEGACY architecture only)** — `rawgentic:rawgentic-implementer` via the Agent tool — with the brief (design, plan w/ riskLevels, TDD requirement, conventions, baseline) + the required receipt schema (both in the reference file). Model: `select_impl_model(<ceiling>, <riskLevel>, <complexity>)` sized to the plan's **highest-risk** task (one agent → size to the hardest task); **never `model: haiku`** (same inherit+Haiku→sonnet rule as above).
-4b. **Collect BEFORE validating (worktree runs, LEGACY).** When the build ran worktree-isolated, the receipt's commits exist in the shared object store but the feature branch has NOT advanced — and receipt Rule 4 diffs `base..HEAD` on THIS checkout, so validating first would reject every worktree build (empty diff vs declared files). Land the build on the branch first: fast-forward to the receipt's final sha (or cherry-pick `task_shas` in plan order), then assert the branch actually advanced past `branch_base_sha`. Only then validate. (Non-isolated fallback dispatches leave HEAD already advanced — this step is then a no-op assert.)
+4. **Dispatch ONE build-subagent** — an Agent-tool worktree subagent — with the brief (design, plan w/ riskLevels, TDD requirement, conventions, baseline) + the required receipt schema (both in the reference file). **Never dispatch it on Haiku.**
+4b. **Collect BEFORE validating (worktree runs).** When the build ran worktree-isolated, the receipt's commits exist in the shared object store but the feature branch has NOT advanced — and receipt Rule 4 diffs `base..HEAD` on THIS checkout, so validating first would reject every worktree build (empty diff vs declared files). Land the build on the branch first: fast-forward to the receipt's final sha (or cherry-pick `task_shas` in plan order), then assert the branch actually advanced past `branch_base_sha`. Only then validate. (Non-isolated fallback dispatches leave HEAD already advanced — this step is then a no-op assert.)
 5. **Validate the receipt** against the real tree:
    ```bash
    python3 -c "import sys,json; sys.path.insert(0,'hooks'); from plan_lib import validate_build_receipt, parse_tasks; r=json.load(open('<receipt.json>')); tasks=parse_tasks(open('<plan.md>').read()); ok,errs,norm=validate_build_receipt(r,tasks,'.','<branch_base_sha>'); print(ok); print('\n'.join(errs)); print(json.dumps(norm))"
    ```
    **Reject (ok=False)** → **restore then fall back** (delegation can never block Step 8): `git reset --hard <branch_base_sha>` (tracked) then remove ONLY the untracked paths the receipt declared (`union(files_per_task)` filtered to still-untracked); on an unparseable/partial receipt, reset only and WARN that builder untracked files may remain — **never** blanket `git clean -fd` against the operator's checkout. Log the fallback loudly, then run the normal per-task Step 8.
 6. **On a valid receipt, run the gates in the orchestrator against the real tree** (not the receipt's word for them):
-   - **Step 8a** as the ONE accumulated wave (#492) covering every high-risk task's receipt sha (tagged in Step 5 **OR** in `norm["promoted_task_ids"]`); coverage asserted via `plan_lib.assert_review_coverage(<log>, tasks, receipt["task_shas"])`. **8a is NOT delegated** — the orchestrator owns it.
+   - **Step 8a** as the ONE accumulated wave (#492) covering every high-risk task's receipt sha (tagged in Step 5 **OR** in `norm["promoted_task_ids"]`); coverage recorded per covered task via the Step 8a session-note markers. **8a is NOT delegated** — the orchestrator owns it.
    - **Step 9** re-run the full suite from the orchestrator (the receipt baseline is a claim; the orchestrator's own run is the gate).
    - **Steps 11 / 11.5** unchanged (full diff review + scan).
 7. **Marker** (session notes): `### WF2 Step 8 whole-issue-delegation (#<issue>): <APPLIED receipt-valid | FALLBACK per-task (<reason>) | SKIPPED not-enabled>`.
 
 Interplay with `<small-standard-lane>`: whole-issue delegation is still allowed in the lane — the collapsed gates still run in the orchestrator; the receipt's Step-8a set is just usually empty.
 
-**Parallel task execution (validated, currently serial):** Use the parallel-eligibility result from Step 5's `plan_lib.validate_parallel_groups(tasks)` to know which groups *could* run concurrently, and the `capabilities.parallelism` probe from Step 2 item 10 (#136) to know whether the environment *can* isolate them. When `parallelism == "serial-only"`, state it once ("worktree isolation unavailable → serial execution") rather than attempting concurrent dispatch and hitting an Agent-tool error; when `parallelism == "worktree"`, note that concurrent execution still waits on the execution layer (#85). **Concurrent execution remains OFF by default — execute ALL tasks sequentially in plan order**, including parallel-eligible groups. With the worktree-isolated `rawgentic:rawgentic-implementer` shipped (#164), the collision hazard that forced the serial floor is addressed at the isolation layer, so #85's concurrent Step 8 becomes a **config-gated option** (a future opt-in key, reconciled on issue #85) rather than an unconditional behavior — until that opt-in exists and is validated, sequential execution stays the safe floor, and when `parallelism == "serial-only"` there is no isolation at all, so concurrency must not be attempted (graceful fallback: same agents, strictly serial). **Staging backstop:** the "stage ONLY this task's files, never `git add -A`" rule above applies to every task; when a task additionally declares `files`, that rule becomes machine-checkable — assert the staged set is a subset of the declared `files` and STOP to reconcile if not. (A task in a parallel_group that declared no `files` is already non-eligible and runs sequentially under the same stage-only-this-task's-files rule.)
+**Parallel task execution:** Use Step 5's parallel-eligibility judgment (declared, pairwise-disjoint `files`) to know which groups *could* run concurrently, and the `capabilities.parallelism` probe from Step 2 item 10 (#136) to know whether the environment *can* isolate them. When `parallelism == "serial-only"`, state it once ("worktree isolation unavailable → serial execution") and run everything inline; when `parallelism == "worktree"`, a parallel-eligible group MAY dispatch as Agent-tool worktree subagents per the optional-subagent contract above. **The default is serial, inline, in plan order** — parallelism is judgment for genuinely-independent tasks, never obligation. **Staging backstop:** the "stage ONLY this task's files, never `git add -A`" rule above applies to every task; when a task additionally declares `files`, that rule becomes machine-checkable — assert the staged set is a subset of the declared `files` and STOP to reconcile if not. (A task in a parallel_group that declared no `files` is already non-eligible and runs sequentially under the same stage-only-this-task's-files rule.)
 
 **Mid-flight risk promotion (P15):** After implementing each task and staging its diff, re-evaluate the task against the 8 risk criteria via two paths:
 
@@ -1064,31 +1021,18 @@ original failure lived — a mid-UAT fix that never went back through Step 3/4.
 
 **Design flaw discovery:** If implementation reveals a fundamental design flaw:
 - Check: `tdd_loopback_used == false` AND `global_loopback_total < GLOBAL_LOOPBACK_BUDGET`
-- If allowed: **park-then-reset the build seat's worktree first** (#637, epic #635 —
-  a design-level loop-back INVALIDATES the current diff, unlike the same-design retry at
-  item 4 above, which discards a still-valid-design attempt via a bare `reset --hard` +
-  `clean -fd` with no park). Before re-dispatching Step 3, and only after confirming the
-  prior build-seat process is terminated: call
-  `WorktreeManager.park_and_reset(handle, run_id=..., design_version=..., task_id=...)`
-  (`phase_executor/src/phase_executor/worktree.py`) — it stashes the current diff
-  recoverably (`git stash push -u -m "rawgentic-parked:<run_id>:<design_version>:<task_id>"`,
-  verified against a `refs/stash` OID change, never a bare `rc == 0`) BEFORE resetting
-  the worktree clean to its base, never the reverse. Then append
-  `RoutingAuditLog.append_park(...)` (`phase_executor/src/phase_executor/enforce.py`)
-  with the returned `ParkRecord` (including its `stash_oid` — the collision-proof
-  recovery identity, since two loop-backs on the same run/task share the same
-  human-readable name) so the parked stash is discoverable from the run's audit log, and
-  log the stash name + OID in session notes. **On a `ParkThenResetError`** (the reset or
-  clean step failed AFTER a confirmed park): still append the audit record from
-  `err.park_record` before propagating the failure — the parked diff is genuinely
-  recoverable via its `stash_oid` even though the reset/clean itself didn't complete;
-  never let a reset/clean failure silently drop the park's own audit reference. Then loop back to Step 3 with the flaw
-  identified — the fresh build-seat context never observes a half-reset worktree.
+- If allowed: **park the invalidated work first** — a design-level loop-back INVALIDATES the
+  current uncommitted diff, so stash it recoverably before returning to Step 3:
+  `git stash push -u -m "rawgentic-parked:<issue>:<design-version>:<task-id>"`, verified by a
+  `refs/stash` OID change (never a bare `rc == 0`; an empty tree stashes nothing — that is
+  fine, note it). Log the stash name + OID in session notes so the parked diff stays
+  discoverable. Then consume the loop-back (`plan_lib.consume_loopback(<counters>, "tdd")`)
+  and return to Step 3 with the flaw identified.
 - If budget exhausted: STOP and escalate to user.
 
 **Session checkpoint (APPEND, every 2-3 tasks).** After each batch of 2-3 tasks, APPEND a
 **lightweight progress checkpoint** to session notes — this is separate from and lighter
-than the heavy `<headless-checkpoint>` (`references/headless.md`, for suspend/error exits):
+than a full suspend/error checkpoint:
 
 ```
 #### Progress — Tasks N-M complete
@@ -1115,9 +1059,19 @@ never overwrite an earlier entry, so the audit trail stays cumulative.
    the repo they read), and Step 11's full `origin/<default>..HEAD` diff reviews the final
    state of everything regardless.
 <!-- model-routing: role=review -->
-Dispatch these reviewers on the executor `review` seat per the `<model-routing-resolve>` contract (primary tier; the fast tier is a #491 lens/model choice, not a seat). **The concatenated high-risk diff is a REQUIRED input: dispatch with `--requires-context` (declaring the requirement) and `--context-file <diff>` (carrying it) (#826)** — declaring the requirement without a usable artifact is refused `review_context_required` at the dispatch choke-point. Both flags are mandatory here and a static test asserts this site passes them. Under the LEGACY architecture (declared, `defaultArchitecture: legacy`) they dispatch as `rawgentic:rawgentic-reviewer` agents via the Agent tool (`model: <review>` unless `inherit`; effort dual-path, always logged; `resolution=fallback`). Every reviewer brief MUST restate the read-only execution clause (#510): Bash is for read-heavy inspection only — never execute the target project's entry-point scripts, deploy paths, or anything that mutates state or sends outward; the only sanctioned executions are the verification commands this brief names (from the project's `.rawgentic.json` testing config); an entry script invoked in an unexpected form may fall through to a live path — do not experiment with invocation forms; when a command's read-only-ness is uncertain, don't run it — report the uncertainty as part of the review.
+Run the wave per the `<model-routing-resolve>` contract: the cross-model pass dispatches
+`python3 hooks/review_runner.py review-code --base <branch_base_sha> --brief <brief.md> --author-model <your model id> --reviewer <default per the contract> [--reopen-token <token.json>] --out <result.json> --project-root .`
+from a read-only harness subagent, IN PARALLEL with your own INLINE self-review of the same
+concatenated high-risk diff (two independent passes, never merged). **The diff is a REQUIRED
+input: the runner composes it itself from `--base`, and the brief names the accumulated
+high-risk shas — the artifact-delivery guarantee that `--requires-context` used to provide
+(#826) is now structural: a route that cannot carry the bytes cannot be called.** Mint the
+reopen token FIRST: `python3 hooks/plan_lib.py review-reopen --state-file claude_docs/.wf2-state/<issue>/loopback_counters.json --source review_design --out <token.json> --project-root .`
+— the mint debits the loop-back budget; on exhaustion (exit 3) dispatch TOKENLESS and note the
+round is diagnostic (a design-flaw finding then escalates instead of looping — item 6). Every
+reviewer brief MUST restate the read-only execution clause (#510): Bash is for read-heavy inspection only — never execute the target project's entry-point scripts, deploy paths, or anything that mutates state or sends outward; the only sanctioned executions are the verification commands this brief names (from the project's `.rawgentic.json` testing config); an entry script invoked in an unexpected form may fall through to a live path — do not experiment with invocation forms; when a command's read-only-ness is uncertain, don't run it — report the uncertainty as part of the review.
 
-2. **Dispatch 2 reviewers in parallel** — executor `review` seat (the default architecture; under the declared LEGACY architecture only: via the Agent tool, `rawgentic:rawgentic-reviewer` + a role brief in the prompt, same pattern as Step 11). Per `<review-lens-routing>` (SKILL.md): Reviewer 1 dispatches on the `mechanical` lens (fast tier), Reviewer 2 on the `security` lens (strong) — resolve each via `resolve --role review --lens <lens>`:
+2. **Run the 2 review passes in parallel** — Reviewer 1 is your INLINE self-review; Reviewer 2 is the runner-dispatched cross-model review (the command above). Per `<review-lens-routing>` (SKILL.md): Reviewer 1 carries the `mechanical` lens, Reviewer 2 the `security` lens (the strong pass — never the one dropped):
    - **Reviewer 1: Code-level (style + bug/logic)** — naming, imports, hardcoded credentials, off-by-one errors, null/undefined handling, race conditions, type errors. Scope: every accumulated high-risk section in the concatenated diff.
    - **Reviewer 2: Silent-failure hunt** — catch-block swallows, missing error returns, unchecked async paths, ignored exceptions, fallthrough cases, missing `else` branches that should reject. Scope: every accumulated high-risk section in the concatenated diff.
 
@@ -1130,20 +1084,14 @@ Dispatch these reviewers on the executor `review` seat per the `<model-routing-r
    - **High:** fix before Step 9 unless deferred-with-rationale. Persist the deferral via `plan_lib.append_deferral(<deferrals_path>, finding)` (the `finding` needs at least `finding_id`, `severity`, `originator_reviewer_slot`) — it **must be re-presented to Step 11** for resolution.
    - **Medium/Low:** advisory; log to review log only.
 5. **Ambiguity circuit breaker:** if any finding is ambiguous or two findings conflict, STOP and ask user.
-6. **Design flaw detection:** if the review surfaces a design-level flaw (not a code-level issue), consume a loop-back via `plan_lib.consume_loopback(<counters_path>, "review_design")`. On success, increment counters — **park-then-reset the build seat's worktree** (same #637 contract as Step 8's design-flaw-discovery bullet above: `WorktreeManager.park_and_reset` before re-dispatching, `RoutingAuditLog.append_park` after, confirm the prior build-seat process is terminated first) — then return to Step 3. On exhaustion, STOP and escalate.
-7. **Dispatch failure fallback:** if the Agent tool errors on a reviewer dispatch, retry once after 30s. On second failure, append an entry to the review log with `verdict: "REVIEW_DISPATCH_FAILED"` and. **Dead-return detection:** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that reviewer once; on a second death treat it as a dispatch failure (item 7's REVIEW_DISPATCH_FAILED path).
-8. **Append to the review log** via `plan_lib.append_review_log(<log_path>, entry)` — ONE entry per high-risk task the wave covered, written ONLY when both reviewers acknowledged that task's sha (item 2); an unacknowledged sha is UNCOVERED and re-dispatches to the wave's reviewers before Step 9 (same wave, same reviewers; this is what keeps `assert_review_coverage` honest under #492). Each entry is:
-   ```json
-   {"task_id": "<id>", "sha": "<commit_sha>", "reviewers": ["R1","R2"],
-    "verdict": "applied|deferred|REVIEW_DISPATCH_FAILED",
-    "findings": {"crit": N, "high": N, "med": N, "low": N, "dropped": N}}
-   ```
-9. **Update the review-state pointer** via `plan_lib.write_review_state(repo_root, branch, last_review_log_status)` (path resolved by `plan_lib.review_state_path(repo_root, branch)`). Valid statuses: `"applied"|"suspended"|"dispatch_failed"`. This pointer is **local, git-excluded bookkeeping** (#231 AC2) — `write_review_state` auto-appends `.rawgentic/` to the repo's `.git/info/exclude` so it can never land in the feature PR. **Do NOT stage or commit it** (staging `.rawgentic/` into an app PR is the exact #231 bug); commit only the actual fix files.
+6. **Design flaw detection:** if the wave surfaces a design-level flaw (not a code-level issue), the reopen authorization is the token minted before dispatch (`--source review_design` — the debit already happened at mint; never consume a second time). On an ACTIONABLE result (token carried, `diagnostic: false`): park the invalidated uncommitted work per Step 8's design-flaw-discovery stash recipe, then return to Step 3. On a DIAGNOSTIC result (the mint was refused — budget exhausted): the disposition step MUST refuse to open the fix round — STOP and escalate.
+7. **Dispatch failure fallback:** if the runner dispatch fails (exit 3/4, a dead subagent), retry once; on a second failure record `REVIEW_DISPATCH_FAILED` for that slot in session notes and follow the ERROR protocol — the wave never proceeds with fewer than two live passes. **Dead-return detection:** a reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that pass once; on a second death treat it as a dispatch failure (this item's REVIEW_DISPATCH_FAILED path).
+8. **Record coverage** — ONE session-note marker per high-risk task the wave covered (item 10's marker shape, with the task's verdict `applied|deferred|REVIEW_DISPATCH_FAILED` in the detail), written ONLY when both passes acknowledged that task's sha (item 2); an unacknowledged sha is UNCOVERED and re-presents to the wave before Step 9 (same passes — this is what keeps coverage honest under #492). Commit only the actual fix files; never stage bookkeeping.
 10. **Log per-task marker in session notes:** `### WF2 Step 8a [task <id>, sha <abc>]: DONE (#<issue>: <summary>)`.
-11. **Headless suspend protection:** when Step 8a suspends (any QUESTION/ERROR path), convert the PR to draft if one exists (`gh pr ready --undo`). On fork PRs or no-perm sessions, post a blocking review comment instead.
+11. **Suspend protection (unattended runs):** when Step 8a suspends (any QUESTION/ERROR path), convert the PR to draft if one exists (`gh pr ready --undo`). On fork PRs or no-perm sessions, post a blocking review comment instead.
 
 ### Output
-For each high-risk task: an applied|deferred review log entry, review-state pointer updated (local, git-excluded — never staged into the PR), optional fix commits, session-note marker. The branch is not "ready" until the last `last_review_log_status` is `"applied"`.
+For each high-risk task: a session-note coverage marker carrying its verdict (applied|deferred|REVIEW_DISPATCH_FAILED), optional fix commits. The branch is not "ready" until every covered task's verdict is `applied` or a persisted deferral.
 
 ### Step 8a Failure Modes
 - Flat 2-reviewer cost regardless of high-risk-task count (#492's single wave); the blocking signal is deferred to before Step 9 — the accepted trade, bought back by cross-task-interaction visibility. A very large accumulated set may warrant splitting the wave (orchestrator judgment; the per-sha acknowledgment in item 2 catches an under-inspected tail).
@@ -1191,8 +1139,8 @@ fail: the gates that DID run (Step 11, Step 11.5, Step 8a) are still valid and l
 - Design-implementation alignment: does implementation follow the critiqued design?
 - Acceptance criteria verification: for each criterion, identify the test/verification that covers it
 - Documentation check: are required docs updated?
-- **P15 review coverage (NEW):** invoke `plan_lib.assert_review_coverage(<log_path>, plan_tasks, task_to_sha)`. Every high-risk task (including mid-flight-promoted) must have an `applied` or `deferred` entry in the review log. `REVIEW_DISPATCH_FAILED` entries DO NOT count as coverage.
-- **Implausibility check (NEW):** if the plan was tagged `implausible_zero` in Step 5 and the diff touches paths matching `plan_lib.DEFAULT_HIGH_RISK_PATH_PATTERNS`, fail Part A with an explicit message: features touching security-relevant paths must have at least one high-risk task.
+- **P15 review coverage:** every high-risk task (including mid-flight-promoted) must have a Step 8a coverage marker with verdict `applied` or `deferred` in session notes. `REVIEW_DISPATCH_FAILED` DOES NOT count as coverage — an uncovered task re-presents to the wave before this gate passes.
+- **Implausibility check:** if the plan tagged ZERO tasks high-risk and the diff touches paths matching `plan_lib.DEFAULT_HIGH_RISK_PATH_PATTERNS`, fail Part A with an explicit message: features touching security-relevant paths must have at least one high-risk task.
 
 **Part B: Evidence enforcement:**
 
@@ -1238,10 +1186,10 @@ Implementation drift check with verification evidence.
 
 ### Instructions
 
-<!-- model-routing: role=analysis -->
-Dispatch the memorization sub-agent per the `<model-routing-resolve>` contract for the `analysis` role (`model: <analysis>` unless `inherit`; effort dual-path, always logged).
+Run the memorization pass inline, or as a background harness subagent per the
+`<model-routing-resolve>` contract when the gate-findings sweep is broad (D182).
 
-**Runs in PARALLEL with Step 11** (dispatch with `run_in_background=true`).
+**Runs in PARALLEL with Step 11.**
 
 1. Review quality gate findings from Steps 4, 6, and 9.
 2. Identify reusable insights — patterns applicable beyond this specific issue.
@@ -1276,39 +1224,40 @@ Insight stored to mempalace and/or an updated CLAUDE.md (if insights memorized),
    - "Already reviewed at task boundary: <SHA list>. Focus on **cross-cutting concerns**; re-litigate individual files only on **material** findings (the bar is 'this is materially worse than what Step 8a saw,' not 'I might find a smaller issue')."
    - "Previously flagged & deferred: <verbatim finding list>. **RE-EVALUATE each.** A deferred High must end the review as either `applied` or with an independent concurrence from a reviewer slot different from the originator." Record each resolution via `plan_lib.resolve_deferral(<deferrals_path>, <finding_id>, status='applied'` / `add_concurrence=<other_slot>` / `user_ack=True)` — do not edit the deferrals JSON by hand.
 
-1a. **Adversarial diff review sub-step (opt-in, cross-model — runs concurrently with the 2 review agents; issue #131).**
-   Mirrors the Step 4 item 7 join-barrier pattern, but over the *diff* instead of the design doc. Report-only; additive to the 2-agent review, never a replacement.
+1a. **Adversarial diff review sub-step (opt-in, cross-model — runs concurrently with the 2 review passes; issue #131).**
+   Mirrors the Step 4 item 7 join-barrier pattern, but over the *diff* instead of the design doc. Report-only; additive to the 2-pass review, never a replacement.
 
-   - **Stale sweep (first thing):** delete any leftover `.rawgentic-diff-review-*.patch`, `.rawgentic-diff-findings-*.json` (including `-glm` siblings), and `.rawgentic-dispositions-*.jsonl` (#393) under the project root before doing anything else. This is crash recovery — a finally-style cleanup-on-exit cannot cover a SIGKILL, so a prior run's stale temp files may still be on disk.
+   - **Stale sweep (first thing):** delete any leftover `.rawgentic-diff-review-*` temp/result files under the project root before doing anything else. This is crash recovery — a finally-style cleanup-on-exit cannot cover a SIGKILL, so a prior run's stale temp files may still be on disk.
    - **Gate:** enablement via the SAME probe as Step 4 item 7 —
      ```bash
      python3 hooks/adversarial_review_lib.py is-enabled \
        --workspace .rawgentic_workspace.json --project <name> --skill implement-feature
      ```
      exit `0` = enabled, non-zero = skip. Compute `changed_paths` from `git diff --name-only origin/${capabilities.default_branch}..HEAD` — the SAME base ref as the patch below. **If that git command exits non-zero:** log the marker `failed (base ref unavailable: <reason>)`, skip dispatch, and continue (the `failed` marker satisfies the completion gate). Set `has_high_risk_task` = any plan task tagged `riskLevel: high`. Decide via `plan_lib.should_run_diff_review(enabled, changed_paths, has_high_risk_task)` (pure, tested; it raises on str/None inputs, so pass a real list). It returns `(False, <reason>)` → log marker `skipped (<reason>)` and stop; `(True, <reason>)` → dispatch.
-   - **Dispatch (concurrent with the 2 review agents):** build the diff **high-risk-first** so that if the artifact is truncated, only the low-risk tail is cut. `any_high_risk_path` returns only the *first* matching path, so do NOT pass it a whole list here — instead **partition** `changed_paths`: `high = [p for p in changed_paths if plan_lib.any_high_risk_path([p])]`, `low = [p for p in changed_paths if p not in high]`. Then `git diff origin/<default>..HEAD -- <high...>` first, then `git diff origin/<default>..HEAD -- <low...>`, concatenated. **Fallback:** if `high` is empty (dispatch was reached via `has_high_risk_task` alone), build the plain full `git diff origin/<default>..HEAD` **once** — do not emit an empty-pathspec diff (which would double the patch). Write the result to `.rawgentic-diff-review-<issue>-<token>.patch` (unique token, mode `0600`) under the project root, with sidecar path `.rawgentic-diff-findings-<issue>-<token>.json`. **Resolve the review backend first (#403):** `python3 hooks/adversarial_review_lib.py backend --workspace .rawgentic_workspace.json --project <name> --key adversarialReview` — exit 0 → stdout is the backend; **exit 2 (invalid config value) → abort this diff-review layer loudly (marker `failed (invalid backend config)`), never default to gpt.** Run in the background:
+   - **Dispatch (concurrent with the 2 review passes):** **resolve the review backend first (#403):** `python3 hooks/adversarial_review_lib.py backend --workspace .rawgentic_workspace.json --project <name> --key adversarialReview` — exit 0 → stdout is the backend; **exit 2 (invalid config value) → abort this diff-review layer loudly (marker `failed (invalid backend config)`), never default to gpt.** Then, from a read-only harness subagent, run the runner (TOKENLESS — this layer is report-only/diagnostic by design and MUST NOT drive a loop-back):
      ```bash
-     python3 hooks/adversarial_review_lib.py review \
-       --artifact <patch> --type diff --project-root <root> --date <date> \
-       --backend <resolved backend> --findings-json <sidecar>
+     python3 hooks/review_runner.py review-code --base origin/<default> --brief <brief.md> \
+       --author-model <your model id> --reviewer <default per the contract> \
+       [--backend <resolved backend>] --out .rawgentic-diff-review-<issue>-<token>.json --project-root .
      ```
-     append `--headless` when the run is headless. On a pass-N dispatch, apply the Step 4 item 7 disposition-ledger dispatch sequence (#393) — fold, temp-copy to `.rawgentic-dispositions-<issue>-<token>.jsonl`, add `--dispositions <temp path> --issue <n>`, exit-6/degraded join handling, backstop, finally-delete.
+     The runner composes the diff itself from `--base` and REFUSES oversize input instead of truncating (#834) — on an oversize refusal, either split the change or raise `RAWGENTIC_ADV_REVIEW_MAX_BYTES` deliberately and say so in the PR body; never trim the diff by hand to sneak it under. The brief names the changed paths **high-risk-first** (partition via `high = [p for p in changed_paths if plan_lib.any_high_risk_path([p])]`) plus the plan's high-risk tasks. Under `both`, dispatch two runner invocations (one per backend, separate `--out` files). On a pass-N dispatch, apply the Step 4 item 7 disposition-ledger fold (#393) at the join — fold, backstop, gate-close persistence.
    - **Join (before item 3's confidence filter):**
-     - Exit `2`/`3`/`4` → marker `failed (<reason>)`, loud session-note log, continue with the same-model findings — **never** treat a failed review as passed (and, in headless mode, post a STATUS comment noting the diff review was skipped, mirroring Step 4).
-     - **Exit `5` (both-mode PARTIAL, #403):** the successful backend's review DID complete — consume its sidecar (below), log a loud warning naming the failed backend from the stderr `FAILED` line, and continue. Success-with-warning, never `failed`.
-     - Exit `0`/`5` but an EXPECTED sidecar (per the per-backend stdout status lines — the authoritative manifest; under `both` the gpt sidecar is the exact `--findings-json` path and glm's is its `-glm` sibling) is missing / unreadable / invalid JSON → treat that backend as failed (`failed (<reason>)` when none is left), never `no_findings`.
-     - Sidecar `truncated: true` → `failed (truncated)` for that backend.
-     - Success → under `both`, read BOTH expected sidecars and merge deterministically: provenance from file identity; dedupe key (evidence, location, category); on collision keep the higher severity, tie → higher confidence, tie → the gpt record; stable sort (severity rank, backend, original order). Then map each finding's confidence enum through `ADV_CONFIDENCE_TO_FLOAT` (from `adversarial_review_lib`), tag each `source: adversarial`, and **merge** them into the finding list BEFORE item 3 so the severity-banded filter processes them identically. The single ambiguity breaker at item 6 runs **once** over the merged list; the design-flaw loop-back at item 7 stays the single `review` source. Marker `findings_present <N>` or `no_findings`; when the sidecar `secrets` list is non-empty, append `; secrets detected: <categories>` to the marker (and to the headless STATUS comment).
-   - **Cleanup (finally-style):** delete the patch + sidecar (and any dispositions temp copy) on every handled exit path after the join. The startup stale sweep covers unhandled termination. **Staging backstop:** the temp files land under the *target* project's root (which is usually NOT this plugin repo), so the primary protection is the finally-cleanup + startup sweep, plus the explicit "stage ONLY this task's files, never `git add -A`" rule. As belt-and-suspenders, on first use append the globs (including `.rawgentic-dispositions-*.jsonl`) to the target repo's `.git/info/exclude` (local, untracked — does not dirty the target's committed `.gitignore`); the globs added to this plugin repo's own `.gitignore` only protect self-dogfooding runs.
+     - Runner exit `2`/`3`/`4` (after the contract's one retry) → marker `failed (<reason>)`, loud session-note log, continue with the same-model findings — **never** treat a failed review as passed (and, in an unattended run, post a STATUS comment noting the diff review was skipped, mirroring Step 4).
+     - **Under `both`, one backend failed and one succeeded:** consume the successful result, log a loud warning naming the failed backend. Success-with-warning, never `failed`.
+     - Exit `0` but the `--out` file is missing / empty / invalid JSON / stale (`head_sha` no longer matches the current HEAD) → treat that backend as failed (`failed (<reason>)` when none is left), never `no_findings` — the vacuous-result gate from `<model-routing-resolve>`.
+     - Success → under `both`, read BOTH results and merge deterministically: provenance from file identity; dedupe key (evidence, location, category); on collision keep the higher severity, tie → higher confidence, tie → the gpt record; stable sort (severity rank, backend, original order). Then map each finding's confidence enum through `ADV_CONFIDENCE_TO_FLOAT` (from `adversarial_review_lib`), tag each `source: adversarial`, and **merge** them into the finding list BEFORE item 3 so the severity-banded filter processes them identically. The single ambiguity breaker at item 6 runs **once** over the merged list; the design-flaw loop-back at item 7 stays the single `review` source. Marker `findings_present <N>` or `no_findings`; when any finding reports a leaked secret, append `; secrets detected: <categories>` to the marker (and to the unattended STATUS comment).
+   - **Cleanup (finally-style):** delete the `--out` result file(s) on every handled exit path after the join. The startup stale sweep covers unhandled termination. **Staging backstop:** the temp files land under the *target* project's root (which is usually NOT this plugin repo), so the primary protection is the finally-cleanup + startup sweep, plus the explicit "stage ONLY this task's files, never `git add -A`" rule. As belt-and-suspenders, on first use append the `.rawgentic-diff-review-*` glob to the target repo's `.git/info/exclude` (local, untracked — does not dirty the target's committed `.gitignore`); the globs added to this plugin repo's own `.gitignore` only protect self-dogfooding runs.
    - **Marker (log exactly one per run):**
      `### WF2 Step 11 — Adversarial Diff Review: #<issue> findings_present <N>|no_findings|failed (<reason>)|skipped (<reason>) — <report path if any>`
 
 <!-- model-routing: role=review -->
-Dispatch the 2 review agents on the executor `review` seat per the `<model-routing-resolve>` contract (primary tier; the fast tier is a #491 lens/model choice, not a seat). **The PR diff is a REQUIRED input: dispatch with `--requires-context` (declaring the requirement) and `--context-file <diff>` (carrying it) (#826)** — declaring the requirement without a usable artifact is refused `review_context_required` at the dispatch choke-point, because a review of nothing still returns a verdict this gate would read as a pass. Both flags are mandatory here and a static test asserts this site passes them. Under the LEGACY architecture (declared, `defaultArchitecture: legacy`) they dispatch as `rawgentic:rawgentic-reviewer` via the Agent tool (`model: <review>` unless `inherit`; effort dual-path, always logged; `resolution=fallback`). Per `<review-lens-routing>` (SKILL.md): Reviewer 1 → `mechanical` (the bug_logic brief folded in, fast tier), Reviewer 2 → `security` (strong); resolve each via `resolve --role review --lens <lens>`; an `inherit` resolution on a Haiku session dispatches `model: sonnet` (never-Haiku). Every reviewer brief MUST restate the read-only execution clause (#510): Bash is for read-heavy inspection only — never execute the target project's entry-point scripts, deploy paths, or anything that mutates state or sends outward; the only sanctioned executions are the verification commands this brief names (from the project's `.rawgentic.json` testing config); an entry script invoked in an unexpected form may fall through to a live path — do not experiment with invocation forms; when a command's read-only-ness is uncertain, don't run it — report the uncertainty as part of the review.
+Run the review per the `<model-routing-resolve>` contract: the cross-model pass dispatches
+`python3 hooks/review_runner.py review-code --base origin/<default> --brief <brief.md> --author-model <your model id> --reviewer <default per the contract> [--reopen-token <token.json>] --out <result.json> --project-root .`
+from a read-only harness subagent, IN PARALLEL with your own INLINE self-review of the same diff (two independent passes, never merged). **The PR diff is a REQUIRED input: the runner composes it itself from `--base` — the artifact-delivery guarantee that `--requires-context` used to provide (#826) is now structural (a route that cannot carry the bytes cannot be called), so a review of nothing can never return a verdict this gate would read as a pass.** Mint the reopen token FIRST: `python3 hooks/plan_lib.py review-reopen --state-file claude_docs/.wf2-state/<issue>/loopback_counters.json --source review --out <token.json> --project-root .` — the mint debits the loop-back budget; on exhaustion (exit 3) dispatch TOKENLESS and note the round is diagnostic (a fundamental-flaw finding then escalates instead of looping — item 7). Per `<review-lens-routing>` (SKILL.md): Reviewer 1 (the inline self-review) → `mechanical` + `bug_logic`; Reviewer 2 (the runner pass) → `architecture` + `security` (never the one dropped). Every reviewer brief MUST restate the read-only execution clause (#510): Bash is for read-heavy inspection only — never execute the target project's entry-point scripts, deploy paths, or anything that mutates state or sends outward; the only sanctioned executions are the verification commands this brief names (from the project's `.rawgentic.json` testing config); an entry script invoked in an unexpected form may fall through to a live path — do not experiment with invocation forms; when a command's read-only-ness is uncertain, don't run it — report the uncertainty as part of the review.
 
-2. **Dispatch 2-agent parallel review** (#492 trimmed 3→2 — the mechanical and bug/logic briefs share the fast-tier seat). If any returns 429, retry that agent after 30s. **Dead-return detection:** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that agent once; on a second death treat that slot as a dispatch failure (retry-once-then-REVIEW_DISPATCH_FAILED per Step 8a item 7's pattern) rather than counting it as a clean review.
+2. **Run the 2-agent parallel review** (#492 trimmed 3→2 — the mechanical and bug/logic briefs fold into the inline self-review; the two "agents" are the inline pass and the runner pass). The runner owns transport retries (#857) — never wrap it in your own retry loop. **Dead-return detection:** a reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that pass once; on a second death treat that slot as a dispatch failure (retry-once-then-REVIEW_DISPATCH_FAILED per Step 8a item 7's pattern) rather than counting it as a clean review.
 
-   While the two agents run, pipeline per `<review-pipelining>` (SKILL.md): draft the PR body and the version/changelog edits (non-committing); the confidence filter (item 3), fixes, and the exit gate still wait for the wave.
+   While the passes run, pipeline per `<review-pipelining>` (SKILL.md): draft the PR body and the version/changelog edits (non-committing); the confidence filter (item 3), fixes, and the exit gate still wait for the wave.
 
    **Reviewer 1: Mechanical + Bug & Logic** (the old Agents 1+2, merged by #492)
    - Code style rules from project conventions and config.formatting; naming; import ordering
@@ -1317,7 +1266,7 @@ Dispatch the 2 review agents on the executor `review` seat per the `<model-routi
    - Silent failures in catch blocks; null/undefined handling
    - Off-by-one errors, boundary conditions
 
-   **Reviewer 2: Architecture, History & Security** (the strong seat — the security lens is never the one dropped, #492)
+   **Reviewer 2: Architecture, History & Security** (the strong pass — the security lens is never the one dropped, #492)
    - Does this change break patterns established by prior commits?
    - Are there related files that should also change?
    - Are there security implications? (this lens caught the ReDoS + FIFO-DoS on #466)
@@ -1333,14 +1282,14 @@ Dispatch the 2 review agents on the executor `review` seat per the `<model-routi
 
 6. Apply ambiguity circuit breaker.
 
-7. **Design flaw detection:** If review finds fundamental flaw, consume a loop-back via `plan_lib.consume_loopback(<counters_path>, "review")`. On success, return to Step 3. On exhaustion, escalate. Consume a loop-back **only** for findings with `source: review` (same-model); adversarial-sourced findings (merged in by sub-step 1a with `source: adversarial`) are report-only and MUST NOT consume a design loop-back here — they are advisory input to the fix workflow, not a loop-back trigger.
+7. **Design flaw detection:** If the review finds a fundamental flaw, the reopen authorization is the token minted before dispatch (`--source review` — the debit already happened at mint; never consume a second time). On an ACTIONABLE result (token carried, `diagnostic: false`): return to Step 3. On a DIAGNOSTIC result (the mint was refused — budget exhausted): the disposition step MUST refuse to open the fix round — escalate. A loop-back fires **only** for findings from the 2-pass review itself; adversarial-sourced findings (merged in by sub-step 1a with `source: adversarial`, always diagnostic) are report-only and MUST NOT drive a loop-back here — they are advisory input to the fix workflow, not a loop-back trigger.
 
 8. **Deferred-resolution exit gate (P15):** before declaring Step 11 complete, call `plan_lib.assert_no_unresolved_high_deferrals(<deferrals_path>)`. If any deferred Critical/High remains unresolved (not `applied` and lacking independent concurrence from a different reviewer slot), Step 11 cannot complete. A finding with `defer_count >= 2` additionally requires `user_ack: true`.
 
-9. **Update review-state pointer:** after Step 11 passes, call `plan_lib.write_review_state(repo_root, branch, "applied")` (file path resolved via `plan_lib.review_state_path`). It is **local, git-excluded** (auto-added to `.git/info/exclude`); do NOT stage or commit it (#231 AC2). At this gate's close, also persist each Critical/High finding's terminal disposition via `plan_lib.append_disposition` (Step 4's gate-close persistence sentence is canonical; deferrals stay in `deferrals.json`).
+9. **Gate-close persistence:** at this gate's close, persist each Critical/High finding's terminal disposition via `plan_lib.append_disposition` (Step 4's gate-close persistence sentence is canonical; deferrals stay in `deferrals.json`).
 
 ### Output
-Code review result with filtered findings and fixes applied. The local, git-excluded `.rawgentic/review-state/<branch-sanitized>.json` reflects "applied" (not committed — #231 AC2).
+Code review result with filtered findings and fixes applied.
 
 ### Failure Modes
 - Fundamental design flaw -> loop back to Step 3 if budget allows; if budget exhausted:
@@ -1625,7 +1574,7 @@ are failures: never treat either as the fallback.
    - If `capabilities.has_tests`: the full-suite evidence is the Step 9 run — re-run the full suite here ONLY when a commit landed after Step 9 touching code or a test-pinned surface (per `<test-run-discipline>`, SKILL.md); block the PR on any failure. **Prose-only scoped exception (#527):** when EVERY post-Step-9 commit touches ONLY prose/doc files (`*.md`, `docs/`) plus their own guard test files under `tests/` (no `hooks/`, no `phase_executor/`, no `scripts/`, no shared behavior code, and no shared test infrastructure — `conftest.py`, `tests/corpus.py`, cross-file test helpers), run the affected guard test files plus `tests/hooks/test_adversarial_review_registration.py` (the version pin) SCOPED and consume the Step 9 full-suite result as the regression evidence — log a session-note marker naming the scoped set (e.g. `#### Step 12 pre-PR gate: scoped (<files>)`); any code-bearing commit keeps the full re-run.
    - If NOT `capabilities.has_tests`: re-run key verification commands, document results
 
-4a. **P15 review-state gate:** read via `plan_lib.read_review_state(repo_root, branch)`. If the returned state is `None` (missing or branch mismatch) OR `state["last_review_log_status"] != "applied"`, REFUSE to open the PR and surface unresolved review state to the user (or to the issue comment in headless mode). This catches any Step 8a suspend that did not resolve before the PR-creation attempt.
+4a. **Review-completeness check:** before opening the PR, confirm Step 11's exit gate passed (item 8 — no unresolved Critical/High deferral) and every Step 8a covered task's verdict is `applied` or a persisted deferral. A suspend that never resolved must not reach PR creation.
 
 5. **Create PR:**
    ```bash
@@ -1714,7 +1663,7 @@ CI status, quarantine notice, or skip confirmation.
 
 ### Instructions
 
-**P15 pre-merge gate:** re-read via `plan_lib.read_review_state(repo_root, branch)`. If None or `last_review_log_status != "applied"`, refuse to merge. Cleanup of `claude_docs/.wf2-state/<issue>/` AND the branch's `.rawgentic/review-state/<branch-sanitized>.json` happens on merge success.
+**State cleanup:** on merge success, clean up `claude_docs/.wf2-state/<issue>/`. (Merge permission itself is owner-gated — see the workflow's merge rules; nothing here weakens them.)
 
 **Quarantine × protection contradiction check (#139):** before attempting the merge, call `plan_lib.quarantine_protection_contradiction(capabilities.ci_quarantined, <protection state from Step 1 item 9>, <required_checks>)`. A non-None message means CI is quarantined (WF2 non-gating) but branch protection REQUIRES a status check — the squash-merge below would hit a server-side wall. Surface the message to the user and STOP rather than merging into the wall.
 
@@ -1842,13 +1791,13 @@ measurable signal — not just a sentence the user reads once.
    this issue) add its printed reason as a `follow_ups` entry. Fail-open that leaves no trace
    is how a real miss comes to look exactly like a deliberate no-op.
 
-1b. **Headless mode:** if `additionalContext` has "HEADLESS MODE active", Steps 14
-   and 15 were skipped — the PR is the terminal deliverable. Record this for
-   auditability by appending a session-notes marker:
-   `### WF2 Step 14/15: SKIPPED (headless — PR #N is terminal; merge/deploy deferred to human + CI)`
+1b. **PR-terminal runs:** when the run had no merge authorization (e.g. an epic-run child
+   or any unattended run), Steps 14 and 15 were skipped — the PR is the terminal
+   deliverable. Record this for auditability by appending a session-notes marker:
+   `### WF2 Step 14/15: SKIPPED (unattended — PR #N is terminal; merge/deploy deferred to human + CI)`
    and set the run-record `outcome.deploy` to `"not_applicable"` with a
-   `follow_ups` note `"headless: merge/deploy deferred to human + CI"`. The
-   rendered summary then reflects deploy: not_applicable for the headless run.
+   `follow_ups` note `"unattended: merge/deploy deferred to human + CI"`. The
+   rendered summary then reflects deploy: not_applicable for the run.
 
 2. **Assemble the run-record** from the workflow so far and write it to
    `/tmp/wf2-run-record-<issue>-<session-id>.json` (use the Write tool, or a `cat > … <<'JSON'`
@@ -1877,7 +1826,9 @@ measurable signal — not just a sentence the user reads once.
    measured ~2× off, the #506 motivation).
    In short: every documented key must be **present** (a dropped field is a
    telemetry gap, not a `null`), counts are non-negative integers, `resolved` ≤
-   `findings`, and `workflow` is `"implement-feature"`. **Canonical names (#116):** use
+   `findings`, and `workflow` is `"implement-feature"`. Record
+   `"architecture": "inline"` (optional-legacy since the executor retreat;
+   `executor`/`legacy` remain valid on historical records only). **Canonical names (#116):** use
    the exact `gates[].name` per step from `work_summary.CANONICAL_GATE_NAMES`
    (`canonical_gate_name("implement-feature", step)`) and record `security_scan.skipped[]` as scanner **kinds**
    from `work_summary.SCANNER_KINDS` (`secrets`/`sca`/`sast`/`iac`), never free text — the
@@ -1912,52 +1863,14 @@ measurable signal — not just a sentence the user reads once.
    `hooks/work_summary.py` — `validate_record` only checks the keys it knows about and does not
    reject unrecognized top-level keys, so an omitted or present `lane` are both valid.
 
-2d. **dispatches[] assembly (#330).** Assemble `dispatches[]` by grepping
-   claude_docs/session_notes.md for lines matching `^DISPATCH issue=<n> ` where
-   `<n>` is this run's issue number. INPUT is `claude_docs/session_notes.md`; each
-   matching line becomes one `dispatches[]` entry carrying the 6 schema fields
-   (`role`, `subagent_type`, `model`, `effort`, `outcome`, `resolution`) —
-   `issue=<n>` is the scoping key ONLY, it is NOT itself a record field. A
-   literal `null` in the `model`/`effort` capture position becomes JSON `null`,
-   never the string `"null"`. Entries preserve note order (the order the lines
-   appear in the session-notes file) and are NEVER deduplicated — two
-   identical lines are two distinct dispatches (e.g. Step 8a's two
-   identically-configured reviewers). Malformed detection operates on this
-   issue's lines: any line whose STRIPPED content starts `DISPATCH issue=<n> `
-   but that fails the canonical regex (`shared/blocks/model-routing-resolve.md`)
-   — including an indented or list-bulleted line the flush-left `^DISPATCH`
-   grep would otherwise miss — is skipped and COUNTED in an extra note
-   `{"label": "dispatch capture notes", "value": "skipped <n> malformed
-   DISPATCH line(s)"}` — a malformed capture line never fails the record and
-   is never silently lost. (A `DISPATCH` line carrying NO parseable `issue=`
-   field is unattributable to any run and stays outside this issue's assembly.) Zero well-formed lines for this issue → OMIT the
-   `dispatches` key entirely (never an empty array). Assembly does NOT compare
-   against the start-time observability line count — under-count detection is
-   owned entirely by WF14's dispatch-completeness rubric. OUTPUT is the
-   `dispatches` key of `/tmp/wf2-run-record-<issue>-<session-id>.json`; the full schema shape lives
-   in `references/run-record.md`.
+2d. **dispatches[] (legacy key):** the retreat removed the dispatch machinery, so a current
+   run emits no `DISPATCH` lines — OMIT the `dispatches` key entirely (never an empty
+   array). The key remains valid on historical records (`references/run-record.md`).
 
-2e. **Telemetry sidecar + advisory alerts (#473, W11) — BEFORE summarize.** The run-record
-   assembled above MUST carry the additive `run_id` (this run's executor run id, e.g.
-   `wf2-<issue>-<session>`) and, on each reviewed gate, the deduplicated `findings_critical` /
-   `findings_high` counts (the I3 join key + the review-anomaly baseline input; both are
-   optional-additive in `validate_record`, absent on legacy records). Then harvest the run's
-   seat Observations into the durable I3 sidecar and fold any FIRED advisory alerts into the
-   record's `extra` — never a gate, never blocking:
-   ```bash
-   python3 hooks/seat_outcomes_lib.py run-end \
-     --run-id <this run's run_id> \
-     --record-file /tmp/wf2-run-record-<issue>-<session-id>.json \
-     --project-root <activeProject.path> --json
-   ```
-   Then, **via a Python JSON read-modify-write** (never shell interpolation into the record),
-   append each object in the verb's `extra_rows` to the record's `extra` list, and append the
-   verb's `advisory_block` to session notes. **Every one of these operations — the `run-end`
-   invocation, the JSON fold, and the session-note append — is loud-log-and-continue on ANY
-   failure:** telemetry is advisory (AC-K3) and MUST NOT block Step 16. A nonzero `run-end`
-   exit, a fold error, or a note-append error is logged and the workflow proceeds to
-   `summarize` unchanged. (The sidecar's own contract — non-destructive locked harvest,
-   redaction, baselines, the `telemetryAlerts` config — lives in `docs/run-records.md`.)
+2e. **Gate severity counts (#473):** on each reviewed gate, carry the deduplicated
+   `findings_critical` / `findings_high` counts computed at that gate's close
+   (optional-additive in `validate_record`, absent on legacy records). The
+   seat-Observation sidecar harvest retired with the executor.
 
 3. **Render + persist.** Carry `activeProject.path` in as a literal (shell vars
    do not persist across Bash tool calls):

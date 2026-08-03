@@ -17,8 +17,8 @@ non-negative integers and `resolved` may not exceed `findings`:
   "changes": {"files_changed": N, "insertions": N|null, "deletions": N|null,
               "commits": N},
   "tests": {"added": N, "passing": N|null, "total": N|null},
-  "run_id": "<executor run id, e.g. wf2-<issue>-<session>>",  // #473 additive; the I3<->I2 join key (optional; grammar-safe component)
-  "architecture": "executor|legacy",  // #474 REQUIRED at workflow_version >= 3.93.0: the run's declared dispatch architecture (from begin-run / the workspace defaultArchitecture)
+  "run_id": "<run id, e.g. wf2-<issue>-<session>>",  // #473 additive; legacy sidecar join key (optional; grammar-safe component)
+  "architecture": "inline|executor|legacy",  // OPTIONAL-legacy since M0b (#866): current runs record "inline"; executor/legacy remain valid on historical records
   "gates": [
     {"step": "4",  "name": "Design Critique",       "findings": N, "resolved": N, "status": "pass|fail|skipped|fast_path",
      "findings_critical": N, "findings_high": N,   // #473 additive; both-or-neither, sum <= findings (feeds review_findings_p90)
@@ -108,10 +108,10 @@ gate that records one MUST record the other, and `findings_critical + findings_h
 exceed `findings` (`validate_record` enforces). These feed the I3 `review_findings_p90` advisory
 alert (`docs/run-records.md`).
 
-**`run_id` (OPTIONAL, #473):** the executor run id (e.g. `wf2-<issue>-<session>`) — the join
-key linking this run-record to its `seat-outcomes.jsonl` sidecar rows. Grammar-bounded
-(`[A-Za-z0-9._-]`, 1..120) when present; omitted on legacy records (validate_record tolerates
-absence). Set it at assembly (Step 16 item 2e).
+**`run_id` (OPTIONAL, #473):** a run id (e.g. `wf2-<issue>-<session>`) — historically the
+join key linking executor-era run-records to their `seat-outcomes.jsonl` sidecar rows.
+Grammar-bounded (`[A-Za-z0-9._-]`, 1..120) when present; absence is valid and is the norm
+since the executor retreat (#866).
 
 **`lane` (OPTIONAL, #135):** `"small-standard"` when the run took the `<small-standard-lane>`,
 `"full"` otherwise. Unlike the required keys above, `lane` may be **omitted** — `validate_record`
@@ -180,11 +180,10 @@ line in place — use `python3 hooks/usage_capture.py backfill --records docs/me
 pristine drift-guard test validates the whole committed store in CI, so a malformed hand-edit is
 caught the same way a bad writer output would be.
 
-**`dispatches` (OPTIONAL, #330):** a **structured list** of per-dispatch telemetry, one entry
-per canonical `DISPATCH` audit line (`shared/blocks/model-routing-resolve.md`)
-emitted this run. The producer of each line is the executor result dict on the primary tier
-(`resolution=primary`) or — legacy architecture only — the Agent-tool subagent (`resolution=fallback`) — the
-line grammar and the six schema fields are unchanged either way (#470). It follows the same *validated-optional* pattern as `usage`/`verification_deferred`
+**`dispatches` (OPTIONAL, #330 — legacy since the executor retreat, #866):** a **structured
+list** of per-dispatch telemetry, one entry per canonical `DISPATCH` audit line emitted by an
+executor-era run. A current run emits no `DISPATCH` lines and OMITS the key; the schema below
+remains valid for historical records. It follows the same *validated-optional* pattern as `usage`/`verification_deferred`
 (NOT the unvalidated-passthrough pattern of `lane`): **absent** is fine — old records stay valid, no
 schema version bump — but **present is strict**: each entry must carry all six fields
 (`role`, `subagent_type`, `model`, `effort`, `outcome`, `resolution`), and `role`/`outcome`/`resolution`
@@ -196,9 +195,9 @@ the §16 assembly instruction above (grep `^DISPATCH issue=<n> `, map to entries
 malformed lines, never dedup); zero well-formed lines for this issue means the key is **omitted
 entirely**, never an empty array.
 
-**Routing telemetry on `dispatches[]` entries (OPTIONAL, #420):** each dispatch entry MAY carry
-additional per-dispatch routing-telemetry fields, populated once the executor is wired into the WF
-prose (#470; the executor's Observation supplies them on the primary tier): `preferred_model` (str|null — the routed/requested
+**Routing telemetry on `dispatches[]` entries (OPTIONAL, #420 — executor-era records only):**
+each dispatch entry MAY carry additional per-dispatch routing-telemetry fields (supplied by the
+executor's Observation before the retreat): `preferred_model` (str|null — the routed/requested
 model), `actual_model` (str|null — the provider-reported id), `fallback_reason` (str|null),
 `queued_ms` (int|null — quota queue wait), `concurrency` (int|null — observed concurrent-permit
 count, for ≤3-ceiling visibility), and `selector` (object|null — `{risk_level, complexity, ceiling}`,
