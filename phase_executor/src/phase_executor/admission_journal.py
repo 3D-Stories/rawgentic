@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from .capture import sanitize_component
+from .platform_gate import assert_posix_primitives
 
 _JOURNAL_NAME = "admission.jsonl"
 
@@ -91,6 +92,10 @@ class AdmissionJournal:
     """Append + hardened-parse one issue's ``admission.jsonl``."""
 
     def __init__(self, journal_dir, issue_key: str) -> None:
+        # Assert the primitives this journal's atomicity rests on BEFORE it can be used. A gate
+        # with no call site is the exact defect #855 exists to remove, so it is enforced here
+        # rather than left for a caller to remember.
+        assert_posix_primitives()
         self.issue_key = str(issue_key)
         # sanitize_component is the same guard the capture root already applies to run_id
         # (executor_routing_lib builds the run dir with it), so a hostile issue key cannot
