@@ -72,7 +72,9 @@ def _validate(rec, where: str) -> dict:
     if not isinstance(rec, dict):
         raise AdmissionJournalError(f"{where}: record must be an object, got {type(rec).__name__}")
     kind = rec.get("kind")
-    if kind not in _KINDS:
+    # `in` on a set raises TypeError for an unhashable value (a list/dict kind), which would leak
+    # out of this module's "malformed input raises AdmissionJournalError" contract.
+    if not isinstance(kind, str) or kind not in _KINDS:
         raise AdmissionJournalError(f"{where}: unknown kind {kind!r}")
     keys = frozenset(rec)
     if keys != _KIND_KEYS[kind]:
@@ -91,7 +93,7 @@ def _validate(rec, where: str) -> dict:
         v = rec.get(f)
         if not isinstance(v, int) or isinstance(v, bool) or v < 0:
             raise AdmissionJournalError(f"{where}: {f} must be a non-negative int")
-    if rec["workflow"] not in _WORKFLOWS:
+    if not isinstance(rec["workflow"], str) or rec["workflow"] not in _WORKFLOWS:
         raise AdmissionJournalError(
             f"{where}: workflow {rec['workflow']!r} not in {sorted(_WORKFLOWS)}")
     return dict(rec)
@@ -180,12 +182,13 @@ class AdmissionJournal:
                 except OSError as e:
                     raise AdmissionJournalError(
                         f"journal {self.path}: cannot create issue dir ({e})") from e
-            try:
-                return os.open(self.component,
-                               os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
-            except OSError as e:  # ELOOP = a symlinked issue dir; ENOTDIR = not a directory
-                raise AdmissionJournalError(
-                    f"journal {self.path}: issue dir unopenable ({e})") from e
+            # OSError propagates with its errno intact. The read path needs to tell a genuine
+            # ENOENT (nothing written yet) from ELOOP/ENOTDIR/EACCES, and an earlier revision
+            # decided that with a pathname `.exists()` check — which FOLLOWS symlinks, so a
+            # dangling issue-directory symlink read as "absent" and returned empty state. That is
+            # a fail-OPEN in the one module that must never have one; two reviewers caught it.
+            return os.open(self.component,
+                           os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
         finally:
             os.close(root_fd)
 
@@ -204,12 +207,16 @@ class AdmissionJournal:
     def _read_text_nofollow(self) -> Optional[str]:
         try:
             dir_fd = self._open_issue_dir(create=False)
-        except AdmissionJournalError:
-            if not self.root.exists() or not (self.root / self.component).exists():
-                return None                 # nothing written yet is a legitimate empty state
-            raise
+        except FileNotFoundError:
+            return None                     # nothing written yet is a legitimate empty state
+        except OSError as e:                # ELOOP / ENOTDIR / EACCES all fail CLOSED
+            raise AdmissionJournalError(
+                f"journal {self.path}: issue dir unopenable ({e})") from e
         try:
-            fd = os.open(_JOURNAL_NAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+            # O_NONBLOCK so a FIFO leaf cannot park this read forever before _assert_plain_file
+            # gets to refuse it — the refusal has to be reachable to be a refusal.
+            fd = os.open(_JOURNAL_NAME,
+                         os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
         except FileNotFoundError:
             return None
         except OSError as e:  # ELOOP (symlink) and friends fail closed
@@ -257,23 +264,28 @@ class AdmissionJournal:
     # -- appending -------------------------------------------------------------
 
     def _open_locked(self, timeout: Optional[float]) -> int:
-        dir_fd = self._open_issue_dir(create=True)
         try:
-            existed = True
+            dir_fd = self._open_issue_dir(create=True)
+        except OSError as e:
+            raise AdmissionJournalError(
+                f"journal {self.path}: issue dir unopenable ({e})") from e
+        try:
             try:
-                os.stat(_JOURNAL_NAME, dir_fd=dir_fd, follow_symlinks=False)
-            except FileNotFoundError:
-                existed = False
-            try:
-                fd = os.open(_JOURNAL_NAME, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600,
+                fd = os.open(_JOURNAL_NAME,
+                             os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600,
                              dir_fd=dir_fd)
             except OSError as e:
                 raise AdmissionJournalError(
                     f"journal {self.path}: unopenable for append ({e})") from e
-            if not existed:
-                # The new file's directory ENTRY must be durable, not just its contents — without
-                # this the first reservation is unreachable after a crash.
+            try:
+                # fsync the issue directory on EVERY append, not only on first create. Deciding
+                # "was it new?" from a prior stat is a race, and a leaked fd from a raising fsync
+                # was the alternative bug — this is both cheaper to reason about and always right.
                 os.fsync(dir_fd)
+            except OSError as e:
+                os.close(fd)               # the leaf fd must not leak if the fsync raises
+                raise AdmissionJournalError(
+                    f"journal {self.path}: directory fsync failed ({e})") from e
         finally:
             os.close(dir_fd)
         try:

@@ -1,5 +1,10 @@
 """#855 — hardening the admission journal, from the Step-8a review wave.
 
+Two tests that lived here were SUPERSEDED by stronger versions in
+``test_admission_step11_fixes.py`` after the Step-11 review found them too weak: a durability
+assertion that accepted any fsync rather than the specific fds, and a "short read" that actually
+simulated premature EOF. They were removed rather than left as coverage that looks like proof.
+
 Every test here exists because a reviewer named the defect. Both reviewers independently found the
 same three: the platform gate REQUIRED ``dir_fd`` support and the journal then opened by pathname
 anyway; durability stopped at the file and never reached its directory entry; and the size/record
@@ -74,18 +79,6 @@ def test_fifo_leaf_is_refused(tmp_path):
 
 # -- durability reaches the directory entry (M2 / S4) -------------------------------------------
 
-def test_first_create_fsyncs_the_directory_entry(tmp_path, monkeypatch):
-    """Without this the first reservation is not reachable after a crash: the file's contents are
-    durable but the name that finds it is not."""
-    synced = []
-    real = os.fsync
-    monkeypatch.setattr(os, "fsync", lambda fd: (synced.append(os.fstat(fd).st_mode), real(fd))[1])
-    _j(tmp_path).append(_rec())
-    import stat as _stat
-    assert any(_stat.S_ISDIR(m) for m in synced), "a directory fd must be fsynced on first create"
-    assert any(_stat.S_ISREG(m) for m in synced), "the journal file must be fsynced too"
-
-
 # -- prospective limits (M3 / S6) ---------------------------------------------------------------
 
 def test_append_that_would_cross_the_byte_cap_is_refused(tmp_path, monkeypatch):
@@ -137,20 +130,6 @@ def test_short_write_is_completed_not_reported_as_success(tmp_path, monkeypatch)
     j.append(_rec())
     monkeypatch.undo()
     assert len(j.read()) == 1                    # the record is COMPLETE and parses
-
-
-def test_short_read_raises_rather_than_hiding_records(tmp_path, monkeypatch):
-    """A short read ending on a line boundary would silently hide later reservations from
-    precheck — a fail-OPEN, the one direction this module must never take."""
-    j = _j(tmp_path)
-    j.append(_rec(slot="a"))
-    j.append(_rec(slot="b"))
-
-    real = os.read
-    monkeypatch.setattr(os, "read", lambda fd, n: real(fd, min(n, 5)) and b"")
-
-    with pytest.raises(AJ.AdmissionJournalError):
-        j.read()
 
 
 # -- closed schema and write-side type discipline (S5 / M6) ------------------------------------

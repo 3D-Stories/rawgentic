@@ -59,6 +59,9 @@ class LedgerError(RuntimeError):
 _ADMISSION_STR_FIELDS = ("issue_key", "gate", "digest", "slot", "fencing_token")
 _ADMISSION_INT_FIELDS = ("schema_version", "generation", "attempt")
 _ADMISSION_WORKFLOWS = frozenset({"wf2", "wf3"})
+#: An unknown version must not be parsed as though its semantics were supported.
+_ADMISSION_SCHEMA_VERSIONS = frozenset({1})
+_ADMISSION_MAX_STR = 512
 _ADMISSION_KEYS = frozenset(_ADMISSION_STR_FIELDS + _ADMISSION_INT_FIELDS + ("workflow",))
 
 
@@ -79,12 +82,19 @@ def _validate_review_admission(obj, where: str) -> dict:
     for f in _ADMISSION_STR_FIELDS:
         if not isinstance(obj[f], str) or not obj[f]:
             raise LedgerError(f"{where}: review_admission.{f} must be a non-empty string")
+        if len(obj[f]) > _ADMISSION_MAX_STR:
+            raise LedgerError(
+                f"{where}: review_admission.{f} exceeds {_ADMISSION_MAX_STR} characters")
     for f in _ADMISSION_INT_FIELDS:
         # bool is an int subclass; a True slipping in as a generation would compare and sort
         # like 1 and corrupt the state machine silently.
         if not isinstance(obj[f], int) or isinstance(obj[f], bool) or obj[f] < 0:
             raise LedgerError(f"{where}: review_admission.{f} must be a non-negative int")
-    if obj["workflow"] not in _ADMISSION_WORKFLOWS:
+    if obj["schema_version"] not in _ADMISSION_SCHEMA_VERSIONS:
+        raise LedgerError(
+            f"{where}: review_admission.schema_version {obj['schema_version']!r} not in "
+            f"{sorted(_ADMISSION_SCHEMA_VERSIONS)}")
+    if not isinstance(obj["workflow"], str) or obj["workflow"] not in _ADMISSION_WORKFLOWS:
         raise LedgerError(
             f"{where}: review_admission.workflow {obj['workflow']!r} not in "
             f"{sorted(_ADMISSION_WORKFLOWS)}")
@@ -259,8 +269,21 @@ class ExpectedCallLedger:
             state = self._parse(text) if text.strip() else LedgerState()
             precheck(state)  # raises LedgerError on an illegal transition (HELD under the lock)
             payload = (json.dumps({"run_id": self.run_id, **rec}, sort_keys=True) + "\n").encode("utf-8")
+            # Prospective cap: checking only the pre-append size lets one legal append cross it and
+            # leave a ledger every later read refuses.
+            if st.st_size + len(payload) > MAX_LEDGER_BYTES:
+                raise LedgerError(
+                    f"ledger {self.path}: append would reach {st.st_size + len(payload)} bytes, "
+                    f"over cap {MAX_LEDGER_BYTES}")
             os.lseek(fd, 0, os.SEEK_END)
-            os.write(fd, payload)
+            written = 0
+            while written < len(payload):   # os.write may write short
+                n = os.write(fd, payload[written:])
+                if n <= 0:
+                    raise LedgerError(
+                        f"ledger {self.path}: wrote {written} of {len(payload)} bytes")
+                written += n
+            os.fsync(fd)                    # a completed append must be crash-durable
         finally:
             os.close(fd)  # releases the flock
 
