@@ -50,7 +50,8 @@ DEFAULT_STORE_RELPATH = ("docs", "measurements", "seat-outcomes.jsonl")
 # (a drift test pins these against the live schema). An off-vocab value redacts to null.
 PARSE_STATUS_ENUM = frozenset({
     "ok", "nonzero_exit", "timeout", "launch_error", "parse_error", "no_response",
-    "identity_failure", "usage_unavailable", "harness_error"})
+    "identity_failure", "usage_unavailable", "harness_error",
+    "budget_exhausted"})   # #852 — omitting it here redacted a valid status to null
 PROMOTION_STATUS_ENUM = frozenset({"not_attempted", "promoted", "not_promoted", "failed"})
 CANARY_VERDICT_ENUM = frozenset({"pass", "refuse"})
 

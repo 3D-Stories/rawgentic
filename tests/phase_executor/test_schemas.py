@@ -298,11 +298,23 @@ def test_observation_schema_dispatches_by_version():
         contract.observation_schema("99")
 
 
-def test_validate_observation_dispatches_v1_and_v2():
-    """A v1 doc (kukakuka fixture) validates via dispatch -> frozen v1; a v2 doc via -> v2."""
-    v1 = _load(FIXTURES / "kukakuka-observation.json")
-    contract.validate_observation(v1)  # dispatch -> frozen v1
-    contract.validate_observation(_obs_ok())  # v2 -> v2
+def test_validate_observation_dispatches_every_version():
+    """A v1 doc (kukakuka fixture) -> frozen v1; an explicitly-v2 doc -> frozen v2; the current doc
+    -> v3. #852 review finding 4: after `_obs_ok()` moved to v3, this test had stopped exercising v2
+    at all while still claiming to — real coverage of the frozen copy, silently gone."""
+    contract.validate_observation(_load(FIXTURES / "kukakuka-observation.json"))   # -> frozen v1
+    v2 = dict(_obs_ok(), schema_version="2")
+    contract.validate_observation(v2)                                             # -> frozen v2
+    contract.validate_observation(_obs_ok())                                       # -> current v3
+
+
+def test_a_v3_only_value_is_rejected_on_a_v2_declared_doc():
+    """The freeze guarantee, executed rather than asserted about: `budget_exhausted` on a doc that
+    declares schema_version 2 must fail closed, which is exactly why the enum could not be widened
+    in place."""
+    doc = dict(_obs_ok(), schema_version="2", parse_status="budget_exhausted")
+    with pytest.raises(Exception):
+        contract.validate_observation(doc)
 
 
 def test_validate_observation_unknown_version_fails_closed():

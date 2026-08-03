@@ -157,7 +157,11 @@ def resolve_parse_status(parsed: ParsedResult, requested_model: str, *, timed_ou
     # #852: BEFORE the exit-code branch, because a cost trip exits non-zero and would otherwise
     # read as an ordinary crash — the misclassification that burns the whole fallback chain. A
     # timeout or launch error still wins above: those are what they are, whatever the envelope says.
-    if isinstance(parsed.terminal, dict) and parsed.terminal.get("subtype") in contract.COST_ABORT_SUBTYPES:
+    if (isinstance(parsed.terminal, dict)
+            and parsed.terminal.get("subtype") in contract.COST_ABORT_SUBTYPES
+            # Corroborated, not taken on one field: a contradictory envelope (cost subtype with a
+            # different terminal_reason) is NOT reclassified away from its process outcome.
+            and parsed.terminal.get("terminal_reason") == contract.BUDGET_EXHAUSTED):
         return contract.BUDGET_EXHAUSTED
     if exit_code not in (0, None):
         return contract.NONZERO_EXIT

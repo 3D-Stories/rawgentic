@@ -119,7 +119,9 @@ def _terminal_from(env: dict) -> Optional[dict]:
     preserved is this evidence, which previously lived only in ``transport.stdout.txt`` and went
     unread for an entire retrospective.
     """
-    if not env.get("is_error"):
+    # Exact type, not truthiness: this envelope is untrusted subprocess output, and a
+    # wrong-typed `is_error` must not gate a classification decision.
+    if env.get("is_error") is not True:
         return None
     out = {}
     for k in ("terminal_reason", "subtype"):

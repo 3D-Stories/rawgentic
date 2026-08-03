@@ -113,6 +113,11 @@ def observation_process_failure(obs) -> Optional[str]:
         exit_code = None  # bool is an int subclass; neither is process-exit evidence
     if proc.get("timed_out") is True or status == TIMEOUT:
         return TIMEOUT
+    # #852: BEFORE the exit-code branch. A cost abort exits non-zero, so without this every
+    # downstream consumer reads it back as `nonzero_exit` and the distinct classification made at
+    # resolve time is silently undone here — which is the whole defect, one layer down.
+    if status == BUDGET_EXHAUSTED:
+        return BUDGET_EXHAUSTED
     if exit_code is not None and exit_code != 0:
         return "signalled" if exit_code < 0 else NONZERO_EXIT
     if not isinstance(status, str):

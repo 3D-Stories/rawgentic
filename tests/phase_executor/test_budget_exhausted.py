@@ -157,3 +157,42 @@ def test_a_clean_observation_omits_terminal_entirely():
     d = obs.to_dict()
     assert "terminal" not in d
     contract.validate_observation(d)
+
+
+# -- from the #852 code review --------------------------------------------------------------------
+
+def test_downstream_failure_reason_is_not_nonzero_exit():
+    """Review finding 1 (High). `resolve_parse_status` returning BUDGET_EXHAUSTED is not enough:
+    `observation_process_failure` tested the positive exit code FIRST, so every downstream consumer
+    read the trip back as `nonzero_exit` and the distinct classification was undone one layer down.
+    My original test only asserted the reason was non-None, which is exactly the assertion that
+    cannot catch this.
+    """
+    reason = contract.observation_process_failure(
+        {"parse_status": contract.BUDGET_EXHAUSTED,
+         "process": {"exit_code": 1, "timed_out": False}, "parsed_payload": None})
+    assert reason == contract.BUDGET_EXHAUSTED, f"got {reason!r} — the classification was undone"
+
+
+def test_a_timeout_still_outranks_the_budget_signal_downstream():
+    assert contract.observation_process_failure(
+        {"parse_status": contract.BUDGET_EXHAUSTED,
+         "process": {"exit_code": 1, "timed_out": True}, "parsed_payload": None}) == contract.TIMEOUT
+
+
+@pytest.mark.parametrize("env,why", [
+    ({**BUDGET, "is_error": "true"}, "a wrong-TYPED is_error must not gate classification"),
+    ({**BUDGET, "is_error": 1}, "truthy-but-not-True must not gate classification"),
+])
+def test_wrong_typed_is_error_yields_no_terminal_evidence(env, why):
+    """Review finding 3 (Medium): the envelope is untrusted subprocess output."""
+    assert claude_cli.parse_claude(env, requested_model=MODEL).terminal is None, why
+
+
+def test_a_contradictory_envelope_is_not_reclassified():
+    """Cost subtype but a different terminal_reason: corroboration fails, so the process outcome
+    stands rather than a single attacker-chosen field deciding the status."""
+    env = {**BUDGET, "terminal_reason": "something_else"}
+    parsed = claude_cli.parse_claude(env, requested_model=MODEL)
+    assert base.resolve_parse_status(
+        parsed, MODEL, timed_out=False, exit_code=1, launch_error=None) == contract.NONZERO_EXIT

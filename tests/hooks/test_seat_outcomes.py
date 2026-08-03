@@ -972,3 +972,22 @@ class TestStep11FinalResiduals:
                              capture_output=True, text=True, cwd=str(tmp_path))
         assert res.returncode == 0, res.stderr
         assert "telemetry harvest:" in res.stdout and "rows_appended=1" in res.stdout
+
+
+def test_parse_status_enum_matches_the_live_observation_schema():
+    """#852 review finding 2: `PARSE_STATUS_ENUM`'s own comment claims "a drift test pins these
+    against the live schema" — and no such test existed, which is why `budget_exhausted` was
+    missing here and a valid status redacted to null in every derived seat outcome.
+
+    A comment asserting a guard that does not exist is worse than no comment: it stops the next
+    person looking. This is that guard.
+    """
+    import seat_outcomes_lib as sol
+
+    schema = json.loads(
+        (REPO_ROOT
+         / "phase_executor/src/phase_executor/schemas/observation.schema.json").read_text())
+    live = set(schema["properties"]["parse_status"]["enum"])
+    assert set(sol.PARSE_STATUS_ENUM) == live, (
+        "seat_outcomes_lib.PARSE_STATUS_ENUM has drifted from the Observation schema; a status "
+        "present in the schema but absent here is silently redacted to null")
