@@ -41,7 +41,7 @@ def test_marketplace_registers_skill():
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "3.121.0"
+    assert plugin["version"] == "3.122.0"
 
 
 def test_descriptions_consistent_count():
@@ -375,22 +375,12 @@ def test_config_reference_scope_out_dropped():
     assert "does not yet collect" not in doc
 
 
-# --- #446: setup Step 2i — phase-executor seat table ---
+# --- M0c (#866): setup Step 2i (phase-executor seat table) removed with its config surface ---
 
-def test_setup_has_step_2i():
+def test_setup_has_no_step_2i():
     text = skill_corpus("setup")
-    assert "Step 2i" in text
-    assert "phaseExecutorTable" in text
-    assert "show-table" in text and "apply-table" in text
-    # #531: declining/keeping defaults stages the answered-defaults sentinel so the
-    # staleness nudge can record the answer (presence = answered); resolution stays
-    # package-default. The old "stages nothing" contract looped the nudge forever.
-    # Whitespace-normalized: the sentence wraps across lines in the skill prose.
-    flat = " ".join(text.lower().replace("**", "").split())
-    assert "stages the answered-defaults sentinel" in flat
-    assert '"file": null' in text
-    # A2/Step-6 staging: the pointer is applied at the .rawgentic.json write (Step 6), not Step 8.
-    assert "phaseExecutorTable" in _section(text, "## Step 6:", "## Step 7:")
+    assert "Step 2i" not in text
+    assert "phaseExecutorTable" not in text
 
 
 def test_manifest_project_config_entries_have_setup_anchor():

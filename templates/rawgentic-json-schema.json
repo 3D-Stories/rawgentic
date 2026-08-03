@@ -13,32 +13,6 @@
     "fullName": "org/repo-name",
     "defaultBranch": "main"
   },
-  "phaseExecutorTable": {
-    "$comment": "OPTIONAL versioned descriptor naming the project-owned phase-executor seat-table file (#445): a project-relative path to a routing-table JSON (phase_executor routing-table.schema.json) that is a complete replacement for the package default, never a merge overlay. Absent section = package default. The answered-defaults sentinel {\"version\": 1, \"file\": null} (#531) also resolves package-default \u2014 setup Step 2i stages it on decline/keep-defaults so key presence records the answer and the staleness nudge stops. This template is a reference example only \u2014 the executable validation contract lives in capabilities_lib (derive fails closed on any present-but-invalid section: version must be 1; file must be a relative path with no '..' \u2014 or the explicit null sentinel). Seeded/tweaked by /rawgentic:setup (#446).",
-    "version": 1,
-    "file": "claude_docs/routing/phase-executor-table.json"
-  },
-  "executorTerminalBackend": {
-    "$comment": "OPTIONAL versioned descriptor selecting which TerminalBackend the executor's build seat launches under (#638, epic #635 C2): \"tmux\" (package default) or \"herdr\" \u2014 tmux stays the default until herdr is independently proven; every other seat is unaffected. Absent section = \"tmux\", the only silent default. This template is a reference example only \u2014 the executable validation contract lives in capabilities_lib (derive fails closed on any present-but-invalid section: version must be 1; build must be \"tmux\" or \"herdr\").",
-    "version": 1,
-    "build": "tmux"
-  },
-  "telemetryAlerts": {
-    "$comment": "OPTIONAL per-project config for the #473 I3 seat-outcomes advisory alerts (AC-K5). ADVISORY only \u2014 no rule here can ever gate/block a run. Absent section (or the answered-defaults sentinel {\"version\": 1}) = all defaults. `enabled: false` disables evaluation (harvest still runs). windowSize (int 1..1000, default 30) + minSamples (int 1..windowSize, default 5) size the rolling baselines. thresholds: COUNT rules (fallback_fired, dispatch_failures) take false|non-negative-int (false disables that rule); TOGGLE rules (model_mismatch, parse_failure, seat_wall_time_p90, seat_cost_p90, review_findings_p90) take a bool. This template is a reference example only \u2014 the executable STRICT validation contract lives in hooks/seat_outcomes_lib.py (validate_telemetry_alerts; the `validate-config` CLI verb; setup Step 2j stages it, runtime load_thresholds fails open to these defaults). Seeded/tweaked by /rawgentic:setup Step 2j (#446).",
-    "version": 1,
-    "enabled": true,
-    "windowSize": 30,
-    "minSamples": 5,
-    "thresholds": {
-      "fallback_fired": 0,
-      "dispatch_failures": 0,
-      "model_mismatch": true,
-      "parse_failure": true,
-      "seat_wall_time_p90": true,
-      "seat_cost_p90": true,
-      "review_findings_p90": true
-    }
-  },
   "contextMeter": {
     "$comment": "OPTIONAL context-pressure trigger tuning (#687, hooks/context_meter.py). Absent section = defaults (200000/60/70/5/300). Each key has an env twin that takes precedence (RAWGENTIC_CONTEXT_WINDOW, _CHECKIN_PCT, _ACT_PCT, _EVERY_TURNS, _EVERY_SECONDS). windowSize is the one worth setting: a session's model name does not reveal its context window, so it is declared and defaults conservatively to 200000. See docs/context-meter.md.",
     "windowSize": 1000000,

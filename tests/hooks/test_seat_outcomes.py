@@ -741,27 +741,19 @@ class TestStep16Wiring:
                 f"{skill}: the run-record summarize call must survive the retreat")
 
 
-class TestConfigSurfaceAgreement:
-    def test_template_and_defaults_agree_on_rules(self):
+class TestConfigSurfaceRetired:
+    """M0c (#866): the telemetryAlerts CONFIG surface (setup Step 2j, template
+    example, config-reference section) is retired. The lib's runtime handling —
+    load_thresholds fail-open, validate-config CLI — survives until M0d deletes
+    the lib with its consumers, so absent-config defaults stay tested above."""
+
+    def test_template_carries_no_telemetry_alerts_example(self):
         tmpl = json.loads((REPO_ROOT / "templates" / "rawgentic-json-schema.json").read_text())
-        tmpl_rules = set(tmpl["telemetryAlerts"]["thresholds"])
-        assert tmpl_rules == set(so.DEFAULT_THRESHOLDS)
+        assert "telemetryAlerts" not in tmpl
 
-    def test_config_reference_documents_the_key(self):
-        cr = (REPO_ROOT / "docs" / "config-reference.md").read_text()
-        assert "telemetryAlerts" in cr
-        for rule in so.DEFAULT_THRESHOLDS:
-            assert rule in cr, f"rule {rule} not documented in config-reference"
-
-    def test_template_defaults_match_code_defaults(self):
-        tmpl = json.loads((REPO_ROOT / "templates" / "rawgentic-json-schema.json").read_text())
-        assert tmpl["telemetryAlerts"]["thresholds"] == so.DEFAULT_THRESHOLDS
-        assert tmpl["telemetryAlerts"]["windowSize"] == so.DEFAULT_WINDOW
-        assert tmpl["telemetryAlerts"]["minSamples"] == so.DEFAULT_MIN_SAMPLES
-
-    def test_setup_step_2j_present(self):
+    def test_setup_no_longer_stages_the_key(self):
         s = (REPO_ROOT / "skills" / "setup" / "SKILL.md").read_text()
-        assert "Step 2j" in s and "telemetryAlerts" in s and "validate-config" in s
+        assert "telemetryAlerts" not in s and "Step 2j" not in s
 
 
 # ---------------------------------------------------------------------------

@@ -9,9 +9,9 @@ workspace config against the current feature manifest:
   - auto-on (opt-OUT) features whose flag is ABSENT are turned on by default;
     an explicit opt-out already on record (the flag present with any value) is
     HONORED and left alone,
-  - opt-in features (headlessEnabled — grants external-orchestrator access) are
-    never force-enabled,
-  - answer-required features (adversarialReview/WF5, modelRouting, peerConsult,
+  - opt-in features are never force-enabled (none ship today; the policy exists
+    for future features that grant outside access),
+  - answer-required features (adversarialReview/WF5, peerConsult,
     designArtifact — each needs setup answers) are never silently enabled;
     instead the user is NUDGED to run /rawgentic:setup — but ONLY when the
     version jump actually crossed the feature's `since` (the plugin version
@@ -44,40 +44,33 @@ STATE_FILENAME = "rawgentic-reconciled-version"
 # {"key": ..., "policy": "auto-on", "default_value": ...} entry and it will flip
 # on automatically after the next plugin update (honoring recorded opt-outs).
 # Today there are no auto-on entries: the security scanners are install-managed by
-# scanner_bootstrap.py rather than a per-project workspace flag, headless is opt-in,
-# and the rest are answer-required. The framework exists so future features get
-# this for free.
+# scanner_bootstrap.py rather than a per-project workspace flag, and the rest are
+# answer-required. The framework exists so future features get this for free.
 #
 # `since` = the plugin version whose release introduced the feature's setup step
 # (from git history of skills/setup/). needs-question nudges fire only when the
 # reconciled-version jump crosses `since` (#184). Every entry here must match a
 # workspace field staged by skills/setup/SKILL.md — a drift-guard test enforces
 # the two sets stay equal, so a new setup opt-in step MUST add an entry here.
+#
+# A feature whose key lives in the PROJECT's .rawgentic.json (not the workspace
+# entry) carries `"source": "project_config"`: consumed ONLY by the source-aware
+# project_feature_gaps (with a parsed config passed in); reconcile_projects SKIPS
+# these entirely (its needs-question loop reads the workspace entry, where the key
+# never appears — un-skipped it would nudge every project on the version crossing,
+# even configured ones). No production row uses it today.
+#
+# M0c (#866): the headlessEnabled, modelRouting, phaseExecutorTable, and
+# executorTerminalBackend rows were removed WITH their setup steps — a manifest
+# row for a feature with no setup step nudges the user toward a step that no
+# longer exists, on every /rawgentic:switch bind, forever.
 FEATURE_MANIFEST = [
-    {"key": "headlessEnabled", "policy": "opt-in", "since": "2.18.0"},
     {"key": "adversarialReview", "policy": "needs-question",
      "nudge": "adversarial review (WF5)", "since": "2.24.0"},
-    {"key": "modelRouting", "policy": "needs-question",
-     "nudge": "model routing", "since": "2.46.0"},
     {"key": "peerConsult", "policy": "needs-question",
      "nudge": "peer consult (WF13)", "since": "2.46.0"},
     {"key": "designArtifact", "policy": "needs-question",
      "nudge": "HTML design-artifact lifecycle", "since": "2.63.0"},
-    # #446: source "project_config" = the key lives in the PROJECT's .rawgentic.json, not
-    # the workspace entry. Consumed ONLY by the source-aware project_feature_gaps (with a
-    # parsed config passed in); reconcile_projects SKIPS these entirely (its needs-question
-    # loop reads the workspace entry, where this key never appears — un-skipped it would
-    # nudge every project on the version crossing, even configured ones).
-    {"key": "phaseExecutorTable", "policy": "needs-question",
-     "nudge": "phase-executor seat table (setup Step 2i)", "since": "3.55.0",
-     "source": "project_config"},
-    # #638: which TerminalBackend the executor's `build` seat launches under. Also
-    # "project_config" — the key lives in the project's .rawgentic.json. Absent derives
-    # "tmux" (package default, unchanged behavior), so the nudge exists to surface the
-    # CHOICE, never to imply the project is broken without it.
-    {"key": "executorTerminalBackend", "policy": "needs-question",
-     "nudge": "executor terminal backend (setup Step 2k)", "since": "3.98.0",
-     "source": "project_config"},
 ]
 
 

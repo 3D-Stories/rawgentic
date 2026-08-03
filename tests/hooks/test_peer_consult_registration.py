@@ -39,11 +39,13 @@ def test_wf2_step3_integration_present():
     assert "before reading" in text.lower() or "must not read" in text.lower()
 
 
-def test_setup_has_modelrouting_and_peerconsult_steps():
+def test_setup_has_peerconsult_step():
+    # M0c (#866): the modelRouting and headlessEnabled setup steps were removed
+    # with their config surfaces; the surviving staged fields are pinned here.
     text = skill_corpus("setup")
-    assert "modelRouting" in text
+    assert "modelRouting" not in text
     assert "peerConsult" in text
-    # The Step 8 finalize write must apply all four pending fields in one
+    # The Step 8 finalize write must apply all pending fields in one
     # read-modify-write sentence, so no step's write clobbers another's field.
     match = re.search(
         r"Apply any pending per-project field changes.*?Write the file back once\.",
@@ -52,5 +54,5 @@ def test_setup_has_modelrouting_and_peerconsult_steps():
     )
     assert match, "Step 8 finalize read-modify-write sentence not found"
     finalize_sentence = match.group(0)
-    for field in ("headlessEnabled", "adversarialReview", "modelRouting", "peerConsult", "designArtifact"):
+    for field in ("adversarialReview", "peerConsult", "designArtifact"):
         assert field in finalize_sentence, f"{field!r} missing from finalize sentence"
