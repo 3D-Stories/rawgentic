@@ -157,3 +157,28 @@ class TestDecisionStoreSurvivesTheTrimmer:
             capture_output=True, text=True, timeout=20)
         assert r.returncode == 0
         assert store.read_bytes() == before
+
+
+class TestInjectionBoundIsEnforced:
+    """Round-1 review: a digits-only check accepted 999999999, and
+    `out[-999999999:]` is the entire store."""
+
+    def test_absurd_override_falls_back_to_the_default(self, make_workspace):
+        ws = make_workspace(registry_entries=[
+            {"session_id": "test-sess", "project": "testproj",
+             "project_path": "./projects/testproj"}])
+        _seed(ws.root / "claude_docs", "testproj", 200)
+        fake_home = ws.root / ".test_home"
+        fake_home.mkdir(exist_ok=True)
+        stdout, _, rc = run_hook(
+            "session-start",
+            {"session_id": "test-sess", "cwd": str(ws.root),
+             "hook_event_name": "SessionStart", "source": "startup"},
+            cwd=ws.root,
+            env_override={"HOME": str(fake_home),
+                          "RAWGENTIC_DECISION_INJECT_COUNT": "999999999"},
+        )
+        assert rc == 0
+        ctx = json.dumps(parse_hook_output(stdout) or "")
+        injected = ctx.count('\\"id\\": \\"D') + ctx.count('"id": "D')
+        assert injected <= 15, f"{injected} injected — the bound was bypassed"

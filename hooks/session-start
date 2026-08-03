@@ -581,6 +581,10 @@ _do_decision_injection() {
 
     local n="${RAWGENTIC_DECISION_INJECT_COUNT:-15}"
     case "$n" in ''|*[!0-9]*) n=15 ;; esac
+    # Clamp the range too, not just the character class. A digits-only check
+    # accepts 999999999, and `out[-999999999:]` is the whole store — which
+    # would recreate the unbounded-context failure this bound exists to stop.
+    if [ "$n" -lt 1 ] || [ "$n" -gt 100 ]; then n=15; fi
 
     local decisions
     decisions=$(python3 "$SCRIPT_DIR/decision_log.py" read \

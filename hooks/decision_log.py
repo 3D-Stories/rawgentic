@@ -38,7 +38,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-PROJECT_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+# Mirrors session-start's path-safety guard (`.*|-*|*..*|*[!A-Za-z0-9._-]*`):
+# internal dots are legal project names in this workspace, so rejecting them
+# here would silently give a project like `api.v2` no decision store at all.
+# Leading dot/dash and any `..` stay forbidden — this value becomes a path
+# component.
+PROJECT_NAME_RE = re.compile(r"^(?![.-])(?!.*\.\.)[A-Za-z0-9._-]+$")
 
 # The fields every record carries. `run` may be empty for a standalone decision.
 FIELDS = ("id", "ts", "session", "project", "run", "title", "body", "overturnable")
@@ -87,10 +92,22 @@ def append_record(state_dir, project: str, record: dict) -> Path:
     path = store_path(state_dir, project)
     path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
+    data = line.encode("utf-8")
     fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
-        os.write(fd, line.encode("utf-8"))
+        # os.write may write fewer bytes than asked (ENOSPC boundaries, large
+        # records). Ignoring the count would persist a truncated record while
+        # telling the caller the decision was saved — the precise failure this
+        # module exists to prevent. Loop, and raise if it stops making progress.
+        written = 0
+        while written < len(data):
+            n = os.write(fd, data[written:])
+            if n <= 0:
+                raise OSError(
+                    f"short write to {path}: {written}/{len(data)} bytes")
+            written += n
+        os.fsync(fd)
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)

@@ -58,18 +58,6 @@ class TestNoOp:
         # File unchanged
         assert notes_file.read_text() == original
 
-    def test_exactly_at_char_threshold_no_trim(self, tmp_path):
-        """Exactly 800 lines should NOT trigger trim (threshold is >800)."""
-        notes_file = _make_notes(tmp_path, "testproj", 800)
-        original = notes_file.read_text()
-
-        stdout, stderr, rc = _run_handler(notes_file)
-        assert rc == 0
-
-        result = json.loads(stdout.strip())
-        assert result["trimmed"] is False
-        assert notes_file.read_text() == original
-
     def test_nonexistent_file_exits_zero(self, tmp_path):
         """Missing file should exit 0 with trimmed=false."""
         fake_file = tmp_path / "nonexistent.md"
@@ -118,18 +106,6 @@ class TestTrimming:
         assert "line 8999" in content
         # The first lines (like "line 1") should be gone
         assert "line 1\n" not in content
-
-    def test_trim_just_over_char_threshold(self, tmp_path):
-        """One character over the threshold should trigger a trim."""
-        notes_file = tmp_path / "testproj.md"
-        notes_file.write_text("a" * 64_000 + "b\n")
-
-        stdout, stderr, rc = _run_handler(notes_file)
-        assert rc == 0
-
-        result = json.loads(stdout.strip())
-        assert result["trimmed"] is True
-        assert result["char_count"] == 64_002
 
     def test_trim_header_format(self, tmp_path):
         """Trimmed file should have proper header with project name and timestamp."""
@@ -269,7 +245,10 @@ def _decision_log(path: Path, name: str, n_decisions: int, n_churn: int) -> Path
         lines.append(f"### D{i} — decision: irreplaceable reasoning {i}")
         lines.append(f"Undo: revert commit abc{i}")
         lines.append("")
-    lines.extend(f"- routine step marker {i}" for i in range(n_churn))
+    # Padded so the fixture clears THRESHOLD_CHARS. Without this the file is
+    # ~850 lines but well under 64,000 chars, so deleting the exclusion logic
+    # would leave it untrimmed anyway and these tests could never fail.
+    lines.extend(f"- routine step marker {i} " + "p" * 80 for i in range(n_churn))
     f.write_text("\n".join(lines) + "\n")
     return f
 
@@ -346,6 +325,10 @@ class TestTrimIsNonDestructive:
         _run_handler(f)
         archives = sorted((tmp_path / ".notes-archive").glob("proj.md.*.archive.md"))
         assert len(archives) == 2, f"an archive was clobbered: {archives}"
+        assert any(a.name.endswith("-1.archive.md") for a in archives), (
+            "the second trim did not take a collision-suffixed name, so this "
+            "test may have passed only by crossing a wall-clock second"
+        )
         blob = "".join(a.read_text() for a in archives)
         assert "first 0\n" in blob and "second 0\n" in blob
 
@@ -367,3 +350,79 @@ class TestThresholdIsMeasuredInCharacters:
         stdout, _, _ = _run_handler(f)
         assert json.loads(stdout.strip())["trimmed"] is True
         assert len(f.read_text()) < THRESHOLD_CHARS
+
+
+class TestBoundaryAndEncodingGuards:
+    """Round-1 review findings: boundaries that were asserted but never exercised."""
+
+    def test_exactly_at_char_threshold_is_not_trimmed(self, tmp_path):
+        """Genuinely 64,000 characters. The old test used a ~7 KB fixture, so a
+        threshold regression from <= to < would not have failed anything."""
+        f = tmp_path / "proj.md"
+        f.write_text("a" * 63_999 + "\n")
+        assert len(f.read_text()) == 64_000
+        before = f.read_bytes()
+        stdout, _, _ = _run_handler(f)
+        assert json.loads(stdout.strip())["trimmed"] is False
+        assert f.read_bytes() == before
+
+    def test_one_char_over_threshold_is_considered(self, tmp_path):
+        f = tmp_path / "proj.md"
+        f.write_text("ab\n" * 21_334)          # 64,002 chars, many lines
+        assert len(f.read_text()) == 64_002
+        stdout, _, _ = _run_handler(f)
+        assert json.loads(stdout.strip())["trimmed"] is True
+
+    def test_single_oversized_line_is_not_grown(self, tmp_path):
+        """A file that is one huge line has nothing to cut. Trimming it would
+        prepend a header, make the file BIGGER, write an empty archive, and
+        report success — on every run, forever."""
+        f = tmp_path / "proj.md"
+        f.write_text("a" * 64_001)
+        before = f.read_bytes()
+        stdout, _, _ = _run_handler(f)
+        result = json.loads(stdout.strip())
+        assert result["trimmed"] is False
+        assert result["reason"] == "nothing_to_cut"
+        assert f.read_bytes() == before
+        assert not (tmp_path / ".notes-archive").exists(), "wrote an empty archive"
+
+    def test_crlf_content_is_preserved_byte_for_byte(self, tmp_path):
+        """Universal-newline translation silently ate every \\r, so the archive
+        did not actually preserve what it archived."""
+        f = tmp_path / "proj.md"
+        original = ("x" * 40 + "\r\n") * 2_000        # ~84 KB, CRLF throughout
+        f.write_bytes(original.encode("utf-8"))
+        _run_handler(f)
+        archives = list((tmp_path / ".notes-archive").glob("proj.md.*.archive.md"))
+        assert len(archives) == 1
+        recovered = archives[0].read_bytes() + f.read_bytes()
+        assert b"\r\n" in archives[0].read_bytes(), "CRLF was normalised away"
+        assert recovered.count(b"\r\n") == 2_000, (
+            f"expected 2000 CRLF pairs across archive+file, got "
+            f"{recovered.count(chr(13).encode() + chr(10).encode())}"
+        )
+
+    def test_crlf_file_is_measured_at_its_real_size(self, tmp_path):
+        """A CRLF file at 64,002 stored chars must not read as 42,668."""
+        f = tmp_path / "proj.md"
+        f.write_bytes(("a\r\n" * 21_334).encode("utf-8"))
+        stdout, _, _ = _run_handler(f)
+        result = json.loads(stdout.strip())
+        assert result["trimmed"] is True
+        assert result["char_count"] == 64_002, result
+
+
+class TestSelectTailBoundary:
+    """select_tail is pure — test it directly at the exact cap."""
+
+    def test_keeps_lines_that_fit_exactly_at_keep_chars(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("nsh", HANDLER_SCRIPT)
+        nsh = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(nsh)
+        lines = ["x" * 7_999 + "\n", "y" * 7_999 + "\n"]   # exactly 16,000 chars
+        assert sum(len(l) for l in lines) == nsh.KEEP_CHARS
+        assert nsh.select_tail(lines) == lines, (
+            "a tail that fits exactly at the cap must not lose its oldest line"
+        )

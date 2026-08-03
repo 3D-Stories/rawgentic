@@ -172,3 +172,48 @@ class TestLastN:
             "the run filter must be applied before slicing, or an older run "
             "silently returns nothing"
         )
+
+
+class TestRoundOneReviewGuards:
+    """Findings from the round-1 cross-model review of this change."""
+
+    def test_dotted_project_names_are_accepted(self, tmp_path):
+        """session-start's own guard accepts an internal dot, so rejecting it
+        here silently gave such a project no decision store at all."""
+        p = decision_log.store_path(tmp_path, "api.v2")
+        assert p.name == "api.v2.jsonl"
+        r = _append(tmp_path, "api.v2", "D1")
+        assert r.returncode == 0, r.stderr
+        assert [x["id"] for x in decision_log.read_records(tmp_path, "api.v2")] == ["D1"]
+
+    @pytest.mark.parametrize("bad", ["../etc", ".hidden", "-lead", "a..b", "a/b"])
+    def test_traversal_shapes_still_rejected(self, tmp_path, bad):
+        with pytest.raises(ValueError):
+            decision_log.store_path(tmp_path, bad)
+
+    def test_short_write_is_never_reported_as_success(self, tmp_path, monkeypatch):
+        """os.write may return a short count. Ignoring it persisted a truncated
+        record while telling the caller the decision was saved."""
+        real_write = decision_log.os.write
+        calls = {"n": 0}
+
+        def stubborn_short_write(fd, data):
+            calls["n"] += 1
+            return real_write(fd, data[:1])  # always writes one byte
+
+        monkeypatch.setattr(decision_log.os, "write", stubborn_short_write)
+        rec = decision_log.build_record(
+            project="proj", decision_id="D1", title="t", body="b" * 200,
+            overturnable="u")
+        decision_log.append_record(tmp_path, "proj", rec)
+
+        # The loop must have kept going until every byte landed.
+        assert calls["n"] > 1, "the short return value was ignored"
+        assert [r["id"] for r in decision_log.read_records(tmp_path, "proj")] == ["D1"]
+
+    def test_write_that_makes_no_progress_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(decision_log.os, "write", lambda fd, data: 0)
+        rec = decision_log.build_record(
+            project="proj", decision_id="D1", title="t", body="b", overturnable="u")
+        with pytest.raises(OSError, match="short write"):
+            decision_log.append_record(tmp_path, "proj", rec)

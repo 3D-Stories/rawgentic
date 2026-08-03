@@ -78,11 +78,15 @@ def is_excluded(path: Path) -> bool:
 def select_tail(lines: list[str]) -> list[str]:
     """The tail to keep: last KEEP_LINES lines, then capped to KEEP_CHARS.
 
+    `lines` carries its own line terminators (``splitlines(keepends=True)``), so
+    the character total is exact — counting a separator per line would
+    over-count by one and drop a line that fits precisely at KEEP_CHARS.
+
     Whole lines only — a line is never split. A single line longer than
     KEEP_CHARS is kept intact rather than mangled.
     """
     kept = lines[-KEEP_LINES:]
-    while len(kept) > 1 and sum(len(ln) + 1 for ln in kept) > KEEP_CHARS:
+    while len(kept) > 1 and sum(len(ln) for ln in kept) > KEEP_CHARS:
         kept.pop(0)
     return kept
 
@@ -119,8 +123,10 @@ def write_archive(path: Path, text: str) -> Path:
             fd = os.open(str(cand), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
             continue
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
         return cand
     raise OSError(f"could not find a free archive name for {path.name}")
 
@@ -155,7 +161,7 @@ def trim_notes(path: Path, session_id: str = "unknown") -> dict:
     # path inside the decisions store — refuse. Found by this fix's own
     # integration test: without it, `notes-size-handler.py decisions/x.jsonl`
     # happily destroyed the append-only store it exists to protect.
-    if path.suffix != ".md" or "decisions" in path.parts:
+    if path.suffix != ".md" or path.parent.name == "decisions":
         return {"trimmed": False, "reason": "not_a_notes_file"}
 
     if is_excluded(path):
@@ -176,20 +182,32 @@ def trim_notes(path: Path, session_id: str = "unknown") -> dict:
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         # dup() so the with-block close doesn't release the original fd's lock
-        with os.fdopen(os.dup(fd), "r") as f:
+        # newline="" disables universal-newline translation. Without it a CRLF
+        # file is silently normalised: char_count under-counts what is actually
+        # stored, and the archive does not byte-preserve the content it exists
+        # to preserve.
+        with os.fdopen(os.dup(fd), "r", encoding="utf-8", newline="") as f:
             content = f.read()
 
         char_count = len(content)
         if char_count <= THRESHOLD_CHARS:
             return {"trimmed": False, "char_count": char_count}
 
-        lines = content.splitlines()
+        # keepends: each element carries its own terminator, so join is exact.
+        lines = content.splitlines(keepends=True)
         kept = select_tail(lines)
+        cut = lines[: len(lines) - len(kept)]
+
+        if not cut:
+            # One logical line longer than the threshold. There is nothing to
+            # cut, so trimming would only prepend a header and make the file
+            # BIGGER while reporting success — every run, forever.
+            return {"trimmed": False, "reason": "nothing_to_cut",
+                    "char_count": char_count}
 
         # Archive FIRST, and fail CLOSED if it does not land (#847).
-        cut = lines[: len(lines) - len(kept)]
         try:
-            archive = write_archive(path, "\n".join(cut) + ("\n" if cut else ""))
+            archive = write_archive(path, "".join(cut))
         except OSError as exc:
             print(
                 f"notes-size-handler: REFUSING to trim {path} — archive write "
@@ -206,12 +224,14 @@ def trim_notes(path: Path, session_id: str = "unknown") -> dict:
             f"cut content archived to {archive.name} -->\n"
             f"\n"
         )
-        new_content = header + "\n".join(kept)
+        new_content = header + "".join(kept)
         if not new_content.endswith("\n"):
             new_content += "\n"
 
-        # Atomic write via the shared helper (#264)
-        atomic_write_text(path, new_content)
+        # Atomic write via the shared helper (#264). fsync: the archive is
+        # already durable, so the replacement must be too — otherwise a crash
+        # can make the truncation survive while the archive does not.
+        atomic_write_text(path, new_content, fsync=True)
         warn_if_archives_large(path)
 
         return {
