@@ -7,11 +7,47 @@ validation, matching the module's existing "malformed input RAISES, nothing is a
 """
 from __future__ import annotations
 
+import importlib.util
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 from phase_executor import ledger as L
+
+
+BASE_REF = "origin/main"
+MODULE_PATH = "phase_executor/src/phase_executor/ledger.py"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _base_ledger_module(tmp_path):
+    """Load the ledger module as it exists at origin/main — the real pre-#855 writer.
+
+    Shared shape with tests/phase_executor/test_ledger_downgrade.py deliberately: both need the
+    genuine base implementation rather than a stand-in, and duplicating twelve lines is cheaper
+    than a shared helper module that two test files would then both import.
+    """
+    try:
+        src = subprocess.run(
+            ["git", "show", f"{BASE_REF}:{MODULE_PATH}"],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=30, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        pytest.skip(f"{BASE_REF}:{MODULE_PATH} not resolvable here")
+    if "review_admission" in src:
+        pytest.skip(f"{BASE_REF} already carries #855; an external baseline is only meaningful pre-merge")
+    path = tmp_path / "base_ledger_admission.py"
+    path.write_text(src, encoding="utf-8")
+    name = "phase_executor.base_ledger_admission_855"
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    except Exception as e:                                    # pragma: no cover - environment
+        pytest.skip(f"base ledger module not importable in isolation ({e})")
+    return mod
 
 
 def _new(tmp_path, run_id="r1"):
@@ -41,12 +77,15 @@ def _lines(path: Path):
 # -- 1. byte-for-byte back-compat -------------------------------------------------------------
 
 def test_omitted_admission_writes_a_byte_identical_record(tmp_path):
-    """The whole serialized line is compared, not a chosen subset of keys.
+    """The baseline comes from the ACTUAL pre-#855 writer at origin/main, not from this code.
 
-    Enumerating "the keys I expect" would let this pass while a real field was dropped, and would
-    invite deleting `run_id` (which `_locked_append` injects) to make an enumeration match.
+    An earlier version of this test generated both sides with the changed implementation, so a
+    shared serialization regression — dropping `recovered_from` from both paths, say — would have
+    passed while violating the very contract the test names. A reviewer caught that; the baseline is
+    now external by construction.
     """
-    a = _new(tmp_path / "a")
+    base = _base_ledger_module(tmp_path)
+    a = base.ExpectedCallLedger(tmp_path / "a", "r1")
     a.append_initial("sha256:d", architecture="executor")
     a.append_expected("review", "c1", expected_architecture="executor")
     baseline = _lines(a.path)[1]
@@ -56,7 +95,13 @@ def test_omitted_admission_writes_a_byte_identical_record(tmp_path):
     b.append_expected("review", "c1", expected_architecture="executor", review_admission=None)
     explicit_none = _lines(b.path)[1]
 
+    c = _new(tmp_path / "c")
+    c.append_initial("sha256:d", architecture="executor")
+    c.append_expected("review", "c1", expected_architecture="executor")   # argument omitted
+    omitted = _lines(c.path)[1]
+
     assert explicit_none == baseline
+    assert omitted == baseline
     # and the key must be ABSENT, not serialized as null — `sort_keys=True` would otherwise
     # change the line and break every existing byte-comparison of this file.
     assert "review_admission" not in json.loads(baseline)
