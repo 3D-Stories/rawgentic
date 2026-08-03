@@ -41,7 +41,7 @@ def test_marketplace_registers_skill():
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "3.120.0"
+    assert plugin["version"] == "3.121.0"
 
 
 def test_descriptions_consistent_count():
@@ -146,9 +146,12 @@ def test_constants_supported_artifact_types_includes_diff():
     assert "diff" in types
 
 
-def test_body_documents_findings_json_sidecar_flag():
+def test_body_documents_runner_result_findings():
+    # M0b (#866): the engine's --findings-json sidecar retired — the runner
+    # result JSON is the findings carrier; the report renders from it.
     text = skill_corpus("adversarial-review")
-    assert "--findings-json" in text
+    assert "hooks/review_runner.py review-artifact" in text
+    assert "render_report_md" in text
 
 
 def test_step1_autodetect_mentions_patch_and_diff_globs():

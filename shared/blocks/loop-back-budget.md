@@ -15,7 +15,7 @@ accepted, pinned trade-off (worst case equals today's escalate-to-user).
 `plan_lib.consume_loopback`
 enforces both the per-source and the global cap; call it and act on its `(ok, state)`
 return rather than pre-checking the in-context mirror.
-If the global cap is reached, STOP and escalate to user with a full summary of all loop-back triggers. **[Headless: ERROR — post error comment with full loop-back summary, add rawgentic:ai-error label, exit.]**
+If the global cap is reached, STOP and escalate to user with a full summary of all loop-back triggers.
 
 **One carve-out — the Step-4 design gate closes instead (#798).** When the `design` SOURCE cap is
 reached (and the global cap is NOT, and the ambiguity breaker returned `clear`), Step 4 closes
@@ -34,4 +34,4 @@ review_loopback_used = false
 review_design_loopback_used = false
 global_loopback_total = 0
 
-**Source of truth:** once it exists, `claude_docs/.wf2-state/<issue>/loopback_counters.json` (written via `plan_lib.consume_loopback`) is canonical for all *successfully persisted* counts — it survives context compaction, fresh headless sessions, and worktrees. The in-context variables above are a convenience mirror: on resume, initialize them from the file when it is present, otherwise from the defaults above (a missing file means "no loop-backs consumed yet," not an error). Do not write the in-context values back over a more-advanced file. If a `consume_loopback` call increments the in-context counter but fails to persist, treat that as a blocker — reconcile or STOP rather than blindly trusting either side, since a stale file would silently restore spent budget.
+**Source of truth:** once it exists, `claude_docs/.wf2-state/<issue>/loopback_counters.json` (written via `plan_lib.consume_loopback`) is canonical for all *successfully persisted* counts — it survives context compaction, fresh sessions, and worktrees. The in-context variables above are a convenience mirror: on resume, initialize them from the file when it is present, otherwise from the defaults above (a missing file means "no loop-backs consumed yet," not an error). Do not write the in-context values back over a more-advanced file. If a `consume_loopback` call increments the in-context counter but fails to persist, treat that as a blocker — reconcile or STOP rather than blindly trusting either side, since a stale file would silently restore spent budget.

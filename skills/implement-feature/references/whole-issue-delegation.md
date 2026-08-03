@@ -4,16 +4,11 @@ This is the detail behind the thin `wholeIssueDelegation` block in `SKILL.md`
 Step 8. Read it in full before using the mode. The mode is **opt-in and
 default-off**; when it is not enabled Step 8 behaves exactly as it does today.
 
-**Architecture scope (#767).** This contract's `task_shas` trust boundary requires
-agent-authored commits, which only the LEGACY architecture's Agent-tool worktree
-dispatch can produce — a contained executor build agent structurally cannot produce
-them: its linked worktree's gitdir is read-only under containment, and the commit
-write-set spans the common `.git`. Collection shipped in #767 and #762 wires landing;
-neither supplies executor-tier whole-issue receipts. Under the EXECUTOR architecture
-(the default) this mode remains LEGACY-only: an enabled `wholeIssueDelegation` falls
-back loudly to per-task Step 8 until issue #779 ships executor-tier receipts. Its
-executor collection path (`collect-work-product --promote-path …` + the guarded
-fast-forward landing) is the supported mutating route today.
+**Dispatch mechanism (D174, the executor retreat).** This contract's `task_shas` trust
+boundary requires agent-authored commits, which an Agent-tool WORKTREE subagent produces:
+it commits in its own linked worktree, off the shared tree, and the commits land in the
+shared object store for the orchestrator to collect. There is no executor tier and no
+architecture split — one dispatch mechanism, one receipt contract.
 
 ## Why this exists
 
@@ -34,9 +29,8 @@ them are delegated, and none of them trust the receipt's word.
 
 ## Build-subagent brief template
 
-Dispatch exactly one subagent, sized by `select_impl_model` to the plan's
-**highest-risk** task (one agent builds everything, so size it to the hardest
-task; never `model: haiku`). Give it:
+Dispatch exactly one Agent-tool worktree subagent (one agent builds everything;
+never `model: haiku`). Give it:
 
 ```
 You are the whole-issue build agent for issue #<N> on branch <branch>.
@@ -83,16 +77,10 @@ orchestrator owns everything after the build.
 - `promotions` — mid-flight risk promotions the builder flagged; the
   orchestrator dispatches Step 8a for each.
 
-## Collect before validation (worktree-isolated builds, #164 — LEGACY architecture)
+## Collect before validation (worktree-isolated builds, #164)
 
-This whole section is LEGACY-architecture mechanics (#767): only the LEGACY
-build-subagent (`rawgentic:rawgentic-implementer`, `isolation: worktree`) can
-produce the agent-authored commits this contract collects — a contained
-executor build agent cannot produce them because its gitdir is read-only under
-containment and the commit write-set spans the common `.git`; executor whole-
-issue mode therefore stays LEGACY-only until issue #779 ships executor-tier
-receipts (see the Architecture-scope note above). Under LEGACY, the produced commits land in the shared object
-store, NOT on the feature branch. Validation Rule 4 diffs `base..HEAD` on the ORCHESTRATOR's checkout,
+The worktree build-subagent's commits land in the shared object store, NOT on the
+feature branch. Validation Rule 4 diffs `base..HEAD` on the ORCHESTRATOR's checkout,
 so an un-collected worktree build always fails Rule 4 (empty diff) and would
 be discarded on every run. Therefore, before invoking
 `validate_build_receipt`: fast-forward the feature branch to the receipt's
@@ -152,8 +140,7 @@ Delegation can **never** block Step 8. On `ok=False`:
 
 - **Step 8a** — the ONE accumulated wave (#492) covering every high-risk task's
   `receipt["task_shas"][id]` (tagged in Step 5 OR in
-  `normalized["promoted_task_ids"]`) — one review-log entry per covered task. Coverage via
-  `plan_lib.assert_review_coverage(<log>, plan_tasks, receipt["task_shas"])`.
+  `normalized["promoted_task_ids"]`) — one session-note coverage marker per covered task.
 - **Step 9** — re-run the full suite from the orchestrator.
 - **Steps 11 / 11.5** — unchanged (full diff review + security scan).
 

@@ -39,33 +39,39 @@ SKILLS = REPO / "skills"
 MARKER = "model-routing: role=review"
 
 # Pinned so a NEW review-dispatch site cannot appear unnoticed. Raising this number is a deliberate
-# act that should come with wiring the new site's flags in the same commit.
+# act that should come with wiring the new site's artifact carrier in the same commit.
 EXPECTED_SITE_COUNT = 4
 
-# The literal dispatch instruction. Discovering on THIS rather than on the marker is what catches a
+# The literal dispatch instruction. Since M0b (#866) every review dispatch goes through the
+# runner — discovering on the runner invocation rather than on the marker is what catches a
 # review dispatch someone forgot to annotate.
-DISPATCH_PHRASE = "executor `review` seat"
+DISPATCH_PHRASE = "hooks/review_runner.py review-"
 
-# Review dispatches that legitimately need NO external artifact, each with the reason it is exempt.
-# Being on this list is a DECLARATION; being absent from both this list and the marker set is a
-# failure, which is the point.
+# Runner invocations that are legitimately NOT a marker-annotated WF gate site, each with the
+# reason. Being on this list is a DECLARATION; being absent from both this list and the marker
+# set is a failure, which is the point.
 _INLINE_CONTEXT_SITES = {
+    ("skills/implement-feature/SKILL.md",
+     "review-artifact --artifact <file> --type <design|plan|diff|…>"):
+        "the <model-routing-resolve> contract's command-shape listing, not a dispatch site.",
+    ("skills/implement-feature/SKILL.md",
+     "review-code --base <base ref> --brief <brief.md>"):
+        "the <model-routing-resolve> contract's command-shape listing, not a dispatch site.",
+    ("skills/fix-bug/SKILL.md",
+     "review-code --base <default branch> --brief <brief.md>"):
+        "the bespoke WF3 contract's command shape, not a dispatch site.",
     ("skills/implement-feature/references/steps.md",
-     "incremental verifier"):
-        "Step 4 spec-tightening: the verifier reviews ONLY the changed design sections and quotes "
-        "them before/after INLINE, so there is no external artifact to attach.",
-    # Continuations: prose that re-describes a dispatch already declared a line or two above, at
-    # the marker-annotated site. Named explicitly rather than absorbed by widening the search
-    # window — a wider window would also let an unrelated marker vouch for a genuinely new,
-    # unannotated dispatch, which is exactly what this test exists to catch.
+     "review-artifact --artifact <design-doc> --type design --author-model"):
+        "Step 4 item 7: the opt-in adversarial-on-design layer — a continuation of the "
+        "Step-4 marker-annotated site; the artifact is carried by the mandatory --artifact.",
     ("skills/implement-feature/references/steps.md",
-     "Dispatch 2 reviewers in parallel"):
-        "Step 8a continuation of the marker-annotated dispatch two lines above; same dispatch, "
-        "described again for the per-reviewer lens split.",
-    ("skills/fix-bug/references/steps.md",
-     "Launch a focused 2-agent code review in parallel"):
-        "WF3 continuation of the marker-annotated dispatch two lines above; same dispatch, "
-        "described again for the per-slot architecture split.",
+     "review-code --base origin/<default> --brief <brief.md> \\"):
+        "Step 11 item 1a: the opt-in diff-review layer, tokenless/report-only; the diff is "
+        "composed by the runner itself from --base (structural carrier).",
+    ("skills/adversarial-review/SKILL.md",
+     "hooks/review_runner.py review-artifact \\"):
+        "WF5's standalone invocation — the artifact IS the skill's own input, carried by the "
+        "mandatory --artifact.",
 }
 
 # How far past the marker the dispatch mandate must appear. Generous enough to survive rewrapping
@@ -99,17 +105,20 @@ def test_the_set_of_review_dispatch_sites_is_what_we_think_it_is():
         f"must be raised in the same commit; a REMOVED one must be deliberate.")
 
 
-def test_every_discovered_review_site_declares_the_context_requirement():
-    """Each site must mandate BOTH flags: declaring without carrying, or carrying without
-    declaring, is a half-wired site."""
+def test_every_discovered_review_site_names_the_artifact_carrier():
+    """M0b (#866): `--requires-context`/`--context-file` retired with the executor — artifact
+    delivery is now STRUCTURAL in the runner (a route that cannot carry the bytes cannot be
+    called, #826's intent). Each marker site's window must dispatch through the runner and name
+    the artifact-carrying parameter (`--brief` for review-code, `--artifact` for
+    review-artifact)."""
     missing = []
     for rel, idx, window in _discover_sites():
-        if "--requires-context" not in window:
-            missing.append(f"{rel}@{idx}: does not mandate --requires-context")
-        if "--context-file" not in window:
-            missing.append(f"{rel}@{idx}: does not mandate --context-file")
+        if "review_runner.py" not in window:
+            missing.append(f"{rel}@{idx}: does not dispatch through hooks/review_runner.py")
+        if "--brief" not in window and "--artifact" not in window:
+            missing.append(f"{rel}@{idx}: does not name the artifact-carrying parameter")
     assert not missing, (
-        "#826: a review site that does not declare its context requirement can dispatch a review "
+        "#826: a review site that does not carry its artifact can dispatch a review "
         "of nothing and have the gate read the verdict as a pass:\n  " + "\n  ".join(missing))
 
 
@@ -152,7 +161,7 @@ def test_every_review_dispatch_is_either_flag_checked_or_declared_inline():
         idx = body.find(_norm(line)[:80])
         # a marker within the preceding window means this dispatch is one of the annotated sites
         preceding = body[max(0, idx - 400):idx] if idx >= 0 else ""
-        if MARKER in preceding or "--requires-context" in body[idx:idx + _WINDOW]:
+        if MARKER in preceding:
             continue
         unaccounted.append(f"{rel}:{ln_no}: review dispatch is neither flag-checked nor declared inline")
     assert not unaccounted, (

@@ -100,28 +100,12 @@ SCANNER_KINDS = {"secrets", "sca", "sast", "iac"}
 # already-active epic-level campaign goal (RAWGENTIC_EPIC_GOAL set) rather than
 # emitting one that would clobber it.
 GOAL_GUARD_VALUES = {"set", "skipped", "fired", "deferred"}
-# #474: the run's dispatch architecture. REQUIRED for records at workflow_version >= this
-# threshold (the flip release); optional/lenient below so historical records stay readable.
-ARCHITECTURE_VALUES = {"executor", "legacy"}
-_ARCHITECTURE_REQUIRED_FROM = (3, 93, 0)
-_SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
-
-
-def _semver_tuple(version):
-    """Strict ``X.Y.Z`` -> int 3-tuple, else None. NEVER lexical (#474 SR4-9: a lexical
-    compare would classify 3.100.0 < 3.93.0). A malformed version returns None and the
-    caller treats the record as NEW — failing toward the requirement, never around it."""
-    if not _is_str(version):
-        return None
-    # S11 F5: match the ORIGINAL string, no trimming — a whitespace-padded version is
-    # malformed and counts as NEW (the requirement applies), never as a valid old version.
-    m = _SEMVER_RE.match(version)
-    return tuple(int(g) for g in m.groups()) if m else None
-
-
-def _architecture_required(record) -> bool:
-    v = _semver_tuple(record.get("workflow_version"))
-    return v is None or v >= _ARCHITECTURE_REQUIRED_FROM
+# #474 established the field; M0b (#866, D174/D181) made it OPTIONAL-LEGACY at every
+# version: the executor is retired, so a new record can no longer truthfully say
+# executor|legacy — requiring the field would fail every post-retreat Step 16. The
+# vocabulary check stays for records that DO carry it (historical executor/legacy
+# lines, plain-session "inline" comparison records per D181).
+ARCHITECTURE_VALUES = {"executor", "legacy", "inline"}
 
 
 def architecture_dispatch_warnings(record) -> list:
@@ -460,19 +444,13 @@ def validate_record(record, *, strict=False) -> list:
         errs.append("run_id must be a grammar-safe non-all-dot component "
                     "([A-Za-z0-9._-], 1..120) when present")
 
-    # #474: the run's dispatch architecture. Off-vocab rejected at ANY version; the field is
-    # REQUIRED once workflow_version >= 3.93.0 (strict semver 3-tuple compare; a malformed
-    # version counts as new — fails toward the requirement), lenient/optional below so
-    # pre-flip records stay readable.
+    # #474 / M0b (#866): `architecture` is optional-legacy at every version — the
+    # executor retreat removed the machinery a required value would have named.
+    # Off-vocab still rejected whenever the field IS present.
     if "architecture" in record:
         arch = record["architecture"]
         if not _is_str(arch) or arch not in ARCHITECTURE_VALUES:
             errs.append(f"architecture must be one of {sorted(ARCHITECTURE_VALUES)}")
-    elif _architecture_required(record):
-        wv = record.get("workflow_version")
-        note = "" if _semver_tuple(wv) else f" (workflow_version {wv!r} is not X.Y.Z — treated as new)"
-        errs.append("architecture is required for records at workflow_version >= 3.93.0 "
-                    f"(#474: executor|legacy){note}")
 
     if "issue" in record:
         issue = record["issue"]

@@ -44,23 +44,19 @@ def _step_section(skill_text: str, step_number: str) -> str:
     return skill_text[start:end]
 
 
-# Expected (helper_name -> list of step numbers where it must appear)
+# Expected (helper_name -> list of step numbers where it must appear).
+# M0b (#866, D175) removed the ceremony helpers' rows (compute_risk_ratio,
+# check_ratio_band, validate_parallel_groups, append_review_log,
+# assert_review_coverage, write/read_review_state, review_state_path) — the
+# helpers themselves survive until M0d (see _M0D_PENDING_UNREFERENCED below).
 EXPECTED_REFERENCES = {
     "parse_tasks": ["5"],
-    "compute_risk_ratio": ["5"],
-    "check_ratio_band": ["5"],
-    "validate_parallel_groups": ["5"],  # PR 3a: parallel_group disjointness validator
     "should_promote": ["8"],
     "format_promotion_note": ["8"],
     "scan_prior_commits_for_trigger": ["8"],
-    "append_review_log": ["8"],
-    "assert_review_coverage": ["9"],
     "get_deferred_findings": ["11"],
     "assert_no_unresolved_high_deferrals": ["11"],
     "consume_loopback": ["8"],
-    "write_review_state": ["8", "11"],   # written at Step 8a (suspend states) and Step 11 ("applied")
-    "read_review_state": ["12", "14"],   # read by the PR-creation and merge gates
-    "review_state_path": ["8", "11"],    # path resolver for the state file
 }
 
 
@@ -138,13 +134,28 @@ def test_risk_criteria_canonical_strings_appear_in_docs():
     assert missing == [], "\n".join(missing)
 
 
+# M0d-pending allowlist (#866): D175 removed these ceremony helpers from the
+# ACTIVE prose in M0b; the helpers and their unit tests stay until M0d deletes
+# them with their remaining consumers. Anything added here must carry the M0d
+# pointer — this set is a scheduled deletion list, not a parking lot.
+_M0D_PENDING_UNREFERENCED = {
+    "compute_risk_ratio", "check_ratio_band", "validate_parallel_groups",
+    "append_review_log", "read_review_log", "assert_review_coverage",
+    "write_review_state", "read_review_state", "review_state_path",
+    "estimate_agents", "parse_feasibility_block", "assert_feasibility_declared",
+}
+
+
 def test_every_public_helper_is_referenced_in_skill():
     """Reverse test: catch dead helpers — a plan_lib export with no SKILL.md
-    reference is either unused or never wired in."""
+    reference is either unused, never wired in, or on the documented
+    M0d-pending deletion list."""
     skill = _read_skill()
     public_symbols = _public_plan_lib_symbols()
-    unreferenced = [s for s in public_symbols if s not in skill]
+    unreferenced = [s for s in public_symbols
+                    if s not in skill and s not in _M0D_PENDING_UNREFERENCED]
     assert unreferenced == [], (
         f"Public plan_lib symbols not referenced in SKILL.md: {unreferenced}. "
-        f"Either wire them into a workflow step or make them private."
+        f"Either wire them into a workflow step, make them private, or (only "
+        f"for a scheduled M0d deletion) add them to _M0D_PENDING_UNREFERENCED."
     )

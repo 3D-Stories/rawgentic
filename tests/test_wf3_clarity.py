@@ -209,206 +209,96 @@ class TestDelegatedReadsWF3:
 
 # --- #330: canonical DISPATCH completion-time audit-line grammar (WF3 review + build) ---
 
-class TestDispatchGrammar:
-    """Drift guard for the #330 canonical DISPATCH audit line, WF3's review +
-    implementation variant. Whitespace-normalized per the repo convention."""
+# --- M0b (#866): WF3 inline contract (the executor retreat, D174/D179) ---
 
-    def test_wf3_canonical_grammar_sentence_present(self):
-        corpus = " ".join(skill_corpus("fix-bug").split())
-        grammar = (
-            "DISPATCH issue=<n> role=<review|implementation> type=<subagent_type> "
-            "model=<model|null> effort=<effort|null> "
-            "outcome=<ok|error|retried|dead> resolution=<primary|fallback|generic>"
-        )
-        assert grammar in corpus, (
-            "the WF3 review/build canonical DISPATCH grammar line must be present "
-            "in the fix-bug corpus")
+class TestInlineContractWF3:
+    """Drift guards for the M0b (#866) retreat in WF3: inline fix implementation
+    (D174), the runner-based Step 9 review pairing (D179), and the fix-plan
+    grammar that survives as the plan_lib.parse_tasks contract. One canonical
+    sentence per assert, whitespace-normalized, section-sliced."""
 
-    def test_wf3_per_invocation_emission_rule_present(self):
-        """#330 8a hardening: two review agents must mean two DISPATCH lines.
-        #331 (Step 11 refinement) splits descent emission by trigger — a
-        runtime-error descent adds the abandoned tier's terminal line; a
-        resolve-failure descent adds none (an unresolvable tier never ran)."""
-        corpus = " ".join(skill_corpus("fix-bug").split())
-        rule = ("One line per SUBAGENT INVOCATION dispatched (not per attempt) "
-                "— WF3 Step 9's two review agents = two lines at a single "
-                "tier; a slot that descends on a RUNTIME ERROR adds the "
-                "abandoned tier's terminal line, while a resolve-failure "
-                "descent adds none (an unresolvable tier never ran).")
-        assert rule in corpus, (
-            "the WF3 per-invocation DISPATCH emission rule must be present in "
-            "the fix-bug corpus, split by descent trigger per #331")
-
-    def test_wf3_descent_trigger_split_present(self):
-        """#331 Step 11 refinement: a resolve-failure descent must never
-        fabricate an 'attempted and errored' audit line for a tier that never
-        ran; the runtime-error descent carries the abandoned tier's OWN
-        resolution value. Pins the load-bearing clauses of the split rule."""
-        corpus = " ".join(skill_corpus("fix-bug").split())
-        assert ("a RESOLVE-FAILURE descent (the tier's agent type is not "
-                "installed / does not resolve) emits NO line for the "
-                "unresolved tier") in corpus, (
-            "the resolve-failure no-line clause must be present (#331)")
-        assert ("the abandoned tier's terminal line with `outcome=error` and "
-                "THAT TIER's own resolution value (tier 1 → "
-                "`resolution=primary`, tier 2 → `resolution=fallback`)") in corpus, (
-            "the runtime-error two-line clause with per-tier resolution "
-            "values must be present (#331)")
-
-
-# --- #470: WF3 bespoke executor-dispatch contract (review + build PRIMARY tier) ---
-
-class TestExecutorDispatchContractWF3:
-    """Drift guards for the #470 executor-dispatch contract in WF3's bespoke
-    model-routing block. WF3 routes review and fix-plan implementation work through
-    executor seats. Companion to
-    test_wf2_clarity.py::TestDispatchGrammar::test_wf2_producer_sentence_present
-    and test_model_routing_resolve_prose.py (the WF2/shared-source guards). One
-    canonical sentence per assert, whitespace-normalized, corpus `in`."""
-
-    def test_executor_contract_header_present(self):
-        corpus = _norm(_text())
-        assert ("**Executor-dispatch contract (#470) — the PRIMARY tier.** Every "
-                "`review`-seat model call dispatches through ONE skill-facing entry "
-                "point — the executor `dispatch` CLI") in corpus, (
-            "the WF3 executor-dispatch contract header (PRIMARY tier) must be "
-            "present in the fix-bug corpus")
-
-    def test_fix_plan_build_seat_clause_present(self):
-        corpus = _norm(_text())
-        assert ("WF3 fix-plan tasks dispatch through the executor `build` seat: mint "
-                "the gate from the WF3 fix plan, dispatch with `--gate-file` and "
-                "`--plan-file`, then collect and land the work product audited.") in corpus, (
-            "the WF3 fix-plan build-seat adoption clause must be present (#762)")
-
-    def test_step5_mint_gate_compatible_plan_grammar_present(self):
+    def test_step5_plan_grammar_present(self):
         step5 = _norm(_section(_text(), "## Step 5:", "## Step 6:"))
         assert ("Every task heading is exactly `### Task <id>: <title>` (`##` headings "
                 "parse to zero tasks); each task includes `- riskLevel: high|standard` "
                 "and `- files: <declared paths>`; and the plan has one canonical "
                 "`- estimated-lines: <nonnegative int>` line.") in step5, (
-            "Step 5 must use the mint-gate-compatible WF3 fix-plan grammar (#762)")
+            "Step 5 must keep the parse_tasks-compatible WF3 fix-plan grammar")
 
-    def test_step7_executor_primary_paragraph_present(self):
+    def test_step7_inline_loop_sentence_present(self):
         step7 = _norm(_section(_text(), "## Step 7:", "## Step 8:"))
-        assert ("Executor-primary implementation loop (#762): for each task in the "
-                "3-6-task fix plan, record pre-task state → dispatch → collect → land "
-                "audited → assert branch advance plus non-empty content → run the scoped "
-                "suite; emit exactly one canonical `DISPATCH` line per workflow dispatch.") in step7, (
-            "Step 7 must carry the WF2-style executor-primary per-task loop (#762)")
+        assert ("Inline implementation loop (D174): for each task in the 3-6-task fix "
+                "plan, record pre-task state (HEAD + dirty baseline) → implement the "
+                "task INLINE, reproduce-first TDD → commit → assert the branch advanced "
+                "with non-empty content → run the scoped suite.") in step7, (
+            "Step 7 must carry the inline per-task loop (M0b, #866)")
 
-    def test_wf3_complexity_mapping_present(self):
-        corpus = _norm(_text())
-        assert ("WF3 complexity mapping for `mint-gate`: `trivial_work=true → trivial`; "
-                "`simple_bug|moderate_bug → standard`; `complex_bug → complex` "
-                "(normally upgrade to WF2; this mapping covers an owner-overridden "
-                "stay-in-WF3 case).") in corpus, (
-            "the R4-D WF3 complexity-to-gate mapping must be present (#762)")
+    def test_step9_runner_pairing_present(self):
+        step9 = _norm(_section(_text(), "## Step 9:", "## Step 10:"))
+        assert ("the cross-model pass dispatches `hooks/review_runner.py review-code "
+                "--base <default branch> --brief <brief.md>` from a read-only harness "
+                "subagent, IN PARALLEL with your own inline self-review of the same "
+                "diff (two independent passes, never merged)") in step9, (
+            "Step 9 must pair the runner cross-model pass with the inline self-review")
 
-    def test_producer_sentence_present(self):
-        # #762 Step-11 r2-4/r1-3: WF3 dispatches BOTH seats since the build adoption — the
-        # producer type derives from the seat, never hardcodes executor:review.
+    def test_no_executor_vocabulary_in_wf3_corpus(self):
         corpus = _norm(_text())
-        assert ("The producer is the executor result dict (`type=executor:<seat>` — "
-                "`executor:review` for review dispatches, `executor:build` for "
-                "implementation dispatches — `model=<actual_model>`, "
-                "`resolution=primary`) on the primary tier, "
-                "or — under the LEGACY architecture only — the Agent-tool dispatch "
-                "(`resolution=fallback`).") in corpus, (
-            "the WF3 DISPATCH producer sentence (seat-derived executor type vs "
-            "legacy-architecture Agent-tool) must be present (#474, #762)")
-        assert "(`type=executor:review`, `model=<actual_model>`" not in corpus, (
-            "the pre-#762 hardcoded executor:review producer form must be gone")
-
-    def test_per_run_tier_selection_present(self):
-        corpus = _norm(_text())
-        assert "Architecture selection is per-RUN, declared at run start via `begin-run`, never mixed (#474)." in corpus
-        assert "NEVER a downgrade to the Agent tool: there is no runtime fallback tier" in corpus, (
-            "the WF3 no-runtime-fallback semantics (#474 flip) must be present")
-
-    def test_fallback_legacy_tier_present(self):
-        corpus = _norm(_text())
-        assert "**Bundled agent dispatch (#164) — the LEGACY architecture (manual rollback target, #474).**" in corpus
-        assert "Since the W12 flip (#474) the executor IS the architecture everywhere by default" in corpus, (
-            "the WF3 legacy-architecture framing (post-#474 flip) must be present")
-        assert "Until the W12 flip" not in corpus  # the pre-flip clause must be gone
-        assert "Under the LEGACY architecture" in corpus, (
-            "WF3 legacy dispatch instructions must be conditioned on the declared-legacy branch (#474)")
-
-    def test_gate_preservation_sentences_present(self):
-        # The two #470 gate-preservation sentences carried VERBATIM into the WF3
-        # corpus (design §3; also pinned by the dedicated test_gate_preservation.py).
-        corpus = _norm(_text())
-        assert ("An executor seat is never a gate bypass — every mandatory gate "
-                "(Steps 4, 8a, 9, 11, 11.5) runs with identical semantics whichever "
-                "tier dispatches its model calls, and every EXECUTOR-tier build-seat "
-                "dispatch requires the authenticated gate decision plus the internally "
-                "minted plan context.") in corpus, (
-            "WF3 corpus must carry the #470 gate-bypass invariant sentence verbatim")
-        assert ("WF2/WF3 prose runs the complexity-gate step before any legacy-architecture "
-                "build dispatch.") in corpus, (
-            "WF3 corpus must carry the complexity-gate-before-legacy-build "
-            "sentence verbatim (#474)")
+        for needle in ("executor `build` seat", "executor `review` seat", "begin-run",
+                       "mint-gate", "DISPATCH issue="):
+            assert needle not in corpus, (
+                f"executor vocabulary {needle!r} re-entered the fix-bug corpus")
 
 
 # --- #330: dispatches[] assembly instruction at WF3 Step 14 ---
 
 class TestDispatchesAssembly:
-    """Header-index-sliced guard (repo convention: test_wf2_clarity.py's
-    TestTieredLoopback pattern, :444-454) pinning the Step 14 dispatches[]
-    assembly instruction — the WF3 mirror of the WF2 Step 16 guard. Location pin
-    (reads steps.md directly, not the corpus) since this is a specific-file,
-    specific-section contract."""
+    """Header-index-sliced guard pinning the Step 14 dispatches[] LEGACY note —
+    since the M0b retreat (#866) a current run emits no dispatch audit lines and
+    must OMIT the key. Location pin (reads steps.md directly, not the corpus)."""
 
     def _step14(self) -> str:
         text = (REPO_ROOT / "skills" / "fix-bug" / "references" / "steps.md").read_text()
         return _section(text, "## Step 14:", "## Workflow Resumption")
 
-    def test_canonical_assembly_sentence_present(self):
+    def test_dispatches_key_omitted_on_current_runs(self):
         s14 = " ".join(self._step14().split())
-        sentence = (
-            "Assemble `dispatches[]` by grepping claude_docs/session_notes.md "
-            "for lines matching `^DISPATCH issue=<n> ` where `<n>` is this "
-            "run's issue number.")
-        assert sentence in s14, (
-            "Step 14 must contain the canonical #330 dispatches[] assembly "
-            "sentence")
+        assert ("OMIT the `dispatches` key entirely (never an empty array)") in s14, (
+            "Step 14 must instruct omitting the legacy dispatches[] key")
+        assert "Assemble `dispatches[]` by grepping" not in s14, (
+            "the executor-era dispatches[] assembly instruction must be gone (M0b, #866)")
 
 
 # --- #331: per-slot fallback chain + dead-return detection at the Step 9 gate ---
 
-class TestPerSlotFallbackChain:
-    """Header-index-sliced guard (repo convention: TestDispatchesAssembly /
-    test_wf2_clarity.py's TestTieredLoopback, :444-454). Pins the two #331
-    canonical sentences the Step 9 review gate must carry: the per-slot
-    three-tier fallback chain (a fallback in one slot never collapses the gate
-    from two reviews to one) and the dead-return relaunch rule (a vacuous
-    reviewer return is a DEAD dispatch, not a clean pass). Location pin (reads
-    steps.md directly), whitespace-normalized so wrapped prose compares equal."""
+class TestTwoPassReviewGate:
+    """Header-index-sliced guard pinning the Step 9 review-gate invariants after
+    the M0b retreat (#866): two DISTINCT passes (inline self-review + runner
+    cross-model), never collapsed to one; the dead-return relaunch rule (a
+    vacuous reviewer return is a DEAD dispatch, not a clean pass). Location pin
+    (reads steps.md directly), whitespace-normalized so wrapped prose compares
+    equal."""
 
     def _step9(self) -> str:
         text = (REPO_ROOT / "skills" / "fix-bug" / "references" / "steps.md").read_text()
         return " ".join(_section(text, "## Step 9:", "## Step 10:").split())
 
-    def test_per_slot_fallback_chain_sentence_present(self):
+    def test_two_passes_never_collapsed_sentence_present(self):
         s9 = self._step9()
         sentence = (
-            "For EACH reviewer slot independently: dispatch the named "
-            "`pr-review-toolkit` agent; if THAT slot's agent type fails to "
-            "resolve, dispatch `rawgentic:rawgentic-reviewer` with that slot's "
-            "brief; if that also fails, use a generic inline-prompt dispatch "
-            "with that slot's brief — fallback in one slot never collapses the "
-            "gate from two reviews to one.")
+            "a failure in one pass never collapses the gate from two reviews to one "
+            "— a failed cross-model dispatch (after its one retry) follows the ERROR "
+            "protocol rather than silently leaving only the self-review; the two "
+            "briefs stay DISTINCT (silent-failure-hunt lens + code-review lens), two "
+            "reviews, never merged.")
         assert sentence in s9, (
-            "Step 9 must carry the #331 canonical per-slot three-tier fallback "
-            "chain sentence")
+            "Step 9 must carry the two-passes-never-collapsed sentence (M0b, #866)")
 
     def test_dead_return_detection_sentence_present(self):
         s9 = self._step9()
         sentence = (
             "A reviewer return that is vacuous (no findings AND no substantive "
             "content) is a DEAD dispatch, not a clean pass — relaunch that slot "
-            "once at the same tier; on a second death, record the slot as "
+            "once; on a second death, record the slot as "
             "REVIEW_DISPATCH_FAILED in session notes and invoke the workflow's "
             "ERROR protocol — the gate never proceeds with fewer than two live "
             "reviews.")
@@ -419,7 +309,7 @@ class TestPerSlotFallbackChain:
         """8a hardening (#331): the failure-mode bullets carry the terminal
         action — deleting them must fail a test, not just the bold blocks."""
         s9 = self._step9()
-        assert ("Named agent type does not resolve → per-slot fallback chain" in s9)
+        assert ("A pass cannot be dispatched → run it inline with the same brief" in s9)
         assert ("Reviewer returns vacuous success → dead-return relaunch once, "
                 "then REVIEW_DISPATCH_FAILED + the workflow's ERROR protocol") in s9
 

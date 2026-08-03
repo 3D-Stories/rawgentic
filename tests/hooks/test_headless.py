@@ -1418,19 +1418,22 @@ class TestHeadlessInteractionBlock:
         )
 
     @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
-    def test_body_points_to_headless_reference(self, skill_name: str):
-        """The body must keep a <headless-mode> pointer at references/headless.md so the
-        protocol is still discoverable; otherwise the moved protocol is orphaned."""
+    def test_body_no_longer_points_to_headless_reference(self, skill_name: str):
+        """D178 (M0b, #866): headless mode is removed from the active prose — the
+        <headless-mode> pointer is deleted from both skill bodies. The
+        references/headless.md FILES stay on disk until M0d deletes the whole
+        headless machinery (the existence tests above pin that), deliberately
+        un-pointed-to in the interim."""
         content = (SKILLS_DIR / skill_name / "SKILL.md").read_text()
-        assert "<headless-mode>" in content, f"{skill_name}/SKILL.md missing <headless-mode> pointer"
-        assert "references/headless.md" in content, (
-            f"{skill_name}/SKILL.md <headless-mode> must point at references/headless.md"
+        assert "<headless-mode>" not in content, (
+            f"{skill_name}/SKILL.md must not re-grow the <headless-mode> pointer (D178)"
         )
 
-    # Expected [Headless annotation counts per skill
+    # Expected [Headless annotation counts per skill — ZERO since D178 (M0b, #866)
+    # stripped every [Headless:] directive from the active prose.
     EXPECTED_COUNTS = {
-        "implement-feature": 34,  # 17 base + 7 P15 (#73): Step 5 warn/halt/decompose + 8a ambiguity/dispatch-failure/design-flaw/headless-suspend + Step 11 deferred-High + 1 Step 11.5 security-scan block + 1 Step 2 trivial-work suggestion + 3 headless remote-ops guards (#47): Step 2 SSH-probe skip, Step 14 merge/deploy skip, Step 15 post-deploy skip + 1 Step 7 base-mismatch ERROR (#140) + 1 Step 13 CI-quarantine-change approval (#137) + 1 Step 14 quarantine×protection contradiction (#139) + 1 Step 1b goal guard (#156) + 1 Step 13 CI-unavailable non-gate (#232)
-        "fix-bug": 12,            # 10 interaction points + 1 Step 2 trivial-work suggestion + 1 Step 1b goal guard (#156)
+        "implement-feature": 0,
+        "fix-bug": 0,
     }
 
     @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)

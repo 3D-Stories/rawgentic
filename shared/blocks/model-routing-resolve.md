@@ -1,89 +1,73 @@
-Resolve model routing (optional, fail-open) right after `<config-loading>`, before any subagent dispatch. For each role this skill dispatches (`analysis`, `review`, `implementation`), resolve the configured model:
+**Where work runs (D174, the executor retreat — 2026-08-03).** Analysis and implementation run
+INLINE in the orchestrating session. There is no dispatch machinery, no seat table, and no
+per-phase model routing. Broad read-only gathers MAY fan out harness subagents (Agent tool,
+Explore-style) to keep file dumps out of the main window — inline when narrow; judgment by
+breadth (D182). Genuinely parallel implementation tasks MAY use Agent-tool worktree subagents;
+the default is inline TDD. What is retired is the executor seat, not subagents.
+
+**Cross-model review runs through ONE entry point** — `hooks/review_runner.py` (D179) —
+dispatched from a read-only harness subagent so the inline self-review and the cross-model
+review run in parallel. The subagent's ONLY job is to run one runner command and report back
+the result path plus the exit code; it must not modify project files — its only permitted
+write is the runner's declared `--out` result file. Command shapes:
+
 ```bash
-python3 hooks/model_routing_lib.py resolve \
-  --workspace .rawgentic_workspace.json --project <name> --role <analysis|review|implementation>
+# Text artifact (design/plan/spec/…): WF2 Step 4, WF5
+python3 hooks/review_runner.py review-artifact --artifact <file> --type <design|plan|diff|…> \
+  --author-model <your own model id, verbatim> --reviewer <reviewer, below> \
+  [--backend gpt|glm] [--reopen-token <token.json>] --out <result.json> --project-root .
+
+# Code diff vs a base ref: WF2 Steps 8a/11, WF3 Step 9
+python3 hooks/review_runner.py review-code --base <base ref> --brief <brief.md> \
+  --author-model <your model id> --reviewer <reviewer> [--backend gpt|glm] \
+  [--reopen-token <token.json>] --out <result.json> --project-root .
+
+# Independent peer proposal: WF13
+python3 hooks/review_runner.py consult --artifact <problem.md> \
+  --author-model <your model id> --reviewer <reviewer> [--backend gpt|glm] \
+  --out <result.json> --project-root .
 ```
-Run once per role (three invocations total). Exit is always 0; stdout is a model name or `inherit`. If `hooks/model_routing_lib.py` is missing (e.g. a stale plugin cache), the invocation may exit non-zero — treat that, and any non-zero/absent output, as `inherit`. Carry each resolved value as a literal into later steps (fresh-shell rule). When a value is `inherit`, dispatch that role's subagents with NO `model:` parameter (session model). Otherwise pass `model: <value>` on every Agent dispatch for that role. A stderr warning is advisory — never treat it as failure.
 
-For each role also resolve its effort tier with a second invocation appending `--effort`, printing the effort string or `none`; carry both the model and the effort as literals. Effort is role-wide — it does not scale with any per-task down-route (e.g. `select_impl_model`'s ceiling logic in Step 8, `references/steps.md`, is unaffected). When the resolved effort is `none`, dispatch exactly as today. When it is non-`none`: the Agent tool has no per-invocation effort parameter, so effort is carried dual-path — (a) pass it where the dispatch layer supports effort (the Workflow tool's `agent(prompt, {effort: <value>})` option, or a Codex dispatch's reasoning-effort flag), and (b) always record it in the dispatch's session-note/audit line (e.g. `dispatch <role>: model <model>, effort <effort>`) so the resolved tier stays observable where per-invocation delivery is impossible.
+**Reviewer identity is pinned, never inherited.** The current default reviewer id is
+**`gpt-5.6-sol`** (single-sourced HERE — a retired id fails loudly at invocation and is updated
+on this one line). The alternate backend is `--backend glm` (model `glm-5.2`). The runner
+REFUSES author==reviewer and unresolvable identities; pass your own model id as
+`--author-model`, verbatim. Exit codes: `0` success (check `diagnostic` in the result JSON) ·
+`2` refused (validation/identity/token — no egress) · `3` terminal backend failure ·
+`4` empty/invalid backend output. The runner owns transport policy (#857): one bounded
+transport retry, org-wide 429 terminal, one permitted backend switch on a per-account 429 —
+callers NEVER add their own retry loop around it.
 
-**Executor-dispatch contract (#470) — the PRIMARY tier.** Every per-phase model call dispatches through ONE skill-facing entry point — the executor `dispatch` CLI (all seats, one single entry point; no second entry point is ever named in prose, because the sync-vs-supervised split is an internal routing decision keyed on the staged launch profile):
+**Actionable vs diagnostic — the reopen choke point (#855).** A review that may open a fix
+round needs a reopen token minted FIRST:
+
 ```bash
-python3 hooks/executor_routing_lib.py dispatch \
-  --seat <seat> --prompt-file <brief-file> --run-id wf2-<issue>-<session> \
-  --correlation-id <issue>-<step>-<slug> [--effort <tier>] [--timeout <s>] \
-  [--context-file <path> ...] \
-  [--gate-file <gate.json> --plan-file <impl-plan.md>] \
-  --workspace <workspace-file> --project <name>
+python3 hooks/plan_lib.py review-reopen --state-file claude_docs/.wf2-state/<issue>/loopback_counters.json \
+  --source <design|spec_tighten|tdd|review|review_design> --out <token.json> --project-root .
 ```
-**A `review`-seat dispatch that needs an external artifact MUST declare it with `--requires-context` AND pass it with `--context-file` (#826).** The requirement is carried OUT OF BAND, as a typed flag — never inferred from the brief's wording. `--requires-context` with no usable `--context-file` (an empty or whitespace-only file does not count) is refused pre-receipt with `review_context_required` (exit 2), before any receipt or ledger entry is minted. Measured at `3a017dd9`: ~5 recorded review dispatches asked for a review of material they never attached, and each returned a verdict the gate read as a pass.
 
-Why typed and not inferred (owner decision 2026-08-01, after three review rounds refuted three different heuristics): a phrase list was over-inclusive (5 of 10 flagged dispatches INLINED their artifact — a false positive refuses live work), a narrowed list was under-inclusive ("the provided spec", "uploaded document"), and an HTML-comment marker was forgeable (artifact data quoting the marker sets a control signal). A brief's prose cannot be both complete and unforgeable. A caller can still forget `--requires-context` — but that is a STATIC property of the call sites, asserted by `tests/hooks/test_wf_review_sites.py`, whereas a wrong prose guess was only ever discoverable in production.
-Build seats require BOTH `--gate-file` and `--plan-file` (the authenticated #429 gate decision plus the live implementation plan the context is minted from). The CLI derives the canonical `REQUIRED_PLAN_CONTEXT_KEYS` internally from `--plan-file` after authenticating the gate — the input is `--plan-file`, NEVER `--plan-context`, so no caller-assembled context object crosses the boundary. An omitted `--timeout` defaults to the seat's own declared bound (`resolve_dispatch_timeout`, #753); `--timeout` only tightens, never loosens (#733).
+The mint itself debits the atomic loop-back budget; exhaustion refuses (exit 3) and the gate
+escalates instead of looping. A tokenless run still reviews, but its result carries
+`diagnostic: true`, and the disposition step MUST refuse to open a fix round on a diagnostic
+result. Transport retries inside one runner invocation never re-debit. A spent or malformed
+token refuses outright.
 
-**Exit taxonomy (shipped numbering preserved; 6 is ADDITIVE):** `0` ok · `2` malformed input · `3` availability (chain exhausted / quota timeout / a timed-out, signalled, or otherwise process-failed dispatch — `ok: false` with any partial output attached and flagged `partial: true`, #733) · `4` enforcement denial (incl. `gate_stale_for_plan`) · `5` internal · `6` refused (`EXIT_REFUSED` — canary refusal; NEW, no renumber of the shipped #427/#464 codes; the competitive-only-seat error stays exit 2 as shipped). Exit → DISPATCH `outcome` mapping (normative):
+**The vacuous-result gate — subagent results are hypotheses.** Before consuming ANY subagent
+result (review or gather):
+1. the artifact it claims exists and is non-empty (for the runner: the `--out` file);
+2. the shape parses (for the runner: JSON with a `status` field that matches the exit code);
+3. freshness: the result's `head_sha`/`input_sha256` still match the current HEAD/artifact —
+   a result whose subject moved before disposition is REJECTED and re-run against the new
+   state; and any load-bearing claim is spot-verified against the cited file:line.
+A dead subagent, an empty file, or a missing status is a FAILED dispatch — never a pass,
+never "still running" (#766). Retry a failed review dispatch once; a second failure follows
+the ERROR protocol.
 
-| dispatch exit | DISPATCH `outcome` | condition |
-|---|---|---|
-| 0 | `ok` (or `retried` when a fallback attempt succeeded) | — |
-| 2 malformed | `error` | terminal caller error |
-| 3 availability | `error` after the orchestrator stops retrying; `dead` ONLY when it abandons a hung/vacuous supervised job (reap/quarantine) | retry policy is the orchestrator's; includes the #733 process-failure results (`dispatch_timeout`/`dispatch_signalled`/`dispatch_<status>` and the supervised/resume siblings) — the ONE canonical DISPATCH line for a workflow dispatch whose final attempt was killed carries `outcome=error`, never `ok`; a `partial: true` payload is a lead, not a pass |
-| 4 enforcement (incl. `gate_stale_for_plan`) | `error` | terminal denial |
-| 5 internal | `error` | terminal internal fault |
-| 6 refused (canary) | `error` | terminal refusal |
-
-**Emission rule (per WORKFLOW DISPATCH, #735 — owner-ratified):** the ORCHESTRATOR owns the retry loop: one workflow dispatch may comprise up to two executor ATTEMPTS (distinct correlation ids, e.g. `<id>` and `<id>-r1`), each attempt leaving its own receipt/observation in the audit trail — and the workflow dispatch emits exactly ONE canonical `DISPATCH` line once the loop completes (retried-then-succeeded → `outcome=retried`; retried-and-failed → `outcome=error`; abandoned hung/vacuous → `dead`). The attempt-level executor call never emits a session-note DISPATCH line of its own; no attempt ever disappears — attempt detail lives in receipts, not extra DISPATCH lines. Retry is permitted ONLY on proven death: a terminal failure observation for sync attempts; for MUTATING (supervised) attempts a VERIFIED kill — residue, an unverified kill, or a receipt with no observation goes DIRECTLY to the ERROR protocol, no blind retry (#733/#766). The producer is the executor result dict (`type=executor:<seat>`, `model=<actual_model>`, `resolution=primary`) on the primary tier, or — under the LEGACY architecture only — the Agent-tool dispatch (`resolution=fallback`).
-
-**Mutating-engine allowlist (#470 §2a).** Mutating dispatch is codex-only until an FS-sandbox child ships: the `MUTATING_FS_SANDBOXED` allowlist in `hooks/executor_routing_lib.py` currently holds `{codex}` alone, so a mutating composition on any other engine — a mutating-claude composition — is refused at the supervised STEP 0 with exit 6 (the canary refuses before any process exists). Non-mutating seats are unaffected (canary policy derivation returns None).
-
-**Seat mapping (per-phase → seat; exact seat ids come from the #445 routing table `executor_routing_lib.resolve_table`, cited here as the authority — this prose never restates per-seat models, so there is no second source of truth):**
-
-| WF2 phase | seat | notes |
-|---|---|---|
-| Step 2 fan-out | `analysis` | concurrent executor dispatches of the `analysis` seat (D-2); ≤3 concurrent preserved |
-| Step 3 design generation | bake-off (`competitive`) | competitive-only, never single-dispatch — **WIRED, opt-in (#765, owner decision 2026-07-31): gated by `python3 hooks/bakeoff_policy.py design-round-enabled --workspace <workspace-file> --project <name>` (exit 0 = opted in via `designBakeoff: {"enabled": true}` on the project's workspace entry; default OFF — a non-zero exit skips the round with a session-note line, Step 3 keeps its current mechanism). When opted in, full-spine Step 3 design generation dispatches ONE competitive design round via `python3 hooks/bakeoff_policy.py design-round --prompt-file <brief> --run-id wf2-<issue>-<session> --correlation-id <issue>-s3-design --workspace <workspace-file> --project <name> --winner-out <design-draft-path> --evidence-out <path>` (sol vs fable concurrent, glm-5.2 judge). `--winner-out` IS the winner-delivery channel: Step 3 proceeds only after exit 0 AND adopts that file's exact bytes as the design draft — stdout and the evidence carry no payloads, so a round without `--winner-out` produces no draft. The sanitized `--evidence-out` record rides the run's audit context — the raw sink stays gitignored. The round path itself re-enforces the opt-in (a disabled project refuses, exit 4) — the probe verb is the prose gate, not the only guard. Prerequisites: the judge env (`source ~/.config/rawgentic/glm-judge.env`) and a zhipuai-capable python — run the CLI under one (e.g. the workspace `.venv-bench`); on judge failure the CLI exits 3 fail-loud (interactive) or records a `judge_degraded` incumbent winner (`--headless`) — a degraded round is surfaced, never silently passed. The small-standard lane keeps its brief design note (the lane drops design ceremony, not review); a lane child skips the round with a session-note line.** |
-| Step 4 / 8a / 11 review | `review` | always the `review` seat — `review_fast` is a #491 LENS/model tier resolved via `resolve --role review --lens <lens>`, NOT a wired seat (`classify_seat` rejects it; the standing authorization covers exactly `analysis`/`review`/`build`, #735) |
-| Step 8 implementation | `build` | gate authentication + internally minted plan context (`--gate-file` + `--plan-file`, both mandatory) |
-| Step 16 | local | no model call |
-
-**Architecture selection is per-RUN, declared at run start via `begin-run`, never mixed (#474).** The workspace-level `defaultArchitecture` key selects the architecture (`"executor"` — the default when absent — or `"legacy"`); Step 2 probes the executor tier once (import + routing-table resolve — the probe-parallelism idiom) and, UNDER THE EXECUTOR ARCHITECTURE, declares the run: `python3 hooks/executor_routing_lib.py begin-run --run-id <run-id> --workspace <ws> --project <name>` pins the architecture in the run ledger's `initial` record (begin-run is executor-only — under legacy it refuses, exit 4), and every executor entry point (dispatch, recover-run, close-run) consumes that pin — an undeclared run refuses (`run_not_declared`), a mixed dispatch refuses (`mixed_architecture_run_refused`, exit 4). A LEGACY run makes no begin-run call and has no ledger: its declaration is the session-note line plus the run-record `architecture` field. The session-note line (`architecture: executor` / `architecture: legacy (defaultArchitecture)`) mirrors the declaration. A MID-RUN executor failure is a handled hard failure surfaced via the ERROR protocol — NEVER a downgrade to the Agent tool: there is no runtime fallback tier. Switching architectures is a deliberate JOINT config change (owner + operator edit `defaultArchitecture`), takes effect for NEW runs, and stops any in-flight run of the other architecture loudly at its next dispatch/recovery — restart the work as a fresh run under the new architecture. This extends the #417 no-silent-downgrade rule to an absolute.
-
-**An executor seat is never a gate bypass — every mandatory gate (Steps 4, 8a, 9, 11, 11.5) runs with identical semantics whichever tier dispatches its model calls, and every EXECUTOR-tier build-seat dispatch requires the authenticated gate decision plus the internally minted plan context.** WF2/WF3 prose runs the complexity-gate step before any legacy-architecture build dispatch.
-
-**Bundled agent dispatch (#164) — the LEGACY architecture (manual rollback target, #474).** Since the W12 flip (#474) the executor IS the architecture everywhere by default; the Agent-tool path below remains in-tree ONLY as the legacy architecture, reachable solely via the deliberate joint rollback (`defaultArchitecture: "legacy"` — procedure in `docs/config-reference.md`), NEVER via runtime fallback — an executor failure is surfaced via the ERROR protocol, not routed here. **Under the LEGACY architecture** (declared: `defaultArchitecture: "legacy"`, `resolve-seat` returns `inherit`) it dispatches with `rawgentic:rawgentic-implementer` / `rawgentic:rawgentic-reviewer` and carries `resolution=fallback` on the DISPATCH line (`fallback` is the audit token for a legacy-architecture Agent-tool dispatch — schema'd in run-records, deliberately unchanged). Both definitions carry a first-instruction architecture SELF-CHECK that refuses unless the workspace declares legacy — do not delete them: they are the rollback target. The plugin ships the two subagent definitions, auto-discovered from the plugin-root `agents/` directory and namespaced on install:
-- `rawgentic:rawgentic-implementer` — implementation-task agent (`isolation: worktree`; mutating work runs in an isolated git worktree)
-- `rawgentic:rawgentic-reviewer` — quality-gate review agent (read-heavy tools only: Read/Grep/Glob/Bash — no Write/Edit)
-
-Both declare `model: inherit` because routing is per-project config a static definition cannot read: dispatch by passing `subagent_type` plus the resolved role model as the per-invocation `model:` parameter, which OVERRIDES the definition's frontmatter (documented resolution order: env var > per-invocation param > frontmatter > session model). Every per-step dispatch annotation in `references/steps.md` means exactly this contract — `review`-role dispatches use `rawgentic:rawgentic-reviewer`, `implementation`-role dispatches use `rawgentic:rawgentic-implementer`, `analysis`-role dispatches stay generic (no bundled analysis agent). Never-Haiku is enforced twice: in the definitions themselves and by the `select_impl_model` floor in Step 8 (`references/steps.md`). **Graceful fallback (AC4):** when the Step 2 `probe-parallelism` result is `serial-only` (worktree isolation unavailable — e.g. not a git repo), dispatch the same agent types WITHOUT relying on isolation and execute strictly serially; if the agent type itself is unavailable (stale cache, non-plugin install), fall back to the generic inline-prompt dispatch with the same brief — the routed model contract is unchanged in both fallbacks.
-
-**Canonical DISPATCH audit line (#330).** The lowercase start-time line above stays as-is (observability only, never parsed). At the point each dispatch decision COMPLETES — or the orchestrator declares it dead/abandoned — ALSO append one uppercase canonical line carrying the issue number and all six schema fields, fixed key order, single-space-separated, one line:
-```
-DISPATCH issue=<n> role=<review|implementation|analysis|other> type=<subagent_type> model=<model|null> effort=<effort|null> outcome=<ok|error|retried|dead> resolution=<primary|fallback|generic>
-```
-Canonical regex (assembly's scoped grep + validator):
-```
-^DISPATCH issue=(\d+) role=(review|implementation|analysis|other) type=([A-Za-z0-9_.:/-]+) model=(null|[A-Za-z0-9_.:/-]+) effort=(null|[A-Za-z0-9_.:/-]+) outcome=(ok|error|retried|dead) resolution=(primary|fallback|generic)$
-```
-Emission rules:
-- One line per SUBAGENT INVOCATION dispatched (not per attempt) — a multi-reviewer gate emits one line per reviewer (WF2 Step 8a's single accumulated wave of two reviewers = two lines; Step 11's two agents = two lines, #492).
-- Write each line flush-left at column 0 as its own physical line — never inside a list item, blockquote, or fenced code block (the assembler greps `^DISPATCH` anchored to line start; an indented or bulleted line is rescued only into the MALFORMED count, never into `dispatches[]`).
-- Retry semantics: a single retry of the SAME task/invocation is ONE line — retried-then-succeeded → `outcome=retried`; retried-and-still-failed → `outcome=error` — regardless of any model escalation on the retry. Two lines are written only when the workflow abandons one dispatch PATH for a different one (e.g. delegation abandoned for inline work): the abandoned path's terminal line plus the new path's line.
-- A hung/vacuous dispatch abandoned by the orchestrator → `outcome=dead`. A dispatch that errors into a failure handler or a suspend still gets its canonical line (`outcome=error` or `dead`) BEFORE the handler/suspend proceeds — the failed dispatch is exactly the entry the audit most needs.
-- `type`/`model`/`effort` values are stable slugs matching `[A-Za-z0-9_.:/-]+` (no spaces, no commas). Write the literal `null` when the role resolved `inherit` (model) or `none` (effort) — never an empty string or "unknown".
-- Generic inline-prompt dispatches (no bundled agent type ran) use the stable `subagent_type` token `generic-<role>` (e.g. `generic-analysis`) and carry `resolution=generic`.
-- `issue=<n>` is this run's issue number (scoping key — assembly greps the whole session-notes file for `^DISPATCH issue=<n> `). `DISPATCH` is uppercase so it can never collide with the lowercase start-time prose line.
-
-Resolution decision table (maps the dispatch ladder to #329's vocab):
-
-| Dispatch path | resolution |
-|---|---|
-| Named agent type ran worktree-isolated | `primary` |
-| Named agent type ran WITHOUT isolation (`serial-only` degradation) | `primary` — the NAMED type still ran; `fallback` means a SUBSTITUTE type ran, which did not happen |
-| Named agent type unavailable AND no bundled substitute tier is declared (or the substitute also fails to resolve) → generic inline-prompt dispatch | `generic` (`subagent_type` = `generic-<role>`) |
-| A bundled SUBSTITUTE agent type ran in place of an unavailable named type | `fallback` — no WF2 producer today; WF3 Step 9's declared per-slot chain (#331) produces it at tier 2 |
-
-**Seat fallback chains + circuit breaker (#417).** Each seat's model is a config-declared chain (the routing table's `primary` + `chain[]`, e.g. the `review` chain sol → fable → sonnet — owner matrix 2026-07-31, #762), tried in order on an AVAILABILITY failure; the skip is **chain-aware** — it drops any entry that would violate the artifact's cross-model invariant, never blindly the literal next entry. **A chain that exhausts its eligible entries is a handled hard failure, never a silent downgrade** — the run surfaces it (the ERROR protocol), it does not quietly proceed on an unrouted model.
-
-**Concurrency ceiling (#417).** Keep **≤ 3 concurrent Claude subagents** (the standing cap); when the driver itself is dispatching Claude work alongside them, reserve one slot for the driver → an **effective working ceiling of 2**. This is a PROSE rule — no programmatic clamp exists — so honor it when fanning out (Step 8a's two reviewers and Step 11's two agents (#492) sit within the cap; a cross-engine candidate on the codex/zhipu pool consumes no Claude slot). `queued_ms` on an Observation records any queue wait so a stall is diagnosable.
-
-**Driver seat — guidance, not enforcement (#417).** opus-4-8 is the recommended session/orchestrator model: the strong-model-on-top reliability floor (weak-model-on-top collapses; the role is unbenchmarked until the driver-bench, #430, reports). This is GUIDANCE only — the harness owns the session model; this block cannot set it, and nothing here fails a run whose session model differs.
+**Disposition.** Findings flow to the gate's normal handling: the severity-banded confidence
+filter, High-deferral discipline, the ambiguity circuit breaker, and the loop-back budget.
+Fix, defer with rationale, or decline with reason — never silently drop. Concurrency courtesy:
+keep ≤ 3 concurrent Claude subagents (token burn; a session-limit hit kills all in-flight
+agents with vacuous results). A subagent or runner dispatch is never a gate bypass — every
+mandatory review gate runs with identical semantics whether a pass ran inline or through
+`hooks/review_runner.py`, and a review that may open a fix round carries a reopen token
+minted first.

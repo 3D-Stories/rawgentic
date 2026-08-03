@@ -279,11 +279,13 @@ def test_wf2_step3_requires_platform_apis_declaration():
     assert "surface:" in s3, "Step 3 must require a surface: for a fail-silent call (AC4)"
 
 
-def test_wf2_step4_runs_validator_and_lens():
+def test_wf2_step4_runs_feasibility_lens():
+    # M0b (#866, D175): the mechanical assert_feasibility_declared call left the
+    # prose; the feasibility CHECK stays a blocking Step-4 dimension by judgment.
     s4 = _section(WF2_STEPS, "## Step 4:", "## Step 5:")
-    assert "assert_feasibility_declared" in s4, "Step 4 must run the mechanical feasibility gate (#226 AC2)"
     assert "Platform / external-dependency feasibility" in s4, "Step 4 must carry the platform-feasibility critique dimension"
-    # the human-judgment lens the parser cannot do: a used-but-undeclared API
+    assert "blocking" in s4.lower(), "the feasibility dimension must stay a blocking finding class"
+    # the human-judgment lens: a used-but-undeclared API
     assert "undeclared" in s4.lower() or "not declare" in s4.lower(), "Step 4 lens must flag a used-but-undeclared API"
 
 

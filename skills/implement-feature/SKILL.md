@@ -72,7 +72,7 @@ The following steps are MANDATORY and must NEVER be skipped, abbreviated, or com
 | 1 | Receive Issue | Foundation — wrong issue = wrong implementation |
 | 2 | Analyze Codebase | Complexity classification drives all downstream decisions |
 | 3 | Design Solution | Architecture before code — always |
-| 4 | Quality Gate (Design) | Catches design flaws BEFORE implementation. The in-repo quality-bar rubric + the mechanical platform-feasibility gate (#226) run for all lanes; the full spine adds the opt-in adversarial-on-design + peer consult. |
+| 4 | Quality Gate (Design) | Catches design flaws BEFORE implementation. The in-repo quality-bar rubric + the platform-feasibility check (#226) run for all lanes; the full spine adds the opt-in adversarial-on-design + peer consult. |
 | 5 | Implementation Plan | Task decomposition enables TDD and progress tracking |
 | 7 | Create Branch | Git isolation is non-negotiable |
 | 8 | Implementation | The actual work |
@@ -87,8 +87,8 @@ Conditional steps (skip ONLY when their condition is not met):
 - **Step 8a (Per-task Review, P15):** mandatory when ANY task has `riskLevel: high`. Dispatched as ONE accumulated wave after the last plan task's commit, covering every high-risk commit (#492 — was per-task-batch). Marker (one per covered task): `### WF2 Step 8a [task <id>, sha <abc>]: DONE (#<issue>: <N findings>)` in session notes.
 - Step 10 (Memorize): background, never blocks
 - Step 13 (CI): skip only if has_ci == false
-- Step 14 (Merge/Deploy): skip only if user does not request merge — **always skipped in headless mode** (`additionalContext` has "HEADLESS MODE active"): PR creation is the terminal deliverable, so a headless run never merges or deploys (`references/headless.md`).
-- Step 15 (Post-Deploy): skip only if no deployment performed — also skipped in headless mode (no deployment occurred).
+- Step 14 (Merge/Deploy): skip only if user does not request merge — in an unattended run (e.g. an epic-run child) PR creation is the terminal deliverable, so the run never merges or deploys.
+- Step 15 (Post-Deploy): skip only if no deployment performed.
 
 **Why these hold even under pressure:** the tempting reasons to skip — a long session, a
 running-low context window, a change that "looks mechanical," or "WF1 already critiqued
@@ -134,119 +134,86 @@ Before executing any workflow steps, load the project configuration:
      --config <activeProject.path>/.rawgentic.json
    ```
    - **Non-zero exit** -> the config is missing, corrupt, or invalid. **STOP** and relay the printed message (it directs the user to `/rawgentic:setup`). A `config.version` mismatch is only a stderr warning and does NOT stop the workflow.
-   - **Exit 0** -> stdout is `{"config": {...}, "capabilities": {...}}`. Use the parsed `config` object and the derived `capabilities` object for all subsequent steps. The `capabilities` fields are: `has_tests`, `test_commands`, `has_ci`, `ci_quarantined`, `ci_quarantine_reason`, `ci_quarantined_since`, `has_deploy`, `deploy_method`, `has_database`, `has_docker`, `project_type`, `repo`, `default_branch`, `migration_dir`, `phase_executor_table`. Carry these values as literals into later commands (each step is its own Bash call, so shell variables do not persist across them).
+   - **Exit 0** -> stdout is `{"config": {...}, "capabilities": {...}}`. Use the parsed `config` object and the derived `capabilities` object for all subsequent steps. The `capabilities` fields are: `has_tests`, `test_commands`, `has_ci`, `ci_quarantined`, `ci_quarantine_reason`, `ci_quarantined_since`, `has_deploy`, `deploy_method`, `has_database`, `has_docker`, `project_type`, `repo`, `default_branch`, `migration_dir`. Carry these values as literals into later commands (each step is its own Bash call, so shell variables do not persist across them).
 
 All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
 </config-loading>
 
 <model-routing-resolve>
-Resolve model routing (optional, fail-open) right after `<config-loading>`, before any subagent dispatch. For each role this skill dispatches (`analysis`, `review`, `implementation`), resolve the configured model:
+**Where work runs (D174, the executor retreat — 2026-08-03).** Analysis and implementation run
+INLINE in the orchestrating session. There is no dispatch machinery, no seat table, and no
+per-phase model routing. Broad read-only gathers MAY fan out harness subagents (Agent tool,
+Explore-style) to keep file dumps out of the main window — inline when narrow; judgment by
+breadth (D182). Genuinely parallel implementation tasks MAY use Agent-tool worktree subagents;
+the default is inline TDD. What is retired is the executor seat, not subagents.
+
+**Cross-model review runs through ONE entry point** — `hooks/review_runner.py` (D179) —
+dispatched from a read-only harness subagent so the inline self-review and the cross-model
+review run in parallel. The subagent's ONLY job is to run one runner command and report back
+the result path plus the exit code; it must not modify project files — its only permitted
+write is the runner's declared `--out` result file. Command shapes:
+
 ```bash
-python3 hooks/model_routing_lib.py resolve \
-  --workspace .rawgentic_workspace.json --project <name> --role <analysis|review|implementation>
+# Text artifact (design/plan/spec/…): WF2 Step 4, WF5
+python3 hooks/review_runner.py review-artifact --artifact <file> --type <design|plan|diff|…> \
+  --author-model <your own model id, verbatim> --reviewer <reviewer, below> \
+  [--backend gpt|glm] [--reopen-token <token.json>] --out <result.json> --project-root .
+
+# Code diff vs a base ref: WF2 Steps 8a/11, WF3 Step 9
+python3 hooks/review_runner.py review-code --base <base ref> --brief <brief.md> \
+  --author-model <your model id> --reviewer <reviewer> [--backend gpt|glm] \
+  [--reopen-token <token.json>] --out <result.json> --project-root .
+
+# Independent peer proposal: WF13
+python3 hooks/review_runner.py consult --artifact <problem.md> \
+  --author-model <your model id> --reviewer <reviewer> [--backend gpt|glm] \
+  --out <result.json> --project-root .
 ```
-Run once per role (three invocations total). Exit is always 0; stdout is a model name or `inherit`. If `hooks/model_routing_lib.py` is missing (e.g. a stale plugin cache), the invocation may exit non-zero — treat that, and any non-zero/absent output, as `inherit`. Carry each resolved value as a literal into later steps (fresh-shell rule). When a value is `inherit`, dispatch that role's subagents with NO `model:` parameter (session model). Otherwise pass `model: <value>` on every Agent dispatch for that role. A stderr warning is advisory — never treat it as failure.
 
-For each role also resolve its effort tier with a second invocation appending `--effort`, printing the effort string or `none`; carry both the model and the effort as literals. Effort is role-wide — it does not scale with any per-task down-route (e.g. `select_impl_model`'s ceiling logic in Step 8, `references/steps.md`, is unaffected). When the resolved effort is `none`, dispatch exactly as today. When it is non-`none`: the Agent tool has no per-invocation effort parameter, so effort is carried dual-path — (a) pass it where the dispatch layer supports effort (the Workflow tool's `agent(prompt, {effort: <value>})` option, or a Codex dispatch's reasoning-effort flag), and (b) always record it in the dispatch's session-note/audit line (e.g. `dispatch <role>: model <model>, effort <effort>`) so the resolved tier stays observable where per-invocation delivery is impossible.
+**Reviewer identity is pinned, never inherited.** The current default reviewer id is
+**`gpt-5.6-sol`** (single-sourced HERE — a retired id fails loudly at invocation and is updated
+on this one line). The alternate backend is `--backend glm` (model `glm-5.2`). The runner
+REFUSES author==reviewer and unresolvable identities; pass your own model id as
+`--author-model`, verbatim. Exit codes: `0` success (check `diagnostic` in the result JSON) ·
+`2` refused (validation/identity/token — no egress) · `3` terminal backend failure ·
+`4` empty/invalid backend output. The runner owns transport policy (#857): one bounded
+transport retry, org-wide 429 terminal, one permitted backend switch on a per-account 429 —
+callers NEVER add their own retry loop around it.
 
-**Executor-dispatch contract (#470) — the PRIMARY tier.** Every per-phase model call dispatches through ONE skill-facing entry point — the executor `dispatch` CLI (all seats, one single entry point; no second entry point is ever named in prose, because the sync-vs-supervised split is an internal routing decision keyed on the staged launch profile):
+**Actionable vs diagnostic — the reopen choke point (#855).** A review that may open a fix
+round needs a reopen token minted FIRST:
+
 ```bash
-python3 hooks/executor_routing_lib.py dispatch \
-  --seat <seat> --prompt-file <brief-file> --run-id wf2-<issue>-<session> \
-  --correlation-id <issue>-<step>-<slug> [--effort <tier>] [--timeout <s>] \
-  [--context-file <path> ...] \
-  [--gate-file <gate.json> --plan-file <impl-plan.md>] \
-  --workspace <workspace-file> --project <name>
+python3 hooks/plan_lib.py review-reopen --state-file claude_docs/.wf2-state/<issue>/loopback_counters.json \
+  --source <design|spec_tighten|tdd|review|review_design> --out <token.json> --project-root .
 ```
-**A `review`-seat dispatch that needs an external artifact MUST declare it with `--requires-context` AND pass it with `--context-file` (#826).** The requirement is carried OUT OF BAND, as a typed flag — never inferred from the brief's wording. `--requires-context` with no usable `--context-file` (an empty or whitespace-only file does not count) is refused pre-receipt with `review_context_required` (exit 2), before any receipt or ledger entry is minted. Measured at `3a017dd9`: ~5 recorded review dispatches asked for a review of material they never attached, and each returned a verdict the gate read as a pass.
 
-Why typed and not inferred (owner decision 2026-08-01, after three review rounds refuted three different heuristics): a phrase list was over-inclusive (5 of 10 flagged dispatches INLINED their artifact — a false positive refuses live work), a narrowed list was under-inclusive ("the provided spec", "uploaded document"), and an HTML-comment marker was forgeable (artifact data quoting the marker sets a control signal). A brief's prose cannot be both complete and unforgeable. A caller can still forget `--requires-context` — but that is a STATIC property of the call sites, asserted by `tests/hooks/test_wf_review_sites.py`, whereas a wrong prose guess was only ever discoverable in production.
-Build seats require BOTH `--gate-file` and `--plan-file` (the authenticated #429 gate decision plus the live implementation plan the context is minted from). The CLI derives the canonical `REQUIRED_PLAN_CONTEXT_KEYS` internally from `--plan-file` after authenticating the gate — the input is `--plan-file`, NEVER `--plan-context`, so no caller-assembled context object crosses the boundary. An omitted `--timeout` defaults to the seat's own declared bound (`resolve_dispatch_timeout`, #753); `--timeout` only tightens, never loosens (#733).
+The mint itself debits the atomic loop-back budget; exhaustion refuses (exit 3) and the gate
+escalates instead of looping. A tokenless run still reviews, but its result carries
+`diagnostic: true`, and the disposition step MUST refuse to open a fix round on a diagnostic
+result. Transport retries inside one runner invocation never re-debit. A spent or malformed
+token refuses outright.
 
-**Exit taxonomy (shipped numbering preserved; 6 is ADDITIVE):** `0` ok · `2` malformed input · `3` availability (chain exhausted / quota timeout / a timed-out, signalled, or otherwise process-failed dispatch — `ok: false` with any partial output attached and flagged `partial: true`, #733) · `4` enforcement denial (incl. `gate_stale_for_plan`) · `5` internal · `6` refused (`EXIT_REFUSED` — canary refusal; NEW, no renumber of the shipped #427/#464 codes; the competitive-only-seat error stays exit 2 as shipped). Exit → DISPATCH `outcome` mapping (normative):
+**The vacuous-result gate — subagent results are hypotheses.** Before consuming ANY subagent
+result (review or gather):
+1. the artifact it claims exists and is non-empty (for the runner: the `--out` file);
+2. the shape parses (for the runner: JSON with a `status` field that matches the exit code);
+3. freshness: the result's `head_sha`/`input_sha256` still match the current HEAD/artifact —
+   a result whose subject moved before disposition is REJECTED and re-run against the new
+   state; and any load-bearing claim is spot-verified against the cited file:line.
+A dead subagent, an empty file, or a missing status is a FAILED dispatch — never a pass,
+never "still running" (#766). Retry a failed review dispatch once; a second failure follows
+the ERROR protocol.
 
-| dispatch exit | DISPATCH `outcome` | condition |
-|---|---|---|
-| 0 | `ok` (or `retried` when a fallback attempt succeeded) | — |
-| 2 malformed | `error` | terminal caller error |
-| 3 availability | `error` after the orchestrator stops retrying; `dead` ONLY when it abandons a hung/vacuous supervised job (reap/quarantine) | retry policy is the orchestrator's; includes the #733 process-failure results (`dispatch_timeout`/`dispatch_signalled`/`dispatch_<status>` and the supervised/resume siblings) — the ONE canonical DISPATCH line for a workflow dispatch whose final attempt was killed carries `outcome=error`, never `ok`; a `partial: true` payload is a lead, not a pass |
-| 4 enforcement (incl. `gate_stale_for_plan`) | `error` | terminal denial |
-| 5 internal | `error` | terminal internal fault |
-| 6 refused (canary) | `error` | terminal refusal |
-
-**Emission rule (per WORKFLOW DISPATCH, #735 — owner-ratified):** the ORCHESTRATOR owns the retry loop: one workflow dispatch may comprise up to two executor ATTEMPTS (distinct correlation ids, e.g. `<id>` and `<id>-r1`), each attempt leaving its own receipt/observation in the audit trail — and the workflow dispatch emits exactly ONE canonical `DISPATCH` line once the loop completes (retried-then-succeeded → `outcome=retried`; retried-and-failed → `outcome=error`; abandoned hung/vacuous → `dead`). The attempt-level executor call never emits a session-note DISPATCH line of its own; no attempt ever disappears — attempt detail lives in receipts, not extra DISPATCH lines. Retry is permitted ONLY on proven death: a terminal failure observation for sync attempts; for MUTATING (supervised) attempts a VERIFIED kill — residue, an unverified kill, or a receipt with no observation goes DIRECTLY to the ERROR protocol, no blind retry (#733/#766). The producer is the executor result dict (`type=executor:<seat>`, `model=<actual_model>`, `resolution=primary`) on the primary tier, or — under the LEGACY architecture only — the Agent-tool dispatch (`resolution=fallback`).
-
-**Mutating-engine allowlist (#470 §2a).** Mutating dispatch is codex-only until an FS-sandbox child ships: the `MUTATING_FS_SANDBOXED` allowlist in `hooks/executor_routing_lib.py` currently holds `{codex}` alone, so a mutating composition on any other engine — a mutating-claude composition — is refused at the supervised STEP 0 with exit 6 (the canary refuses before any process exists). Non-mutating seats are unaffected (canary policy derivation returns None).
-
-**Seat mapping (per-phase → seat; exact seat ids come from the #445 routing table `executor_routing_lib.resolve_table`, cited here as the authority — this prose never restates per-seat models, so there is no second source of truth):**
-
-| WF2 phase | seat | notes |
-|---|---|---|
-| Step 2 fan-out | `analysis` | concurrent executor dispatches of the `analysis` seat (D-2); ≤3 concurrent preserved |
-| Step 3 design generation | bake-off (`competitive`) | competitive-only, never single-dispatch — **WIRED, opt-in (#765, owner decision 2026-07-31): gated by `python3 hooks/bakeoff_policy.py design-round-enabled --workspace <workspace-file> --project <name>` (exit 0 = opted in via `designBakeoff: {"enabled": true}` on the project's workspace entry; default OFF — a non-zero exit skips the round with a session-note line, Step 3 keeps its current mechanism). When opted in, full-spine Step 3 design generation dispatches ONE competitive design round via `python3 hooks/bakeoff_policy.py design-round --prompt-file <brief> --run-id wf2-<issue>-<session> --correlation-id <issue>-s3-design --workspace <workspace-file> --project <name> --winner-out <design-draft-path> --evidence-out <path>` (sol vs fable concurrent, glm-5.2 judge). `--winner-out` IS the winner-delivery channel: Step 3 proceeds only after exit 0 AND adopts that file's exact bytes as the design draft — stdout and the evidence carry no payloads, so a round without `--winner-out` produces no draft. The sanitized `--evidence-out` record rides the run's audit context — the raw sink stays gitignored. The round path itself re-enforces the opt-in (a disabled project refuses, exit 4) — the probe verb is the prose gate, not the only guard. Prerequisites: the judge env (`source ~/.config/rawgentic/glm-judge.env`) and a zhipuai-capable python — run the CLI under one (e.g. the workspace `.venv-bench`); on judge failure the CLI exits 3 fail-loud (interactive) or records a `judge_degraded` incumbent winner (`--headless`) — a degraded round is surfaced, never silently passed. The small-standard lane keeps its brief design note (the lane drops design ceremony, not review); a lane child skips the round with a session-note line.** |
-| Step 4 / 8a / 11 review | `review` | always the `review` seat — `review_fast` is a #491 LENS/model tier resolved via `resolve --role review --lens <lens>`, NOT a wired seat (`classify_seat` rejects it; the standing authorization covers exactly `analysis`/`review`/`build`, #735) |
-| Step 8 implementation | `build` | gate authentication + internally minted plan context (`--gate-file` + `--plan-file`, both mandatory) |
-| Step 16 | local | no model call |
-
-**Architecture selection is per-RUN, declared at run start via `begin-run`, never mixed (#474).** The workspace-level `defaultArchitecture` key selects the architecture (`"executor"` — the default when absent — or `"legacy"`); Step 2 probes the executor tier once (import + routing-table resolve — the probe-parallelism idiom) and, UNDER THE EXECUTOR ARCHITECTURE, declares the run: `python3 hooks/executor_routing_lib.py begin-run --run-id <run-id> --workspace <ws> --project <name>` pins the architecture in the run ledger's `initial` record (begin-run is executor-only — under legacy it refuses, exit 4), and every executor entry point (dispatch, recover-run, close-run) consumes that pin — an undeclared run refuses (`run_not_declared`), a mixed dispatch refuses (`mixed_architecture_run_refused`, exit 4). A LEGACY run makes no begin-run call and has no ledger: its declaration is the session-note line plus the run-record `architecture` field. The session-note line (`architecture: executor` / `architecture: legacy (defaultArchitecture)`) mirrors the declaration. A MID-RUN executor failure is a handled hard failure surfaced via the ERROR protocol — NEVER a downgrade to the Agent tool: there is no runtime fallback tier. Switching architectures is a deliberate JOINT config change (owner + operator edit `defaultArchitecture`), takes effect for NEW runs, and stops any in-flight run of the other architecture loudly at its next dispatch/recovery — restart the work as a fresh run under the new architecture. This extends the #417 no-silent-downgrade rule to an absolute.
-
-**An executor seat is never a gate bypass — every mandatory gate (Steps 4, 8a, 9, 11, 11.5) runs with identical semantics whichever tier dispatches its model calls, and every EXECUTOR-tier build-seat dispatch requires the authenticated gate decision plus the internally minted plan context.** WF2/WF3 prose runs the complexity-gate step before any legacy-architecture build dispatch.
-
-**Bundled agent dispatch (#164) — the LEGACY architecture (manual rollback target, #474).** Since the W12 flip (#474) the executor IS the architecture everywhere by default; the Agent-tool path below remains in-tree ONLY as the legacy architecture, reachable solely via the deliberate joint rollback (`defaultArchitecture: "legacy"` — procedure in `docs/config-reference.md`), NEVER via runtime fallback — an executor failure is surfaced via the ERROR protocol, not routed here. **Under the LEGACY architecture** (declared: `defaultArchitecture: "legacy"`, `resolve-seat` returns `inherit`) it dispatches with `rawgentic:rawgentic-implementer` / `rawgentic:rawgentic-reviewer` and carries `resolution=fallback` on the DISPATCH line (`fallback` is the audit token for a legacy-architecture Agent-tool dispatch — schema'd in run-records, deliberately unchanged). Both definitions carry a first-instruction architecture SELF-CHECK that refuses unless the workspace declares legacy — do not delete them: they are the rollback target. The plugin ships the two subagent definitions, auto-discovered from the plugin-root `agents/` directory and namespaced on install:
-- `rawgentic:rawgentic-implementer` — implementation-task agent (`isolation: worktree`; mutating work runs in an isolated git worktree)
-- `rawgentic:rawgentic-reviewer` — quality-gate review agent (read-heavy tools only: Read/Grep/Glob/Bash — no Write/Edit)
-
-Both declare `model: inherit` because routing is per-project config a static definition cannot read: dispatch by passing `subagent_type` plus the resolved role model as the per-invocation `model:` parameter, which OVERRIDES the definition's frontmatter (documented resolution order: env var > per-invocation param > frontmatter > session model). Every per-step dispatch annotation in `references/steps.md` means exactly this contract — `review`-role dispatches use `rawgentic:rawgentic-reviewer`, `implementation`-role dispatches use `rawgentic:rawgentic-implementer`, `analysis`-role dispatches stay generic (no bundled analysis agent). Never-Haiku is enforced twice: in the definitions themselves and by the `select_impl_model` floor in Step 8 (`references/steps.md`). **Graceful fallback (AC4):** when the Step 2 `probe-parallelism` result is `serial-only` (worktree isolation unavailable — e.g. not a git repo), dispatch the same agent types WITHOUT relying on isolation and execute strictly serially; if the agent type itself is unavailable (stale cache, non-plugin install), fall back to the generic inline-prompt dispatch with the same brief — the routed model contract is unchanged in both fallbacks.
-
-**Canonical DISPATCH audit line (#330).** The lowercase start-time line above stays as-is (observability only, never parsed). At the point each dispatch decision COMPLETES — or the orchestrator declares it dead/abandoned — ALSO append one uppercase canonical line carrying the issue number and all six schema fields, fixed key order, single-space-separated, one line:
-```
-DISPATCH issue=<n> role=<review|implementation|analysis|other> type=<subagent_type> model=<model|null> effort=<effort|null> outcome=<ok|error|retried|dead> resolution=<primary|fallback|generic>
-```
-Canonical regex (assembly's scoped grep + validator):
-```
-^DISPATCH issue=(\d+) role=(review|implementation|analysis|other) type=([A-Za-z0-9_.:/-]+) model=(null|[A-Za-z0-9_.:/-]+) effort=(null|[A-Za-z0-9_.:/-]+) outcome=(ok|error|retried|dead) resolution=(primary|fallback|generic)$
-```
-Emission rules:
-- One line per SUBAGENT INVOCATION dispatched (not per attempt) — a multi-reviewer gate emits one line per reviewer (WF2 Step 8a's single accumulated wave of two reviewers = two lines; Step 11's two agents = two lines, #492).
-- Write each line flush-left at column 0 as its own physical line — never inside a list item, blockquote, or fenced code block (the assembler greps `^DISPATCH` anchored to line start; an indented or bulleted line is rescued only into the MALFORMED count, never into `dispatches[]`).
-- Retry semantics: a single retry of the SAME task/invocation is ONE line — retried-then-succeeded → `outcome=retried`; retried-and-still-failed → `outcome=error` — regardless of any model escalation on the retry. Two lines are written only when the workflow abandons one dispatch PATH for a different one (e.g. delegation abandoned for inline work): the abandoned path's terminal line plus the new path's line.
-- A hung/vacuous dispatch abandoned by the orchestrator → `outcome=dead`. A dispatch that errors into a failure handler or a suspend still gets its canonical line (`outcome=error` or `dead`) BEFORE the handler/suspend proceeds — the failed dispatch is exactly the entry the audit most needs.
-- `type`/`model`/`effort` values are stable slugs matching `[A-Za-z0-9_.:/-]+` (no spaces, no commas). Write the literal `null` when the role resolved `inherit` (model) or `none` (effort) — never an empty string or "unknown".
-- Generic inline-prompt dispatches (no bundled agent type ran) use the stable `subagent_type` token `generic-<role>` (e.g. `generic-analysis`) and carry `resolution=generic`.
-- `issue=<n>` is this run's issue number (scoping key — assembly greps the whole session-notes file for `^DISPATCH issue=<n> `). `DISPATCH` is uppercase so it can never collide with the lowercase start-time prose line.
-
-Resolution decision table (maps the dispatch ladder to #329's vocab):
-
-| Dispatch path | resolution |
-|---|---|
-| Named agent type ran worktree-isolated | `primary` |
-| Named agent type ran WITHOUT isolation (`serial-only` degradation) | `primary` — the NAMED type still ran; `fallback` means a SUBSTITUTE type ran, which did not happen |
-| Named agent type unavailable AND no bundled substitute tier is declared (or the substitute also fails to resolve) → generic inline-prompt dispatch | `generic` (`subagent_type` = `generic-<role>`) |
-| A bundled SUBSTITUTE agent type ran in place of an unavailable named type | `fallback` — no WF2 producer today; WF3 Step 9's declared per-slot chain (#331) produces it at tier 2 |
-
-**Seat fallback chains + circuit breaker (#417).** Each seat's model is a config-declared chain (the routing table's `primary` + `chain[]`, e.g. the `review` chain sol → fable → sonnet — owner matrix 2026-07-31, #762), tried in order on an AVAILABILITY failure; the skip is **chain-aware** — it drops any entry that would violate the artifact's cross-model invariant, never blindly the literal next entry. **A chain that exhausts its eligible entries is a handled hard failure, never a silent downgrade** — the run surfaces it (the ERROR protocol), it does not quietly proceed on an unrouted model.
-
-**Concurrency ceiling (#417).** Keep **≤ 3 concurrent Claude subagents** (the standing cap); when the driver itself is dispatching Claude work alongside them, reserve one slot for the driver → an **effective working ceiling of 2**. This is a PROSE rule — no programmatic clamp exists — so honor it when fanning out (Step 8a's two reviewers and Step 11's two agents (#492) sit within the cap; a cross-engine candidate on the codex/zhipu pool consumes no Claude slot). `queued_ms` on an Observation records any queue wait so a stall is diagnosable.
-
-**Driver seat — guidance, not enforcement (#417).** opus-4-8 is the recommended session/orchestrator model: the strong-model-on-top reliability floor (weak-model-on-top collapses; the role is unbenchmarked until the driver-bench, #430, reports). This is GUIDANCE only — the harness owns the session model; this block cannot set it, and nothing here fails a run whose session model differs.
+**Disposition.** Findings flow to the gate's normal handling: the severity-banded confidence
+filter, High-deferral discipline, the ambiguity circuit breaker, and the loop-back budget.
+Fix, defer with rationale, or decline with reason — never silently drop. Concurrency courtesy:
+keep ≤ 3 concurrent Claude subagents (token burn; a session-limit hit kills all in-flight
+agents with vacuous results). A subagent or runner dispatch is never a gate bypass — every
+mandatory review gate runs with identical semantics whether a pass ran inline or through
+`hooks/review_runner.py`, and a review that may open a fix round carries a reopen token
+minted first.
 </model-routing-resolve>
-
-<headless-mode>
-When `additionalContext` contains "HEADLESS MODE active", you operate without a terminal
-user: the QUESTION (post→label→suspend→exit), ERROR, rich-checkpoint, and fresh-session
-resume protocols live in `references/headless.md`. **Read that file in full before acting on
-any of the per-step headless annotations in references/steps.md.** When NOT in headless mode, ignore them and behave
-normally (STOP and wait for terminal input at each interaction point).
-
-**Headless is PR-terminal — no remote ops.** A headless run's job ends at PR
-creation: no merge, no deploy, no outbound SSH to remote hosts. Step 14 (merge +
-deploy) and Step 15 (post-deploy) are skipped entirely; Step 2's live-environment
-probe does no SSH (local exploration only); CI handles deployment when a human
-merges the PR. This is also enforced at the hook layer — `wal-guard` blocks any
-`ssh`/`scp`/`rsync`/`sftp` invocation in headless mode regardless of step (set
-`headlessAllowSSH: true` on the project's `.rawgentic_workspace.json` entry to
-override), so even an ad-hoc SSH that a step forgot to annotate is denied.
-</headless-mode>
 
 <error-protocol>
 When a step hits an unrecoverable blocker (a base mismatch, an exhausted loop-back
@@ -257,14 +224,18 @@ blocker and STOP — never silently continue. The mechanics are mode-specific (#
   went wrong and exactly what the user must do to unblock, write the error state to
   session notes, then STOP and tell the user. This IS "a blocker posted to the issue
   via the ERROR protocol" — it satisfies the `/goal` guard's escape disjunct with **no
-  label**: `rawgentic:ai-error` is a headless-orchestrator signal, not a requirement of
+  label**: `rawgentic:ai-error` is an unattended-run signal, not a requirement of
   the interactive protocol, so do NOT add it interactively.
-- **Headless:** run the full protocol in `references/headless.md` — blocker comment +
-  create-and-add the `rawgentic:ai-error` label + exit (the orchestrator watches that
-  label). Every per-step **headless ERROR** annotation resolves to that protocol.
+- **Unattended (e.g. an epic-run child):** blocker comment + create-and-add the
+  `rawgentic:ai-error` label + stop this child (the epic driver watches that label).
 
 Either way the blocker is *posted*, so the goal guard clears honestly instead of the
 run hanging on an unsatisfiable "PR open with green CI".
+
+**Unattended waits:** in an unattended run, a step that WAITS for a user decision
+auto-resolves conservatively where its own text defines an auto-resolution (WF1-created
+issue confirmation, the lane/trivial suggestions); where none is defined, treat the wait
+as a blocker via this protocol — never an indefinite wait.
 </error-protocol>
 
 <termination-rule>
@@ -289,7 +260,7 @@ accepted, pinned trade-off (worst case equals today's escalate-to-user).
 `plan_lib.consume_loopback`
 enforces both the per-source and the global cap; call it and act on its `(ok, state)`
 return rather than pre-checking the in-context mirror.
-If the global cap is reached, STOP and escalate to user with a full summary of all loop-back triggers. **[Headless: ERROR — post error comment with full loop-back summary, add rawgentic:ai-error label, exit.]**
+If the global cap is reached, STOP and escalate to user with a full summary of all loop-back triggers.
 
 **One carve-out — the Step-4 design gate closes instead (#798).** When the `design` SOURCE cap is
 reached (and the global cap is NOT, and the ambiguity breaker returned `clear`), Step 4 closes
@@ -308,7 +279,7 @@ review_loopback_used = false
 review_design_loopback_used = false
 global_loopback_total = 0
 
-**Source of truth:** once it exists, `claude_docs/.wf2-state/<issue>/loopback_counters.json` (written via `plan_lib.consume_loopback`) is canonical for all *successfully persisted* counts — it survives context compaction, fresh headless sessions, and worktrees. The in-context variables above are a convenience mirror: on resume, initialize them from the file when it is present, otherwise from the defaults above (a missing file means "no loop-backs consumed yet," not an error). Do not write the in-context values back over a more-advanced file. If a `consume_loopback` call increments the in-context counter but fails to persist, treat that as a blocker — reconcile or STOP rather than blindly trusting either side, since a stale file would silently restore spent budget.
+**Source of truth:** once it exists, `claude_docs/.wf2-state/<issue>/loopback_counters.json` (written via `plan_lib.consume_loopback`) is canonical for all *successfully persisted* counts — it survives context compaction, fresh sessions, and worktrees. The in-context variables above are a convenience mirror: on resume, initialize them from the file when it is present, otherwise from the defaults above (a missing file means "no loop-backs consumed yet," not an error). Do not write the in-context values back over a more-advanced file. If a `consume_loopback` call increments the in-context counter but fails to persist, treat that as a blocker — reconcile or STOP rather than blindly trusting either side, since a stale file would silently restore spent budget.
 </loop-back-budget>
 
 <review-severity>
@@ -369,7 +340,7 @@ Active at ALL quality gates (Steps 4, 6, 9, 11, 15). Triggers when:
 - Two or more findings conflict (contradictory recommendations)
 - A finding requires judgment not captured in the GitHub issue
 
-When triggered: STOP the workflow at the current step. Present ALL problematic findings to the user. Wait for resolution. Do NOT auto-apply unambiguous findings separately -- the full set is applied together after resolution. **[Headless: QUESTION — post comment with all ambiguous/conflicting findings and resolution options, suspend.]**
+When triggered: STOP the workflow at the current step. Present ALL problematic findings to the user. Wait for resolution. Do NOT auto-apply unambiguous findings separately -- the full set is applied together after resolution.
 </ambiguity-circuit-breaker>
 
 <review-pipelining>
@@ -427,20 +398,20 @@ this directive binds only where a spike is the evidence.
 </probe-before-design>
 
 <review-lens-routing>
-Review waves are model-tiered per lens (#491; the epic #475 profile measured ~9 opus
-reviewers per child where the mechanical lenses never needed the strong model). When
-dispatching review-role subagents at Step 4, Step 8a, and Step 11, select the model per
-LENS via `select_review_lens_model`: the security lens is pinned to the resolved
-review model, and the mechanical, ac_completeness, test_coverage, and bug_logic lenses
-ride the fast tier (default sonnet; per-project tunable via `modelRouting.reviewLenses`;
-the function lives in `hooks/model_routing_lib.py`, CLI `resolve --role review --lens <lens>`).
-The pins are hard: a `reviewLenses` override can never downgrade the security lens (the
-function ignores it with a warning), and never-Haiku holds on every path — haiku floors
-to sonnet inside the function, and an `inherit` resolution on a Haiku session dispatches
-`model: sonnet` at the site (the Step 8 delegation guard's rule). Lens map: Step 4
-self-review dispatch → security; Step 8a Reviewer 1 → mechanical, Reviewer 2
-(silent-failure hunt) → security; Step 11 Reviewer 1 → mechanical + bug_logic (fast
-tier), Reviewer 2 → architecture + security (strong; #492).
+Review lenses are BRIEF EMPHASIS, not model routing (#491's per-lens model tiering retired
+with the executor — D174; there is no per-lens model selection any more). Each review pass
+carries a LENS naming what it hunts: `mechanical` (style, imports, hardcoded credentials,
+off-by-one), `bug_logic` (logic errors, race conditions, silent failures), `security` (auth,
+injection, traversal, ReDoS — this lens caught the ReDoS + FIFO-DoS on #466), `architecture`
+(pattern breaks, missing sibling changes, backward compatibility), plus `ac_completeness`
+and `test_coverage` as Step 4/9 emphases. The pairing at every review site: the INLINE
+self-review carries the mechanical + bug_logic lenses; the cross-model runner pass carries
+the architecture + security lenses — the security lens is never the one dropped (#492), so
+in the small-standard lane's single-reviewer form the one reviewer carries it. Lens map:
+Step 4 self-review → security; Step 8a Reviewer 1 → mechanical, Reviewer 2 (silent-failure
+hunt) → security; Step 11 Reviewer 1 → mechanical + bug_logic, Reviewer 2 → architecture +
+security (#492). State each pass's lens in its brief as emphasis only — never a verdict
+instruction (`<review-severity>`).
 </review-lens-routing>
 
 <early-smoke-install>
@@ -493,7 +464,7 @@ This slot table is AUTHORITATIVE: every prescribed marker literal in references/
 conform to its type's slot, and when a literal and this table diverge the table wins.
 Emitters: the key MUST land in the type's slot — a key anywhere else on the line is
 ignored by consumers. Deliberately un-keyed informational markers (path-estimate,
-path-estimate refresh, trivial-work suggestion, headless Step 14/15 skip) are declared
+path-estimate refresh, trivial-work suggestion, unattended Step 14/15 skip) are declared
 deferrals, not misses — they are print-and-continue advisories no consumer attributes.
 Step-entry state (#480, hook-emitted since #499): the PostToolUse hook (`hooks/step_state_post.py`) derives the now-pointer automatically from step DONE markers and signature commands — no per-step action required. The manual `python3 hooks/step_state.py write --project <project> --workflow wf2 --step <N> --step-title "<step name>" --issue <issue number> --session-id "$CLAUDE_CODE_SESSION_ID"` call is OPTIONAL belt-and-suspenders for entry-time precision on prose-only steps. Fail-open either way (never gates; any failure is ignored and the step proceeds).
 </step-tracking>
@@ -507,11 +478,9 @@ read on demand by this contract:
   `<trivial-work-check>`, and `<learning-config>` blocks.
 - `references/state-and-resume.md` — the `<state-files>` and
   `<resumption-protocol>` contracts. Read before ANY resume, or before reading
-  or writing a session-scoped state file or the local (git-excluded) review-state pointer.
+  or writing a session-scoped state file.
 - `references/run-record.md` — the run-record schema. Read before the Step 16
   run-record assembly.
-- `references/headless.md` — the headless interaction protocols. Read IN FULL
-  when `additionalContext` has "HEADLESS MODE active" (see `<headless-mode>`).
 - `references/whole-issue-delegation.md` — the whole-issue delegated-build
   brief, receipt schema, and validation contract. Read before using that
   Step 8 sub-mode.
@@ -527,20 +496,20 @@ ordered spine is in `<happy-path>`; MANDATORY vs conditional is in
 - **Step 1b — AC-derived goal guard (`/goal`).** Build the goal text via `plan_lib.build_goal_text` and fold it into Step 1's confirmation; optional, never blocks. (read references/steps.md §1b before executing)
 - **Step 2 — Analyze codebase & classify complexity.** Map-first then parallel gather then synthesize; set the authoritative complexity, small-standard-lane eligibility, trivial-work check, and the parallelism probe. (read references/steps.md §2 before executing)
 - **Step 3 — Design solution architecture.** Produce the design doc incl. the mandatory `platform_apis:` feasibility declaration (#226), probing load-bearing platform APIs live first per `<probe-before-design>` (#490); optional cross-model peer consult, blind both ways; collapses to a brief note in the lane. (read references/steps.md §3 before executing)
-- **Step 4 — Quality gate: design critique.** the in-repo quality-bar rubric for all lanes (#190 retired the 3-judge panel; #205 replaced the reflexion dependency) + the mechanical platform-feasibility gate (`plan_lib.assert_feasibility_declared`, #226) + opt-in adversarial-on-design on the full spine; the breaker runs EXACTLY once. (read references/steps.md §4 before executing)
-- **Step 5 — Create implementation plan.** Decompose into risk-tagged tasks (`riskLevel`), parallel-group/files validation, verification strategy; checklist form in the lane. (read references/steps.md §5 before executing)
+- **Step 4 — Quality gate: design critique.** the in-repo quality-bar rubric for all lanes (#190 retired the 3-judge panel; #205 replaced the reflexion dependency) + the platform-feasibility check (#226) + opt-in adversarial-on-design (via the review runner) on the full spine; the breaker runs EXACTLY once. (read references/steps.md §4 before executing)
+- **Step 5 — Create implementation plan.** Decompose into risk-tagged tasks (`riskLevel`), optional parallel-group/files declarations, verification strategy; checklist form in the lane. (read references/steps.md §5 before executing)
 - **Step 6 — Quality gate: plan drift (conditional).** The quality-bar rubric + opt-in adversarial-on-plan; skipped when time-critical or in the lane. (read references/steps.md §6 before executing)
 - **Step 7 — Create feature branch.** Branch from a freshly-fetched `origin/<default>` and assert the base; never pull into the current checkout. (read references/steps.md §7 before executing)
-- **Step 8 — Implementation.** Execute the plan task-by-task (TDD/implement-verify), commit per task; early smoke-install after the first runnable commit on deploy-bearing projects (`<early-smoke-install>`, #494); optional per-task or whole-issue delegation, mid-flight risk promotion + a mid-flight platform-feasibility check for gate-bypassing changes (#226). (read references/steps.md §8 before executing)
-- **Step 8a — Per-task review (conditional).** Fires when any `riskLevel: high` task exists: ONE accumulated wave of 2 reviewers over the set of high-risk commits (#492), deferrals persisted, review log (one entry per covered task) + review-state pointer (local, git-excluded) updated. (read references/steps.md §8a before executing)
-- **Step 9 — Quality gate: implementation drift.** Alignment self-review (Part A) + evidence (Part B); P15 review-coverage assertion; runtime-surface feasibility — spike OR a deferred-to-target naming the likeliest-wrong claim (#226); lane runs evidence-only + the lane cross-check. (read references/steps.md §9 before executing)
+- **Step 8 — Implementation.** Execute the plan task-by-task (TDD/implement-verify), commit per task; early smoke-install after the first runnable commit on deploy-bearing projects (`<early-smoke-install>`, #494); inline TDD with optional worktree-subagent parallelism or whole-issue delegation, mid-flight risk promotion + a mid-flight platform-feasibility check for gate-bypassing changes (#226). (read references/steps.md §8 before executing)
+- **Step 8a — Per-task review (conditional).** Fires when any `riskLevel: high` task exists: ONE accumulated wave of 2 review passes (inline + runner) over the set of high-risk commits (#492), deferrals persisted, one coverage marker per covered task. (read references/steps.md §8a before executing)
+- **Step 9 — Quality gate: implementation drift.** Alignment self-review (Part A) + evidence (Part B); P15 review-coverage check; runtime-surface feasibility — spike OR a deferred-to-target naming the likeliest-wrong claim (#226); lane runs evidence-only + the lane cross-check. (read references/steps.md §9 before executing)
 - **Step 10 — Conditional memorization (background).** Runs in parallel with Step 11; never blocks. (read references/steps.md §10 before executing)
 - **Step 11 — Pre-PR code review.** 2-agent review (≥1 in the lane; #492) + opt-in adversarial diff review; severity-banded confidence, deferred-resolution exit gate. NON-NEGOTIABLE. (read references/steps.md §11 before executing)
 - **Step 11.5 — Tool-based security scan (pre-PR gate).** `hooks/security_scan.py` for secrets/SCA/SAST/IaC; fail-closed on real findings; visible skips, never a silent pass. (read references/steps.md §11.5 before executing)
-- **Step 12 — Create PR & push.** Join Steps 10+11, update README/docs, review-state gate, open the PR with the templated body. (read references/steps.md §12 before executing)
+- **Step 12 — Create PR & push.** Join Steps 10+11, update README/docs, review-completeness check, open the PR with the templated body. (read references/steps.md §12 before executing)
 - **Step 13 — CI verification (conditional).** Monitor/fix CI when `has_ci`; quarantine handled as a visible non-gate with a trust guard. (read references/steps.md §13 before executing)
-- **Step 14 — Merge & deploy (conditional).** Only on user-requested merge; SKIPPED entirely in headless mode; pre-merge review-state + quarantine×protection contradiction checks. (read references/steps.md §14 before executing)
-- **Step 15 — Post-deploy verification (conditional).** Only if a deployment happened; skipped in headless mode. (read references/steps.md §15 before executing)
+- **Step 14 — Merge & deploy (conditional).** Only on user-requested merge (unattended runs stop at the PR); pre-merge quarantine×protection contradiction checks. (read references/steps.md §14 before executing)
+- **Step 15 — Post-deploy verification (conditional).** Only if a deployment happened. (read references/steps.md §15 before executing)
 - **Step 16 — Completion summary + run-record.** WF2 terminates here (stub below). (read references/steps.md §16 before executing)
 
 ## Step 16: Workflow Completion Summary
@@ -557,27 +526,23 @@ telemetry gap; rc 2 = usage error). Full detail in `references/steps.md` §16.
 <completion-gate>
 Before declaring WF2 complete, verify the following. Items marked (conditional) only apply if the capability exists:
 
-1. [ ] Step markers logged for ALL executed steps in session notes
-2. [ ] Final step output (completion summary) presented to user
-3. [ ] Session notes updated with completion summary
-4. [ ] PR URL documented
-5. [ ] All commits pushed
-6. [ ] (conditional: has_ci) CI passed — **OR** (`ci_quarantined`) the quarantine notice (reason + run status, "not gating") is recorded in session notes + PR body. A legible skip, never a silent one; a quarantined run is never reported as green.
-7. [ ] (conditional: has_deploy, NOT headless) Deployment verified or manual deploy confirmed — auto-satisfied in headless mode, where Steps 14/15 are skipped (PR is the terminal deliverable)
-8. [ ] (conditional: architecture changed) CLAUDE.md updated
-9. [ ] All Critical/High code review findings resolved
-10. [ ] (conditional: adversarialReview opt-in for implement-feature) A "### WF2 Step 11 — Adversarial Diff Review:" 4-state marker exists in session notes — opt-in ⇒ marker, unconditionally (skipped (<reason>) is a legitimate marker; silent omission is not; no gate-time diff recompute — a post-merge recompute sees an empty diff and would waive the check exactly in the merge path)
-11. [ ] Security scan (Step 11.5) ran; all blocking findings resolved (or, if no scanners were installed, the skips are recorded in session notes + PR body)
-12. [ ] Completion summary rendered via `work_summary.py` (Step 16) and the run-record persisted (rc 0) — or, if validation failed (rc 1), the telemetry gap is recorded in session notes
-13. [ ] (conditional: any `plan_lib.deferred_tasks(tasks)` — verification deferred to target, #138) Every deferred task is recorded on BOTH surfaces. **RUN the check; do not re-derive it (#796):**
+1. [ ] Step markers logged for ALL executed steps in session notes, and the completion summary presented to the user + recorded in session notes
+2. [ ] PR URL documented; all commits pushed
+3. [ ] (conditional: has_ci) CI passed — **OR** (`ci_quarantined`) the quarantine notice (reason + run status, "not gating") is recorded in session notes + PR body. A legible skip, never a silent one; a quarantined run is never reported as green.
+4. [ ] (conditional: has_deploy) Deployment verified or manual deploy confirmed — auto-satisfied in an unattended run, where Steps 14/15 are skipped (PR is the terminal deliverable)
+5. [ ] All Critical/High code review findings resolved
+6. [ ] (conditional: adversarialReview opt-in for implement-feature) A "### WF2 Step 11 — Adversarial Diff Review:" 4-state marker exists in session notes — opt-in ⇒ marker, unconditionally (skipped (<reason>) is a legitimate marker; silent omission is not; no gate-time diff recompute — a post-merge recompute sees an empty diff and would waive the check exactly in the merge path)
+7. [ ] Security scan (Step 11.5) ran; all blocking findings resolved (or, if no scanners were installed, the skips are recorded in session notes + PR body)
+8. [ ] Completion summary rendered via `work_summary.py` (Step 16) and the run-record persisted (rc 0) — or, if validation failed (rc 1), the telemetry gap is recorded in session notes
+9. [ ] (conditional: any `plan_lib.deferred_tasks(tasks)` — verification deferred to target, #138) Every deferred task is recorded on BOTH surfaces. **RUN the check; do not re-derive it (#796):**
     ```bash
     python3 hooks/plan_lib.py assert-pr-body \
       --plan-file <impl-plan.md> --pr-body-file <pr-body.md> \
-      [--gate-file <step8-gate.json>] [--record-file <run-record.json>] \
+      [--record-file <run-record.json>] \
       --project-root .
     ```
     `0` gate holds · `1` gate FAILS (findings on stdout) · `2` caller error. It executes both pure functions — `assert_pr_body_has_deferred_section` (the PR body carries the canonical `## Deferred verification` section) and, when `--record-file` is given, `assert_deferrals_recorded` (each recorded entry carries non-empty `task_id` + `reason` + `local_proxy` + `target_check`, and the plan↔record task ids match exactly: missing/duplicate/foreign ⇒ fail). Both were previously invoked NOWHERE in production, which is why the #781 H1 slip fired after merge.
-    Two refusals are caller errors rather than gate results, and both are deliberate: a plan that parses to **no tasks at all** is rc 2, never a vacuous pass (absence of tasks is a wrong path or a malformed plan, not a plan with nothing deferred); and with `--gate-file` the plan is bound to the gate's recorded `plan_digest`, so a plan revised after the gate was taken is refused — the same staleness rule `executor_routing_lib` enforces as `gate_stale_for_plan`.
+    One refusal is a caller error rather than a gate result, deliberately: a plan that parses to **no tasks at all** is rc 2, never a vacuous pass (absence of tasks is a wrong path or a malformed plan, not a plan with nothing deferred).
     rc 0 ⇒ gate satisfied-with-note. Any failure (an **unrecorded** deferral, evidence-less entry, or a missing PR section) ⇒ gate FAILURE — a deferral must never silently vanish into a pass.
 
 If ANY applicable item fails, complete it before declaring "WF2 complete."
