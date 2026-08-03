@@ -99,20 +99,14 @@ def test_reviewer_is_not_isolated():
     assert "isolation" not in fm
 
 
-def test_wf2_references_both_agent_types():
-    """AC2: WF2 dispatch prose references the shipped types (namespaced form).
-
-    Counts, not mere presence: the <model-routing-resolve> inventory alone must
-    not satisfy this — the per-step dispatch sites must reference the types too.
-    #470 rewired the primary tier to executor seats and demoted the Agent-tool
-    types to the FALLBACK tier, but each per-step dispatch annotation still names
-    its fallback-tier agent type, so the multi-site count actually GREW (the
-    contract's `<model-routing-resolve>` fallback lead + inventory + Step 2/4/8/8a/11
-    fallback annotations). Thresholds retuned to the produced fallback-tier
-    occurrence count; the agent-definition pins are unchanged."""
+def test_wf2_references_no_bundled_agent_types():
+    """M0b (#866): the retreat removed every bundled-agent dispatch from WF2
+    prose — the definitions survive on disk until M0c, but the corpus may not
+    name them (tests/test_no_executor_prose.py is the repo-wide guard; this is
+    the corpus-level mirror)."""
     corpus = skill_corpus("implement-feature")
-    assert corpus.count("rawgentic:rawgentic-implementer") >= 8
-    assert corpus.count("rawgentic:rawgentic-reviewer") >= 8
+    assert corpus.count("rawgentic:rawgentic-implementer") == 0
+    assert corpus.count("rawgentic:rawgentic-reviewer") == 0
 
 
 def test_reviewer_prose_limits_bash_to_inspection():
@@ -210,63 +204,27 @@ def test_wf2_documents_worktree_fallback():
     assert "fallback" in low and "serial-only" in low
 
 
-def test_wf2_notes_85_config_gated_follow_up():
-    """AC5: with isolation shipped, #85's concurrent Step 8 is a config-gated
-    follow-up — the prose must say so rather than still calling it unconditional."""
-    corpus = skill_corpus("implement-feature")
-    assert "#85" in corpus
-    assert "config-gated" in corpus
-
-
-def test_wf2_step8_documents_executor_collection():
-    """#767: a contained executor build agent structurally cannot commit (the linked worktree's
-    gitdir is read-only under containment) — Step 8 must document uncommitted delivery, the exact
-    collection entry point, and the guarded landing that materializes the checkout."""
+def test_wf2_step8_documents_worktree_collection():
+    """M0b (#866): the optional worktree-subagent path must document collection
+    (the agent's commit is in the object store, not on the branch), the staging
+    backstop, and the content-bearing branch-advance assert (an empty commit
+    passes every diff-scoped gate vacuously, #767)."""
     section = _steps_section(
         SKILLS_DIR / "implement-feature" / "references" / "steps.md", "## Step 8: Implementation")
-    assert "delivers uncommitted worktree work" in section
-    assert "gitdir is read-only under containment" in section
-    assert "collect-work-product" in section
-    assert "--promote-path" in section
-    assert (
-        "collect-work-product --run-id <run> --session-name <job> --target-ref "
-        "refs/rawgentic/collect/<receipt-nonce> --expected-target-sha "
-        "0000000000000000000000000000000000000000 --expected-feature-ref "
-        "<feature-ref recorded before dispatch> --kind code --promote-path <file> "
-        "[--promote-path <file> …] --workspace <ws> --project <name>"
-    ) in section
-    # Step-11 lane R1-F2: the landing is a named PRODUCTION verb, not a prose git recipe
-    assert "land-work-product" in section
-    assert (
-        "land-work-product --expected-ref <feature-ref recorded before dispatch> "
-        "--pre-sha <recorded pre-task sha> --new-sha <new_sha> --temp-ref "
-        "refs/rawgentic/collect/<receipt-nonce> --run-id <run> --workspace <ws> "
-        "--project <name>"
-    ) in section
-    assert "land-work-product --repo ." not in section
-    assert "bare `update-ref` on the checked-out feature branch is forbidden" in section
-    # the legacy (agent-commit) path stays documented alongside, explicitly scoped
-    assert "cherry-pick or fast-forward" in section
-    # 8a fixes: the pre-dispatch capture names the symbolic ref (detached HEAD refuses), and
-    # branch advancement must carry content (an empty commit passes the SHA check vacuously)
-    assert "a detached head refuses this mode" in section
-    assert "the advance carries content" in section
+    assert "cherry-pick or fast-forward the reported sha" in section
+    assert "⊆ the task's declared `files`" in section
+    assert "an empty commit lets every diff-scoped gate pass vacuously" in section
+    assert "restore nothing" in section  # failure path: shared checkout untouched
 
 
-def test_wf2_whole_issue_executor_falls_back():
-    """#767 (pass-1 F3): the whole-issue receipt contract requires agent-authored commits a
-    contained executor build agent cannot produce — under the executor architecture an enabled
-    wholeIssueDelegation must fall back fail-closed to per-task Step 8 until #779 ships
-    executor-tier receipts."""
+def test_wf2_whole_issue_dispatches_worktree_subagent():
+    """M0b (#866): the whole-issue build-subagent is an Agent-tool WORKTREE
+    subagent (it authors the receipt's task_shas commits in its own worktree);
+    the executor/legacy architecture split is gone from both surfaces."""
     section = _steps_section(
         SKILLS_DIR / "implement-feature" / "references" / "steps.md", "## Step 8: Implementation")
-    assert "falls back to the normal per-task step 8" in section
-    # the gate is the FIRST numbered item and the procedure below it is legacy-scoped (8a R1-H6)
-    assert "every numbered item below is legacy-architecture-only" in section
-    ref = (SKILLS_DIR / "implement-feature" / "references" / "whole-issue-delegation.md").read_text(
-        encoding="utf-8")
-    assert "LEGACY architecture" in ref
-    assert "#779" in ref
-    assert "executor-tier receipts" in ref
-    assert "gitdir is read-only under containment" in ref
-    assert "commit write-set spans the common `.git`" in ref
+    assert "agent-tool worktree subagent" in section
+    ref = " ".join((SKILLS_DIR / "implement-feature" / "references"
+                    / "whole-issue-delegation.md").read_text(encoding="utf-8").split())
+    assert "Agent-tool WORKTREE subagent" in ref
+    assert "There is no executor tier and no architecture split" in ref

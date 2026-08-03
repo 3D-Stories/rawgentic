@@ -192,15 +192,21 @@ class TestStep11DiffReview:
     def test_should_run_diff_review_referenced(self):
         assert "plan_lib.should_run_diff_review" in _step11()
 
-    def test_dispatch_command_flags(self):
+    def test_dispatch_command_shape(self):
+        # M0b (#866): the diff review dispatches the runner, tokenless (report-only).
         s11 = _step11()
-        for flag in ("--type diff", "--findings-json", "--headless"):
-            assert flag in s11, f"Step 11 dispatch command missing {flag!r}"
+        for needle in ("review_runner.py review-code --base",
+                       "--out .rawgentic-diff-review-", "--reviewer"):
+            assert needle in s11, f"Step 11 diff-review dispatch missing {needle!r}"
+        assert "TOKENLESS" in s11, "the diff-review layer must be tokenless/diagnostic"
+        assert "MUST NOT drive a loop-back" in s11
 
-    def test_patch_construction_and_failure_strings(self):
+    def test_oversize_refusal_and_failure_strings(self):
         s11 = _step11()
-        assert "high-risk-first" in s11, "patch must be built high-risk-first"
-        assert "truncated" in s11 and "failed (truncated)" in s11
+        assert "high-risk-first" in s11, "the brief names changed paths high-risk-first"
+        assert "REFUSES oversize input instead of truncating" in s11
+        assert "RAWGENTIC_ADV_REVIEW_MAX_BYTES" in s11, (
+            "the sanctioned oversize path is a deliberate, PR-visible cap raise")
         assert "base ref unavailable" in s11
 
     def test_stale_sweep_and_confidence_mapping(self):
@@ -480,19 +486,20 @@ class TestTieredLoopback:
         assert "absent/null/off-vocab contributes `untagged`" in s4
         assert "fully backward compatible" in s4
 
-    def test_step4_dispatch_produces_findings_sidecar(self):
-        # Step-11 F1: loopback_class is sidecar-only (render_report_md never
-        # emits it) — the Step-4 dispatch must produce/read the sidecar or the
-        # #407 fold is silently inert at its target step.
+    def test_step4_findings_read_from_result_json(self):
+        # M0b (#866): the runner result JSON is the canonical findings carrier
+        # (the engine's --findings-json sidecar retired with the old engine) —
+        # loopback_class rides the result's findings list or the #407 fold is
+        # silently inert at its target step.
         s4 = " ".join(self._step4().split())
-        assert "--findings-json" in s4
-        assert "sidecar-only" in s4
+        assert "read from the result JSON's `findings` list" in s4
+        assert "`loopback_class`" in s4
 
-    def test_verifier_brief_sourced_from_sidecar(self):
-        # Pass-3 rider: originating findings come from the review sidecar,
+    def test_verifier_brief_sourced_from_result_json(self):
+        # Pass-3 rider: originating findings come from the runner result,
         # never a re-derivation.
         s4 = " ".join(self._step4().split())
-        assert "`--findings-json` sidecar" in s4
+        assert "read from the runner result JSON's `findings` list" in s4
         assert "never a re-derivation" in s4
 
     def test_loopback_class_field_in_wf2_finding_shape(self):
@@ -523,43 +530,8 @@ class TestTieredLoopback:
         assert "never silent-PASS" in s4 or "never silently PASS" in s4
 
 
-# --- #224: Step-2 upfront agent-count / est-time estimate ---
-
-class TestStep2PathEstimate:
-    """Drift guards for the #224 Step-2 path-cost estimate."""
-
-    def _step2(self) -> str:
-        text = _text()
-        return text[text.index("## Step 2:"):text.index("## Step 3:")]
-
-    def test_step2_emits_derived_estimate(self):
-        s2 = " ".join(self._step2().split())
-        assert "plan_lib.estimate_agents" in s2
-        assert "Path estimate:" in s2
-        # AC1: both paths in one line.
-        assert "small-standard lane ≈" in s2
-
-    def test_not_a_contract_canonical_sentence(self):
-        s2 = " ".join(self._step2().split())
-        assert ("derived via plan_lib.estimate_agents — never hard-coded — "
-                "and is an estimate, not a contract") in s2
-
-    def test_projection_is_labeled_lower_bound(self):
-        s2 = " ".join(self._step2().split())
-        assert "any_high_risk_path" in s2
-        assert "lower bound" in s2
-        # semantic criteria invisible pre-decomposition must be named
-        assert "invisible" in s2 or "cannot be seen" in s2
-
-    def test_unconditional_estimate_marker(self):
-        # AC3: a dedicated session-note marker, not a suspend-only checkpoint.
-        s2 = self._step2()
-        assert "### WF2 Step 2 — path estimate:" in s2
-
-    def test_step5_refreshes_estimate(self):
-        text = _text()
-        s5 = _section(text, "## Step 5:", "## Step 6:")
-        assert "estimate_agents" in s5, "Step 5 must refresh the estimate with the real high-risk count"
+# --- #224 path-cost estimate: retired by the M0b retreat (#866, D175 ceremony
+# --- cut) — estimate_agents left the prose; the class guarding it went with it.
 
     def test_step11_axis_reconciled_in_skill_base(self):
         # The stale complexity-keyed row contradicted steps.md's unconditional
@@ -665,12 +637,14 @@ class TestAppendOnlySessionNotes:
         assert "never overwrite or replace" in low
 
     def test_lightweight_progress_checkpoint_defined_and_distinct(self):
-        # AC4: a lightweight per-batch progress checkpoint, separate from <headless-checkpoint>
+        # AC4: a lightweight per-batch progress checkpoint, separate from a full
+        # suspend/error checkpoint
         text = _text()
         assert "#### Progress — Tasks N-M complete" in text
-        # it must be framed as distinct/lighter than the heavy headless checkpoint
-        m = re.search(r"lightweight progress checkpoint.*?headless-checkpoint", text, re.DOTALL)
-        assert m, "progress checkpoint not framed as distinct from <headless-checkpoint>"
+        # it must be framed as distinct/lighter than the heavy checkpoint
+        m = re.search(r"lightweight progress checkpoint.*?suspend/error checkpoint",
+                      text, re.DOTALL)
+        assert m, "progress checkpoint not framed as distinct from the heavy checkpoint"
 
     def test_ambiguous_overwrite_verbs_removed_at_key_sites(self):
         # AC1/AC5: the specific content-mutation sites now say APPEND, not update/document
@@ -787,76 +761,27 @@ class TestDesignArtifactStyleVocabulary:
             "present in the implement-feature corpus")
 
 
-# --- #330: canonical DISPATCH completion-time audit-line grammar ---
+# --- #330 DISPATCH grammar: retired by the M0b retreat (#866) — current runs emit
+# --- no DISPATCH lines; docs/run-records.md keeps the legacy capture contract for
+# --- historical records (TestDispatchCaptureDoc below still pins it there).
 
-class TestDispatchGrammar:
-    """Drift guard for the #330 canonical DISPATCH audit line. The completion-
-    time grammar sentence (all 6 schema fields + issue scope) must be present in
-    the implement-feature corpus so the emitter has one canonical form to copy.
-    Whitespace-normalized per the repo convention (prose may hard-wrap)."""
-
-    def test_wf2_canonical_grammar_sentence_present(self):
-        corpus = " ".join(skill_corpus("implement-feature").split())
-        grammar = (
-            "DISPATCH issue=<n> role=<review|implementation|analysis|other> "
-            "type=<subagent_type> model=<model|null> effort=<effort|null> "
-            "outcome=<ok|error|retried|dead> resolution=<primary|fallback|generic>"
-        )
-        assert grammar in corpus, (
-            "the WF2 canonical DISPATCH grammar line must be present in the "
-            "implement-feature corpus")
-
-    def test_wf2_per_invocation_emission_rule_present(self):
-        """#330 8a hardening: the per-invocation rule is the load-bearing
-        emission sentence — without it a two-reviewer gate can emit one line."""
-        corpus = " ".join(skill_corpus("implement-feature").split())
-        rule = ("One line per SUBAGENT INVOCATION dispatched (not per attempt) "
-                "— a multi-reviewer gate emits one line per reviewer")
-        assert rule in corpus, (
-            "the WF2 per-invocation DISPATCH emission rule must be present in "
-            "the implement-feature corpus")
-
-    def test_wf2_producer_sentence_present(self):
-        """#470: the DISPATCH grammar is unchanged, but the PRODUCER changed —
-        the primary tier's executor result dict (resolution=primary) or the
-        fallback (legacy) Agent-tool dispatch (resolution=fallback) emits the
-        line. Pin the producer sentence so the rewire can't silently drift back
-        to an Agent-tool-only producer."""
-        corpus = " ".join(skill_corpus("implement-feature").split())
-        producer = (
-            "The producer is the executor result dict "
-            "(`type=executor:<seat>`, `model=<actual_model>`, `resolution=primary`) "
-            "on the primary tier, or — under the LEGACY architecture only — "
-            "the Agent-tool dispatch (`resolution=fallback`).")
-        assert producer in corpus, (
-            "the #470 DISPATCH producer sentence must be present in the "
-            "implement-feature corpus")
-
-
-# --- #330: dispatches[] assembly instruction at WF2 Step 16 ---
 
 class TestDispatchesAssembly:
-    """Header-index-sliced guard (repo convention: this file's TestTieredLoopback
-    pattern, :444-454) pinning the Step 16 dispatches[] assembly instruction — the
-    canonical sentence telling the orchestrator how to turn #330's DISPATCH audit
-    lines into the run-record's dispatches[] key. Location pin (reads steps.md
-    directly, not the corpus) since this is a specific-file, specific-section
-    contract, not corpus-wide content."""
+    """Header-index-sliced guard pinning the Step 16 dispatches[] LEGACY note —
+    since the M0b retreat (#866) a current run emits no dispatch audit lines and
+    must OMIT the key. Location pin (reads steps.md directly, not the corpus)."""
 
     def _step16(self) -> str:
         text = (REFERENCES / "steps.md").read_text()
         assert "## Step 16:" in text, "Step 16 not found"
         return text[text.index("## Step 16:"):]
 
-    def test_canonical_assembly_sentence_present(self):
+    def test_dispatches_key_omitted_on_current_runs(self):
         s16 = " ".join(self._step16().split())
-        sentence = (
-            "Assemble `dispatches[]` by grepping claude_docs/session_notes.md "
-            "for lines matching `^DISPATCH issue=<n> ` where `<n>` is this "
-            "run's issue number.")
-        assert sentence in s16, (
-            "Step 16 must contain the canonical #330 dispatches[] assembly "
-            "sentence")
+        assert "OMIT the `dispatches` key entirely (never an empty array)" in s16, (
+            "Step 16 must instruct omitting the legacy dispatches[] key")
+        assert "Assemble `dispatches[]` by grepping" not in s16, (
+            "the executor-era dispatches[] assembly instruction must be gone (M0b, #866)")
 
 
 # --- #330: dispatches[] capture contract + worked example, docs/run-records.md ---
@@ -891,12 +816,11 @@ class TestDispatchCaptureDoc:
             "present verbatim in the dispatches section")
 
 
-class TestDispatchRegexIdentity:
-    """#330 Step 11 hardening: the canonical DISPATCH regex must stay
-    byte-identical between the shared block and docs/run-records.md, and WF3's
-    narrowed variant (review|implementation since the #762 build-seat adoption)
-    may differ ONLY in the role group — regex-vs-validator drift would
-    otherwise stay green."""
+class TestDispatchRegexIsLegacyOnly:
+    """M0b (#866): the canonical DISPATCH regex left the active prose with the
+    executor — the LEGACY capture contract survives ONLY in docs/run-records.md
+    (for historical records). Guard both directions: the docs keep it, the
+    active prose never carries it again."""
 
     _BROAD = (
         r"^DISPATCH issue=(\d+) role=(review|implementation|analysis|other) "
@@ -905,20 +829,17 @@ class TestDispatchRegexIdentity:
         r"resolution=(primary|fallback|generic)$"
     )
 
-    def test_shared_block_and_docs_regex_identical(self):
-        block = (REPO_ROOT / "shared" / "blocks" / "model-routing-resolve.md").read_text()
+    def test_docs_keep_the_legacy_regex(self):
         docs = (REPO_ROOT / "docs" / "run-records.md").read_text()
-        assert self._BROAD in block, "canonical regex missing from the shared block"
-        assert self._BROAD in docs, "docs/run-records.md regex drifted from the shared block"
+        assert self._BROAD in docs, (
+            "docs/run-records.md must keep the legacy DISPATCH capture regex "
+            "for historical records")
 
-    def test_wf3_regex_differs_only_in_role_group(self):
-        wf3 = (REPO_ROOT / "skills" / "fix-bug" / "SKILL.md").read_text()
-        narrow = self._BROAD.replace(
-            "role=(review|implementation|analysis|other)", "role=(review|implementation)")
-        assert narrow in wf3, (
-            "fix-bug SKILL.md must carry the canonical regex narrowed ONLY in "
-            "the role group (role=(review|implementation) since the #762 "
-            "build-seat adoption)")
+    def test_active_prose_carries_no_dispatch_regex(self):
+        for path in ((REPO_ROOT / "shared" / "blocks" / "model-routing-resolve.md"),
+                     (REPO_ROOT / "skills" / "fix-bug" / "SKILL.md")):
+            assert "^DISPATCH issue=" not in path.read_text(), (
+                f"{path.name}: the DISPATCH regex must not re-enter active prose")
 
 
 # --- #331: dead-return detection at WF2's reviewer dispatch sites (Step 8a item 7 ---
@@ -933,9 +854,9 @@ class TestDeadReturnDetection:
     the corpus."""
 
     CANONICAL_8A = (
-        "A reviewer return that is vacuous (no findings AND no substantive "
-        "content) is a DEAD dispatch, not a clean pass — relaunch that reviewer "
-        "once; on a second death treat it as a dispatch failure (item 7's "
+        "a reviewer return that is vacuous (no findings AND no substantive "
+        "content) is a DEAD dispatch, not a clean pass — relaunch that pass "
+        "once; on a second death treat it as a dispatch failure (this item's "
         "REVIEW_DISPATCH_FAILED path)."
     )
 
@@ -1122,26 +1043,15 @@ class TestRunFeedbackWiring:
             "the generic is-enabled parser (#338)")
 
 
-# --- #332: when Step 8 delegates vs runs inline ---
+# --- #332 inline-vs-delegated: retired by the M0b retreat (#866) — inline IS the
+# --- default now; the optional worktree-subagent path is pinned in
+# --- TestStep8InlineLoop below.
 
-class TestStep8InlineVsDelegated:
-    """#332: the #328 subagent-dispatch audit measured 6/6 genuine runs
-    implementing inline even with `implementation: opus` configured. Step 8
-    must document that inline execution when the resolved model equals the
-    session/orchestrator model is expected and acceptable, not a bug — while
-    stopping short of settling delegation policy (the audit's unrun
-    falsification experiment stays open). Location pin (lives in
-    references/steps.md's Step 8 section), whitespace-normalized (prose may
-    hard-wrap)."""
 
-    CANONICAL = (
-        # #735: legacy-scoped — inline-as-expected documents the LEGACY
-        # delegation path only; the executor branch rejects inline.
-        "Under the LEGACY architecture, when the resolved `implementation` "
-        "model equals the session/orchestrator model, inline execution is "
-        "an expected, acceptable outcome — delegation exists for isolation "
-        "and parallelism, not obligation."
-    )
+class TestStep8InlineLoop:
+    """M0b (#866): Step 8 is an inline TDD loop; worktree subagents are optional
+    judgment for genuinely parallel tasks, never obligation. Location pin
+    (references/steps.md Step 8 section), whitespace-normalized."""
 
     def _step8(self) -> str:
         text = (
@@ -1152,21 +1062,17 @@ class TestStep8InlineVsDelegated:
         assert m, "Step 8 section not found in steps.md"
         return m.group(0)
 
-    def test_canonical_inline_expected_sentence_present(self):
+    def test_inline_loop_sentence_present(self):
         s8 = " ".join(self._step8().split())
-        assert self.CANONICAL in s8, (
-            "Step 8 must carry the #332 canonical inline-execution-is-"
-            "expected sentence verbatim (whitespace-normalized)")
+        assert ("Inline implementation (D174): the plan tasks are written in "
+                "THIS session.") in s8
+        assert "No dispatch machinery, no seats, no per-task model routing" in s8
 
-    def test_cites_audit_and_leaves_policy_open(self):
+    def test_worktree_subagents_are_judgment_never_obligation(self):
         s8 = " ".join(self._step8().split())
-        assert "subagent-dispatch-audit-2026-07-09.md" in s8, (
-            "must cite the #328 audit doc")
-        assert "#328" in s8, "must cite the audit PR"
-        assert "6/6" in s8, "must cite the audit's 6/6-inline measurement"
-        assert "does NOT settle the delegation policy" in s8 or (
-            "does not settle the delegation policy" in s8.lower()
-        ), "must state the honesty bound: policy remains unsettled"
+        assert "This is judgment, never obligation — the default is inline and serial." in s8
+        assert ("A subagent can never block Step 8: inline is always the "
+                "fallback.") in s8
 
 
 # --- #393: disposition ledger — gate-close persistence + pass-N dispatch ---
@@ -1206,11 +1112,14 @@ class TestDispositionLedger:
         for section in (self._step4(), self._step6(), self._step11()):
             assert "append_disposition" in section
 
-    def test_canonical_dispatch_sequence_sentence(self):
-        # Pass-N dispatch: both flags, orchestrator folds + temp-copies first.
+    def test_canonical_fold_sentence(self):
+        # M0b (#866): the runner has no dispositions channel — the orchestrator-side
+        # join backstop is the enforcement point; no temp file, no engine flag.
         s4 = " ".join(self._step4().split())
-        assert "--dispositions <temp path> --issue <n>" in s4
         assert "fold_dispositions" in s4
+        assert "no temp file, no engine flag" in s4
+        assert "--dispositions" not in s4, (
+            "the retired engine's --dispositions flag must not re-enter Step 4")
 
     def test_exit6_loud_abort_marker(self):
         s4 = " ".join(self._step4().split())
@@ -1238,11 +1147,12 @@ class TestDispositionLedger:
             "REOPENS prefix (plan_lib.strip_reopens)")
         assert "strip_reopens" in s4
 
-    def test_dispositions_glob_in_stale_sweep(self):
+    def test_diff_review_temp_glob_in_stale_sweep(self):
+        # M0b (#866): the dispositions temp copy retired with the engine flag;
+        # the runner result files are the surviving temp artifacts to sweep.
         s11 = self._step11()
-        assert ".rawgentic-dispositions-" in s11, (
-            "the dispositions temp-copy glob must be in the Step 11 1a stale "
-            "sweep list")
+        assert ".rawgentic-diff-review-" in s11, (
+            "the runner result glob must be in the Step 11 1a stale sweep list")
 
 
 # --- #488: review-wave pipelining (never idle-wait) ---
@@ -1358,30 +1268,27 @@ class TestProbeBeforeDesign:
             "must point at the canonical <probe-before-design> block")
 
 
-# --- #491: review-lens routing (sonnet mechanical, strong security) ---
+# --- lenses are brief emphasis since the M0b retreat (#866; #491's model tiering retired) ---
 
 class TestReviewLensRouting:
-    """Drift guards for the #491 per-lens review-model routing: security-critical
-    lenses stay on the strong review model; mechanical/AC/test-coverage/bug-logic
-    lenses ride the fast tier; never-Haiku preserved."""
+    """Drift guards for the post-retreat lens contract: lenses are BRIEF
+    EMPHASIS, not model routing; the security lens always rides the pass that
+    runs and is never the one dropped."""
 
     def _lens_block(self) -> str:
         return " ".join(_block(_text(), "review-lens-routing").split())
 
-    def test_canonical_lens_routing_sentence(self):
-        # AC1's contract, single-sourced in the <review-lens-routing> block.
-        assert (
-            "select the model per LENS via `select_review_lens_model`: the "
-            "security lens is pinned to the resolved review model, and the "
-            "mechanical, ac_completeness, test_coverage, and bug_logic lenses "
-            "ride the fast tier"
-        ) in self._lens_block()
-
-    def test_security_never_downgraded_sentence(self):
-        # AC2: config can never downgrade the security lens; never-Haiku holds.
+    def test_canonical_lens_emphasis_sentence(self):
         block = self._lens_block()
-        assert "a `reviewLenses` override can never downgrade the security lens" in block
-        assert "never-Haiku" in block
+        assert "Review lenses are BRIEF EMPHASIS, not model routing" in block
+        assert ("the INLINE self-review carries the mechanical + bug_logic lenses; "
+                "the cross-model runner pass carries the architecture + security "
+                "lenses") in block
+
+    def test_security_never_dropped_sentence(self):
+        block = self._lens_block()
+        assert "the security lens is never the one dropped" in block
+        assert "never a verdict instruction" in block
 
     def test_dispatch_sites_point_at_canonical_block(self):
         # Step 4 dispatch, Step 8a item 2, Step 11 item 2 — multi-site presence,
@@ -1418,7 +1325,7 @@ class TestTighterReviewWaves:
         assert f"Full {n}-agent review" in skill, (
             "the mandatory-steps Step 11 row must state the SAME reviewer count "
             "as plan_lib.STEP11_REVIEW_AGENT_COUNT_FULL")
-        assert f"Dispatch {n}-agent parallel review" in (REFERENCES / "steps.md").read_text()
+        assert f"Run the {n}-agent parallel review" in (REFERENCES / "steps.md").read_text()
 
 
 # --- #494: early smoke-install after the first runnable commit (deploy-bearing) ---
@@ -1610,9 +1517,9 @@ class TestStep4BudgetExhaustedClose:
         assert "TOP-LEVEL run-record `extra`" in s4
         assert "NOT into the gate row" in s4
 
-    def test_headless_close_is_not_an_error(self):
+    def test_close_is_not_an_error(self):
         s4 = " ".join(self._step4().split())
-        assert "this is a legitimate close, NOT an ERROR" in s4
+        assert "a legitimate close, NOT an ERROR" in s4
 
     def test_skill_carveout_does_not_generalize(self):
         # The SKILL.md carve-out must fence itself to the design source.

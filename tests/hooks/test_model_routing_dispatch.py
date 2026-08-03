@@ -8,13 +8,15 @@ prose into references/ without weakening the guard.
 """
 from tests.corpus import skill_corpus
 
-# (skill, role, count of annotations expected in that skill's corpus)
+# (skill, role, count of annotations expected in that skill's corpus).
+# M0b (#866): analysis routing retired (inline/harness gathers carry no marker);
+# the review markers mark the review SITES (tests/hooks/test_wf_review_sites.py
+# checks their content); the implementation marker heads the inline TDD loop.
 EXPECTED = [
-    ("implement-feature", "analysis", 2),  # Step-2 fan-out, Step-10 memorize (the #314 Step-11 diff reader is deferred, not wired — option 3)
+    ("implement-feature", "analysis", 0),
     ("implement-feature", "review", 3),
     ("implement-feature", "implementation", 1),
     ("fix-bug", "review", 1),
-    # refactor deprecated to a stub (#160) — no dispatch sites remain.
 ]
 
 
@@ -28,53 +30,10 @@ def test_dispatch_sites_annotated():
         assert got == want, f"{skill} role={role}: expected {want} annotations, got {got}"
 
 
-def test_resolve_invoked_in_preambles():
+def test_no_routing_cli_in_active_prose():
+    # M0b (#866): per-phase model routing retired — the resolve CLI must not
+    # re-enter either workflow corpus.
     for skill in ("implement-feature", "fix-bug"):
         text = skill_corpus(skill)
-        assert "model_routing_lib.py resolve" in text, f"{skill} missing routing resolve call"
-
-
-def test_step8_delegation_documents_clean_state_boundary():
-    text = skill_corpus("implement-feature")
-    # the delegation sub-step must document pre-task state capture + restore-before-retry
-    assert "clean-state boundary" in text
-    assert "git status --porcelain" in text
-    assert "restore" in text.lower()
-    # #132: a struggling down-routed task escalates — retry at the CEILING model
-    # (restore-first), not a flat inline retry.
-    assert "retry that task once at the CEILING model" in text
-
-
-def test_step8_documents_ceiling_downrouting():
-    """#132: implementation model is a per-task ceiling, selected via select_impl_model."""
-    text = skill_corpus("implement-feature")
-    assert "CEILING, not a blanket assignment" in text
-    assert "select_impl_model" in text
-    # never-Haiku guarantee is stated at the dispatch site (covers inherit→session-model):
-    # pin the specific guard sentence, not just the two words appearing somewhere.
-    assert "Never dispatch an implementation subagent with `model: haiku`" in text
-    # per-task audit log line
-    assert "impl task <id>: model" in text
-
-
-def test_preambles_resolve_effort():
-    """#154 Task 2: both skills also resolve the role's effort tier via --effort."""
-    for skill in ("implement-feature", "fix-bug"):
-        text = skill_corpus(skill)
-        assert "--effort" in text, f"{skill} missing --effort resolution"
-
-
-def test_effort_dual_path_documented():
-    """#154 Task 2: the Agent tool has no per-invocation effort parameter, so effort
-    is carried dual-path (pass where supported, always log). Pin the literals."""
-    for skill in ("implement-feature", "fix-bug"):
-        text = skill_corpus(skill)
-        assert "dual-path" in text, f"{skill} missing dual-path marker"
-        assert "no per-invocation effort parameter" in text, f"{skill} missing effort-parameter marker"
-
-
-def test_impl_audit_line_carries_effort():
-    """#154 Task 2: Step 8's per-task audit line extends with the resolved effort."""
-    text = skill_corpus("implement-feature")
-    assert "impl task <id>: model" in text
-    assert "effort <effort|none>" in text
+        assert "model_routing_lib.py resolve" not in text, (
+            f"{skill}: the retired routing resolve call re-entered the corpus")

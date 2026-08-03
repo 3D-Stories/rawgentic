@@ -59,10 +59,10 @@ def test_step2_fans_out_independent_analyses():
         "Step 2 classification/fast-path must run after an explicit gather barrier"
     )
     # item 5 (test inventory) needs item 2's blast radius, so 2->5 is a chain
-    # inside the fan-out, not a fully-independent parallel leaf. #470 renamed the
-    # fan-out unit "subagent" -> "executor dispatch" (analysis seat).
-    assert "sequential executor dispatch" in step2, (
-        "Step 2 must run items 2 -> 5 as a sequential executor dispatch (test inventory needs blast radius)"
+    # inside the fan-out, not a fully-independent parallel leaf. M0b (#866)
+    # renamed the fan-out unit back to a harness subagent (D182).
+    assert "sequential subagent" in step2, (
+        "Step 2 must run items 2 -> 5 as one sequential subagent (test inventory needs blast radius)"
     )
 
 

@@ -723,31 +723,22 @@ class TestI2AdditiveFields:
 # ---------------------------------------------------------------------------
 
 class TestStep16Wiring:
+    """M0b (#866): the seat-Observation harvest retired with the executor — the
+    workflows must NOT invoke run-end any more (the lib + its unit tests survive
+    until M0d deletes them with their consumers)."""
+
     def _steps(self, skill):
         import re as _re  # noqa: PLC0415  # whitespace-normalize wrapped prose (repo drift-guard convention)
         raw = (REPO_ROOT / "skills" / skill / "references" / "steps.md").read_text()
         return _re.sub(r"\s+", " ", raw)
 
-    def test_wf2_wires_run_end_before_summarize(self):
-        t = self._steps("implement-feature")
-        i_re = t.index("seat_outcomes_lib.py run-end")
-        i_sum = t.index("work_summary.py summarize")
-        assert i_re < i_sum, "run-end must be invoked before summarize"
-
-    def test_wf3_wires_run_end_before_summarize(self):
-        t = self._steps("fix-bug")
-        assert "seat_outcomes_lib.py run-end" in t
-        assert t.index("seat_outcomes_lib.py run-end") < t.index("work_summary.py summarize")
-
-    def test_both_workflows_declare_loud_continue(self):
+    def test_workflows_no_longer_wire_run_end(self):
         for skill in ("implement-feature", "fix-bug"):
             t = self._steps(skill)
-            assert "loud-log-and-continue" in t and "MUST NOT block" in t
-
-    def test_extra_rows_fold_via_json_not_shell(self):
-        for skill in ("implement-feature", "fix-bug"):
-            t = self._steps(skill)
-            assert "extra_rows" in t and "JSON read-modify-write" in t
+            assert "seat_outcomes_lib.py run-end" not in t, (
+                f"{skill}: the retired run-end harvest must not re-enter Step 16/14")
+            assert "work_summary.py summarize" in t, (
+                f"{skill}: the run-record summarize call must survive the retreat")
 
 
 class TestConfigSurfaceAgreement:

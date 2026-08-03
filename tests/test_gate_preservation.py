@@ -1,15 +1,14 @@
-"""#450 gate-preservation invariant, test-pinned by #470 (AC2).
+"""#450 gate-preservation invariant, re-pinned by M0b (#866).
 
-"Fan-out is a dispatch mechanism, never a gate bypass." Two layers:
+"A dispatch mechanism is never a gate bypass." Two layers:
 
-- PROSE: the two canonical sentences (executor-scoped build clause + fallback-tier
-  prose-gate sentence) anchored in BOTH the WF2 and WF3 corpora, plus the WF2
-  mandatory-step table still naming every gate row. Single-sentence anchors,
-  whitespace-normalized (mistake #6/#11 idiom).
+- PROSE: ONE canonical sentence (subagent/runner dispatch never bypasses a gate; an
+  actionable review round carries a minted reopen token) anchored in BOTH the WF2 and
+  WF3 corpora, plus the WF2 mandatory-step table still naming every gate row.
+  Single-sentence anchor, whitespace-normalized (mistake #6/#11 idiom).
 - MECHANICAL: the production mutating-engine allowlist pin, and cross-references to
   the executable black-box cells that live with the dispatch harness in
-  tests/hooks/test_executor_routing.py (design §3 rule: cross-reference, never
-  duplicate — those cells subprocess/in-process-drive the real CLI):
+  tests/hooks/test_executor_routing.py (retired wholesale in M0d, #866):
     * gateless build dispatch refused pre-launch .... test_supervised_missing_gate_refuses_malformed
     * tampered/stale gate ........................... test_cli_build_* (gate_tampered / gate_stale_for_plan)
     * un-sandboxed mutating engine refusal .......... test_supervised_refuses_unsandboxed_mutating_engine
@@ -27,13 +26,10 @@ sys.path.insert(0, str(REPO_ROOT / "hooks"))
 from corpus import skill_corpus  # noqa: E402
 
 GATE_SENTENCE = (
-    "An executor seat is never a gate bypass — every mandatory gate (Steps 4, 8a, 9, "
-    "11, 11.5) runs with identical semantics whichever tier dispatches its model calls, "
-    "and every EXECUTOR-tier build-seat dispatch requires the authenticated gate "
-    "decision plus the internally minted plan context."
-)
-FALLBACK_SENTENCE = (
-    "WF2/WF3 prose runs the complexity-gate step before any legacy-architecture build dispatch."
+    "A subagent or runner dispatch is never a gate bypass — every mandatory review "
+    "gate runs with identical semantics whether a pass ran inline or through "
+    "`hooks/review_runner.py`, and a review that may open a fix round carries a "
+    "reopen token minted first."
 )
 
 
@@ -47,14 +43,6 @@ def test_gate_sentence_in_wf2_corpus():
 
 def test_gate_sentence_in_wf3_corpus():
     assert _norm(GATE_SENTENCE) in _norm(skill_corpus("fix-bug"))
-
-
-def test_fallback_sentence_in_wf2_corpus():
-    assert _norm(FALLBACK_SENTENCE) in _norm(skill_corpus("implement-feature"))
-
-
-def test_fallback_sentence_in_wf3_corpus():
-    assert _norm(FALLBACK_SENTENCE) in _norm(skill_corpus("fix-bug"))
 
 
 def test_wf2_mandatory_step_table_names_every_gate():

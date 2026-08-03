@@ -385,14 +385,14 @@ Run the review per the `<model-routing-resolve>` contract: the cross-model pass 
 
 Launch a focused 2-pass code review in parallel: the runner-dispatched cross-model review plus your inline self-review, using the two DISTINCT lenses below — a failed runner dispatch retries once and then follows the ERROR protocol (never a silent skip):
 
-1. `pr-review-toolkit:silent-failure-hunter` — silent failure detection (critical for bug fixes — ensure the fix doesn't suppress errors)
-2. `pr-review-toolkit:code-reviewer` — project standards compliance + general review
+1. Silent-failure hunt lens (the runner pass) — silent failure detection (critical for bug fixes — ensure the fix doesn't suppress errors)
+2. Code-review lens (the inline self-review) — project standards compliance + general review
 
 For bug fixes, focus reviewers on: (a) is the fix correct and complete, (b) are there any new silent failures, (c) is the code simple and focused. Type design and code simplification are deferred — bug fixes should be minimal and targeted.
 
 **Two passes, never collapsed:** a failure in one pass never collapses the gate from two reviews to one — a failed cross-model dispatch (after its one retry) follows the ERROR protocol rather than silently leaving only the self-review; the two briefs stay DISTINCT (silent-failure-hunt lens + code-review lens), two reviews, never merged.
 
-**Dead-return detection (#331).** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that slot once at the same tier; on a second death, record the slot as REVIEW_DISPATCH_FAILED in session notes and invoke the workflow's ERROR protocol — the gate never proceeds with fewer than two live reviews. A dispatch that ERRORS mid-tier (a runtime failure, not a resolve-failure and not a vacuous return) retries once at that tier, then descends the chain; a tier-3 error takes the same REVIEW_DISPATCH_FAILED terminal action. (The same vacuous-return rule is applied to WF2's review sites — Steps 8a and 11 — by this change; WF2's pre-existing analog is the implementation-delegation rule at its Step 8 item 4.)
+**Dead-return detection (#331).** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that slot once; on a second death, record the slot as REVIEW_DISPATCH_FAILED in session notes and invoke the workflow's ERROR protocol — the gate never proceeds with fewer than two live reviews. A dispatch that ERRORS mid-run (a runtime failure, not a vacuous return) likewise retries once; a second error takes the same REVIEW_DISPATCH_FAILED terminal action. (The same vacuous-return rule applies at WF2's review sites — Steps 8a and 11.)
 
 Apply findings automatically. Circuit breaker on ambiguity.
 
@@ -416,7 +416,7 @@ Review-clean code + optional project knowledge updates.
 
 - Review finds fundamental flaw → loop back to Step 3 (max 1 time per loop-back budget)
 - Review agents hit rate limit → log partial results, resume after reset
-- Named agent type does not resolve → per-slot fallback chain (never stall, never skip the gate)
+- A pass cannot be dispatched → run it inline with the same brief (never stall, never skip the gate)
 - Reviewer returns vacuous success → dead-return relaunch once, then REVIEW_DISPATCH_FAILED + the workflow's ERROR protocol (the gate never proceeds with fewer than two live reviews)
 
 ---
@@ -788,50 +788,15 @@ read once.
    `skills/implement-feature/references/run-record.md` (unique-across-passes /
    final-disposition-at-close).
 
-3b. **dispatches[] assembly (#330).** Assemble `dispatches[]` by grepping
-   claude_docs/session_notes.md for lines matching `^DISPATCH issue=<n> ` where
-   `<n>` is this run's issue number. INPUT is `claude_docs/session_notes.md`; each
-   matching line becomes one `dispatches[]` entry carrying the 6 schema fields
-   (`role`, `subagent_type`, `model`, `effort`, `outcome`, `resolution`) —
-   `issue=<n>` is the scoping key ONLY, it is NOT itself a record field. A
-   literal `null` in the `model`/`effort` capture position becomes JSON `null`,
-   never the string `"null"`. Entries preserve note order (the order the lines
-   appear in the session-notes file) and are NEVER deduplicated — two identical
-   lines are two distinct dispatches (e.g. two identically-configured review
-   agents). Malformed detection operates on this issue's lines: any line whose
-   STRIPPED content starts `DISPATCH issue=<n> ` but that fails the canonical
-   regex (`shared/blocks/model-routing-resolve.md` — the broad 4-role form,
-   deliberately a superset of WF3's review-only emission regex) — including an
-   indented or list-bulleted line the flush-left `^DISPATCH` grep would
-   otherwise miss — is skipped and COUNTED in an extra note
-   `{"label": "dispatch capture notes", "value": "skipped <n> malformed DISPATCH
-   line(s)"}` — a malformed capture line never fails the record and is never
-   silently lost. (A `DISPATCH` line with NO parseable `issue=` field is
-   unattributable and stays outside this issue's assembly.) Zero
-   well-formed lines for this issue → OMIT the `dispatches` key entirely (never
-   an empty array). Assembly does NOT compare against the start-time
-   observability line count — under-count detection is owned entirely by
-   WF14's dispatch-completeness rubric. OUTPUT is the `dispatches` key of
-   `/tmp/wf3-run-record-<issue>-<session-id>.json`; the full schema shape lives in
-   `skills/implement-feature/references/run-record.md` (WF3 reuses the same
-   `dispatches[]` shape).
+3b. **dispatches[] (legacy key):** the retreat removed the dispatch machinery, so a current
+   run has no dispatch audit lines — OMIT the `dispatches` key entirely (never an empty
+   array). The key remains valid on historical records
+   (`skills/implement-feature/references/run-record.md`).
 
-3b. **Telemetry sidecar + advisory alerts (#473, W11) — BEFORE summarize.** As in WF2 Step 16,
-   set the additive `run_id` on the record and the deduplicated `findings_critical` /
-   `findings_high` counts on each reviewed gate, then harvest the run's seat Observations into
-   the durable I3 sidecar and fold any FIRED advisory alerts into `extra` — never a gate:
-   ```bash
-   python3 hooks/seat_outcomes_lib.py run-end \
-     --run-id <this run's run_id> \
-     --record-file /tmp/wf3-run-record-<issue>-<session-id>.json \
-     --project-root <activeProject.path> --json
-   ```
-   Append each `extra_rows` object to the record's `extra` **via a Python JSON
-   read-modify-write** (never shell interpolation) and append the `advisory_block` to session
-   notes. **The `run-end` invocation, the JSON fold, and the note append are each
-   loud-log-and-continue on ANY failure** — telemetry is advisory (AC-K3) and MUST NOT block
-   completion; on a nonzero exit or error, log and proceed to `summarize` unchanged. Sidecar
-   contract + `telemetryAlerts` config: `docs/run-records.md`.
+3c. **Gate severity counts (#473):** on each reviewed gate, carry the deduplicated
+   `findings_critical` / `findings_high` counts computed at that gate's close
+   (optional-additive in `validate_record`, absent on legacy records). The
+   seat-Observation sidecar harvest retired with the executor.
 
 4. **Render + persist** (carry `activeProject.path` in as a literal — shell vars
    do not persist across Bash tool calls):
