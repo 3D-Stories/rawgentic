@@ -54,13 +54,62 @@ class LedgerError(RuntimeError):
     """Fail-loud ledger failure (symlink/oversized/tampered/malformed, or an illegal transition)."""
 
 
+#: #855: the review-admission object's exact shape. Presence-sensitive and closed — an unknown
+#: key is malformed, not ignored, so a caller cannot smuggle policy fields past the validator.
+_ADMISSION_STR_FIELDS = ("issue_key", "gate", "digest", "slot", "fencing_token")
+_ADMISSION_INT_FIELDS = ("schema_version", "generation", "attempt")
+_ADMISSION_WORKFLOWS = frozenset({"wf2", "wf3"})
+#: An unknown version must not be parsed as though its semantics were supported.
+_ADMISSION_SCHEMA_VERSIONS = frozenset({1})
+_ADMISSION_MAX_STR = 512
+_ADMISSION_KEYS = frozenset(_ADMISSION_STR_FIELDS + _ADMISSION_INT_FIELDS + ("workflow",))
+
+
+def _validate_review_admission(obj, where: str) -> dict:
+    """Fail-closed shape check for a ``review_admission`` object (#855).
+
+    Shape only — the SEMANTICS (is this generation legal, is the slot in the gate's roster) belong
+    to the admission state machine in later tasks. Rejecting here keeps a malformed object out of
+    the persisted record, matching this module's write-side fail-closed contract.
+    """
+    if not isinstance(obj, dict):
+        raise LedgerError(f"{where}: review_admission must be an object, got {type(obj).__name__}")
+    keys = frozenset(obj)
+    if keys != _ADMISSION_KEYS:
+        missing = sorted(_ADMISSION_KEYS - keys)
+        extra = sorted(keys - _ADMISSION_KEYS)
+        raise LedgerError(f"{where}: review_admission keys missing={missing} extra={extra}")
+    for f in _ADMISSION_STR_FIELDS:
+        if not isinstance(obj[f], str) or not obj[f]:
+            raise LedgerError(f"{where}: review_admission.{f} must be a non-empty string")
+        if len(obj[f]) > _ADMISSION_MAX_STR:
+            raise LedgerError(
+                f"{where}: review_admission.{f} exceeds {_ADMISSION_MAX_STR} characters")
+    for f in _ADMISSION_INT_FIELDS:
+        # bool is an int subclass; a True slipping in as a generation would compare and sort
+        # like 1 and corrupt the state machine silently.
+        if not isinstance(obj[f], int) or isinstance(obj[f], bool) or obj[f] < 0:
+            raise LedgerError(f"{where}: review_admission.{f} must be a non-negative int")
+    if obj["schema_version"] not in _ADMISSION_SCHEMA_VERSIONS:
+        raise LedgerError(
+            f"{where}: review_admission.schema_version {obj['schema_version']!r} not in "
+            f"{sorted(_ADMISSION_SCHEMA_VERSIONS)}")
+    if not isinstance(obj["workflow"], str) or obj["workflow"] not in _ADMISSION_WORKFLOWS:
+        raise LedgerError(
+            f"{where}: review_admission.workflow {obj['workflow']!r} not in "
+            f"{sorted(_ADMISSION_WORKFLOWS)}")
+    return dict(obj)
+
+
 @dataclass(frozen=True)
 class LedgerExpected:
     """One expected call, with #554 recovery provenance (recovered_from = the original call's
-    correlation_id, or None for a first dispatch)."""
+    correlation_id, or None for a first dispatch) and the #855 review-admission object (None on
+    every non-review dispatch and on every record written before #855)."""
     seat: str
     correlation_id: str
     recovered_from: Optional[str] = None
+    review_admission: Optional[dict] = None
 
     def as_expected_call(self) -> ExpectedCall:
         """The (seat, correlation_id) identity reconcile_run keys on (recovery join lives on the
@@ -176,11 +225,18 @@ class ExpectedCallLedger:
             rf = rec.get("recovered_from")
             if not (rf is None or isinstance(rf, str)):
                 raise LedgerError(f"ledger {self.path} line {i}: recovered_from not a string-or-null")
+            # #855: presence-sensitive, like `architecture` on the initial record — a genuinely
+            # ABSENT key is a pre-#855 record (None); anything present is validated, so a tampered
+            # admission is refused at READ as well as at write.
+            adm = None
+            if "review_admission" in rec:
+                adm = _validate_review_admission(
+                    rec["review_admission"], f"ledger {self.path} line {i}")
             key = (seat, cid)
             if key in seen_keys:
                 raise LedgerError(f"ledger {self.path} line {i}: duplicate expected call {key}")
             seen_keys.add(key)
-            expected.append(LedgerExpected(seat, cid, rf))
+            expected.append(LedgerExpected(seat, cid, rf, adm))
         return LedgerState(initial_digest=initial_digest, expected=expected, closed=closed,
                            architecture=architecture)
 
@@ -213,8 +269,21 @@ class ExpectedCallLedger:
             state = self._parse(text) if text.strip() else LedgerState()
             precheck(state)  # raises LedgerError on an illegal transition (HELD under the lock)
             payload = (json.dumps({"run_id": self.run_id, **rec}, sort_keys=True) + "\n").encode("utf-8")
+            # Prospective cap: checking only the pre-append size lets one legal append cross it and
+            # leave a ledger every later read refuses.
+            if st.st_size + len(payload) > MAX_LEDGER_BYTES:
+                raise LedgerError(
+                    f"ledger {self.path}: append would reach {st.st_size + len(payload)} bytes, "
+                    f"over cap {MAX_LEDGER_BYTES}")
             os.lseek(fd, 0, os.SEEK_END)
-            os.write(fd, payload)
+            written = 0
+            while written < len(payload):   # os.write may write short
+                n = os.write(fd, payload[written:])
+                if n <= 0:
+                    raise LedgerError(
+                        f"ledger {self.path}: wrote {written} of {len(payload)} bytes")
+                written += n
+            os.fsync(fd)                    # a completed append must be crash-durable
         finally:
             os.close(fd)  # releases the flock
 
@@ -236,10 +305,20 @@ class ExpectedCallLedger:
 
     def append_expected(self, seat: str, correlation_id: str,
                         recovered_from: Optional[str] = None,
-                        *, expected_architecture: Optional[str] = None) -> None:
+                        *, expected_architecture: Optional[str] = None,
+                        review_admission: Optional[dict] = None) -> None:
         """``expected_architecture`` (#474, optional): assert the run's pinned architecture
         UNDER the same flock that appends — no read-then-append window. A ``None`` pinned
-        architecture (pre-3.93 ledger) passes the assertion (bounded compat window)."""
+        architecture (pre-3.93 ledger) passes the assertion (bounded compat window).
+
+        ``review_admission`` (#855, optional): the review-wave admission object. When omitted the
+        record is BYTE-IDENTICAL to the pre-#855 one — the key is left out entirely rather than
+        written as null, because ``_locked_append`` serializes with ``sort_keys=True`` and an extra
+        key would change every existing line. Validated before the lock is taken, so a malformed
+        object cannot leave a half-record behind.
+        """
+        admission = (None if review_admission is None
+                     else _validate_review_admission(review_admission, f"ledger {self.path}"))
         def _check(st: LedgerState) -> None:
             if st.initial_digest is None:
                 raise LedgerError(f"ledger {self.path}: append_expected before append_initial")
@@ -253,8 +332,11 @@ class ExpectedCallLedger:
             if any(e.seat == seat and e.correlation_id == correlation_id for e in st.expected):
                 raise LedgerError(
                     f"ledger {self.path}: duplicate expected call ({seat}, {correlation_id})")
-        self._locked_append({"kind": "expected", "seat": seat, "correlation_id": correlation_id,
-                             "recovered_from": recovered_from}, _check)
+        rec = {"kind": "expected", "seat": seat, "correlation_id": correlation_id,
+               "recovered_from": recovered_from}
+        if admission is not None:
+            rec["review_admission"] = admission
+        self._locked_append(rec, _check)
 
     def append_run_closed(self) -> None:
         def _check(st: LedgerState) -> None:
