@@ -559,6 +559,42 @@ ${content}")
 _do_project_handoff 2>/dev/null || true
 
 # =========================================================================
+# SECTION 2e2: Decision injection (startup/resume/clear, bound sessions)
+# =========================================================================
+# Inject the newest decisions for the bound project from the append-only store
+# at claude_docs/decisions/<project>.jsonl (#847). BOUNDED deliberately: that
+# store is never trimmed, so it grows without limit, and injecting all of it
+# would recreate the very context pressure the notes trimmer exists to relieve.
+# The full history is always one `decision_log.py read` away.
+# Fail-OPEN: this is convenience context. The TRIM in Section 2 is fail-CLOSED
+# because it destroys data. Two opposite fail modes in one file, on purpose.
+_do_decision_injection() {
+    case "$EVENT_TYPE" in startup|resume|clear) ;; *) return 0 ;; esac
+    [ -n "$_registry_project" ] || return 0
+    [ -n "$CLAUDE_DOCS" ] || return 0
+
+    # Same path-safety guard as the handoff section: the project name comes from
+    # the session registry and becomes a file-path component.
+    case "$_registry_project" in
+        .*|-*|*..*|*[!A-Za-z0-9._-]*) return 0 ;;
+    esac
+
+    local n="${RAWGENTIC_DECISION_INJECT_COUNT:-15}"
+    case "$n" in ''|*[!0-9]*) n=15 ;; esac
+
+    local decisions
+    decisions=$(python3 "$SCRIPT_DIR/decision_log.py" read \
+        --project "$_registry_project" --last "$n" \
+        --state-dir "$CLAUDE_DOCS" 2>/dev/null) || return 0
+    [ -n "$decisions" ] || return 0
+
+    CONTEXT_PARTS+=("RAWGENTIC DECISIONS — ${_registry_project} (newest ${n}, from an append-only store that is never trimmed; full history: \`python3 hooks/decision_log.py read --project ${_registry_project}\`):
+
+${decisions}")
+}
+_do_decision_injection 2>/dev/null || true
+
+# =========================================================================
 # SECTION 2c: Security Pattern Staleness Check (startup/resume only)
 # =========================================================================
 _do_security_staleness_check() {

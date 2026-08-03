@@ -151,6 +151,13 @@ def trim_notes(path: Path, session_id: str = "unknown") -> dict:
     if not path.exists():
         return {"trimmed": False, "reason": "file_not_found"}
 
+    # Only ever touch markdown notes. Handed anything else — most importantly a
+    # path inside the decisions store — refuse. Found by this fix's own
+    # integration test: without it, `notes-size-handler.py decisions/x.jsonl`
+    # happily destroyed the append-only store it exists to protect.
+    if path.suffix != ".md" or "decisions" in path.parts:
+        return {"trimmed": False, "reason": "not_a_notes_file"}
+
     if is_excluded(path):
         return {"trimmed": False, "reason": "excluded"}
 
