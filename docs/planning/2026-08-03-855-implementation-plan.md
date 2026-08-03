@@ -87,10 +87,18 @@ The design's transaction requires an issue-scoped journal whose lock is held thr
 for it at all (finding #1) while Task 4 depended on it. Durable append with `fsync`; recovery reads
 a reservation left by a crash.
 
-- RED: two concurrent reopening attempts, exactly one admitted (design test T); a crash injected
-  between the journal reservation and the run-ledger append leaves a consumed attempt and **no**
-  free wave (design test R); lock order is asserted by an instrumented double-acquire that would
-  deadlock in the wrong order.
+- RED: the **primitive** only — round-trip and issue-key stamping; `fsync` on append; a record
+  appended inside a transaction whose body then raises still persists (the fail-closed direction of
+  design test R); `precheck` sees the state held under the lock and a refused append writes
+  nothing; two concurrent claimants of one slot yield exactly one winner (the indivisible
+  check-then-append underlying design test T); a second appender cannot acquire the lock mid
+  transaction, which is what makes the fixed issue-journal → run-ledger order mean anything;
+  hardened parse (symlink, oversized, non-UTF-8, malformed JSON, malformed record).
+- **Corrected during implementation:** revision 2 of this plan wrote the RED list as "two
+  concurrent **reopening** attempts", but reopening is Task 10 in PR 1b. That is precisely the
+  ordering defect Step-6 finding #3 named — a task testing behaviour a later task introduces — and
+  it survived into the revision that claimed to fix it. Wave, generation and roster semantics are
+  out of this task; it delivers the locking primitive they ride on.
 - riskLevel: high (infra/persistence)
 - files: phase_executor/src/phase_executor/admission_journal.py, tests/phase_executor/test_admission_journal.py
 - verification: `pytest tests/phase_executor/test_admission_journal.py -q`
