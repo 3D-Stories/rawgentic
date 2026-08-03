@@ -14,7 +14,48 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
-## Epic #756 — silent failures: the executor instruction layer (#735 → #733 → #732 → #758 → #767 → #765 → #762) · v3.112.0
+## Epic #756 — silent failures: the executor instruction layer (#735 → #733 → #732 → #758 → #767 → #765 → #762 → #847) · v3.118.2
+
+Eighth slot (#847, session ea47e4bc, v3.118.2, WF3): the run that turned the epic's own thesis on
+the epic's own records. `hooks/notes-size-handler.py` had been deleting everything outside the last
+200 lines of every `session_notes/*.md` with **no archive**, and its only preservation path — a POST
+to `localhost:9077/ingest` — had never served, swallowed every exception, and had its result
+assigned at `:105` and never read. Six epic decision logs were destroyed, `epic-46` (960 lines) and
+`epic-756` (848) on the day the issue was filed. Reproduced first by the reporter's entry path: an
+852-line fixture holding 140 decision entries came back **0 of 140 surviving**, `"ingested": false`
+and `"trimmed": true` in the same result object. Three compounding defects, each separately
+sufficient: destruction as the primary action; fail-OPEN on an unobservable preservation call; and a
+line metric inverted 833× against context cost (a 100-line 2.0 MB file spared, an 801-line 2.4 KB
+file cut). Shipped: archive-first to a `.notes-archive/` dot-directory outside the glob, created
+`O_CREAT|O_EXCL` so a same-second trim cannot clobber the prior archive; fail-CLOSED (archive does
+not land → no trim, byte-identical, loud on stderr); a 64,000-CHARACTER threshold with a 200-line /
+16,000-char tail; the dead ingest deleted with its three tests; decision logs never trimmed at all,
+matched by NAME rather than by the accident that had been sparing them (a dot in the stem failed
+`PROJECT_NAME_RE` — the only reason `sysop.handoff.md` survived at 1,670 lines); and a new
+`hooks/decision_log.py` append-only store at `claude_docs/decisions/<project>.jsonl`, injected 15
+records deep at session start. **Sabotage did real work twice.** The first run showed the
+fail-closed test passing with the guard REMOVED — a read-only parent had been blocking the notes
+write too, so the OS was doing the test's job; that is why the archive got its own directory. The
+second proved the `flock`+`O_APPEND` deviation from AC8 load-bearing: swapping in
+`atomic_write_text`'s read-modify-write lost **31 of 40** concurrent records. Gate economics: the
+Step-4 adversarial layer returned 6 findings (1 High) and rewrote the plan's constants before a line
+was written; two review rounds, both `gpt-5.6-sol` seats against `anthropic` authorship, returned
+0 Critical / 3 High / 8 Medium / 4 Low and then 2 High / 3 Medium / 2 Low — and materially changed
+the fix each time (ignored `os.write` short returns; universal-newline translation eating every
+`\r` so the archive did not byte-preserve what it archived; a truncated final JSONL record
+POISONING the next append; a 40-digit env value making bash's own `[ -gt ]` fail so the round-1
+clamp silently did not clamp; a no-progress guard that measured the tail but not the header it was
+about to prepend, so the file stayed oversized and churned a fresh archive every session). **Eight
+of the reviewers' findings were false-greens in this change's OWN tests** — including
+`test_invalid_project_name_rejected`, whose fixture stem `passwd` is a perfectly valid project name
+and which asserted only `rc == 0`. Owner decisions: the two-round review cap held (round-2 fixes
+therefore ship unreviewed, stated on the PR); the decision WRITERS were redirected in-PR rather than
+deferred (D-847-1) — there was no programmatic writer to change, only `skills/epic-run/SKILL.md`
+prose telling the orchestrator to hand-append markdown, now `decision_log.py append` with a drift
+guard; ONE High deferred with acknowledgement (D-847-2) — the pre-existing `flock` + `os.replace`
+inode race, unchanged by this fix and already modelled by `plan_lib.file_lock()`'s sidecar lock.
+Suite 6886→6938/21/exit 0, both pylint lanes 10.00/10, scan clean (iac skip visible). No
+workflow-spine change → no diagram REV.
 
 Seventh slot (#762, sessions ff40b6d5 → 89f42f76 → 3fecd708 → f0517473 across three clean-seam
 pane-handoffs, v3.112.0, full spine): the wiring child — the executor build seat becomes the
