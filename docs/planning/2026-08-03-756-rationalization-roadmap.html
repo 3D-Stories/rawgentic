@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>Rawgentic rationalization roadmap — get unbroken, then get simple</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+:root{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}
+:root[data-theme=dark]{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}
+:root[data-theme=light]{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#955a06;--defer-bg:#f8f2e2}
+@media print{:root,:root[data-theme=dark]{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#955a06;--defer-bg:#f8f2e2}}
+.mstone{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:12px;padding:14px 16px;margin:14px 0}
+.mstone h3{margin:0 0 .4em;font-size:15px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.c-conf{color:var(--chip-c);background:var(--chip-c-bg)}
+.c-defer{color:var(--defer);background:var(--defer-bg)}
+.c-plan{color:var(--ink-2);background:var(--code)}
+
+body.tpl-roadmap{background:radial-gradient(1000px 520px at 70% -8%,#17202c 0%,var(--bg) 58%)}
+.tpl-roadmap .wrap{max-width:1120px;padding:0 22px 72px}
+.tpl-roadmap header{padding:36px 0 14px;border-bottom:none;margin-bottom:20px}
+.tpl-roadmap h1{font-size:clamp(26px,3.6vw,36px)}
+.tpl-roadmap h2{font-size:20px;margin:2em 0 .6em}
+
+.tpl-roadmap .rm-epic{border-left-width:4px}
+.tpl-roadmap .rm-meter{margin:10px 0 4px}
+.tpl-roadmap .rm-meter .blk-track{height:8px}
+.tpl-roadmap .rm-child{gap:5px}
+.tpl-roadmap .rm-child .blk-chip{font-size:10.5px;padding:2px 8px}
+/* Phase rail — what we take from the reference's `.gantt` is that a row is a PHASE, not a log
+   entry: the marker is a short bar rather than a dot, and the phase name is the heavy element
+   while the `when` shrinks to a label. It is NOT proportional — see the docstring; every bar is
+   the same size, because the grammar carries no duration. */
+.tpl-roadmap .rm-timeline{margin:18px 0;border-left-color:var(--line)}
+.tpl-roadmap .rm-timeline .blk-tl{padding:10px 0}
+.tpl-roadmap .rm-timeline .blk-tl::before{width:4px;height:22px;border-radius:2px;left:-19px;
+top:12px;background:var(--line)}
+.tpl-roadmap .rm-timeline .is-now::before{background:var(--accent)}
+.tpl-roadmap .rm-timeline .is-past::before{background:var(--ink-3)}
+.tpl-roadmap .rm-timeline .blk-when{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase}
+.tpl-roadmap .rm-timeline .blk-title{font-size:15.5px}
+/* Risk table — the reference's `.sev` pill, coloured by level, ahead of the risk text so the
+   column of pills is scannable on its own.
+   Severity is NOT a closed set here, which is worth knowing before reading the four rules below.
+   `_findings` calls `_token(value, "severity")` and `_SEMANTIC_SETS` has no "severity" entry, so
+   ANY slug passes straight through — `blocker` yields `is-blocker`, and a blank field yields
+   `is-note`. Neither warns. Executed, not assumed. The four rules colour the four levels the rest
+   of the engine already uses (`review` styles the same set); anything else keeps the base pill
+   shape with no fill, and the author's own word still renders inside it. Deliberate: an
+   unrecognised severity should look unrecognised, not be silently recoloured. */
+.tpl-roadmap .rm-risk{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+padding:4px 16px;margin:14px 0}
+.tpl-roadmap .rm-risk .blk-finding{border-bottom:1px solid var(--line);padding:10px 0}
+.tpl-roadmap .rm-risk .blk-finding:last-child{border-bottom:none}
+.tpl-roadmap .rm-risk .blk-sev{display:inline-block;font:700 10px/1.6 ui-monospace,Menlo,
+Consolas,monospace;letter-spacing:.06em;text-transform:uppercase;padding:2px 9px;
+border-radius:999px;margin-right:8px}
+.tpl-roadmap .rm-risk .is-critical .blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.tpl-roadmap .rm-risk .is-high .blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.tpl-roadmap .rm-risk .is-medium .blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.tpl-roadmap .rm-risk .is-low .blk-sev{color:var(--sev-low);background:var(--sev-low-bg)}
+/* Data-flow figure — the reference's `.diagram`: a framed figure whose nodes are boxes and
+   whose edges are accented. The tree stays a tree; only the framing and the edge weight come
+   from the reference. */
+.tpl-roadmap .rm-flow{background:var(--code);border:1px solid var(--line);border-radius:12px;
+padding:12px 16px;margin:16px 0}
+.tpl-roadmap .rm-flow .blk-node{background:var(--bg)}
+.tpl-roadmap .rm-flow .blk-edge{color:var(--accent);font:700 10.5px/1.6 ui-monospace,Menlo,
+Consolas,monospace;letter-spacing:.05em}
+.tpl-roadmap .rm-flow .blk-label{font-weight:650}
+/* #68: the segmented composition meter — the signature device of the approved visual spec
+   (docs/planning/2026-08-02-72-visual-spec.md §2). One segment per group, proportional to its
+   count, coloured by STATE. The gap between segments is what makes it read as parts of a whole
+   rather than one bar; a solid bar is what `meter` already is. */
+.tpl-roadmap .blk-comp{margin:14px 0}
+.tpl-roadmap .blk-comp-bar{display:flex;gap:5px}
+.tpl-roadmap .blk-comp-seg{height:9px;border-radius:5px;background:var(--ink-3)}
+.tpl-roadmap .blk-comp-seg.is-crit{background:var(--sev-crit)}
+.tpl-roadmap .blk-comp-seg.is-warn{background:var(--sev-med)}
+.tpl-roadmap .blk-comp-seg.is-ok{background:var(--chip-c)}
+.tpl-roadmap .blk-comp-legend{display:flex;flex-wrap:wrap;gap:6px 20px;margin-top:9px;
+font-size:10.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3)}
+.tpl-roadmap .blk-comp-key{display:inline-flex;align-items:center;gap:7px}
+.tpl-roadmap .blk-comp-key::before{content:"";width:8px;height:8px;border-radius:2px;
+background:var(--ink-3)}
+.tpl-roadmap .blk-comp-key.is-crit::before{background:var(--sev-crit)}
+.tpl-roadmap .blk-comp-key.is-warn::before{background:var(--sev-med)}
+.tpl-roadmap .blk-comp-key.is-ok::before{background:var(--chip-c)}
+/* #68 PR 2: the phase band — the container the composition meter measures.
+   Spec §2 "Tracks as first-class containers": a titled band with its own state badge, its own
+   segmented bar, and its work items nested INSIDE it. Depth by ground, not shadow (spec rule 2):
+   the band sits on `--surface` and its item strip sinks back to `--bg`, which is the two-ground
+   version of the target's three. The ordinal is what makes the sequence visible — it is the
+   "phases in order" the issue title asks for, and it is why the gutter is fixed-width and mono:
+   `01` and `10` must line up or the column stops reading as a sequence. */
+.tpl-roadmap .rm-phase{margin:18px 0;display:flex;flex-direction:column;gap:14px}
+.tpl-roadmap .blk-ph{background:var(--surface);border:1px solid var(--line);
+border-radius:12px;padding:14px 16px;border-left:4px solid var(--ink-3)}
+.tpl-roadmap .blk-ph.is-crit{border-left-color:var(--sev-crit)}
+.tpl-roadmap .blk-ph.is-warn{border-left-color:var(--sev-med)}
+.tpl-roadmap .blk-ph.is-ok{border-left-color:var(--chip-c)}
+.tpl-roadmap .blk-ph-head{display:flex;align-items:baseline;gap:12px}
+.tpl-roadmap .blk-ph-ord{flex:none;width:26px;font:700 13px/1.4 ui-monospace,Menlo,
+Consolas,monospace;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.tpl-roadmap .blk-ph-title{flex:1;font-size:15.5px;font-weight:700}
+.tpl-roadmap .blk-ph-badge{flex:none;font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.11em;text-transform:uppercase;padding:2px 9px;border-radius:6px;
+color:var(--ink-3);border:1px solid var(--line)}
+.tpl-roadmap .blk-ph-badge.is-crit{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-badge.is-warn{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-badge.is-ok{color:var(--chip-c);background:var(--sev-low-bg);
+border-color:transparent}
+/* One segment per ITEM, so the bar is a picture of the list beneath it. Equal widths (spec §2)
+   — `flex:1` rather than an inline percentage, so the renderer does no arithmetic and the
+   segments cannot drift out of step with the rows they stand for. */
+.tpl-roadmap .blk-ph > .blk-comp-bar{margin:11px 0 0}
+.tpl-roadmap .blk-ph .blk-comp-seg{flex:1}
+.tpl-roadmap .blk-ph-items{margin-top:11px}
+.tpl-roadmap .blk-ph-items:empty{display:none}
+/* 38px = the ordinal's 26px plus the head's 12px gap, so an item's id starts exactly under
+   its phase's title. At 26px they were three-quarters aligned, which reads as a mistake
+   rather than as a level of hierarchy — found by looking, not by a test. */
+.tpl-roadmap .blk-ph-item{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+padding:8px 0 8px 38px;border-top:1px solid var(--line)}
+.tpl-roadmap .blk-ph-id{font:700 11.5px/1.6 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-2);border-bottom:2px solid var(--line);padding-bottom:1px}
+.tpl-roadmap .blk-ph-item.is-crit .blk-ph-id{color:var(--sev-crit);
+border-bottom-color:var(--sev-crit)}
+.tpl-roadmap .blk-ph-chip{font:700 9.5px/1.7 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.11em;text-transform:uppercase;padding:1px 7px;border-radius:6px;
+color:var(--ink-3);background:var(--code)}
+.tpl-roadmap .blk-ph-chip.is-crit{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.tpl-roadmap .blk-ph-chip.is-warn{color:var(--sev-med);background:var(--sev-med-bg)}
+.tpl-roadmap .blk-ph-chip.is-ok{color:var(--chip-c);background:var(--sev-low-bg)}
+.tpl-roadmap .blk-ph-text{flex:1 1 240px;color:var(--ink-2);font-size:14px}
+
+:root{--accent:#f2a65e;}
+:root[data-theme=dark]{--accent:#f2a65e;}
+:root[data-theme=light]{--accent:#a26211;}
+@media print{:root,:root[data-theme=dark]{--accent:#a26211;}}
+</style>
+</head>
+<body class="tpl-roadmap">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-03 13:19 MDT</div>
+<h1>Rawgentic rationalization roadmap — get unbroken, then get simple</h1>
+
+</header>
+<main>
+<p><strong>Date:</strong> 2026-08-03 · <strong>Authors:</strong> owner + Fable 5, with gpt-5.6-sol as consultant (xhigh, repo-verified) <strong>Supersedes:</strong> epic #756&#x27;s queue order and the 2026-08-01 &quot;keep the executor&quot; ruling. <strong>Decisions:</strong> D174–D179 in <code>claude_docs/decisions/rawgentic.jsonl</code> (workspace root). Each carries its undo.</p>
+<div class="blk blk-stats"><div class="blk-item"><span class="blk-value">48</span><span class="blk-label">issues rationalized</span></div><div class="blk-item is-accent"><span class="blk-value">28</span><span class="blk-label">issues closed</span></div><div class="blk-item"><span class="blk-value">~33k</span><span class="blk-label">code lines to delete</span></div><div class="blk-item"><span class="blk-value">6</span><span class="blk-label">owner rulings (D174–D179)</span></div><div class="blk-item"><span class="blk-value">34→15</span><span class="blk-label">WF2 refusal gates</span></div></div>
+<div class="blk blk-callout"><div class="blk-callout is-warn"><div class="blk-title">rawgentic is broken on main today — M0 unbreaks it</div><p>Implementation routes through a build seat that has <strong>never run in a real issue</strong>; all three
+mandatory review gates <strong>fail on a missing flag</strong> (#863); and the workflow prose is ~4× past the
+measured instruction-compliance cliff. Milestone 0 fixes all three at once, mostly by deletion.</p></div></div>
+<section class="mstone rm-epic"><h3>The roadmap <span class="chip c-plan">—</span></h3><div class="blk blk-phases rm-phase"><div class="blk-ph is-crit"><div class="blk-ph-head"><span class="blk-ph-ord">01</span><span class="blk-ph-title">M0 — UNBREAK: the retreat</span><span class="blk-ph-badge is-crit">4 PRs · do first</span></div><span class="blk-comp-bar"><span class="blk-comp-seg is-note"></span><span class="blk-comp-seg is-crit"></span><span class="blk-comp-seg is-note"></span><span class="blk-comp-seg is-ok"></span></span><div class="blk-ph-items"><div class="blk-ph-item is-note"><span class="blk-ph-id">M0a</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">Review runner lands (unused): codex+GLM, pinned reviewer identity, reopen-token choke point (#855), error classes (#857), freshness binding</span></div><div class="blk-ph-item is-crit"><span class="blk-ph-id">M0b</span><span class="blk-ph-chip is-crit">crit</span><span class="blk-ph-text">Behavioral cutover: WF2/WF3 inline again; runner at Steps 4/8a/11; WF5/WF13 cut over; ceremony + [Headless:] cuts; run-record relaxation + prose-pin rewrites ride along — <strong>WF2 runnable the day this merges</strong></span></div><div class="blk-ph-item is-note"><span class="blk-ph-id">M0c</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">Config contraction, with shims: setup/config surfaces, agents replaced, ~20 workspace entries</span></div><div class="blk-ph-item is-ok"><span class="blk-ph-id">M0d</span><span class="blk-ph-chip is-ok">ok</span><span class="blk-ph-text">Delete ~33k lines: phase_executor, 5 coupled hooks, the old review engine, headless machinery; tripwire + smoke guards; plugin-reinstall cutover</span></div></div></div><div class="blk-ph is-warn"><div class="blk-ph-head"><span class="blk-ph-ord">02</span><span class="blk-ph-title">M1 — STAY SMALL</span><span class="blk-ph-badge is-warn">2–3 PRs</span></div><span class="blk-comp-bar"><span class="blk-comp-seg is-note"></span><span class="blk-comp-seg is-note"></span><span class="blk-comp-seg is-note"></span></span><div class="blk-ph-items"><div class="blk-ph-item is-note"><span class="blk-ph-id">#856</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">CI byte ceilings (post-retreat baseline) + steps.md split into step-local files</span></div><div class="blk-ph-item is-note"><span class="blk-ph-id">#761</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">WF2-lite lane for disposable-class work</span></div><div class="blk-ph-item is-note"><span class="blk-ph-id">#822</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">Version-surface + changelog check folded into the existing pin test</span></div></div></div><div class="blk-ph is-warn"><div class="blk-ph-head"><span class="blk-ph-ord">03</span><span class="blk-ph-title">M2 — THE PANE-HANDOFF CHAIN</span><span class="blk-ph-badge is-warn">4–5 PRs · now load-bearing</span></div><span class="blk-comp-bar"><span class="blk-comp-seg is-crit"></span><span class="blk-comp-seg is-note"></span><span class="blk-comp-seg is-note"></span><span class="blk-comp-seg is-note"></span><span class="blk-comp-seg is-note"></span><span class="blk-comp-seg is-note"></span></span><div class="blk-ph-items"><div class="blk-ph-item is-crit"><span class="blk-ph-id">LB</span><span class="blk-ph-chip is-crit">crit</span><span class="blk-ph-text">Launcher robustness first (#731+#800+#835) — the observed flakiness lives here</span></div><div class="blk-ph-item is-note"><span class="blk-ph-id">MR</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">Meter rework (D177): two-threshold pane-handoff driving, never-latch, mid-turn delivery, 55/75, rolling summary, code shrink</span></div><div class="blk-ph-item is-note"><span class="blk-ph-id">#726</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">In-flight-work gate + durable-path check + abandoned-work named to the successor</span></div><div class="blk-ph-item is-note"><span class="blk-ph-id">ER</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">Epic-run rework (D176): children continue via pane-handoff; #769 boundary sweep; receipt machinery retires</span></div><div class="blk-ph-item is-note"><span class="blk-ph-id">GR</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">Trusted goal reader (#864+#772): LIVE / CLEARED / NEVER_ARMED / AMBIGUOUS</span></div><div class="blk-ph-item is-note"><span class="blk-ph-id">#806</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">Goal cap read from the constant + exact-text display; no auto-arm</span></div></div></div><div class="blk-ph is-note"><div class="blk-ph-head"><span class="blk-ph-ord">04</span><span class="blk-ph-title">M3 — SMALL TAIL</span><span class="blk-ph-badge is-note">3–4 PRs</span></div><span class="blk-comp-bar"><span class="blk-comp-seg is-note"></span><span class="blk-comp-seg is-note"></span><span class="blk-comp-seg is-note"></span><span class="blk-comp-seg is-note"></span></span><div class="blk-ph-items"><div class="blk-ph-item is-note"><span class="blk-ph-id">#750</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">Registry append helper (kills #800&#x27;s variance at the source)</span></div><div class="blk-ph-item is-note"><span class="blk-ph-id">#759</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">Owner deferral registry, lite</span></div><div class="blk-ph-item is-note"><span class="blk-ph-id">#808</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">WF3&#x27;s own budget-exhausted close</span></div><div class="blk-ph-item is-note"><span class="blk-ph-id">#860</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">Wire consult-on-exhaustion into the gates</span></div></div></div><div class="blk-ph is-note"><div class="blk-ph-head"><span class="blk-ph-ord">05</span><span class="blk-ph-title">LATER — owner-call, unscheduled</span><span class="blk-ph-badge is-note">watch list</span></div><span class="blk-comp-bar"><span class="blk-comp-seg is-note"></span><span class="blk-comp-seg is-note"></span></span><div class="blk-ph-items"><div class="blk-ph-item is-note"><span class="blk-ph-id">#792</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">Fail-open quota preflight from statusline rate_limits</span></div><div class="blk-ph-item is-note"><span class="blk-ph-id">WL</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">10-item future watch list (§6): native sandboxing, subagent-death fix, usage API…</span></div></div></div></div>
+<div class="blk blk-legend"><dl><dt class="blk-swatch is-crit">crit</dt><dd>broken or flaky today — fix first</dd><dt class="blk-swatch is-warn">warn</dt><dd>protects size or reliability</dd><dt class="blk-swatch is-ok">ok</dt><dd>pure deletion win</dd><dt class="blk-swatch is-note">note</dt><dd>scheduled, not started</dd></dl></div>
+<p><strong>Where the 48 issues land:</strong></p>
+<div class="blk blk-composition"><div class="blk-comp"><span class="blk-comp-bar"><span class="blk-comp-seg is-ok" style="width:58.3%"></span><span class="blk-comp-seg is-warn" style="width:16.7%"></span><span class="blk-comp-seg is-warn" style="width:14.6%"></span><span class="blk-comp-seg is-note" style="width:10.4%"></span></span><span class="blk-comp-legend"><span class="blk-comp-key is-ok">28 closed</span><span class="blk-comp-key is-warn">8 combined into 3 work items</span><span class="blk-comp-key is-warn">7 rescoped</span><span class="blk-comp-key is-note">5 kept as-is</span></span></div></div>
+<hr></section>
+<section class="mstone rm-epic"><h3>1. Where we are, in plain words <span class="chip c-plan">—</span></h3><p>rawgentic is broken on main today. Three things broke it:</p>
+<ol>
+<li><strong>WF2&#x27;s implementation path points at a machine that has never run.</strong> Every implementation</li>
+</ol>
+<p>   dispatch routes through the executor build seat (<code>steps.md:997</code>) — a seat with zero real-run    history, that only codex can drive, and codex is weekly-quota-capped.</p>
+<ol start="2">
+<li><strong>All three mandatory review gates fail as written.</strong> The dispatch command the prose gives</li>
+</ol>
+<p>   omits a flag the code requires (<code>--author-provider</code>, #863) — exit 4, every time.</p>
+<ol start="3">
+<li><strong>The workflow prose outgrew what any model can follow.</strong> ~75k tokens carrying ~302 hard</li>
+</ol>
+<p>   obligations. Measured research puts the compliance cliff near <strong>80 simultaneous rules</strong>    (IFScale, arXiv 2507.11538). The #840 run proved it: a session running WF2 bypassed three of    WF2&#x27;s own controls without noticing (#855).</p>
+<p>The last 4 days (~45 PRs, ~30k lines) were mostly machinery to harden machinery, and each big machinery PR spawned a new defect wave (#840&#x27;s two PRs → six new issues; #829&#x27;s review → three; #825&#x27;s review → two). <strong>We do not revert</strong> — about a third of those merges are genuinely good silent-failure fixes (killed dispatches now report failure, the rate card is right, chain-burn is stopped, severity is defined, logs archive before trimming). We stop feeding the loop and delete the dead weight forward.</p></section>
+<section class="mstone rm-epic"><h3>2. The rulings this roadmap builds on (all owner-approved today) <span class="chip c-plan">—</span></h3><table>
+<thead><tr><th>ID</th><th>Ruling</th></tr></thead>
+<tbody>
+<tr><td><strong>D174</strong></td><td><strong>Full retreat from the executor.</strong> Analysis + implementation run inline. Cross-model reviews call the codex CLI <strong>through a subagent</strong> (parallel with self-review). phase_executor and every coupled hook are stripped out. Evidence: 276 recorded dispatches — codex review lane 97% ok, Claude lanes ≤66%, build seat never used in a real run. Version-bump surfaces drop 4 → 3.</td></tr>
+<tr><td><strong>D175</strong></td><td><strong>Guardrail dial.</strong> The ceremony layer dies (feasibility declarations, ratio/halt bands, parallel-group proofs, P15 SHA ledger, review-state refusals; completion gate 13→~8). The earned-by-incident guards stay (riskLevel tags, loop-back budget + High-deferral + severity/confidence via the one review runner, ambiguity breaker, secrets scanning, CI test+lint, wal-bind-guard, PR-only). ~34 distinct WF2 gates → ~15.</td></tr>
+<tr><td><strong>D176</strong></td><td><strong>Epic-run rework.</strong> Between-children continuation = <strong>pane-handoff</strong> (fresh successor pane per child). The claim/lease/generation-fence/receipt machinery retires. A lightweight stale-issue-body check stays at child startup (the #840 intent survives; the receipt subsystem does not).</td></tr>
+<tr><td><strong>D177</strong></td><td><strong>Context meter: shrink, don&#x27;t delete.</strong> It must keep doing exactly two things (owner spec, verbatim): <em>&quot;1) After the first threshold is passed, look for a clean break to do a pane handoff. 2) At the second threshold, let the session finish its current task and then force a pane-handoff.&quot;</em> Fix the latch bug, make the directive deliverable mid-turn, thresholds 55/75.</td></tr>
+<tr><td><strong>D178</strong></td><td><strong>Kills:</strong> #760, #763, #764 closed; #749 closed <strong>and headless mode removed entirely</strong> (the rawgentic-auto trigger is unused — all <code>[Headless:]</code> directives, headless.md files, the session-start headless gate, and <code>RAWGENTIC_HEADLESS</code> paths die).</td></tr>
+<tr><td><strong>D179</strong></td><td><strong>One review runner + issue throttle.</strong> A ~200–300-line runner (extracted from the proven codex path) serves WF2 gates, WF5 and WF13 — <strong>GLM backend kept</strong>. And a process rule: review findings never auto-become GitHub issues — fixed, explicitly declined, or PR-noted; a new issue needs owner confirmation.</td></tr>
+</tbody>
+</table></section>
+<section class="mstone rm-epic"><h3>3. What happens to all 48 open issues <span class="chip c-defer">DROPPED</span></h3><p><strong>Closed — 28</strong> (each gets a closing comment naming the decision):</p>
+<table>
+<thead><tr><th>Why</th><th>Issues</th></tr></thead>
+<tbody>
+<tr><td>Retired by the retreat (D174)</td><td>#766 #775 #778 #779 #793* #794 #795† #799 #825 #832 #833 #834 #838 #839 #857 #861 #863</td></tr>
+<tr><td>Epic-run rework (D176)</td><td>#845 #846 #848 #849 #850 #851</td></tr>
+<tr><td>Owner kill call (D178)</td><td>#749 #760 #763 #764</td></tr>
+<tr><td>Producer boundary retired</td><td>#815</td></tr>
+</tbody>
+</table>
+<p><em>\</em>#793&#x27;s substance (noise-strip, truncation-retry) ships as runner acceptance criteria — see M0a. Residuals from #766/#832/#833/#834/#857 likewise become named runner ACs.<em> </em>†#795 is closed with its ask (per-seat panes + live token ticker) <strong>dropped by ruling</strong>, not residualized — the runner emits start/end/error lines, which is less than #795 asked for. Said plainly so nothing is laundered.*</p>
+<p><strong>Combined — 8 issues → 3 work items:</strong> meter rework (#729+#734+#797, including #797&#x27;s rolling log summary) · launcher robustness (#731+#800+#835) · trusted goal reader (#864+#772).</p>
+<p><strong>Rescoped — 7:</strong> #855 (runner reopen-token + <code>plan_lib review-reopen</code>; PR 1a&#x27;s admission_journal is removed with the package — sunk cost, stated plainly) · #856 (M0 prose strip + M1 ceilings/split; the 302-row inventory and digest instrument are dropped) · #761 (WF2-lite lane only) · #806 (cap-and-display, no auto-arm) · #822 (extend the existing version-pin test; no new CLI) · #792 (LATER: small fail-open quota preflight) · #769 (NOT superseded by #840 — a findings-sweep across remaining issues is different from head-revalidation; it folds into the D176 epic-run rework as the child-boundary sweep step).</p>
+<p><strong>Kept as-is — 5:</strong> #726, #750, #759 (lite), #808, #860.</p></section>
+<section class="mstone rm-epic"><h3>4. Milestone detail <span class="chip c-conf">DONE</span></h3><h3>M0 — UNBREAK: the retreat (4 PRs, consult-sequenced so every merge is green and non-cutover until M0b)</h3>
+<p><strong>M0a — the replacement lands unused.</strong> One small review runner (extracted from <code>adversarial_review_lib</code> + the proven codex adapter; backends <strong>gpt + glm</strong>):</p>
+<ul>
+<li>interface: <code>review-code --base &lt;ref&gt; --brief &lt;f&gt; --author-model &lt;id&gt;</code> / <code>review-artifact --artifact &lt;f&gt; --type design --author-model &lt;id&gt;</code> / <code>consult --artifact &lt;f&gt;</code> (WF13 + #860 use the same runner — D179 means ALL of WF2/WF5/WF13, so the consult verb ships here, not in M3)</li>
+<li>owns ONLY: input validation, invocation, structured output, transport failure. Policy lives elsewhere.</li>
+<li><strong>reviewer identity is pinned, not inherited</strong>: <code>--reviewer &lt;model&gt;</code> resolves to an explicit <code>-m</code>/backend selection (gpt|glm); author==reviewer or unresolvable identity REFUSES; the result echoes the transport-reported model, never an empty string (fixes the extraction&#x27;s config-inherit hole at <code>adversarial_review_lib.py:1352</code>)</li>
+<li><strong>lineage or diagnostic — the #855 choke point</strong>: an actionable run requires <code>--reopen-token &lt;f&gt;</code> minted by <code>plan_lib review-reopen</code> (which debits the existing atomic loop-back budget); without a token the runner still works but stamps the result <code>diagnostic: true</code>, and the workflow&#x27;s disposition step mechanically refuses to open a fix round on a diagnostic result. Transport retries never debit.</li>
+<li>mandatory artifact parameter — a route that can&#x27;t carry the bytes can&#x27;t be called (#832 residual)</li>
+<li>bounded reads that <strong>refuse</strong> oversize instead of truncate-and-continue (#834); composition/capture time recorded in a <code>timing</code> field so the deadline means what it says (#834&#x27;s second half)</li>
+<li><code>codex exec --sandbox read-only --output-schema … -o &lt;file&gt;</code>; non-empty schema-valid output or terminal failure — a dead process/empty result/killed process is a FAILURE, never a pass and never &quot;still running&quot; (#766)</li>
+<li><strong>error classes, not a blanket retry</strong> (#857 residual, in full): transport blip → one bounded retry; org-wide 429 spend limit → terminal, never retried; per-account/model 429 → retry once on the other backend is permitted; anything else → recorded-but-unclassified, terminal. The extraction must NOT keep the current blanket retry of every nonzero exit (<code>adversarial_review_lib.py:1346</code>). <code>quota_detect.py</code> dies with the package — this classification replaces it.</li>
+<li>result carries <code>{status, diagnostic, reviewer_model, input_sha256, base_sha, head_sha, timing, findings, summary, error_class}</code>; the orchestrator rejects results whose HEAD/artifact moved before disposition (freshness binding — closes the parallel-review race)</li>
+<li>noise-strip list (fixed generated-file set, visible; <strong>no generic docs-only skip</strong> — markdown IS executable behavior in this plugin); truncation → one bounded retry (#793)</li>
+<li>one start/end/error line for visibility</li>
+<li>dispatched from a <strong>subagent</strong> with the 3-line artifact gate (file exists, non-empty, shape-grep) so self-review and cross-model review run in parallel and vacuous results are caught mechanically</li>
+</ul>
+<p><strong>M0b — behavioral cutover.</strong> WF2/WF3 prose: inline analysis + implementation (delete the primary/legacy split, <code>begin-run</code>/<code>mint-gate</code>, model-routing calls); Steps 4/8a/11 dispatch the runner subagent; <strong>WF5 adversarial-review and WF13 peer-consult cut over to the same runner in this PR</strong> (D179 is delivered by M0, not promised for later); the D175 ceremony cuts and the D178 <code>[Headless:]</code> directive removal ride the same edit; <code>model-routing-resolve</code> block rewritten as the subagent contract. Everything the cutover invalidates moves WITH it so the PR is green alone: the <strong>run-record schema relaxation</strong> (<code>architecture</code> optional-legacy — <code>work_summary.py:103/:463</code> would otherwise fail every Step 16 on a record that can no longer truthfully say <code>executor|legacy</code>) and the <strong>prose-pin test rewrites</strong> (<code>test_model_routing_resolve_prose.py</code> currently asserts the executor command and <code>begin-run</code>). A negative guard asserts active prose names no executor entry point. <strong>WF2 is runnable again the day this merges.</strong></p>
+<p><strong>M0c — config-surface contraction, with shims.</strong> Setup skill + config reference + post-update nudges + workspace configs (~20 <code>executorRouting</code> entries, <code>executorTerminalBackend</code>, <code>phaseExecutorTable</code>, <code>telemetryAlerts</code>), <code>modelRouting</code> surfaces, headless config surfaces; <code>agents/rawgentic-implementer</code> deleted, <code>agents/rawgentic-reviewer</code> replaced by the runner subagent. <strong><code>capabilities_lib</code> keeps emitting its deprecated derived keys until M0d</strong> — the still-present executor code indexes them directly (<code>executor_routing_lib.py:446/:511</code>), so removing the outputs one PR early is a KeyError factory; the ~70 validation lines leave in M0d with their consumers.</p>
+<p><strong>M0d — deletion + cutover.</strong> <code>phase_executor/</code> (~10k src lines), <code>tests/phase_executor/</code> (~16k), <code>executor_routing_lib</code> (3,984), <code>seat_outcomes_lib</code> (1,347), <code>complexity_gate</code> (296 — after removing <code>plan_lib.py:29</code>&#x27;s module-load import and the <code>--gate-file</code> branch), <code>bakeoff_policy</code> (685), <code>driver_bench_lib</code> (618), <code>diagram_seat_data</code>, <strong>the old review engine in <code>adversarial_review_lib</code> (2,628 lines → the extracted runner + kept GLM backend)</strong>, the <code>capabilities_lib</code> shims from M0c, the wal-bind-guard dispatch-claim exception, headless machinery (session-start gate, headless.md ×2, <code>RAWGENTIC_HEADLESS</code> paths), herdr-pin becomes self-authoritative, ~18 surviving test files triaged, canary version surface removed (4→3). Plus two new guards: a <strong>retirement tripwire</strong> (static test — no retired imports/commands/config keys outside explicitly archival dirs) and an import/CLI smoke test for surviving hooks. Diagram REV. <strong>Cutover is operational:</strong> quiesce running work, merge, reinstall the plugin, fresh session; <code>.rawgentic/runs/</code> history is read-only archival evidence, never deleted.</p>
+<p><em>Also closed by M0d: #449 (driver-bench executor cells — outside the 48 but its subject is deleted).</em></p>
+<h3>M1 — STAY SMALL: prose ceilings + the lite lane</h3>
+<ul>
+<li>Measure the post-retreat corpus, then pin <strong>CI byte ceilings</strong> (total + per-file, glob-exact so</li>
+</ul>
+<p>  a new unbudgeted file can&#x27;t evade it) at actual + modest headroom (#856).</p>
+<ul>
+<li><code>steps.md</code> → step-local files, loaded one step at a time (SKILL.md stays a short index —</li>
+</ul>
+<p>  Anthropic&#x27;s own guidance: &lt;500 lines, progressive disclosure).</p>
+<ul>
+<li>Targeted characterization pins only (mandatory review sites, reviewer≠author, artifact delivery,</li>
+</ul>
+<p>  loop-back debit, deferral honesty, no executor vocabulary) — not every sentence.</p>
+<ul>
+<li><strong>WF2-lite lane</strong> (#761 rescoped): <code>disposable | internal | production</code> task class; disposable</li>
+</ul>
+<p>  work gets a short lane with its own definition of done.</p>
+<ul>
+<li>#822 folded into the existing version-pin test (names the stale surface, checks changelog tail).</li>
+<li>The <strong>issue throttle</strong> (D179) lands in the workspace manual.</li>
+</ul>
+<h3>M2 — THE PANE-HANDOFF CHAIN: now load-bearing, so make it boring</h3>
+<p>Priority order (epic-run depends on this chain per D176):</p>
+<ol>
+<li><strong>Launcher robustness</strong> (#731+#800+#835): error text on every <code>failed_step</code> + capture-before-</li>
+</ol>
+<p>   cleanup + name preflight; path-equivalent <code>project_switched</code> compare; goal-send Enter-nudge    recovery (the #700 pattern, extended to the goal).</p>
+<ol start="2">
+<li><strong>Meter rework</strong> (D177 spec): never-latch re-resolution, mid-turn directive delivery, 55/75,</li>
+</ol>
+<p>   the rolling log summary (#797&#x27;s third AC — kept, not dropped), and a code shrink while keeping    the two-threshold pane-handoff behavior. <strong>Honest mechanism note:</strong> the T2 &quot;force&quot; is delivered    through the prompt-insert channel — authoritative user input that Claude Code queues to the    next tool boundary, which is exactly &quot;let the current task finish, then act&quot;. It cannot    physically seize control, so it is <strong>acknowledgement-tracked</strong>: the meter records the insert,    watches for the handoff&#x27;s own evidence (successor registry line), and re-fires if none appears    — never fire-and-forget.</p>
+<ol start="3">
+<li><strong>#726</strong> — refuse handoff while background work is in flight (wait-or-decide, overridable),</li>
+</ol>
+<p>   <strong>plus</strong> the issue&#x27;s two teeth: a mechanical durable-path check (a successor cannot be handed a    predecessor-session-scoped <code>/tmp</code> path), and abandoned in-flight work is NAMED in the successor    prompt so it re-dispatches instead of waiting forever.</p>
+<ol start="4">
+<li><strong>Epic-run rework</strong> (D176): children continue via pane-handoff; claim/lease/receipt machinery</li>
+</ol>
+<p>   retired; lightweight stale-body check at child startup; <strong>the #769 child-boundary sweep</strong>    (completed child&#x27;s findings swept across every remaining child&#x27;s scope/deps, recorded — this is    NOT the same as head-revalidation and is kept, per review finding 6); visible both-projects    confirmation (the #763 residual, one line).</p>
+<ol start="5">
+<li><strong>Trusted goal reader</strong> (#864+#772): one origin-bound reader (LIVE/CLEARED/NEVER_ARMED/</li>
+</ol>
+<p>   AMBIGUOUS) behind the CLI and both destructive paths.</p>
+<ol start="6">
+<li><strong>#806</strong> rescoped: goal cap read from the constant + exact-text display; no auto-arm.</li>
+</ol>
+<h3>M3 — SMALL TAIL</h3>
+<p>#750 (registry append helper — also removes #800&#x27;s variance at the source) · #759-lite (owner deferral registry, driver + WF2 Step 1 check) · #808 (WF3&#x27;s own budget-exhausted close) · #860 (wire consult-on-exhaustion into the WF2/WF3 gates — the runner&#x27;s consult verb itself ships in M0a).</p>
+<h3>LATER / watch</h3>
+<p>Rescoped #792 (fail-open quota preflight from statusline <code>rate_limits</code> — the pareshrnayak/quota-guard architecture) · PreCompact auto-dump backstop (Sonovore/thepushkarp patterns) if handoffs ever miss · the 10-item future watch list in §6.</p></section>
+<section class="mstone rm-epic"><h3>5. Research this plan stands on (so we stop guessing) <span class="chip c-plan">—</span></h3><ul>
+<li><strong>Anthropic (primary sources):</strong> SKILL.md &lt;500 lines, progressive disclosure, scripts over prose</li>
+</ul>
+<p>  (&quot;the context window is a public good&quot;); <em>coding is a poor multi-agent fit</em> — inline endorsed;   subagents are for side tasks that would flood the main context (reviews fit exactly).</p>
+<ul>
+<li><strong>Measured instruction decay:</strong> best frontier models ~68% compliance at 500 rules; perfect</li>
+</ul>
+<p>  compliance collapses by ~80 rules (IFScale; Prompt Design at Scale). WF2 carried ~302.</p>
+<ul>
+<li><strong>Review economics (Cloudflare, cubic, Greptile):</strong> risk-tiered depth, deterministic pre-filters</li>
+</ul>
+<p>  (not LLM severity judges), confidence fields in structured output, truncation retry, generated-   noise stripping. Greptile: prompting against nits failed; embedding-filters worked — don&#x27;t build   an LLM severity judge.</p>
+<ul>
+<li><strong>Hooks over prose:</strong> PreToolUse deny survives even permission-skip mode; &quot;if violating it once</li>
+</ul>
+<p>  is an incident, make it a hook; otherwise it&#x27;s a skill line&quot;; hook-fed state machine prior art   (Nick Tune) is the template for #856&#x27;s guard direction; practitioners report cutting standing   instructions ~1/3 after moving enforcement into hooks.</p>
+<ul>
+<li><strong>codex exec:</strong> <code>--output-schema</code> + <code>-o</code> gives machine-checkable review artifacts; repo-aware</li>
+</ul>
+<p>  <code>codex exec review --base|--commit|--uncommitted</code> exists in the installed 0.146.0.</p>
+<ul>
+<li><strong>Subagent silent-death rates 14–30%</strong> (claude-code#47936): the artifact gate + proof-token</li>
+</ul>
+<p>  pattern is the cheap mitigation until the SDK surfaces termination status.</p></section>
+<section class="mstone rm-epic"><h3>6. Future watch list (not now; revisit on trigger) <span class="chip c-plan">—</span></h3><ol>
+<li>Claude Code native Bash sandboxing (replaces prose &quot;don&#x27;t touch X&quot; for unattended runs)</li>
+<li>anthropic-experimental/sandbox-runtime (sandboxing the codex CLI itself)</li>
+<li>Async-subagent reliability fix (#47936 — shrinks our artifact-gate machinery when fixed)</li>
+<li>Agent teams (only if parallel implementation ever returns)</li>
+<li>Background agents / agent-view (if epic-run outgrows panes)</li>
+<li>prompt/agent-type hooks (LLM-judged Stop gates, ~$0.001/fire — for subjective gates)</li>
+<li>Codex CLI hooks (same guards on the review side)</li>
+<li>codex --output-schema maturity (adopt-now; watch for changes)</li>
+<li>Native usage API (retires statusline-tee quota reading)</li>
+<li>Plugin marketplace (only if rawgentic is ever shared)</li>
+</ol></section>
+<section class="mstone rm-epic"><h3>7. What we deliberately do NOT do <span class="chip c-plan">—</span></h3><ul>
+<li>No wholesale revert of the last 4 days — good fixes stay; dead weight deletes forward.</li>
+<li>No new enforcement state machines. One runner + <code>plan_lib review-reopen</code> own review-loop control.</li>
+<li>No per-phase token attribution (#777/#815 closed-parked) until a producer boundary exists again.</li>
+<li>No generic docs-only review skip — markdown is executable behavior here.</li>
+<li>protectionLevel stays <code>sandbox</code>; no new pattern guards; secrets scanning stays.</li>
+<li>Historical receipts, measurements and planning docs are archival — M0 does not rewrite history.</li>
+</ul></section>
+<section class="mstone rm-epic"><h3>8. Execution notes <span class="chip c-plan">—</span></h3><ul>
+<li><strong>M0 runs in plain supervised sessions, NOT through WF2 (D180)</strong> — WF2 is broken as written, and</li>
+</ul>
+<p>  a session executes the installed cache&#x27;s prose while editing the repo&#x27;s, a self-reference trap.   Hand-applied discipline is mandatory: TDD for behavior changes; full-suite + both pylint gates   against the recorded baseline (7031 passed / 24 skipped at <code>98547d41</code>); secrets scan; codex   available for consults; an adversarial cross-model review of every PR diff (through the M0a   runner once it exists — the retreat dogfoods its own replacement); proper PR mechanics.   <strong>Rawgentic returns at M1</strong>, which doubles as the test that the retreat worked.</p>
+<ul>
+<li><strong>Comparison telemetry (D181):</strong> plain-session runs write per-PR run-records into the same</li>
+</ul>
+<p>  append-only store (<code>docs/measurements/run_records.jsonl</code>) as <code>workflow: &quot;plain-session&quot;</code>,   <code>architecture: &quot;inline&quot;</code> — wall-clock, usage, review findings, tests, LOC — so   cost / quality / time compares directly against the 32 executor/legacy records since   2026-07-28. One store, one query.</p>
+<ul>
+<li>Every milestone item ships as PRs from branches off fresh <code>origin/main</code>; owner merges (no</li>
+</ul>
+<p>  standing auto-merge grant exists after this session).</p>
+<ul>
+<li><strong>Doc publishing goes through the <code>/design-doc-publish</code> skill</strong> (its <code>publish_doc.py</code> owns</li>
+</ul>
+<p>  render + Vercel deploy + verification in one command; <code>--type</code> picks the template). Sessions do   not hand-invoke the raw render launcher. M0b&#x27;s prose rewrite points WF2/WF3&#x27;s doc-publish steps   at the skill&#x27;s command the same way (owner decision 2026-08-03, this session — this document is   itself published through it).</p>
+<ul>
+<li>M0d&#x27;s cutover: finish/abandon in-flight work → merge → <code>claude plugin remove/install</code> → fresh</li>
+</ul>
+<p>  session. Old sessions may still hold cached executor-era skills; don&#x27;t reinstall mid-session.</p>
+<ul>
+<li>Issue mechanics on owner approval of this roadmap: closing comments citing D174–D179 on the 28</li>
+</ul>
+<p>  closures; 3 new combined-work issues + the epic-run rework issue + M0 umbrella issue; epic #756   gets a final honest summary comment and closes in favor of this roadmap&#x27;s milestone tracking.</p></section>
+<section class="mstone rm-epic"><h3>9. Review provenance <span class="chip c-plan">—</span></h3><p>gpt-5.6-sol consulted on the draft (7 sections, repo-verified) and then adversarially reviewed the finished plan (9 findings: 6 High, 3 Medium — all applied above; the two reports are in this session&#x27;s records and the local <code>docs/reviews/</code> sink). Notable applied corrections: M0b now carries the run-record relaxation and prose-pin rewrites it invalidates; M0c keeps capability shims until M0d; the runner gained the reopen-token choke point (#855) and pinned reviewer identity; the consult verb + WF5/WF13 cutover moved into M0; #769 was un-closed and folded into the epic-run rework; #795/#797 residual claims were made honest.</p></section>
+
+</main>
+<footer>Last updated: 2026-08-03 13:19 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
