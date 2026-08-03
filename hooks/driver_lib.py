@@ -1763,7 +1763,8 @@ def _build_resume_prompt(state: dict, next_issue: int, project=None,
     epic_ref = f"epic #{epic}" if _is_int(epic) else state.get("campaign", "the campaign")
     body = (
         f"fresh-session resume for {epic_ref}: git fetch origin, "
-        "read the driver-state + epic-<N>-autorun-log, and run the next ready child (currently "
+        "read the driver-state + the decision store (`python3 hooks/decision_log.py read "
+        "--project <name> --run epic-<N>`), and run the next ready child (currently "
         f"#{next_issue}) via /rawgentic:implement-feature to full WF2 completion. Derive position "
         "from durable state, never in-context memory; never re-do a merged/closed child; restate "
         "the run's auth grant. On a blocker, post the ERROR comment and end so the next fresh "

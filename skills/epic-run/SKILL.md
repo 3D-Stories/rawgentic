@@ -76,8 +76,16 @@ it is session-level). The condition must contain, explicitly:
   Never hang the run on an unsatisfiable condition.
 - **DONE definition**: all children merged+closed, epic checkboxes checked, epic
   CLOSED with a summary comment.
-- **A decision log**: forks and substitutions go to
-  `claude_docs/session_notes/epic-<N>-autorun-log.md` (append-only).
+- **A decision log**: forks and substitutions are recorded with
+  `python3 hooks/decision_log.py append --project <name> --id D<n> --run epic-<N>
+  --title "<what was decided>" --body "<why, and what it was decided against>"
+  --overturnable "<how to undo it in one step>"`. That store lives at
+  `claude_docs/decisions/<project>.jsonl`, is append-only, and is **never
+  trimmed**; `session-start` injects its newest 15 records. Do NOT hand-append
+  decisions to `claude_docs/session_notes/epic-<N>-autorun-log.md` — the notes
+  trimmer destroyed six such logs before #847, and although that filename is now
+  excluded from trimming, the durable store is the one that gets injected and the
+  one `--overturnable` is enforced in.
 
 ## Step 3b: Put up the run task list (#517)
 
