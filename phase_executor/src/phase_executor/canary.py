@@ -35,10 +35,10 @@ from . import contract
 
 # --- Pinned constants (re-pinned per release, drift-guarded by test_canary_digest_pin.py) ---
 POLICY_REVISION = 1
-EXPECTED_PLUGIN_VERSION = "3.118.1"
+EXPECTED_PLUGIN_VERSION = "3.118.2"
 # Computed live over hooks/hooks.json + the scripts referenced in its command fields (the
 # canonical length-framed encoding below). test_canary_digest_pin.py asserts pin == live.
-EXPECTED_REGISTRATION_DIGEST = "sha256:bdeb9bcf2725911c7e5b385aef8cfe59be1bcf1c19653d3a791e3cc6aba8ab61"
+EXPECTED_REGISTRATION_DIGEST = "sha256:8d4d26ffeb8e42da9cfac043ad5180cfe28ad2061170ab9b5fa077ff45667b13"
 
 # The mutating tool/matcher classes to positive-deny-probe are DERIVED from hooks.json's
 # PreToolUse matchers (never invented) — each matcher whose command is an ENFORCING guard. The

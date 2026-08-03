@@ -120,13 +120,16 @@ runs WAL recovery:
 
 The size handler is the primary growth control for session notes files:
 
-- **Threshold:** 800 lines
-- **Action:** Trim to the most recent 200 lines
+- **Threshold:** 64,000 characters (not lines — see #847)
+- **Action:** Keep the most recent 200 lines, capped at 16,000 characters
 - **Triggers:** session-start on startup and compact events
-- **Optional ingestion:** Before trimming, the handler attempts to POST the full
-  notes content to the memorypalace server at `localhost:PORT/ingest` (default
-  port 9077, 2s timeout). If the server is unreachable, trimming proceeds
-  without error.
+- **Archive first, fail CLOSED:** the cut content is written to
+  `.notes-archive/<file>.<ts>.archive.md` before any truncation. If that write
+  fails, the file is **not** trimmed. The former best-effort POST to
+  `localhost:9077/ingest` was deleted in #847 — nothing ever listened there, its
+  result was never checked, and it read like a safety net while being none.
+- **Never trimmed:** decision logs (`*-autorun-log.md`, `*.handoff.md`,
+  `*.archive.md`), non-`.md` files, and anything under `decisions/`.
 
 The handler uses `fcntl.flock()` for concurrent safety, atomic writes via
 `tempfile` + `os.replace()`, and validates project names against

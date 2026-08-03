@@ -783,8 +783,8 @@ class TestSizeHandler:
     """Tests for Section 2a: session notes size handler integration."""
 
     def test_trims_oversized_notes_on_startup(self, make_workspace):
-        """Notes exceeding 800 lines should be trimmed on startup."""
-        large_content = "# Notes\n" + "".join(f"line {i}\n" for i in range(1, 850))
+        """Notes over the char threshold should be trimmed on startup (#847)."""
+        large_content = "# Notes\n" + "".join(f"line {i}\n" for i in range(1, 12_000))
         ws = make_workspace(
             session_notes={"testproj": large_content},
             registry_entries=[{"session_id": "test-sess", "project": "testproj",
@@ -796,15 +796,13 @@ class TestSizeHandler:
         notes_file = ws.notes_dir / "testproj.md"
         content = notes_file.read_text()
         lines = content.strip().split("\n")
-        # Size handler trims notes > 800 lines to last 200 on startup.
-        # For this test, notes are 850 lines > 800, so handler trims.
-        # After archival: file is reset to 1-line header.
+        # Since #847 the threshold is 64,000 CHARACTERS, not 800 lines, and the
+        # cut content is archived before the file is touched.
         assert len(lines) < 600
 
     def test_trims_oversized_notes_on_compact(self, make_workspace):
-        """Notes exceeding 800 lines should be trimmed on compact events."""
-        # 850 lines — above the 800-line threshold
-        large_content = "# Notes\n" + "".join(f"line {i}\n" for i in range(1, 900))
+        """Notes over the char threshold should be trimmed on compact (#847)."""
+        large_content = "# Notes\n" + "".join(f"line {i}\n" for i in range(1, 12_000))
         ws = make_workspace(
             session_notes={"testproj": large_content},
             registry_entries=[{"session_id": "test-sess", "project": "testproj",
@@ -820,11 +818,15 @@ class TestSizeHandler:
         lines = content.strip().split("\n")
         assert len(lines) <= 210  # 200 kept + header + trim marker
         assert "Trimmed from" in content
-        assert "line 899" in content  # last line preserved
+        assert "line 11999" in content  # last line preserved
         assert "line 1\n" not in content  # early lines removed
+        # #847: nothing is destroyed — the cut content is recoverable.
+        archives = list((ws.notes_dir / ".notes-archive").glob("testproj.md.*.archive.md"))
+        assert len(archives) == 1
+        assert "line 1\n" in archives[0].read_text()
 
     def test_no_trim_on_compact_under_threshold(self, make_workspace):
-        """Notes under 800 lines should not be trimmed on compact."""
+        """Notes under the char threshold should not be trimmed on compact."""
         small_content = "# Notes\n" + "".join(f"line {i}\n" for i in range(1, 500))
         ws = make_workspace(
             session_notes={"testproj": small_content},
