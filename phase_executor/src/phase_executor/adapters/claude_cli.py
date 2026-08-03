@@ -109,6 +109,31 @@ def _usage_from(env: dict) -> Optional[dict]:
     return usage
 
 
+def _terminal_from(env: dict) -> Optional[dict]:
+    """#852: the provider's own terminal verdict, for a NON-success envelope only.
+
+    Measured on the #762 receipts: a cost abort emits ``is_error: true`` with
+    ``terminal_reason: budget_exhausted``, ``subtype: error_max_budget_usd``, ``errors: [...]`` —
+    and **no ``result`` key at all**, where a success carries 11k+ characters of it. So there is no
+    model text to salvage: the CLI discards it, and rawgentic never receives it. What can be
+    preserved is this evidence, which previously lived only in ``transport.stdout.txt`` and went
+    unread for an entire retrospective.
+    """
+    # Exact type, not truthiness: this envelope is untrusted subprocess output, and a
+    # wrong-typed `is_error` must not gate a classification decision.
+    if env.get("is_error") is not True:
+        return None
+    out = {}
+    for k in ("terminal_reason", "subtype"):
+        v = env.get(k)
+        if isinstance(v, str) and v:
+            out[k] = v
+    errs = env.get("errors")
+    if isinstance(errs, list):
+        out["errors"] = [e for e in errs if isinstance(e, str)]
+    return out or None
+
+
 def parse_claude(raw: Union[str, dict], *, requested_model: str) -> ParsedResult:
     """Pure parser over a claude ``--output-format json`` envelope."""
     try:
@@ -119,7 +144,8 @@ def parse_claude(raw: Union[str, dict], *, requested_model: str) -> ParsedResult
         return ParsedResult(parse_error="envelope is not an object")
     model_usage = env.get("modelUsage")
     if not isinstance(model_usage, dict) or not model_usage:
-        return ParsedResult(text=env.get("result", "") or "", parse_error="no modelUsage in envelope")
+        return ParsedResult(text=env.get("result", "") or "", parse_error="no modelUsage in envelope",
+                            terminal=_terminal_from(env))
     rc = contract.canonicalize_model_id(requested_model)
     matches = [k for k in model_usage if contract.canonicalize_model_id(k) == rc]
     actual = matches[0] if len(matches) == 1 else None
@@ -128,6 +154,7 @@ def parse_claude(raw: Union[str, dict], *, requested_model: str) -> ParsedResult
         actual_model=actual,
         usage=_usage_from(env),
         payload=env.get("result"),
+        terminal=_terminal_from(env),
     )
 
 

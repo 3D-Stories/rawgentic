@@ -19,18 +19,19 @@ def _load(path):
     return json.loads(path.read_text())
 
 
-# The canonical filename is the CURRENT (v2) schema; observation-1.schema.json is the FROZEN v1.
+# The canonical filename is the CURRENT (v3) schema; observation-<n>.schema.json are FROZEN priors.
 OBS_SCHEMA = _load(SCHEMA_DIR / "observation.schema.json")
 V1_SCHEMA = _load(SCHEMA_DIR / "observation-1.schema.json")
+V2_SCHEMA = _load(SCHEMA_DIR / "observation-2.schema.json")
 RT_SCHEMA = _load(SCHEMA_DIR / "routing-table.schema.json")
 
 
 def _obs_ok():
-    # v2 variant — a current-version doc validated against OBS_SCHEMA (v2) directly (an
-    # explicitly-v2 structural check, the audited direct-load exception). v1 back-compat is
-    # exercised through validate_observation dispatch (kukakuka fixture) + the frozen-v1 tests.
+    # v3 variant — a current-version doc validated against OBS_SCHEMA (v3) directly (an
+    # explicitly-current structural check, the audited direct-load exception). v1/v2 back-compat is
+    # exercised through validate_observation dispatch (kukakuka fixture) + the frozen-copy tests.
     return {
-        "schema_version": "2",
+        "schema_version": "3",
         "run_id": "r1",
         "attempt_id": "a1",
         "seat": "review",
@@ -245,21 +246,35 @@ def test_observation_dispatched_lane_negative_and_participation_mode():
 # --- #469 W6 Task 1: schema v2 bump + version-dispatching validator (AC1) ---
 
 
-def test_schema_version_is_2():
-    """The canonical schema is now v2 (const "2"); the producer default matches; the FROZEN v1
-    copy keeps const "1" (never edited after release)."""
-    assert OBS_SCHEMA["properties"]["schema_version"]["const"] == "2"
-    assert contract.SCHEMA_VERSION == "2"
+def test_schema_version_is_3():
+    """The canonical schema is now v3 (const "3"); the producer default matches; every FROZEN prior
+    keeps its own const (never edited after release)."""
+    assert OBS_SCHEMA["properties"]["schema_version"]["const"] == "3"
+    assert contract.SCHEMA_VERSION == "3"
     assert V1_SCHEMA["properties"]["schema_version"]["const"] == "1"
-    assert OBS_SCHEMA["$id"].endswith("observation-2.json")
+    assert V2_SCHEMA["properties"]["schema_version"]["const"] == "2"
+    assert OBS_SCHEMA["$id"].endswith("observation-3.json")
     assert V1_SCHEMA["$id"].endswith("observation-1.json")
+    assert V2_SCHEMA["$id"].endswith("observation-2.json")
 
 
-def test_frozen_v1_is_subset_of_v2():
-    """Frozen invariant: v1 removed nothing — its field set is a subset of v2's (v2 only adds)."""
-    v1_props = set(V1_SCHEMA["properties"])
-    v2_props = set(OBS_SCHEMA["properties"])
-    assert v1_props <= v2_props
+def test_v3_only_additions_are_absent_from_frozen_v2():
+    """#852: budget_exhausted + terminal exist in v3 and are ABSENT from frozen v2, so a v3-only
+    value on a "2"-declared doc is rejected by dispatch — that IS the freeze guarantee, and the
+    reason a new enum value could not simply be widened in place."""
+    assert "budget_exhausted" in OBS_SCHEMA["properties"]["parse_status"]["enum"]
+    assert "budget_exhausted" not in V2_SCHEMA["properties"]["parse_status"]["enum"]
+    assert "terminal" in OBS_SCHEMA["properties"]
+    assert "terminal" not in V2_SCHEMA["properties"]
+
+
+def test_frozen_v2_is_subset_of_v3():
+    assert set(V2_SCHEMA["properties"]) <= set(OBS_SCHEMA["properties"])
+
+
+def test_frozen_v1_is_subset_of_current():
+    """Frozen invariant: v1 removed nothing — its field set is a subset of the current schema's."""
+    assert set(V1_SCHEMA["properties"]) <= set(OBS_SCHEMA["properties"])
 
 
 def test_v2_only_fields_absent_from_frozen_v1():
@@ -267,6 +282,7 @@ def test_v2_only_fields_absent_from_frozen_v1():
     v1 — so a v2-only field on a "1"-declared doc is rejected by dispatch (the freeze guarantee)."""
     v2_only = {"work_product", "session_policy", "worktree_id", "tmux_session", "budget",
                "hook_denials"}
+    assert v2_only <= set(V2_SCHEMA["properties"])
     assert v2_only <= set(OBS_SCHEMA["properties"])
     assert v2_only.isdisjoint(set(V1_SCHEMA["properties"]))
 
@@ -276,16 +292,29 @@ def test_observation_schema_dispatches_by_version():
     yields the current version; an unknown version fails closed."""
     assert contract.observation_schema("1")["properties"]["schema_version"]["const"] == "1"
     assert contract.observation_schema("2")["properties"]["schema_version"]["const"] == "2"
-    assert contract.observation_schema()["properties"]["schema_version"]["const"] == "2"  # default
+    assert contract.observation_schema("3")["properties"]["schema_version"]["const"] == "3"
+    assert contract.observation_schema()["properties"]["schema_version"]["const"] == "3"  # default
     with pytest.raises(Exception):
         contract.observation_schema("99")
 
 
-def test_validate_observation_dispatches_v1_and_v2():
-    """A v1 doc (kukakuka fixture) validates via dispatch -> frozen v1; a v2 doc via -> v2."""
-    v1 = _load(FIXTURES / "kukakuka-observation.json")
-    contract.validate_observation(v1)  # dispatch -> frozen v1
-    contract.validate_observation(_obs_ok())  # v2 -> v2
+def test_validate_observation_dispatches_every_version():
+    """A v1 doc (kukakuka fixture) -> frozen v1; an explicitly-v2 doc -> frozen v2; the current doc
+    -> v3. #852 review finding 4: after `_obs_ok()` moved to v3, this test had stopped exercising v2
+    at all while still claiming to — real coverage of the frozen copy, silently gone."""
+    contract.validate_observation(_load(FIXTURES / "kukakuka-observation.json"))   # -> frozen v1
+    v2 = dict(_obs_ok(), schema_version="2")
+    contract.validate_observation(v2)                                             # -> frozen v2
+    contract.validate_observation(_obs_ok())                                       # -> current v3
+
+
+def test_a_v3_only_value_is_rejected_on_a_v2_declared_doc():
+    """The freeze guarantee, executed rather than asserted about: `budget_exhausted` on a doc that
+    declares schema_version 2 must fail closed, which is exactly why the enum could not be widened
+    in place."""
+    doc = dict(_obs_ok(), schema_version="2", parse_status="budget_exhausted")
+    with pytest.raises(Exception):
+        contract.validate_observation(doc)
 
 
 def test_validate_observation_unknown_version_fails_closed():

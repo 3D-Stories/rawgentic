@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Optional
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 # The seat roles the engine actually has ``check_pre`` evaluators for. The loader semantic pass
 # (``routing._assert_referential_integrity``) rejects any ``policy.enforced_roles`` entry outside
@@ -44,8 +44,18 @@ NO_RESPONSE = "no_response"          # transport produced nothing / parsed envel
 IDENTITY_FAILURE = "identity_failure"
 USAGE_UNAVAILABLE = "usage_unavailable"
 HARNESS_ERROR = "harness_error"
+# #852: the provider aborted on its own per-attempt COST bound after the model had finished
+# (`stop_reason: end_turn`). Distinct from NONZERO_EXIT for two reasons that both cost money:
+# the bound is model-INDEPENDENT, so advancing the fallback chain is guaranteed waste (the #762
+# receipts show opus -> fable -> sonnet all hitting the same $2 wall); and the cause is otherwise
+# invisible in the receipt, which is why a retrospective misattributed it to "the brief or the
+# harness, not any one model".
+BUDGET_EXHAUSTED = "budget_exhausted"
+#: Provider envelope `subtype` values that mean "aborted on a cost bound". A set, not a string
+#: compare, so a second provider spelling can be added without touching the resolver.
+COST_ABORT_SUBTYPES = frozenset({"error_max_budget_usd"})
 PARSE_STATUSES = frozenset(
-    {OK, NONZERO_EXIT, TIMEOUT, LAUNCH_ERROR, PARSE_ERROR, NO_RESPONSE, IDENTITY_FAILURE, USAGE_UNAVAILABLE, HARNESS_ERROR}
+    {OK, NONZERO_EXIT, TIMEOUT, LAUNCH_ERROR, PARSE_ERROR, NO_RESPONSE, IDENTITY_FAILURE, USAGE_UNAVAILABLE, HARNESS_ERROR, BUDGET_EXHAUSTED}
 )
 
 # Statuses where the transport failed to deliver a usable envelope: a chain fallback is warranted
@@ -53,6 +63,9 @@ PARSE_STATUSES = frozenset(
 # (identity_failure, parse_error, usage_unavailable, harness_error) means an envelope WAS produced
 # but is not a clean success — routing enforcement treats an absent/mismatched identity there as a
 # breach (verified, not trusted). Single-sourced here so engine and enforce agree.
+# BUDGET_EXHAUSTED is deliberately ABSENT: `engine.run_with_fallback` advances the chain only
+# while `parse_status in AVAILABILITY_FAILURES` (engine.py:163), and a per-attempt dollar bound is
+# model-independent, so the next entry hits the identical wall (#852 AC2).
 AVAILABILITY_FAILURES = frozenset({NONZERO_EXIT, TIMEOUT, LAUNCH_ERROR, NO_RESPONSE})
 
 # #733: the two states a dispatch may report as SUCCESS. Everything else fails deny-by-default —
@@ -100,6 +113,11 @@ def observation_process_failure(obs) -> Optional[str]:
         exit_code = None  # bool is an int subclass; neither is process-exit evidence
     if proc.get("timed_out") is True or status == TIMEOUT:
         return TIMEOUT
+    # #852: BEFORE the exit-code branch. A cost abort exits non-zero, so without this every
+    # downstream consumer reads it back as `nonzero_exit` and the distinct classification made at
+    # resolve time is silently undone here — which is the whole defect, one layer down.
+    if status == BUDGET_EXHAUSTED:
+        return BUDGET_EXHAUSTED
     if exit_code is not None and exit_code != 0:
         return "signalled" if exit_code < 0 else NONZERO_EXIT
     if not isinstance(status, str):
@@ -132,7 +150,8 @@ def _load_schema(name: str) -> dict:
 # observation-<n>.schema.json is a FROZEN prior version. Unknown version = fail-closed (see below).
 _OBSERVATION_SCHEMA_FILES = {
     "1": "observation-1.schema.json",
-    "2": "observation.schema.json",
+    "3": "observation.schema.json",
+    "2": "observation-2.schema.json",
 }
 
 
@@ -210,6 +229,12 @@ class Observation:
     # {requested, native, resolution, capability_revision}; optional-additive (absent on
     # legacy records; consumers tolerate absence — the dispatched_lane precedent).
     effort: Optional[dict] = None
+    # #852: the provider's own terminal verdict on a NON-success envelope
+    # ({terminal_reason, subtype, errors}). Optional-additive, emitted only when set — the
+    # dispatched_lane/effort precedent. It exists because on a cost abort the provider omits
+    # `result` entirely, so this is the ONLY account of what happened; it previously lived only in
+    # transport.stdout.txt and went unread for a whole retrospective.
+    terminal: Optional[dict] = None
     # #468 W5: the guardrail-canary PASS summary for a dispatched launch (a refusal never spawns,
     # so an Observation's canary is always a pass). EXACTLY the 8 keys canary.CanaryResult.
     # pass_summary() emits. Optional-additive (absent on legacy/non-canary records; the
@@ -263,6 +288,9 @@ class Observation:
             out["effort"] = dict(self.effort)
         if self.dispatched_lane is not None:
             out["dispatched_lane"] = dict(self.dispatched_lane)
+        # terminal (#852): the provider's terminal verdict, emitted only when set.
+        if self.terminal is not None:
+            out["terminal"] = dict(self.terminal)
         # canary_result (#468): the pass summary, emitted only when set (a dispatched launch's
         # canary; refusal data travels on CanaryRefused, never the Observation).
         if self.canary_result is not None:
