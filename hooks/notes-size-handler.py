@@ -91,6 +91,18 @@ def select_tail(lines: list[str]) -> list[str]:
     return kept
 
 
+def _fsync_dir(directory: Path) -> None:
+    """fsync a directory so a newly created entry survives a crash. Best effort."""
+    try:
+        dfd = os.open(str(directory), os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+
+
 def archive_dir(path: Path) -> Path:
     """Where `path`'s archives live: a dot-directory beside it.
 
@@ -127,6 +139,10 @@ def write_archive(path: Path, text: str) -> Path:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
+        # fsync the DIRECTORY too: on several filesystems the file's contents can
+        # be durable while its directory entry is not, which would let the
+        # truncation survive a crash that lost the archive.
+        _fsync_dir(adir)
         return cand
     raise OSError(f"could not find a free archive name for {path.name}")
 
@@ -146,6 +162,22 @@ def warn_if_archives_large(path: Path) -> None:
             f"will stop trimming entirely. Prune old *.archive.md files.",
             file=sys.stderr,
         )
+
+
+def _render(project: str, char_count: int, archive_name: str,
+            kept: list[str]) -> str:
+    """The exact content a trim would write. Shared by the real write and the
+    prospective-size check so the two can never disagree."""
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    header = (
+        f"# Session Notes -- {project}\n"
+        f"\n"
+        f"<!-- Trimmed from {char_count} chars at {ts}; "
+        f"cut content archived to {archive_name} -->\n"
+        f"\n"
+    )
+    out = header + "".join(kept)
+    return out if out.endswith("\n") else out + "\n"
 
 
 def trim_notes(path: Path, session_id: str = "unknown") -> dict:
@@ -198,6 +230,21 @@ def trim_notes(path: Path, session_id: str = "unknown") -> dict:
         kept = select_tail(lines)
         cut = lines[: len(lines) - len(kept)]
 
+        # Measure what the file would ACTUALLY become, header included. Comparing
+        # only the kept tail misses the case where tail + header crosses back
+        # over the threshold: the trim "succeeds", the file stays oversized, and
+        # the next session archives the header and does it again, forever.
+        prospective = _render(project, char_count, "x" * 40, kept)
+        if len(prospective) > THRESHOLD_CHARS:
+            print(
+                f"notes-size-handler: {path} cannot be reduced below "
+                f"{THRESHOLD_CHARS} chars without splitting a line "
+                f"(smallest achievable is {len(prospective)} chars). Not trimming.",
+                file=sys.stderr,
+            )
+            return {"trimmed": False, "reason": "irreducible",
+                    "char_count": char_count}
+
         if not cut:
             # One logical line longer than the threshold. There is nothing to
             # cut, so trimming would only prepend a header and make the file
@@ -216,17 +263,7 @@ def trim_notes(path: Path, session_id: str = "unknown") -> dict:
             )
             return {"trimmed": False, "reason": "archive_failed"}
 
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        header = (
-            f"# Session Notes -- {project}\n"
-            f"\n"
-            f"<!-- Trimmed from {char_count} chars at {ts}; "
-            f"cut content archived to {archive.name} -->\n"
-            f"\n"
-        )
-        new_content = header + "".join(kept)
-        if not new_content.endswith("\n"):
-            new_content += "\n"
+        new_content = _render(project, char_count, archive.name, kept)
 
         # Atomic write via the shared helper (#264). fsync: the archive is
         # already durable, so the replacement must be too — otherwise a crash

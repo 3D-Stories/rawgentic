@@ -217,3 +217,29 @@ class TestRoundOneReviewGuards:
             project="proj", decision_id="D1", title="t", body="b", overturnable="u")
         with pytest.raises(OSError, match="short write"):
             decision_log.append_record(tmp_path, "proj", rec)
+
+
+class TestRoundTwoReviewGuards:
+    def test_append_after_a_truncated_record_does_not_join_to_it(self, tmp_path):
+        """O_APPEND concatenates. Appending onto a file that ends mid-record
+        would JOIN the two, reporting success while destroying both."""
+        _append(tmp_path, "proj", "D1")
+        path = decision_log.store_path(tmp_path, "proj")
+        with open(path, "a") as f:
+            f.write('{"id": "D2", "trunc')      # writer died here, no newline
+        r = _append(tmp_path, "proj", "D3")
+        assert r.returncode == 0, r.stderr
+
+        recs = decision_log.read_records(tmp_path, "proj")
+        ids = [x["id"] for x in recs]
+        assert "D3" in ids, "the new record was swallowed by the broken line"
+        assert "D1" in ids, "the earlier record was damaged"
+        assert len(ids) == 2, f"expected exactly D1 and D3, got {ids}"
+
+    def test_store_ends_with_a_newline_after_repair(self, tmp_path):
+        _append(tmp_path, "proj", "D1")
+        path = decision_log.store_path(tmp_path, "proj")
+        with open(path, "a") as f:
+            f.write('{"broken"')
+        _append(tmp_path, "proj", "D2")
+        assert path.read_bytes().endswith(b"\n")

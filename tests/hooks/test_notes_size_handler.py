@@ -140,17 +140,20 @@ class TestValidation:
     """Tests for path and project name validation."""
 
     def test_invalid_project_name_rejected(self, tmp_path):
-        """Filenames with invalid characters should be rejected."""
-        bad_file = tmp_path / "../../etc/passwd.md"
-        # Create a valid file with a traversal-style name
-        bad_dir = tmp_path / ".." / ".." / "etc"
-        bad_dir.mkdir(parents=True, exist_ok=True)
-        bad_file_resolved = bad_dir / "passwd.md"
-        bad_file_resolved.write_text("x\n" * 40_000)
+        """A stem that fails PROJECT_NAME_RE must be refused, not just survive.
 
-        stdout, stderr, rc = _run_handler(bad_file_resolved)
-        # Should exit 0 but not trim (invalid project name or path)
+        This previously used `../../etc/passwd.md`, whose stem is `passwd` — a
+        perfectly VALID project name — and asserted only rc == 0. The handler
+        trimmed it and the test passed, so it pinned nothing.
+        """
+        bad = tmp_path / "bad name!.md"
+        bad.write_text("x\n" * 40_000)
+        before = bad.read_bytes()
+
+        stdout, stderr, rc = _run_handler(bad)
         assert rc == 0
+        assert json.loads(stdout.strip())["reason"] == "invalid_project_name"
+        assert bad.read_bytes() == before
 
     def test_valid_project_names_accepted(self, tmp_path):
         """Standard project names should be accepted."""
@@ -383,7 +386,11 @@ class TestBoundaryAndEncodingGuards:
         stdout, _, _ = _run_handler(f)
         result = json.loads(stdout.strip())
         assert result["trimmed"] is False
-        assert result["reason"] == "nothing_to_cut"
+        # "irreducible" — the single line IS the tail and is itself over the
+        # threshold, so it is caught by the no-progress guard before the
+        # empty-cut guard. Either refusal is correct; what matters is that the
+        # file is untouched and no empty archive is written.
+        assert result["reason"] in ("irreducible", "nothing_to_cut")
         assert f.read_bytes() == before
         assert not (tmp_path / ".notes-archive").exists(), "wrote an empty archive"
 
@@ -426,3 +433,71 @@ class TestSelectTailBoundary:
         assert nsh.select_tail(lines) == lines, (
             "a tail that fits exactly at the cap must not lose its oldest line"
         )
+
+
+class TestRoundTwoReviewGuards:
+    """Round-2 review: defenses that were asserted but passed for other reasons."""
+
+    def _mod(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("nsh", HANDLER_SCRIPT)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
+
+    def test_is_excluded_pins_each_suffix_directly(self):
+        """The file-level tests pass via PROJECT_NAME_RE's dotted-stem rejection
+        even with a suffix removed from EXCLUDED_SUFFIXES, so pin the predicate."""
+        nsh = self._mod()
+        for name in ("epic-756-autorun-log.md", "sysop.handoff.md",
+                     "notes.2026-08-03T00:00:00Z.archive.md"):
+            assert nsh.is_excluded(Path("/x") / name), name
+        for name in ("rawgentic.md", "testproj.md"):
+            assert not nsh.is_excluded(Path("/x") / name), name
+
+    def test_markdown_inside_a_decisions_dir_is_refused(self, tmp_path):
+        """The earlier test used a .jsonl fixture, so it passed on the suffix
+        check alone and could not detect losing the parent-directory guard."""
+        d = tmp_path / "decisions"
+        d.mkdir()
+        f = d / "testproj.md"
+        f.write_text("".join(f"line {i}\n" for i in range(12_000)))
+        before = f.read_bytes()
+        stdout, _, rc = _run_handler(f)
+        assert rc == 0
+        assert json.loads(stdout.strip())["reason"] == "not_a_notes_file"
+        assert f.read_bytes() == before
+
+    def test_huge_terminal_line_does_not_churn_archives(self, tmp_path):
+        """`old\\n` + a 70,000-char line: the old code archived the tiny prefix,
+        left the file oversized, and did it again every single session start."""
+        f = tmp_path / "proj.md"
+        f.write_text("old\n" + "z" * 70_000)
+        stdout, _, _ = _run_handler(f)
+        result = json.loads(stdout.strip())
+        assert result["trimmed"] is False
+        assert result["reason"] == "irreducible"
+
+        # And it must still refuse on every subsequent run, creating no archives.
+        for _ in range(3):
+            _run_handler(f)
+        adir = tmp_path / ".notes-archive"
+        archives = list(adir.glob("*.archive.md")) if adir.exists() else []
+        assert archives == [], f"archive churn: {archives}"
+
+    def test_tail_plus_header_over_threshold_is_refused(self, tmp_path):
+        """The guard must measure the RENDERED result. A tail that fits under
+        the threshold but crosses back over once the header is prepended would
+        otherwise 'trim' successfully and churn a new archive every session."""
+        f = tmp_path / "proj.md"
+        # Tail is exactly 64,000 chars: NOT > THRESHOLD_CHARS, so a tail-only
+        # check passes it through. Only measuring the rendered result catches it.
+        f.write_text("prefix\n" + "x" * 64_000)
+        stdout, _, _ = _run_handler(f)
+        result = json.loads(stdout.strip())
+        assert result["trimmed"] is False
+        assert result["reason"] == "irreducible"
+        for _ in range(3):
+            _run_handler(f)
+        adir = tmp_path / ".notes-archive"
+        assert (list(adir.glob("*.archive.md")) if adir.exists() else []) == []

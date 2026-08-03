@@ -49,6 +49,19 @@ PROJECT_NAME_RE = re.compile(r"^(?![.-])(?!.*\.\.)[A-Za-z0-9._-]+$")
 FIELDS = ("id", "ts", "session", "project", "run", "title", "body", "overturnable")
 
 
+def _fsync_dir(directory: Path) -> None:
+    """fsync a directory so a newly created entry survives a crash. Best effort:
+    some filesystems refuse O_RDONLY fsync on directories."""
+    try:
+        dfd = os.open(str(directory), os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+
+
 def store_path(state_dir, project: str) -> Path:
     """Resolve the JSONL store for `project`. Raises ValueError on a bad name."""
     if not PROJECT_NAME_RE.match(project):
@@ -96,6 +109,15 @@ def append_record(state_dir, project: str, record: dict) -> Path:
     fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
+        # If a previous writer died mid-record the file ends without a newline.
+        # Appending straight onto it would JOIN this record to the broken one and
+        # destroy both — the new record would report success and be unreadable.
+        # Close the damaged line first; the reader then skips exactly one record.
+        if path.stat().st_size:
+            with open(path, "rb") as probe:
+                probe.seek(-1, os.SEEK_END)
+                if probe.read(1) != b"\n":
+                    os.write(fd, b"\n")
         # os.write may write fewer bytes than asked (ENOSPC boundaries, large
         # records). Ignoring the count would persist a truncated record while
         # telling the caller the decision was saved — the precise failure this
@@ -108,6 +130,7 @@ def append_record(state_dir, project: str, record: dict) -> Path:
                     f"short write to {path}: {written}/{len(data)} bytes")
             written += n
         os.fsync(fd)
+        _fsync_dir(path.parent)
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)

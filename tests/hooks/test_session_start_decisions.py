@@ -128,6 +128,11 @@ class TestDecisionStoreSurvivesTheTrimmer:
 
         assert store.read_bytes() == before, "the trimmer touched the decision store"
         assert len(decision_log.read_records(claude_docs, "testproj")) == 5
+        # Assert the trim REALLY ran, or this test would stay green even if the
+        # size-handler call were removed from session-start entirely.
+        archives = list((notes_dir / ".notes-archive").glob("testproj.md.*.archive.md"))
+        assert len(archives) == 1, "the notes file was never trimmed"
+        assert len((notes_dir / "testproj.md").read_text()) < 64_000
 
     def test_trimmer_discovery_never_yields_a_decisions_path(self, make_workspace):
         """The trimmer's own glob, run exactly as session-start runs it."""
@@ -182,3 +187,27 @@ class TestInjectionBoundIsEnforced:
         ctx = json.dumps(parse_hook_output(stdout) or "")
         injected = ctx.count('\\"id\\": \\"D') + ctx.count('"id": "D')
         assert injected <= 15, f"{injected} injected — the bound was bypassed"
+
+
+class TestRoundTwoReviewGuards:
+    def test_oversized_integer_override_cannot_bypass_the_clamp(self, make_workspace):
+        """A 40-digit value makes bash's own `[ -gt ]` fail with "integer
+        expression expected", so a purely numeric clamp silently did not clamp."""
+        ws = make_workspace(registry_entries=[
+            {"session_id": "test-sess", "project": "testproj",
+             "project_path": "./projects/testproj"}])
+        _seed(ws.root / "claude_docs", "testproj", 200)
+        fake_home = ws.root / ".test_home"
+        fake_home.mkdir(exist_ok=True)
+        stdout, _, rc = run_hook(
+            "session-start",
+            {"session_id": "test-sess", "cwd": str(ws.root),
+             "hook_event_name": "SessionStart", "source": "startup"},
+            cwd=ws.root,
+            env_override={"HOME": str(fake_home),
+                          "RAWGENTIC_DECISION_INJECT_COUNT": "9" * 40},
+        )
+        assert rc == 0
+        ctx = json.dumps(parse_hook_output(stdout) or "")
+        injected = ctx.count('\\"id\\": \\"D') + ctx.count('"id": "D')
+        assert injected <= 15, f"{injected} injected — the clamp was bypassed"
