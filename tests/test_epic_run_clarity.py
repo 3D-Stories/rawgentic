@@ -104,3 +104,14 @@ class TestFreshSessionPerChild:
             "the verdict must be passed to fresh_session_available as launch_mode")
         assert "fail-open" in s.lower() and "single-session fallback" in s, (
             "the boundary must fail-open to single-session (#569 AC6)")
+
+
+def test_epic_run_points_decisions_at_the_durable_store():
+    """#847: the epic decision log must name the append-only store, not the
+    markdown notes file the trimmer used to destroy. Pinned because the old
+    instruction is exactly the habit this change exists to break."""
+    text = (Path(__file__).resolve().parents[1] / "skills" / "epic-run" / "SKILL.md").read_text()
+    assert "hooks/decision_log.py append" in text
+    assert "claude_docs/decisions/<project>.jsonl" in text
+    assert "--overturnable" in text
+    assert "Do NOT hand-append" in text

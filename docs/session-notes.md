@@ -111,18 +111,50 @@ on every `*.md` file in `claude_docs/session_notes/`.
 
 ### Behavior
 
-- **Threshold:** 800 lines
-- **Action:** Trim to the most recent 200 lines
+- **Threshold:** 64,000 characters (Unicode code points, not bytes and not
+  lines). Lines were the metric until #847 and were an inverted proxy for
+  context cost: a 100-line 2.0 MB file was spared while an 801-line 2.4 KB file
+  was trimmed.
+- **Action:** Keep the most recent 200 lines, further capped at 16,000
+  characters, snapped to a line boundary. A single line longer than the cap is
+  kept whole rather than split.
+- **Archive first:** the cut content is written to
+  `claude_docs/session_notes/.notes-archive/<file>.<ts>.archive.md` BEFORE the
+  file is truncated. Nothing is deleted without a copy.
 - **Header:** Adds `# Session Notes -- <project>` and a
-  `<!-- Trimmed from N lines at TIMESTAMP -->` comment
+  `<!-- Trimmed from N chars at TIMESTAMP; cut content archived to ... -->`
+  comment naming the archive.
+
+### Never trimmed
+
+Decision logs are **never** trimmed. Their oldest entries are their most
+valuable, which is exactly backwards from the tail-keeping strategy here — and
+before #847 the trimmer destroyed six epic decision logs. Excluded by name:
+
+- `*-autorun-log.md`, `*.handoff.md`, `*.archive.md`
+- anything that is not a `.md` file, or that sits under a `decisions/` directory
+
+Durable decisions belong in the append-only store at
+`claude_docs/decisions/<project>.jsonl` (see `hooks/decision_log.py`), which is
+a sibling of `session_notes/` and therefore outside this glob entirely.
+
+### Fail mode: CLOSED
+
+If the archive cannot be written, **the trim does not happen** and the original
+file is left byte-identical, with a warning on stderr. Failing to shrink a file
+is strictly better than destroying it. This is deliberately the opposite of the
+convenience hooks' fail-open posture — see the fail-mode convention in
+`CLAUDE.md` §3.
 
 ### Process
 
 1. `session-start` iterates all `*.md` files in the session notes directory.
 2. For each file, calls `hooks/notes-size-handler.py <notes_file> --session-id <id>`.
-3. The Python script checks line count; if ≤800, exits with no action.
-4. If >800 lines: optionally POSTs full content to the memorypalace server at
-   `localhost:PORT/ingest` (best-effort, 2s timeout), then trims to last 200 lines.
+3. The script skips excluded files, then checks size; at or under the threshold
+   it exits with no action.
+4. Over the threshold: writes the archive (create-only, `O_CREAT|O_EXCL`, so a
+   same-second second trim can never clobber an earlier archive), and only then
+   trims.
 5. Uses `fcntl.flock()` for exclusive access and atomic writes via
    `tempfile.mkstemp()` + `os.replace()`.
 
@@ -131,6 +163,22 @@ on every `*.md` file in `claude_docs/session_notes/`.
 
 **Stdout isolation:** The size handler's stdout is redirected to `/dev/null` in
 session-start to prevent JSON output from polluting the hook's own JSON response.
+
+## Decision Store (`hooks/decision_log.py`, #847)
+
+Append-only, never trimmed, at `claude_docs/decisions/<project>.jsonl`.
+
+```bash
+python3 hooks/decision_log.py append --project rawgentic --id D139 \
+    --title "..." --body "..." --overturnable "how to undo this in one step"
+python3 hooks/decision_log.py read --project rawgentic --last 15
+```
+
+`--overturnable` is mandatory: every decision records how to reverse it.
+Appends use `flock` + `O_APPEND` + a single `write()`, **not**
+`atomic_write_text` — that helper replaces the whole file, so two concurrent
+appends would lose one. `session-start` injects the newest 15 records for the
+bound project; the full history is always available via `read`.
 
 ## Historical Archives (Inert)
 
