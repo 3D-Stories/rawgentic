@@ -76,8 +76,8 @@ The prompt runs **once**: subsequent binds see the field and skip it.
 ## Step 5b item 2b — why the staleness nudge is advisory and fail-open
 
 The universal-field check only catches a *malformed or old-shape* config. It does not catch a
-project that predates newer setup-requiring features (adversarial review, model routing, peer
-consult, design artifact) — that project's config is valid, just behind.
+project that predates newer setup-requiring features (adversarial review, peer consult,
+design artifact) — that project's config is valid, just behind.
 
 `hooks/post_update_reconcile.py`'s SessionStart pass nudges once per plugin version, but an
 explicit switch is the moment to surface *that project's own* gap, so this pass has **no
