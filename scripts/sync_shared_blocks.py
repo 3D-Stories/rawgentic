@@ -56,6 +56,12 @@ MANIFEST = {
     "loop-back-budget": {
         "loop-back-budget.md": ["implement-feature"],
     },
+    # #840 round 13: severity had no definition anywhere while Critical/High alone drove
+    # loop-backs, and review briefs had grown 6.5KB->19.8KB of accumulated history that
+    # measurably SUPPRESSED findings. Both workflows dispatch review seats, so both carry it.
+    "review-severity": {
+        "review-severity.md": ["implement-feature", "fix-bug"],
+    },
     # #807: the add-on renderer's consumer block. Five call sites, two of which live in
     # references/ — which is why MANIFEST entries may be skill-relative paths (see _skill_md).
     "render-addon": {

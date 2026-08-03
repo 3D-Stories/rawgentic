@@ -121,6 +121,58 @@ python3 hooks/executor_routing_lib.py dispatch \
 **A `review`-seat dispatch that needs an external artifact MUST declare it with `--requires-context` AND pass it with `--context-file` (#826).** The requirement is typed, carried out of band — never inferred from the brief's wording, so a brief that inlines its diff is simply dispatched without the flag and is never refused. `--requires-context` with no usable context file (empty or whitespace-only does not count) is refused pre-receipt with `review_context_required` (exit 2), before any receipt or ledger entry exists. Prose inference was refuted three ways and removed by owner decision 2026-08-01; a forgotten flag is caught statically by `tests/hooks/test_wf_review_sites.py`.
 WF3 review dispatches use the `review` seat and never carry `--gate-file`/`--plan-file` material. WF3 fix-plan tasks dispatch through the executor `build` seat: mint the gate from the WF3 fix plan, dispatch with `--gate-file` and `--plan-file`, then collect and land the work product audited. First mint the authenticated gate: `python3 hooks/executor_routing_lib.py mint-gate --plan-file <fix-plan> --issue-complexity <mapped> --plan-est-lines <from the plan's own estimated-lines> --out <gate.json>`; then dispatch `--seat build --gate-file <gate.json> --plan-file <fix-plan>`. WF3 complexity mapping for `mint-gate`: `trivial_work=true → trivial`; `simple_bug|moderate_bug → standard`; `complex_bug → complex` (normally upgrade to WF2; this mapping covers an owner-overridden stay-in-WF3 case). After a successful build result, use `python3 hooks/executor_routing_lib.py collect-work-product --run-id <run-id> --session-name <job> --target-ref refs/rawgentic/collect/<receipt-nonce> --expected-target-sha 0000000000000000000000000000000000000000 --kind code --promote-path <declared file> [--promote-path <declared file> ...] --expected-feature-ref <recorded fix ref> --workspace <workspace-file> --project <name>`, then audited `python3 hooks/executor_routing_lib.py land-work-product --expected-ref <recorded fix ref> --pre-sha <recorded pre-task SHA> --new-sha <new_sha> --temp-ref refs/rawgentic/collect/<receipt-nonce> --run-id <run-id> --workspace <workspace-file> --project <name>`. An omitted `--timeout` defaults to the seat's own declared bound (`resolve_dispatch_timeout`, #753); `--timeout` only tightens, never loosens (#733).
 
+<review-severity>
+Severity is not a mood. It is the ONLY trigger for loop-backs (`steps.md` Step 8a/11
+triage and the `Loopback-class` rule), so an uncalibrated label spends real budget. Before
+this block these four words had **no definition anywhere in this repo** (a grep of `skills/`
+and `shared/` returned nothing), while Critical/High alone decided whether the workflow
+looped. Every reviewer invented their own scale.
+
+**The rubric. Judge IMPACT and PRECONDITIONS separately, then band.**
+
+- **Critical** — a plausible catastrophic, system-wide, or security/integrity failure, with
+  preconditions that occur in NORMAL operation, and no downstream control that catches it.
+  All three. Data loss, a gate that silently passes what it exists to refuse, a credential
+  leak. Blocks: must fix before Step 9.
+- **High** — a major correctness or workflow-integrity failure, but bounded: it needs an
+  unusual precondition, OR a downstream control detects it, OR it is recoverable once seen.
+  **Deferrable with rationale** via `plan_lib.append_deferral` — re-presented at Step 11.
+  A High is NOT an automatic blocker, and treating it as one is how a PR reaches round 13.
+- **Medium** — real but contained: a wrong error message, a missing guard on a path with a
+  working sibling, prose contradicting code without changing behaviour. Advisory.
+- **Low** — cosmetic, stylistic, or speculative. Advisory.
+
+**Worked calibration, from #840 round 13.** `observe_head` fetched without a refspec, so a
+narrow `remote.origin.fetch` let a STALE sha pass as freshly observed — defeating the gate's
+own freshness clause. Impact is catastrophic (the gate stops gating). But it requires a
+non-default git configuration and had no observed production incidence, so it is **High, not
+Critical**. Promote to Critical only if the configuration is common or the stale decision
+triggers something irreversible with nothing else in the way.
+
+**Severity is not confidence.** Report BOTH. `plan_lib.SEVERITY_BANDED_CONFIDENCE` drops a
+finding whose confidence is below its band (Critical 0.50, High 0.65, Medium 0.80, Low 0.90)
+— a filter that **cannot run if the brief never asks for a confidence score**, which is
+exactly what happened across #840 rounds 4-13. Every review brief MUST request
+`severity`, `confidence` (0.0-1.0), and a one-line precondition/impact rationale. A Critical
+requires explicit disposition regardless of confidence; a low-confidence severe claim
+triggers targeted verification, never an automatic fix.
+
+**Brief hygiene — measured, not stylistic.** #840 round 13 ran three adversarial briefs
+(19.5-19.8 KB, carrying an accumulated 13-round failure history) against three neutral ones
+(3.6 KB) on the same commit, seat and lane. All six FAILed on the same real defects, so the
+adversarial framing bought nothing — but the NEUTRAL arm found a Critical the adversarial
+arm missed, because the bloated brief had told reviewers that clause was "stable for eight
+rounds" and all three duly looked elsewhere. Therefore:
+
+- **Never tell a reviewer what verdict to reach** ("do not approve this") and never state
+  which areas are settled. Both suppress findings.
+- **Never accumulate round history in a brief.** Carry the diff, the scope, the deferred
+  list, and unresolved claims — never past conclusions. History grew these briefs 6.5 KB →
+  19.8 KB across rounds for a strictly worse review.
+- **Keep a review brief under ~8 KB.** If it will not fit, the change under review is too
+  large to review in one pass — split it instead of enlarging the brief.
+</review-severity>
+
 **Exit taxonomy (shipped numbering preserved; 6 is ADDITIVE):** `0` ok · `2` malformed input · `3` availability (chain exhausted / quota timeout / a timed-out, signalled, or otherwise process-failed dispatch — `ok: false` with any partial output attached and flagged `partial: true`, #733) · `4` enforcement denial · `5` internal · `6` refused (`EXIT_REFUSED` — canary refusal; NEW, no renumber of the shipped #427/#464 codes). Exit → DISPATCH `outcome` mapping (normative):
 
 | dispatch exit | DISPATCH `outcome` | condition |
