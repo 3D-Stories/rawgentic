@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#855 — Make the loop-back budget, confidence filter and High-deferral enforceable</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-design{background:radial-gradient(1200px 600px at 50% -10%,rgba(124,156,255,.10),transparent 60%),var(--bg)}
+.tpl-design .wrap{max-width:1080px;padding:0 clamp(16px,4vw,32px) 64px}
+.tpl-design header{padding:clamp(24px,4vw,56px) 0 12px;border-bottom:none;margin-bottom:18px}
+.tpl-design h1{font-size:clamp(26px,3.4vw,40px)}
+.tpl-design h2{font-size:20.8px;margin:1.9em 0 .6em}
+
+/* #76 — the frame's companions only. Two rules, deliberately few.
+   An earlier draft of this PR also added a two-column `.dz-options` grid "so the wide measure
+   pays for itself". Both wrong: the grid was DEAD (the `.dz-options` rule further down sets
+   `display:block` at equal specificity and later source order), and it contradicted a decision
+   this file already records — cards stack FULL WIDTH because "a trade-off you have to READ is
+   not a 220px tile". The width pays for itself inside each card, where the for/against grid is
+   two columns and needs the room. Deleted rather than reconciled. */
+.tpl-design h1{line-height:1.2;max-width:22ch}
+.tpl-design header .eyebrow{font-size:11px;letter-spacing:.14em}
+.tpl-design .dz-lead{background:var(--surface);border:1px solid var(--line);
+border-left:4px solid var(--accent);border-radius:12px;padding:4px 20px 14px;margin:6px 0 26px}
+.tpl-design .dz-lead>p:first-child{font-size:17.5px;line-height:1.55;color:var(--ink);font-weight:550}
+/* Option cards. Stacked full-width, because a trade-off you have to READ is not a 220px tile;
+   the shared layer's flex row is overridden here at higher specificity. */
+.tpl-design .dz-options{margin:22px 0;display:block;counter-reset:dz-opt}
+.tpl-design .dz-options .blk-opt{counter-increment:dz-opt;display:grid;gap:10px 14px;
+grid-template-columns:1fr 1fr;grid-template-areas:"head head" "pro con";
+background:var(--surface);border:1px solid var(--line);border-radius:14px;
+padding:16px 18px;margin:0 0 16px;flex:none}
+.tpl-design .dz-options .blk-opt>.blk-title{grid-area:head;display:flex;gap:12px;
+align-items:baseline;font-size:19px;letter-spacing:-.01em;margin:0}
+.tpl-design .dz-options .blk-opt>.blk-title::before{content:counter(dz-opt,decimal-leading-zero);
+font:700 22px/1.1 ui-monospace,Menlo,Consolas,monospace;color:var(--accent);flex:none}
+.tpl-design .dz-options .blk-for{grid-area:pro;background:var(--req-c-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+.tpl-design .dz-options .blk-against{grid-area:con;background:var(--sev-high-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+/* The shared layer prefixes these with "+ "/"- ". A word reads better than a bare sign at a
+   glance, and does not depend on colour alone. It is NOT an accessibility fix, and an earlier
+   version of this comment wrongly claimed it was: these labels are CSS-generated content, so
+   they are not dependable semantic markup and vanish with the stylesheet. The reference uses
+   real DOM text (`<h4>Pros</h4>`); `_options` emits unlabelled spans with the stance only in a
+   class. Making that semantic means changing the renderer, which moves every style's bytes and
+   so cannot ride in a per-template PR — filed as a follow-up. */
+.tpl-design .dz-options .blk-for::before{content:"FOR";display:block;font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--req-c)}
+.tpl-design .dz-options .blk-against::before{content:"AGAINST";display:block;font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--sev-high)}
+/* Restated at (0,4,0): the card rule above is (0,3,0) and was silently beating the shared
+   `.blk-options .is-chosen` (0,2,0), so the chosen card lost its accent border. Measured. */
+.tpl-design .dz-options .blk-opt.is-chosen{border-color:var(--accent);border-width:2px}
+.tpl-design .dz-options .blk-opt.is-rejected{opacity:.72}
+.tpl-design .dz-options .is-chosen>.blk-title::after{content:"CHOSEN";font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent);
+border:1px solid var(--accent);border-radius:999px;padding:1px 8px;margin-left:auto;flex:none}
+@media(max-width:640px){.tpl-design .dz-options .blk-opt{grid-template-columns:1fr;
+grid-template-areas:"head" "pro" "con"}}
+/* A today/proposed pair is TWO ROOTS in one `nodes compare` block, so the
+   grid goes on the top-level list. Two separate fences cannot pair — each is
+   its own wrapper with a single child. */
+@media(min-width:720px){.tpl-design .dz-compare>ul{grid-template-columns:1fr 1fr}}
+.tpl-design .dz-compare{background:var(--code);border-radius:12px;padding:10px 14px}
+/* The verdict band — `.recommend` in the reference. A gradient wash rather than a flat fill, so
+   the decision reads as the page's conclusion and not as one more callout. */
+.tpl-design .dz-decision{margin:24px 0 8px}
+.tpl-design .dz-decision>.blk-callout{border:1px solid var(--accent);border-left-width:1px;
+border-radius:14px;padding:16px 18px;
+background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 12%,transparent),transparent)}
+.tpl-design .dz-decision>.blk-callout>.blk-title::before{content:"DECISION";display:block;
+font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent)}
+/* Trade-off table. Styled, deliberately NOT markered: a markdown table emits a bare <table> with
+   no hook, and `section_class` is not a table marker — using it would flip `design` into
+   sectioned rendering and demote its h2s. */
+.tpl-design table{border-collapse:collapse;width:100%;margin:14px 0}
+.tpl-design thead th{font:700 11px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);
+border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
+.tpl-design tbody td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.tpl-design tbody tr:nth-child(even){background:var(--code)}
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+
+:root{--accent:#f2a65e;}
+:root[data-theme=dark]{--accent:#f2a65e;}
+:root[data-theme=light]{--accent:#a26211;}
+@media print{:root,:root[data-theme=dark]{--accent:#a26211;}}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-08-02 22:52 MDT</div>
+<h1>#855 — Make the loop-back budget, confidence filter and High-deferral enforceable</h1>
+<p class="sub">Design revision 4 — review admission: one free wave per gate, every reopening debits</p>
+</header>
+<main>
+<div class="dz-lead"><p><strong>Issue:</strong> <a href="https://github.com/3D-Stories/rawgentic/issues/855">#855</a> · Part of epic #756 <strong>Base:</strong> <code>main</code> @ <code>d3374dde</code> · plugin 3.118.2 · suite baseline 6938 passed / 21 skipped <strong>Complexity:</strong> <code>complex_feature</code> (full spine; lane ineligible — architecture change) <strong>Author:</strong> WF2 orchestrator (claude-opus-5), run <code>wf2-855-8c186830</code> <strong>Revision:</strong> 4 — the amended design at the Step-4 budget-exhausted close (#798). Three review passes; loop-backs <code>design</code> 2/2, global 2/3. Decisions D145, D146, D147. §19 records every finding and its disposition across all three passes.</p>
+<hr></div>
+<h2>1. Problem restatement — the issue understates it</h2>
+<p>Verified at <code>d3374dde</code>:</p>
+<table>
+<thead><tr><th>control</th><th>definition</th><th>production call sites</th></tr></thead>
+<tbody>
+<tr><td>loop-back budget</td><td><code>plan_lib.GLOBAL_LOOPBACK_BUDGET</code>, <code>consume_loopback</code> (:2508)</td><td><strong>0</strong></td></tr>
+<tr><td>confidence filter</td><td><code>plan_lib.SEVERITY_BANDED_CONFIDENCE</code> (:163)</td><td><strong>0</strong></td></tr>
+<tr><td>High-deferral</td><td><code>plan_lib.append_deferral</code> (:1262), <code>resolve_deferral</code> (:1306)</td><td><strong>0</strong></td></tr>
+</tbody>
+</table>
+<p><code>plan_lib.py</code> exposes exactly two CLI subparsers — <code>assert-pr-body</code> (:2838), <code>close-design-gate</code> (:2849); neither reaches any control. <code>executor_routing_lib.py</code> contains zero occurrences of <code>loopback</code>/<code>deferral</code>/<code>disposition</code>. Every <code>skills/<strong></code> reference is prose telling an LLM to call Python that has </strong>no runner**.</p>
+<p><strong>The run-id is a red herring</strong> — nothing debits under <em>any</em> run-id. The work is <em>build the transition and wire it</em>. The ACs are unchanged. And the governing corollary: <strong>prose instructing an LLM to call a function is exactly the mechanism that already failed.</strong></p>
+<h2>2. The harm</h2>
+<p>#840 burned ~8 hours on <strong>thirteen review rounds</strong>. The harm is unbounded <em>rounds</em>.</p>
+<h2>3. Enumerations — settled, not deferred</h2>
+<p><strong>Every <code>--seat build</code> call site — exactly three, all initial plan-task builds:</strong> <code>skills/implement-feature/references/steps.md:997</code>, <code>skills/fix-bug/SKILL.md:122</code>, <code>skills/fix-bug/references/steps.md:327</code>.</p>
+<p><strong>Fixes are applied INLINE, never by dispatch:</strong> Step 8a is orchestrator-owned (&quot;8a is NOT delegated&quot;, <code>steps.md:1047</code>) and fixes Critical/High before Step 9; Step 11 fixes them before the PR (&quot;filtered findings <strong>and fixes applied</strong>&quot;); Step 4 edits the design document directly.</p>
+<p><strong>Every review producer that can drive a loop-back</strong> (pass 3, self #3 — the inventory the earlier revisions lacked):</p>
+<table>
+<thead><tr><th>producer</th><th>where</th><th>seat / mechanism</th></tr></thead>
+<tbody>
+<tr><td>Step 4 self-review</td><td><code>steps.md:610</code></td><td>executor <code>review</code></td></tr>
+<tr><td>Step 4 adversarial-on-design</td><td><code>steps.md:683</code></td><td><code>adversarial_review_lib</code>, no seat</td></tr>
+<tr><td>Step 4 incremental verifier (spec_tighten)</td><td><code>steps.md:715</code></td><td>executor <code>review</code></td></tr>
+<tr><td>Step 6 adversarial review</td><td><code>steps.md:892</code></td><td><code>adversarial_review_lib</code>, consumes <code>design</code></td></tr>
+<tr><td>Step 8a wave (2 reviewers)</td><td><code>steps.md</code> Step 8a item 2</td><td>executor <code>review</code>; <code>review_design</code> path</td></tr>
+<tr><td>Step 11 wave (2 reviewers)</td><td><code>steps.md:1285</code>+</td><td>executor <code>review</code></td></tr>
+<tr><td>WF3 Step 4 reflect (+ optional adversarial)</td><td><code>fix-bug/references/steps.md:258, 268</code></td><td>inline + <code>adversarial_review_lib</code></td></tr>
+<tr><td>WF3 Step 9 code review</td><td><code>fix-bug/references/steps.md:428</code></td><td>executor <code>review</code></td></tr>
+<tr><td>LEGACY agents</td><td>declared rollback</td><td>Agent tool, <strong>no ledger</strong> (§18)</td></tr>
+</tbody>
+</table>
+<h2>4. Approaches</h2>
+<p><strong>A — debit per dispatch</strong> (rejected): makes the budget a raw call counter; would have stopped thirteen legitimate clean re-reads. <strong>B — detective exit gate only</strong> (retained as tier c, never primary): a runaway loop still runs every round and merely cannot open a PR. <strong>C — harden the prose + a lint</strong> (rejected): this is what exists. <code>steps.md:1291</code> already says &quot;do not edit the deferrals JSON by hand&quot; and the function was never called at all. <strong>D — barrier on the <code>build</code> seat</strong> (refuted, pass 1): §3 shows fix rounds never dispatch a build seat, and its &quot;relabelling a fix as an initial build is refused&quot; clause would falsely refuse legitimate plan-task builds after any loop-back. <strong>D′ — the same barrier on the <code>review</code> seat</strong> (refuted, pass 2): <strong>a barrier that serializes waves never caps them</strong> — a wave whose findings are absent, filtered, declined or dissolved debits nothing, so thirteen rounds still run one at a time.</p>
+<h3>E — Review admission: one free initial wave per gate, every reopening debits (SELECTED)</h3>
+<p>From the round-3 peer consult (§22):</p>
+<blockquote>**A gate gets exactly one free initial review wave. A completed wave is terminal. Any later wave</blockquote>
+<blockquote>for that same issue and gate is a <em>reopening</em>, and a reopening debits — regardless of whether the</blockquote>
+<blockquote>previous findings were absent, filtered, declined, dissolved, deferred or adopted.**</blockquote>
+<ul>
+<li><strong>A clean review stays free</strong> — the <em>first</em> wave at each gate costs nothing, so the legitimate</li>
+</ul>
+<p>  clean re-reads that killed approach A are not charged for existing.</p>
+<ul>
+<li>**A clean <em>re-read</em> is a loop-back**, because that is what it is. This closes D′&#x27;s hole.</li>
+<li><strong>Waves are therefore bounded by the shipped budgets</strong> — no new ceiling, nothing for</li>
+</ul>
+<p>  <code>work_summary.py:614</code> to disagree with.</p>
+<p>State key <code>(issue_key, workflow, gate, generation)</code>; generation 0 free, every later generation debits before dispatch.</p>
+<h2>5. What is actionable — the boundary is NOT a caller-selected seat</h2>
+<p>Pass 3 raised two Criticals against conditioning admission on <code>seat == review</code>: a caller can put a review prompt on any read-only seat, and nothing mechanically coupled &quot;a review returned findings&quot; to &quot;intake happened&quot;. Both are answered by widening the boundary rather than trusting the label:</p>
+<ol>
+<li><strong>Model output is non-actionable by default.</strong> A gate&#x27;s findings become actionable only through</li>
+</ol>
+<p>   <code>complete-review</code>, which is the only writer of dispositions, deferrals and the terminal wave    record.</p>
+<ol start="2">
+<li><strong>An un-intaken actionable wave blocks the next dispatch of ANY seat in that run</strong> — not just</li>
+</ol>
+<p>   the next review. Exit <strong>4</strong> <code>review_intake_pending</code>, naming the wave and the verb that clears    it. This is the choke that exists given §3&#x27;s finding that fixes are inline: there is no fix    dispatch to gate, but there is always a <em>next dispatch</em>, and the run cannot proceed past it.</p>
+<ol start="3">
+<li><strong>It cannot falsely refuse a plan-task build.</strong> The block is live only in the window between a</li>
+</ol>
+<p>   review wave completing and its intake — a window the orchestrator closes immediately by running    intake. Test L asserts a <code>build</code> dispatch succeeds when no wave is pending; test L2 asserts it    is refused while one is.</p>
+<ol start="4">
+<li><strong>Non-seat producers</strong> (the <code>adversarial_review_lib</code> paths at Step 4, Step 6, WF3 Step 4) have</li>
+</ol>
+<p>   no ledger record to admit. They are <strong>advisory-only inputs merged into the owning gate&#x27;s wave</strong>,    exactly as the prose already treats them, and the owning gate&#x27;s admission is what debits. Where    such a producer can <em>itself</em> drive a loop-back (Step 6, <code>steps.md:892</code>), that gate is in the    allowlist and opening it is a reopening like any other.</p>
+<h2>6. The admission state machine</h2>
+<p>Enforced at the one mandatory pre-spawn choke, <code>hooks/executor_routing_lib.py:3284</code> (<code>led.append_expected(...)</code>) — append-before-dispatch, under <code>flock</code>, duplicates failing closed.</p>
+<pre><code>review dispatch:
+  ctx = hooks.resolve_review_context()   # canonical issue, allowlisted gate, artifact digest, slot
+  append_expected(..., review_admission=ctx)
+
+append_expected, FIXED lock order (issue admission journal → run ledger):
+  require run ledger has an `initial` record        -&gt; else run_not_declared      (exit 4)
+  require run is not closed                          -&gt; else run_closed_intake_refused
+  require no un-intaken actionable wave in this run  -&gt; else review_intake_pending
+  run_ledger.check_architecture_and_duplicate()      # existing checks, unchanged
+  state = issue_journal.fold(issue_key, workflow, gate)
+  roster = GATE_REGISTRY[(workflow, gate)].roster    # AUTHORITATIVE — never the caller&#x27;s
+
+  if no state for this gate:
+      wave = create(generation=0, roster=roster, digest=ctx.digest)          # the free wave
+  elif state.wave is open:
+      require ctx.digest == state.digest and ctx.slot in roster and unclaimed
+      wave = state.wave                                                      # parallel member
+  elif technical retry of a failed slot:
+      require same generation and attempts(slot) &lt; RETRY_LIMIT
+      wave = state.wave                                                      # attempt, not budget
+  else:
+      require ctx.digest != state.digest                                     # nothing changed
+      atomically consume the mapped source AND the workflow&#x27;s global allowance   # THE debit
+      wave = create(generation=state.generation + 1, roster=roster, digest=ctx.digest)
+
+  issue_journal.append(member_reserved(wave, slot, correlation_id, fencing_token, deadline))
+  run_ledger.append_expected(seat, correlation_id, recovered_from, review_admission={...})</code></pre>
+<p>The <code>initial</code>/<code>closed</code> preconditions are stated here explicitly (pass 3, adv #1) because they are load-bearing <em>before</em> any mutation or spawn — the code does refuse (<code>executor_routing_lib.py:3245-3250</code>; <code>ledger.py</code> <code>_check</code>), but a design that leaves it implicit cannot be implemented from.</p>
+<p><strong>The gate registry owns the roster.</strong> <code>GATE_REGISTRY</code> maps <code>(workflow, gate)</code> → immutable <code>{roster_size, slot_ids, budget_source}</code>. <strong><code>roster_size</code> is removed from caller-supplied context</strong>; a caller&#x27;s slot is an <em>assertion checked against</em> the registry, never configuration. Pass 3 (self #5, adv #7) found that a caller-supplied roster of 1 would let one reviewer close the two-reviewer Step 8a/11 gates and skip the second review. Tests G, J, J2 cover size 0/1/3 and invalid slots.</p>
+<p><strong>Slot-completed ≠ attempt-terminal</strong> (pass 3, adv #2). A slot is <em>completed</em> only by a <code>success</code> observation carrying a structurally valid reviewer envelope. <code>spawn_failure</code>, <code>timeout</code>, <code>dead_result</code> and <code>cancelled</code> are terminal <strong>attempts</strong> that leave the slot retryable; exhausting <code>RETRY_LIMIT</code> marks the wave <code>blocked</code>, and intake <strong>refuses</strong> a blocked wave. Without this distinction a failed reviewer would satisfy intake.</p>
+<p><strong>Exactly one debit point</strong> (pass 3, self #4, adv #6): admission, before dispatch. Intake does <strong>not</strong> re-validate budget, intake replay covers persistence only, and <strong>finding dispositions never debit</strong> — every admitted reopening has already consumed exactly one debit.</p>
+<h2>7. Ledger and observation changes — declared, not assumed</h2>
+<p><code>append_expected</code> today writes a fixed <code>{kind, seat, correlation_id, recovered_from}</code> (<code>ledger.py:237-257</code>) and takes one caller precondition, <code>expected_architecture</code>, asserted inside its locked <code>_check</code> (<code>:246-250</code>).</p>
+<ol>
+<li><strong><code>append_expected</code> gains an optional versioned <code>review_admission</code> object</strong> — issue key,</li>
+</ol>
+<p>   workflow, gate, generation (<strong>store-assigned</strong>; a caller-supplied generation is refused), digest,    slot, attempt, fencing token. <code>LedgerState</code> exposes it; absent → <code>None</code>. Non-review seats and    every pre-upgrade record stay valid.</p>
+<ol start="2">
+<li><strong>The precondition is asserted inside the locked <code>_check</code></strong>, as <code>expected_architecture</code> is.</li>
+</ol>
+<p>   Checking it in <code>hooks/</code> around the call reintroduces the read-then-append window the comment at    <code>executor_routing_lib.py:3282</code> exists to eliminate.</p>
+<ol start="3">
+<li><strong>Observation records</strong> — <code>success</code>, <code>spawn_failure</code>, <code>timeout</code>, <code>dead_result</code>, <code>cancelled</code>.</li>
+</ol>
+<p>   <strong>Call-site inventory</strong> (pass 3, adv #5), each named because the record is load-bearing for    roster completion, retries, fencing and blocking: the dispatch result path and its    process-failure branches at <code>executor_routing_lib.py:3291-3306</code> (<code>dispatch_timeout</code> /    <code>dispatch_signalled</code> / <code>dispatch_&lt;status&gt;</code>, #733), the supervised and resume siblings, and the    parse/verify step that produces <code>parse_status</code>. The <strong>executor</strong> appends the observation; an    append failure is <strong>fail-loud</strong> (exit 5), never swallowed — a lost observation would silently    wedge or silently free a wave. A spike asserts every termination path yields exactly one fenced    observation or a loud error.</p>
+<ol start="4">
+<li><strong><code>append_initial</code> is NOT touched.</strong> Requiring a field there is impossible without stranding</li>
+</ol>
+<p>   live runs: <code>begin-run</code> early-returns <code>already_declared</code> on matching architecture+digest    (<code>executor_routing_lib.py:3726-3735</code>) and <code>append_initial</code> enforces &quot;initial must be the first    and only &#x27;initial&#x27;&quot; (<code>ledger.py:231-236</code>). The issue binding is established on the first    post-upgrade review dispatch from immutable run state and is immutable thereafter.</p>
+<ol start="5">
+<li><strong><code>phase_executor</code> still never imports <code>hooks/</code>.</strong> It defines the record schema and transaction</li>
+</ol>
+<p>   protocol; <code>hooks/</code> owns <code>GATE_REGISTRY</code>, issue-key resolution and all finding semantics.</p>
+<ol start="6">
+<li><strong>In-flight grace path</strong> (pass 3, self #9): a pre-upgrade <code>expected</code> review record with an</li>
+</ol>
+<p>   outstanding result is imported into generation 0 of its gate on first contact — one explicit    import, no debit — so an upgrade mid-run cannot strand a review that already happened. Strict    enforcement applies to waves opened after the upgrade. Tests M, M2.</p>
+<h2>8. Budget keying — workflow-scoped, because WF3&#x27;s cap is 2</h2>
+<p>Counters stay issue-keyed (<code>claude_docs/.wf2-state/&lt;issue&gt;/loopback_counters.json</code>). <strong>The debit identity is <code>(workflow, run_id, generation, gate)</code></strong> — <code>workflow</code> included because the caps differ and one issue can see activity in both (pass 3, adv #9). The projection records <code>workflow</code> on every row, and a reader folds per workflow; a legacy row without the field folds to <code>wf2</code>, its only possible origin before this change.</p>
+<ul>
+<li>Issue-scoped and <strong>survives across runs</strong>; a new run never resets it.</li>
+<li><strong>The admission journal is authoritative</strong>; <code>loopback_counters.json</code> and <code>dispositions.jsonl</code></li>
+</ul>
+<p>  remain the projections <code>close-design-gate</code> (<code>plan_lib.py:2657</code>) and <code>work_summary.py:410</code>   already read, unchanged in location and shape.</p>
+<ul>
+<li><strong>WF2&#x27;s global cap is 3; WF3&#x27;s is 2</strong> (<code>fix-bug/references/steps.md:792</code>). <code>consume_loopback</code></li>
+</ul>
+<p>  hard-codes 3 (<code>plan_lib.py:2527</code>), so admission checks the workflow&#x27;s effective cap <strong>first</strong> and   refuses before calling it. The constant is untouched and neither existing reader is disturbed.</p>
+<p><strong>Remedy on exhaustion (AC4)</strong> — exit 4 <code>budget_exhausted</code>:</p>
+<blockquote>Loop-back budget exhausted for issue #N (source <code>&lt;s&gt;</code>: x/y, &lt;workflow&gt; total: t/&lt;cap&gt;).</blockquote>
+<blockquote>Remedies, in order of preference:</blockquote>
+<blockquote>  1. Close or defer the remaining findings without reopening the gate.</blockquote>
+<blockquote>  2. Split the unfixed work into a separately scoped issue.</blockquote>
+<blockquote>  3. Stop and escalate to the owner — this cap is theirs to raise, not the run&#x27;s.</blockquote>
+<p>A fourth remedy — <em>run a peer consult when the budget is spent</em> — is deliberately <strong>out of scope here</strong> and filed as its own issue in epic #756 (owner decision, 2026-08-03), because it is a remedy rather than an enforcement mechanism and can ship independently. Validated by this very run: two review passes refuted two mechanisms and a peer consult produced the third.</p>
+<p><strong>No runtime ceiling override exists.</strong> Revision 1&#x27;s <code>extend-budget --approved-by</code> was dropped: <code>--approved-by</code> is a string the constrained agent supplies itself (§18), and it cannot work anyway — <code>consume_loopback</code> compares against the module constant and <code>work_summary.py:614</code> rejects <code>used &gt; budget</code>. Raising the cap is an owner edit to the constant, auditable in git.</p>
+<h2>9. High deferrals</h2>
+<p>A surviving High may be deferred only with <code>{owner, reason, remedy, due}</code>; missing metadata → exit <strong>2</strong>. A <strong>Critical</strong> deferral is refused → exit <strong>6</strong>.</p>
+<p><strong>Repeat deferral is keyed by a host-assigned deferral lineage id, not by the content hash</strong> (pass 3, adv #3). <code>compute_finding_key</code> hashes model-authored <code>description</code>, so a paraphrase would mint a new key and buy a fresh &quot;first&quot; deferral. The lineage id is assigned on first deferral and carried in an alias table mapping every observed <code>finding_key</code> to it; a later finding whose key resolves to an existing lineage is the <em>same</em> deferral.</p>
+<p><strong>A second deferral of one lineage blocks automated continuation</strong> — exit <strong>4</strong> <code>deferral_needs_owner</code>. Revision 2 gated this on <code>--user-ack</code>, which is the same self-approval defect as <code>extend-budget</code>: the constrained agent supplies the flag. Only a human acting outside the run can move it forward.</p>
+<p><strong>Migration is specified, not assumed</strong> (pass 3, self #7): the existing <code>deferrals.json</code> schema keys on <code>finding_id</code>. <code>append_deferral</code>, <code>resolve_deferral</code> and <code>_deferral_is_resolved</code> gain the lineage field with <code>finding_id</code> retained as an alias; fixtures cover existing one- and two-deferral files; the state/resume prose moves with them.</p>
+<p>Deferrals stay in <code>deferrals.json</code>, <strong>not</strong> the disposition ledger — the shipped boundary (<code>plan_lib.py:1370-1379</code>: the ledger holds only terminal decisions).</p>
+<h2>10. The transition — one module, full CLI grammar</h2>
+<p><strong><code>hooks/review_transition_lib.py</code></strong> owns the policy and all verbs, importing plan_lib&#x27;s primitives (<code>consume_loopback</code>, <code>SEVERITY_BANDED_CONFIDENCE</code>, <code>append_deferral</code>, <code>append_disposition</code>, <code>file_lock</code>, <code>compute_finding_key</code>) rather than duplicating them.</p>
+<pre><code>review_transition_lib.py complete-review --issue N --run-id ID --gate G --generation K
+    --findings-file F [--repo-root .]        # stdout: {status, dropped[], dispositions[], deferrals[]}
+review_transition_lib.py diagnose-review --reason &quot;…&quot; [--issue N] --findings-file F [--repo-root .]
+review_transition_lib.py import-diagnostic --from RECEIPT --issue N --run-id ID --gate G [--repo-root .]
+review_transition_lib.py assert-review-intake --run-id ID --issue N [--repo-root .]</code></pre>
+<p>New dispatch options on <code>executor_routing_lib.py dispatch</code>: <code>--review-gate G</code>, <code>--review-slot S</code>, <code>--review-digest D</code>, <code>--review-issue N</code>, <code>--review-workflow wf2|wf3</code>. Every <code>--*-file</code> resolves under <code>--repo-root</code>. Exit mapping per §21. (Pass 3, self #8: the earlier revision named verbs without a grammar.)</p>
+<p>There is <strong>no</strong> <code>abandon-wave</code> verb — revision 2&#x27;s became the escape hatch. Failure is handled by observations and the bounded attempt allowance (§7.3, §12).</p>
+<p><strong><code>close-design-gate</code> is not a second transition.</strong> It records the Step-4 budget-exhausted close (#798) and writes dispositions for findings adopted at that close; <code>complete-review</code> intakes a <em>wave</em>. They never both run for one wave; test AD guards it.</p>
+<p><code>complete-review</code>, <strong>every validation before every mutation</strong>:</p>
+<ol>
+<li>Lineage — <code>initial</code> present, run not closed.</li>
+<li>Wave — the admission record for <code>(issue, workflow, gate, generation)</code> exists and **every roster</li>
+</ol>
+<p>   slot has a <code>success</code> observation**; incomplete → exit 4 <code>wave_roster_incomplete</code>; blocked → exit    4 <code>wave_blocked</code>. A <code>diagnostic</code> record can never be intaken here.</p>
+<ol start="3">
+<li>Issue binding — bound at dispatch; mismatch → exit 4 <code>issue_mismatch</code>.</li>
+<li>Validate findings, deferral metadata and disposition vocabulary. Missing/invalid <code>confidence</code> or</li>
+</ol>
+<p>   <code>category</code> → exit <strong>2</strong>, <strong>nothing written</strong>. (No budget check here — §6, one debit point.)</p>
+<ol start="5">
+<li>Confidence policy — <code>SEVERITY_BANDED_CONFIDENCE</code>. A below-band finding is recorded as a</li>
+</ol>
+<p>   <strong>journal-only <code>dropped_low_confidence</code> observation</strong> carrying <code>{finding_key, severity,    confidence, band}</code> — deliberately <em>not</em> a disposition, since the shipped vocabulary has no such    terminal value (pass 3, self #10). Tests just-below / at / above the band for every severity.</p>
+<ol start="6">
+<li>Dedupe by <code>compute_finding_key</code> against the issue&#x27;s disposition history.</li>
+<li>Commit (§11).</li>
+</ol>
+<h2>11. Transaction protocol — a real WAL, not per-file atomicity</h2>
+<p>Pass 3 (self #6, adv #4) established that per-file atomic replacement plus lock ordering cannot make separate appends atomically visible. Replaced by an explicit write-ahead commit:</p>
+<ol>
+<li><strong>Append and fsync ONE authoritative commit record</strong> to the wave journal, containing the entire</li>
+</ol>
+<p>   intake intent and a transaction id: the dispositions, deferrals, <code>dropped_low_confidence</code>    observations and the terminal wave state it will produce.</p>
+<ol start="2">
+<li><strong>Materialize each projection</strong> — <code>dispositions.jsonl</code>, <code>deferrals.json</code>, the counters</li>
+</ol>
+<p>   projection — each stamped with the transaction id as an <strong>applied marker</strong>.</p>
+<ol start="3">
+<li><strong>Replay at read time</strong>: any committed transaction whose projection lacks its applied marker is</li>
+</ol>
+<p>   re-materialized idempotently; <strong>readers ignore uncommitted transactions entirely</strong>.</p>
+<ol start="4">
+<li><strong>Fail-closed asymmetry</strong> between the journal reservation and <code>append_expected</code>: a crash between</li>
+</ol>
+<p>   them consumes a technical attempt, never grants a wave.</p>
+<ol start="5">
+<li>Reservations carry <strong>deadlines and fencing tokens</strong>; recovery may fail an expired attempt and</li>
+</ol>
+<p>   retry the slot, and late observations are rejected by token.</p>
+<ol start="6">
+<li>Lock order, fixed everywhere: issue admission journal → run ledger → counters → dispositions →</li>
+</ol>
+<p>   deferrals. Whole-file writes use <code>atomic_write_lib.atomic_write_text</code>    (<code>hooks/atomic_write_lib.py:27</code>); append-only JSONL keeps its plain append, matching    <code>append_disposition</code>&#x27;s documented rationale (<code>plan_lib.py:1372-1374</code>).</p>
+<p>Tests crash-inject before and after <strong>every</strong> append and replace, asserting the exact journal, counter, disposition and deferral state each time, with a debit total of exactly one.</p>
+<h2>12. Failure handling — without an escape hatch</h2>
+<table>
+<thead><tr><th>outcome</th><th>recorded</th><th>slot</th><th>budget</th></tr></thead>
+<tbody>
+<tr><td>valid reviewer envelope</td><td><code>success</code></td><td><strong>completed</strong></td><td>debit already taken at admission</td></tr>
+<tr><td>pre-spawn refusal</td><td>none — nothing spawned, no wave opened</td><td>—</td><td>none</td></tr>
+<tr><td>spawn failure / timeout / cancellation</td><td><code>spawn_failure</code> / <code>timeout</code> / <code>cancelled</code></td><td>retryable</td><td>none; one attempt</td></tr>
+<tr><td>blank, malformed or vacuous return</td><td><code>dead_result</code></td><td>retryable</td><td>none; one attempt</td></tr>
+<tr><td>attempts exhausted</td><td>wave <code>blocked</code></td><td>—</td><td>none; intake refuses; run stops and reports</td></tr>
+</tbody>
+</table>
+<p>A blocked gate is a reported stop, not a released barrier.</p>
+<h2>13. Structured-result contract</h2>
+<pre><code>{ &quot;schema_version&quot;: 1, &quot;run_id&quot;: &quot;…&quot;, &quot;workflow&quot;: &quot;wf2&quot;, &quot;issue&quot;: 855,
+  &quot;gate&quot;: &quot;11&quot;, &quot;generation&quot;: 1,
+  &quot;findings&quot;: [ {
+    &quot;severity&quot;: &quot;High&quot;,                       // Critical | High | Medium | Low
+    &quot;category&quot;: &quot;architecture&quot;,               // REQUIRED — append_disposition validates it
+    &quot;confidence&quot;: 0.72,                       // finite JSON number in [0,1]
+    &quot;location&quot;: &quot;hooks/plan_lib.py&quot;,          // repo-relative; no line number
+    &quot;description&quot;: &quot;…&quot;,
+    &quot;rationale&quot;: &quot;precondition and impact, one line&quot; } ],
+  &quot;requested_dispositions&quot;: { &quot;&lt;finding_key&gt;&quot;: { &quot;kind&quot;: &quot;adopted&quot; } },
+  &quot;requested_deferrals&quot;:    { &quot;&lt;finding_key&gt;&quot;: { &quot;owner&quot;: &quot;…&quot;, &quot;reason&quot;: &quot;…&quot;,
+                                                 &quot;remedy&quot;: &quot;…&quot;, &quot;due&quot;: &quot;YYYY-MM-DD&quot; } } }</code></pre>
+<p><code>category</code> and <code>requested_deferrals</code> exist because <code>_disposition_entry_error</code> (<code>plan_lib.py:1395-1415</code>) requires top-level strings <code>id, finding_key, disposition, reason, decided_by, date</code>, <strong>integers <code>issue</code> and <code>pass</code></strong>, a string <code>gate</code>, and a <code>finding</code> object with <code>severity</code>, <strong><code>category</code></strong>, <code>description</code>. The command supplies <code>issue</code>, <code>gate</code> and <code>pass</code> (= <code>generation</code>); the model supplies the rest.</p>
+<p><strong>Identity reuses <code>plan_lib.compute_finding_key</code> unchanged</strong> (<code>:1351-1366</code>), always host-recomputed so a model cannot perturb its own key. <strong>Vocabulary is the shipped <code>adopted | declined | dissolved</code></strong> (<code>:1409</code>) — and per §6, none of them debits.</p>
+<p><em>Residual weakness, named:</em> the shipped key is paraphrase-sensitive. That is why deferral recurrence uses a lineage id (§9) rather than the key alone; for dispositions the exposure is duplicate work, not a bypass.</p>
+<h2>14. Break-glass diagnostic mode (AC5, AC2)</h2>
+<p><code>diagnose-review --reason &quot;&lt;why&gt;&quot;</code>: no declared run needed; same parse and confidence policy; writes only to <code>claude_docs/.wf2-state/&lt;issue&gt;/diagnostic/&lt;utc&gt;-&lt;token&gt;.json</code>; <strong>debits nothing, writes no disposition</strong>; every finding marked <code>diagnostic: true</code>; <code>--reason</code> mandatory.</p>
+<p><strong>No reason-only release exists.</strong> A diagnostic dispatch carrying <code>--issue</code> records a diagnostic generation for that gate; the next actionable wave there is a <strong>reopening</strong> and debits like any other. There is nothing to &quot;release&quot;, so the revision-2 hole (close the quarantine with a string) is gone. <code>import-diagnostic</code> debits normally. A diagnostic with <strong>no</strong> <code>--issue</code> is a genuine emergency outside any issue&#x27;s boundary and cannot be imported (§18).</p>
+<h2>15. Test strategy (AC6 is the headline)</h2>
+<p>Black-box via <code>subprocess.run([sys.executable, CLI, ...])</code> per <code>docs/testing.md:5-8</code>, plus unit tests on the pure helpers and the ledger. Red before green.</p>
+<table>
+<thead><tr><th>#</th><th>test</th><th>asserts</th></tr></thead>
+<tbody>
+<tr><td>A</td><td>hand-minted run-id, never <code>begin-run</code></td><td>exit 4 <code>run_not_declared</code>; counters byte-identical; <strong>no reviewer spawned</strong>, no admission record</td></tr>
+<tr><td>B</td><td>declared run, fabricated admission record</td><td>exit 4 <code>review_not_in_ledger</code></td></tr>
+<tr><td>C</td><td><strong>first wave at a gate, clean findings</strong></td><td>admitted, <strong>no debit</strong> — the free-wave guarantee</td></tr>
+<tr><td>D</td><td><strong>second wave, changed digest, clean findings</strong></td><td>admitted <strong>and debited</strong> — D′&#x27;s hole, closed</td></tr>
+<tr><td>E</td><td>reopen with an unchanged digest</td><td>refused <code>digest_unchanged</code>; no debit</td></tr>
+<tr><td>F</td><td>reopen to the cap</td><td>exit 4 <code>budget_exhausted</code>, remedy string present</td></tr>
+<tr><td>G</td><td><code>gate</code> not in <code>GATE_REGISTRY</code></td><td>refused <code>gate_not_allowlisted</code></td></tr>
+<tr><td>H</td><td>caller supplies its own <code>generation</code></td><td>refused — the store assigns it</td></tr>
+<tr><td>I</td><td>two reviewers, same wave, concurrent</td><td>both admitted to distinct slots</td></tr>
+<tr><td>J</td><td>third member of a two-slot roster</td><td>refused <code>roster_full</code></td></tr>
+<tr><td>J2</td><td>caller claims roster size 1 for a two-slot gate</td><td>refused — registry wins; also size 0 and 3, and an invalid slot id</td></tr>
+<tr><td>K</td><td>intake with one slot lacking <code>success</code></td><td>exit 4 <code>wave_roster_incomplete</code></td></tr>
+<tr><td>K2</td><td>intake of a wave whose slot only has <code>dead_result</code></td><td>refused — a failed attempt is not a completed slot</td></tr>
+<tr><td>L</td><td><code>build</code> dispatch, no wave pending</td><td><strong>exit 0</strong> — the §3 regression guard</td></tr>
+<tr><td>L2</td><td>any-seat dispatch while an actionable wave is un-intaken</td><td>exit 4 <code>review_intake_pending</code></td></tr>
+<tr><td>M</td><td>pre-upgrade ledger record</td><td>parses with <code>review_admission</code> None; dispatch unaffected</td></tr>
+<tr><td>M2</td><td>upgrade mid-run with an outstanding pre-upgrade review</td><td>imported to generation 0, no debit, run completes</td></tr>
+<tr><td>N</td><td>spawn failure then retry in the same generation</td><td>admitted; no debit; attempt count 1</td></tr>
+<tr><td>O</td><td>vacuous/blank return</td><td><code>dead_result</code>, never clean</td></tr>
+<tr><td>P</td><td>attempts exhausted</td><td>wave <code>blocked</code>; intake refuses; no release</td></tr>
+<tr><td>Q</td><td>late observation after fencing</td><td>rejected by token</td></tr>
+<tr><td>R</td><td>crash between journal reservation and <code>append_expected</code></td><td>fail-closed: attempt consumed, <strong>no free wave</strong></td></tr>
+<tr><td>S</td><td>crash before/after <strong>every</strong> append and replace</td><td>replay yields exact state; debit total exactly 1</td></tr>
+<tr><td>S2</td><td>reader encountering an uncommitted transaction</td><td>ignores it entirely</td></tr>
+<tr><td>T</td><td>two concurrent reopenings</td><td>exactly one admitted</td></tr>
+<tr><td>U</td><td>finding missing <code>confidence</code></td><td>exit 2; nothing written</td></tr>
+<tr><td>V</td><td>finding missing <code>category</code></td><td>exit 2</td></tr>
+<tr><td>W</td><td>second deferral of one lineage, incl. a paraphrased description</td><td>exit 4 <code>deferral_needs_owner</code> — paraphrase does not mint a fresh first deferral</td></tr>
+<tr><td>W2</td><td>existing one- and two-deferral <code>deferrals.json</code> fixtures</td><td>migrate to lineage ids without loss</td></tr>
+<tr><td>X</td><td>Critical with a deferral requested</td><td>exit 6</td></tr>
+<tr><td>Y</td><td>WF3 reopen past 2</td><td>refused at 2, not 3</td></tr>
+<tr><td>Y2</td><td>one issue with interleaved WF2 and WF3 reopenings</td><td>independent totals of 3 and 2</td></tr>
+<tr><td>Z</td><td>diagnostic under a hand-minted run-id, then an actionable wave</td><td>diagnostic debits nothing; the wave debits</td></tr>
+<tr><td>AA</td><td><code>assert-review-intake</code> with a non-terminal wave</td><td>exit 1</td></tr>
+<tr><td>AB</td><td><code>phase_executor/src</code> off <code>sys.path</code></td><td>exit 5 <code>ledger_unavailable</code> naming the path; plus a positive-path import test</td></tr>
+<tr><td>AC</td><td>traversal, leaf symlink, parent-component symlink, oversized/over-deep JSON, unknown keys</td><td>refused per §17</td></tr>
+<tr><td>AD</td><td><code>complete-review</code> and <code>close-design-gate</code> on one gate</td><td>mutually exclusive; no double disposition</td></tr>
+<tr><td>AE</td><td>review prompt dispatched on a non-review read-only seat</td><td>its output cannot become actionable without intake (§5)</td></tr>
+<tr><td>AF</td><td>every executor termination path</td><td>exactly one fenced observation, or a loud error</td></tr>
+<tr><td>AG</td><td>confidence just below / at / above the band, each severity</td><td>dropped vs kept exactly per band</td></tr>
+</tbody>
+</table>
+<p><strong>C, D, L, L2 and J2 are the regression guards for this revision&#x27;s central claims.</strong> Test A is AC6 verbatim and asserts both halves — refused <em>and</em> not debited.</p>
+<h2>16. Prose changes (surgical — decision D143)</h2>
+<ul>
+<li><code>shared/blocks/loop-back-budget.md</code> — the bare <code>consume_loopback</code> instruction becomes the</li>
+</ul>
+<p>  <code>complete-review</code> invocation; add the exit-gate sentence. Re-sync (→ implement-feature).</p>
+<ul>
+<li><code>shared/blocks/review-severity.md</code> — deferral points at <code>complete-review</code>; a second deferral of a</li>
+</ul>
+<p>  lineage stops the run. Re-sync (→ implement-feature <strong>and</strong> fix-bug).</p>
+<ul>
+<li><code>skills/implement-feature/references/steps.md:708, 713, 1144, 1291, 1350</code> — each bare function</li>
+</ul>
+<p>  reference becomes a real CLI invocation.</p>
+<ul>
+<li>Step 4, Step 6, Step 8a and Step 11 dispatch prose — pass gate, slot and digest (never roster).</li>
+<li>WF3 <code>fix-bug/references/steps.md:258, 268, 428</code> — the same for its two gates.</li>
+<li><code>SKILL.md</code> <code>&lt;completion-gate&gt;</code> — add the <code>assert-review-intake</code> item (shape of item 13).</li>
+<li><code>SKILL.md</code> <code>&lt;constants&gt;</code> — values unchanged; note the bands are now <em>applied</em> by intake.</li>
+</ul>
+<p>Drift guards moving with these: <code>tests/test_wf2_clarity.py:518, 1516, 1527, 1534, 1603</code>, <code>tests/test_shared_block_drift.py:42</code>, and the WF3 clarity guards.</p>
+<h2>17. Security</h2>
+<ul>
+<li><strong>Closed schema</strong>, <code>additionalProperties: false</code> at every level; unknown key → exit 2.</li>
+<li><strong>Limits:</strong> ≤ 200 findings; <code>description</code> ≤ 4 KiB; <code>rationale</code> ≤ 1 KiB; <code>location</code> ≤ 512 B;</li>
+</ul>
+<p>  file ≤ 1 MiB; depth ≤ 6.</p>
+<ul>
+<li><strong>Paths open relative to a trusted directory descriptor</strong>, <code>O_NOFOLLOW</code> on the leaf and every</li>
+</ul>
+<p>  parent resolved through that descriptor chain — not by pathname after a separate check.   <code>close-design-gate</code>&#x27;s pattern is insufficient: separate <code>realpath</code>/leaf-<code>islink</code> before an   ordinary open (<code>plan_lib.py:2613-2617, 2642-2658</code>) leaves a check/open race and does not refuse   symlinked parents.</p>
+<ul>
+<li><strong>Every identifier in a pathname is sanitized</strong> with <code>phase_executor.capture.sanitize_component</code></li>
+</ul>
+<p>  (already used for <code>run_id</code> at <code>executor_routing_lib.py:3239</code>).</p>
+<ul>
+<li>Nothing from a finding reaches a shell; <code>--reason</code> is written as JSON.</li>
+</ul>
+<h2>18. Known limits, stated plainly</h2>
+<ul>
+<li><strong>No authenticated human boundary.</strong> Any string the orchestrator supplies authorizes nothing;</li>
+</ul>
+<p>  <code>--approved-by</code> and <code>--user-ack</code> were removed rather than kept as decoration.</p>
+<ul>
+<li><strong>Workflow enforcement at the routing path, not tamper-proofing.</strong> An orchestrator that edits the</li>
+</ul>
+<p>  journal directly or invokes a model outside rawgentic is outside the boundary. No OS-level   prevention is claimed.</p>
+<ul>
+<li><strong>LEGACY has no ledger</strong>, so the preventive tier cannot cover it; legacy keeps the detective tier</li>
+</ul>
+<p>  only. A bounded, named gap.</p>
+<ul>
+<li><strong>A diagnostic with no <code>--issue</code></strong> is deliberately outside the boundary (§14).</li>
+<li><strong>A new issue is a new budget</strong> — honest scoping; the journal records the run→issue binding.</li>
+<li><strong>Issue-journal lifecycle:</strong> reopening a long-finished issue cannot safely reset capacity without</li>
+</ul>
+<p>  a trusted epoch; today that is a deliberate manual operation.</p>
+<ul>
+<li><strong><code>dead_result</code> is structural, not semantic</strong> — a well-formed but useless review can pass it.</li>
+<li><strong>POSIX-only</strong> (pass 3, adv #8): <code>flock</code>, <code>dir_fd</code> and <code>O_NOFOLLOW</code> are required. CI runs Linux</li>
+</ul>
+<p>  and the fleet is Linux/macOS; the requirement is declared in §20 and enforced by a fail-loud   platform gate rather than assumed.</p>
+<h2>19. Findings and dispositions across all three passes</h2>
+<p>Pass 1: 14 self-review + 10 adversarial. Pass 2: 13 + 12. Pass 3: 11 + 9. Every citation was re-read at source before being acted on; nothing was taken on a reviewer&#x27;s word. <strong>Nothing was declined.</strong> The mechanism changed twice on evidence (D → D′ → E) and four sub-mechanisms were removed rather than repaired: <code>extend-budget</code>, the <code>begin-run --issue</code> binding, <code>abandon-wave</code>, and <code>--user-ack</code>.</p>
+<p>Pass-3 dispositions (pass 1 and 2 are recorded in decisions D145/D146 and were applied in revisions 2 and 3):</p>
+<table>
+<thead><tr><th>finding</th><th>disposition</th></tr></thead>
+<tbody>
+<tr><td>self #1, #2 (C) — actionable boundary is a caller-selected seat; intake uncoupled from output</td><td><strong>adopted</strong> — §5: non-actionable by default; an un-intaken wave blocks the next dispatch of ANY seat; tests AE, L2</td></tr>
+<tr><td>self #3 (H) — review-producer inventory incomplete</td><td><strong>adopted</strong> — §3 inventory table; §5.4</td></tr>
+<tr><td>self #4 (H), adv #6 (H) — debit trigger/timing contradictory</td><td><strong>adopted</strong> — §6: admission is the sole debit point; intake never re-validates budget</td></tr>
+<tr><td>self #5 (H), adv #7 (H) — caller supplies roster size</td><td><strong>adopted</strong> — §6 <code>GATE_REGISTRY</code> owns it; tests J2</td></tr>
+<tr><td>self #6 (H), adv #4 (H) — no real multi-file commit protocol</td><td><strong>adopted</strong> — §11 WAL with applied markers and read-time replay; tests S, S2</td></tr>
+<tr><td>self #7 (H), adv #3 (H) — deferral policy incompatible; paraphrase mints a new first deferral</td><td><strong>adopted</strong> — §9 lineage id + migration; tests W, W2</td></tr>
+<tr><td>self #8 (H) — no CLI grammar</td><td><strong>adopted</strong> — §10 synopsis and dispatch options</td></tr>
+<tr><td>self #9 (H) — no grace path for in-flight pre-upgrade reviews</td><td><strong>adopted</strong> — §7.6; test M2</td></tr>
+<tr><td>self #10 (M) — <code>dropped_low_confidence</code> has no durable shape</td><td><strong>adopted</strong> — §10.5 journal-only observation; test AG</td></tr>
+<tr><td>self #11 (M) — <code>sanitize_component</code> undeclared</td><td><strong>adopted</strong> — §20 second entry</td></tr>
+<tr><td>adv #1 (H) — initial/closed checks not stated pre-spawn</td><td><strong>adopted</strong> — §6; test A extended</td></tr>
+<tr><td>adv #2 (H) — a failed observation would satisfy intake</td><td><strong>adopted</strong> — §6 slot-completed vs attempt-terminal; test K2</td></tr>
+<tr><td>adv #5 (H) — no observation call-site evidence</td><td><strong>adopted</strong> — §7.3 inventory + spike; test AF</td></tr>
+<tr><td>adv #8 (M) — POSIX APIs undeclared</td><td><strong>adopted</strong> — §18, §20</td></tr>
+<tr><td>adv #9 (M) — debit identity omits workflow</td><td><strong>adopted</strong> — §8; test Y2</td></tr>
+</tbody>
+</table>
+<h2>20. Platform / external dependencies</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: <code>phase_executor.ledger.ExpectedCallLedger</code> — guarded lazy import from a hooks/ module, plus an extension of its <code>append_expected</code> write schema and new observation records</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — <code>hooks/executor_routing_lib.py:2629</code> performs the guarded lazy <code>import phase_executor.ledger</code> inside the subcommand; <code>:3242-3243</code> constructs <code>pe.ledger.ExpectedCallLedger(run_dir, args.run_id)</code> and calls <code>.read()</code>; <code>:3284</code> calls <code>.append_expected(seat, correlation_id, expected_architecture=&quot;executor&quot;)</code>. Read at d3374dde. Scope stated honestly: the READ path and the guarded-import pattern are proven by those call sites; the <code>review_admission</code> field, the store-supplied admission transaction and the observation records are NEW code in <code>phase_executor/src/phase_executor/ledger.py:237-257</code>, which today writes a fixed four-key record and exposes no observation-read API.   failure: fail-loud   surface: ImportError is caught and re-raised as exit 5 <code>ledger_unavailable</code> naming the resolved sys.path — test AB runs the transition with <code>phase_executor/src</code> absent AND asserts the normal configured import succeeds. Test M asserts a pre-upgrade record parses with <code>review_admission</code> None, so an older ledger cannot fail closed by surprise.</p>
+<ul>
+<li>api: <code>phase_executor.capture.sanitize_component</code></li>
+</ul>
+<p>  feasibility: verified via existing-call-site — imported in the same guarded lazy block at <code>hooks/executor_routing_lib.py:2630</code> and already used to build the run directory at <code>:3239</code> (<code>Path(paths[&quot;capture_root&quot;]) / pe.capture.sanitize_component(args.run_id)</code>). Exactly the function and call form this design needs for every pathname identifier.   failure: fail-loud   surface: shares the guarded-import exit 5 <code>ledger_unavailable</code> path; a positive test asserts a hostile identifier is sanitized and a negative test asserts the traversal attempt is refused rather than written.</p>
+<ul>
+<li>api: POSIX filesystem primitives — <code>fcntl.flock</code>, <code>os.open(..., dir_fd=…)</code>, <code>O_NOFOLLOW</code>, <code>os.fsync</code></li>
+</ul>
+<p>  feasibility: verified via existing-call-site — <code>plan_lib.file_lock</code> already uses <code>flock</code> for the counters this design debits, and the shipped ledger takes <code>flock</code> per append; CI runs Ubuntu on Python 3.12 (<code>.github/workflows/ci.yml</code>) and every fleet host is Linux or macOS. No Windows lane exists in this project.   failure: fail-loud   surface: a startup platform gate raises exit 5 <code>platform_unsupported</code> naming the missing primitive rather than silently degrading to a non-atomic path; asserted by a test that monkeypatches the primitive away.</p>
+<p>No new dependency, no new service. Everything else is stdlib plus in-repo modules.</p>
+<h2>21. Exit codes</h2>
+<table>
+<thead><tr><th>exit</th><th>meaning</th><th>cases</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>ok</td><td>wave admitted or intaken; diagnostic recorded</td></tr>
+<tr><td>1</td><td>gate FAILS</td><td><code>assert-review-intake</code> found a non-terminal actionable wave</td></tr>
+<tr><td>2</td><td>malformed</td><td><code>confidence_required</code>, <code>category_required</code>, <code>high_deferral_metadata_required</code>, <code>diagnostic_reason_required</code>, schema violation, size/depth cap, path escape</td></tr>
+<tr><td>3</td><td>availability</td><td>state file locked or unreadable</td></tr>
+<tr><td>4</td><td>enforcement</td><td><code>run_not_declared</code>, <code>run_closed_intake_refused</code>, <code>review_intake_pending</code>, <code>issue_mismatch</code>, <code>review_not_in_ledger</code>, <code>wave_roster_incomplete</code>, <code>wave_blocked</code>, <code>roster_full</code>, <code>digest_unchanged</code>, <code>gate_not_allowlisted</code>, <code>budget_exhausted</code>, <code>deferral_needs_owner</code></td></tr>
+<tr><td>5</td><td>internal</td><td><code>ledger_unavailable</code>, <code>platform_unsupported</code>, invariant violation, failed atomic update</td></tr>
+<tr><td>6</td><td>refused</td><td><code>critical_deferral_refused</code>, actionable use of diagnostic output</td></tr>
+</tbody>
+</table>
+<h2>22. Multi-PR assessment</h2>
+<p>Estimated ~1600–2000 changed lines. Step 5 makes the final call. Ordering is constrained so no PR leaves existing review callers broken — the admission context stays <em>optional</em> at the routing layer until the prose that supplies it has landed:</p>
+<ul>
+<li><strong>PR 1 (<code>Part of #855</code>)</strong> — <code>phase_executor</code>: <code>review_admission</code>, the admission transaction</li>
+</ul>
+<p>  protocol, observation records, store-assigned generations, roster and fencing semantics, the   platform gate. Tests H, I, J, J2, M, M2, N, O, Q, R, T, AF. Inert for every existing caller.</p>
+<ul>
+<li><strong>PR 2 (<code>Part of #855</code>)</strong> — <code>hooks/review_transition_lib.py</code>: all four verbs, the WAL commit,</li>
+</ul>
+<p>  validation, the confidence filter, deferral lineage + migration, the workflow-scoped cap.   Tests A–G, K, K2, P, S, S2, U–Y2, Z, AA–AD, AG.</p>
+<ul>
+<li><strong>PR 3 (<code>Part of #855</code>)</strong> — wire routing: <code>resolve_review_context</code>, <code>GATE_REGISTRY</code>, the</li>
+</ul>
+<p>  <code>append_expected</code> call site, the any-seat pending-intake block. Tests L, L2, AE.</p>
+<ul>
+<li><strong>PR 4 (<code>Closes #855</code>)</strong> — prose and shared-block edits + re-sync, the completion gate, the</li>
+</ul>
+<p>  <code>work_summary</code> reconciliation, and only now <strong>make the admission context required</strong>.</p>
+<h2>23. Provenance (cross-model, blind both ways)</h2>
+<p>Two consults, both backend <code>gpt</code> (Codex), both report-only and gitignored here:</p>
+<ul>
+<li><strong>Step 3 peer consult</strong> — <code>docs/reviews/peer-rawgentic-peer-problem-855-2026-08-03.md</code>. My draft</li>
+</ul>
+<p>  was on disk before the proposal was read, per the Step-3 blindness rule. Contributed the <em>shape</em>   of preventive enforcement, the actionable/diagnostic distinction, debit-once-per-round, Critical   deferral refusal, host-recomputed identity, a focused module over more <code>plan_lib</code> verbs.</p>
+<ul>
+<li><strong>Round-3 mechanism consult</strong> — <code>docs/reviews/peer-855-round3-mechanism-2026-08-03.md</code>, run after</li>
+</ul>
+<p>  two review passes had refuted candidates D and D′, against a problem statement carrying nine   source-confirmed constraints. <strong>Contributed the mechanism this design uses:</strong> one free initial   wave per <code>(issue, gate)</code> with every reopening debiting; store-assigned generations; the gate   allowlist; full-roster reservation; digest as duplicate-read guard rather than replenishment;   observation records with bounded attempts, deadlines and fencing; the fail-closed asymmetry   between the two durable appends; and the judgment that a second High deferral must block rather   than accept a self-supplied flag.</p>
+<p><strong>Adopted then withdrawn on evidence:</strong> the immutable <code>begin-run --issue</code> binding (§7.4) and <code>extend-budget --approved-by</code> (§8). <strong>Rejected:</strong> changing which files <code>close-design-gate</code> (<code>plan_lib.py:2657</code>) and <code>work_summary.py:410</code> read; <code>review-round</code> as a new dispatch verb (a field on the existing dispatch is smaller); <code>adopt-run</code> (nothing to adopt).</p>
+<p><strong>Retained over both consults:</strong> the completion-gate assertion as a cheap second tier (§10) — a preventive barrier never fires when a run simply ends with no further dispatch.</p>
+
+</main>
+<footer>Last updated: 2026-08-02 22:52 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
