@@ -2713,6 +2713,42 @@ def _cmd_close_design_gate(args) -> int:
     return 0
 
 
+def _cmd_review_reopen(args) -> int:
+    """M0a (#866, #855): mint a reopen token, debiting the loop-back budget.
+
+    The ONE choke point that authorizes an actionable review round: the review
+    runner requires the minted token file for a non-diagnostic result, and the
+    debit happens HERE at mint time — transport retries reuse the token and
+    never debit again. Fail-closed: an exhausted budget mints nothing (exit 3);
+    an --out path outside --project-root refuses (exit 2). The token write is
+    atomic (atomic_write_text) so a concurrent reader never sees a partial file.
+    """
+    root = os.path.realpath(args.project_root)
+    if not _contained(args.out, root):
+        sys.stderr.write(
+            f"review-reopen: REFUSED — --out resolves outside --project-root: "
+            f"{args.out!r}\n")
+        return 2
+    ok, state = consume_loopback(args.state_file, args.source)
+    if not ok:
+        sys.stderr.write(
+            f"review-reopen: budget exhausted for source {args.source!r} "
+            f"(state: {_json.dumps(state, sort_keys=True)}) — no token minted\n")
+        return 3
+    token = {
+        "version": 1,
+        "source": args.source,
+        "minted_at": _now_iso(),
+        "nonce": os.urandom(16).hex(),
+        "state_after": state,
+    }
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
+    atomic_write_text(args.out, _json.dumps(token, sort_keys=True) + "\n")
+    sys.stdout.write(f"review-reopen: minted {args.out} "
+                     f"(source={args.source}, total={state['total']})\n")
+    return 0
+
+
 def _cmd_assert_pr_body(args) -> int:
     """#796 candidate 3 — execute the Step-12 deferral gate instead of re-deriving it as prose.
 
@@ -2863,6 +2899,16 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--project-root", default=".",
                    help="write targets must resolve inside this root")
     c.set_defaults(func=_cmd_close_design_gate)
+    r = sub.add_parser("review-reopen",
+                       help="mint a reopen token, debiting the loop-back budget (#855)")
+    r.add_argument("--state-file", required=True, dest="state_file",
+                   help="loop-back budget state file (consume_loopback store)")
+    r.add_argument("--source", required=True, choices=list(_LOOPBACK_SOURCES))
+    r.add_argument("--out", required=True,
+                   help="token file to mint (must resolve inside --project-root)")
+    r.add_argument("--project-root", default=".",
+                   help="the token write target must resolve inside this root")
+    r.set_defaults(func=_cmd_review_reopen)
     args = parser.parse_args(argv)
     return args.func(args)
 
