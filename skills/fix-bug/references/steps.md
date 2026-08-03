@@ -36,9 +36,6 @@ Wait for the choice.
   — but SKIP the reflect gate (Step 4), the code-review step, and the run-record ceremony.
   If you do emit a run-record, set `complexity: "trivial"`.
 - **(b) Continue:** proceed to Step 3 (Root Cause Analysis) as normal.
-
-**[Headless: AUTO-RESOLVE — continue the full workflow; log `### WF3 Step 2 —
-trivial-work suggestion (auto-continued in headless)`.]**
 </trivial-work-check>
 
 <learning-config>
@@ -65,8 +62,8 @@ If this workflow discovers new project capabilities during execution (e.g., a ne
    - STRIDE "Recommended Remediation" → treat as acceptance criteria for the fix
    - If the issue has the `security` label but no recognizable STRIDE fields, fall back to standard parsing and ask the user to clarify.
 6. Display to the user: title, steps to reproduce (or vulnerability path), expected vs actual behavior (or risk assessment), environment.
-7. Ask user to confirm this is the correct bug to fix. **[Headless: AUTO-RESOLVE for WF1-created issues. QUESTION for manual issues — post summary for confirmation, suspend.]**
-8. If the issue lacks reproduction steps or expected behavior (and is not a security finding with STRIDE fields), ask user to provide them before proceeding. **[Headless: QUESTION — post comment requesting reproduction steps, suspend.]**
+7. Ask user to confirm this is the correct bug to fix.
+8. If the issue lacks reproduction steps or expected behavior (and is not a security finding with STRIDE fields), ask user to provide them before proceeding.
 9. **Memory search for bug history (Layer 3 — proactive recall).** If a mempalace MCP server is available (`mcp__mempalace__*` tools loaded), call `mempalace_search` with the symptom and any error messages from the issue. Past similar bugs often have documented root causes and fixes. Surface any matches explicitly before moving to Step 2. If no mempalace MCP server is configured, skip silently.
 
 ### Output Format
@@ -94,13 +91,13 @@ Confirm this is the bug to fix, or provide corrections. Run the /goal command ab
 ```
 
 Wait for user confirmation before proceeding to Step 2 (and, in the same round-trip,
-whether they ran `/goal` or declined — see Step 1b; no second prompt). **[Headless: AUTO-RESOLVE for WF1-created issues. QUESTION for manual issues — post summary, suspend.]**
+whether they ran `/goal` or declined — see Step 1b; no second prompt).
 
 ### Failure Modes
 
 - Issue not found → ask for correct number
 - Issue is not a bug → suggest WF2 (`/implement-feature`) instead
-- Missing reproduction steps (and not a security finding with STRIDE fields) → ask user to provide them before proceeding. **[Headless: QUESTION — post comment requesting details, suspend.]**
+- Missing reproduction steps (and not a security finding with STRIDE fields) → ask user to provide them before proceeding.
 
 ---
 
@@ -143,14 +140,6 @@ This is an optional guard, not a gate — it never blocks the workflow.
    ### WF3 Step 1b — Goal guard (set|deferred|skipped): #<issue> — <first 80 chars of text | epic #N | decline reason>
    ```
 
-**[Headless: AUTO-RESOLVE — when `RAWGENTIC_EPIC_GOAL` is set (epic campaign),
-DEFER: the epic-level goal already guards the run, so emit nothing and log
-`(deferred: epic #<N> goal active)`. Otherwise, for WF1-created issues, emit the
-built goal text verbatim into the headless checkpoint for the driver to set via
-`claude -p "/goal …"` (session 1 cannot self-set it — the goal text needs the
-fetched issue body, though the driver MAY pre-derive it at launch); for
-unlabeled/manual issues, skip the guard and log the marker with (skipped).]**
-
 ### Failure Modes
 - User neither runs `/goal` nor says "skip" -> treat silence as decline, log `(skipped)`, proceed
 
@@ -185,7 +174,7 @@ Bug analysis (internal working artifact):
 
 ### Failure Modes
 
-- Cannot reproduce from description → ask user for more details. **[Headless: QUESTION — post comment with reproduction attempt details, suspend.]**
+- Cannot reproduce from description → ask user for more details.
 - Bug is in a dependency, not our code → document and suggest upstream report
 - Classified as `complex_bug` → prompt upgrade to WF2 (user can override)
 - Classified as `trivial_work` → suggest doing it directly (user can continue WF3); see `<trivial-work-check>`
@@ -279,9 +268,9 @@ Amended RCA (findings applied) OR blocked state (circuit breaker triggered).
    - `### Task 2: Implement the fix (minimal change)`
    - `### Task 3: Add regression/edge case tests`
    - `### Task 4: Update documentation if behavior changes`
-2. Use the mint-gate-compatible grammar. Every task heading is exactly `### Task <id>: <title>` (`##` headings parse to zero tasks); each task includes `- riskLevel: high|standard` and `- files: <declared paths>`; and the plan has one canonical `- estimated-lines: <nonnegative int>` line.
+2. Use the canonical plan grammar (`plan_lib.parse_tasks` parses it). Every task heading is exactly `### Task <id>: <title>` (`##` headings parse to zero tasks); each task includes `- riskLevel: high|standard` and `- files: <declared paths>`; and the plan has one canonical `- estimated-lines: <nonnegative int>` line.
 3. Document the fix branch name: `fix/<issue-number>-<short-desc>` and estimate 3-6 tasks.
-4. For `mint-gate`, derive `--issue-complexity` from the Step 2 WF3 complexity classification via the R4-D mapping (`trivial_work=true → trivial`; `simple_bug|moderate_bug → standard`; `complex_bug → complex`) and derive `--plan-est-lines` from this plan's own `estimated-lines` line.
+4. Record the mapped complexity for the run-record via the R4-D mapping (`trivial_work=true → trivial`; `simple_bug|moderate_bug → standard`; `complex_bug → complex`).
 
 ### Output
 
@@ -314,8 +303,8 @@ Active fix branch with dependencies installed.
 
 ### Failure Modes
 
-- Working directory is dirty → stash changes first (`git stash`), create branch, then ask user if stash should be applied. **[Headless: AUTO-RESOLVE — always stash, post brief issue comment with stash ref.]**
-- Branch name already exists → ask user if they want to resume (checkout existing branch) or start fresh (delete and recreate). **[Headless: AUTO-RESOLVE — always resume existing branch.]** On a resumed run, before re-dispatching any review seat (Step 4 / Step 9), query the executor `JobRegistry` for live jobs keyed by this run's `run_id` (`supervisor.recover(run_id)`): identity-matched live jobs are ADOPTED rather than re-dispatched, mismatches are quarantined per `classify_recovery` — so a review already in flight from the prior session is not double-launched.
+- Working directory is dirty → stash changes first (`git stash`), create branch, then ask user if stash should be applied.
+- Branch name already exists → ask user if they want to resume (checkout existing branch) or start fresh (delete and recreate). On a resumed run, before re-dispatching a review (Step 4 / Step 9), check session notes for an in-flight review dispatch from the prior session and its `--out` result file: a completed result passing the vacuous-result gate is ADOPTED rather than re-dispatched.
 - Push fails (network) → continue locally, push will be retried by P4 remote sync
 
 ---
@@ -324,7 +313,7 @@ Active fix branch with dependencies installed.
 
 ### Instructions
 
-**Executor-primary implementation loop (#762): for each task in the 3-6-task fix plan, record pre-task state → dispatch → collect → land audited → assert branch advance plus non-empty content → run the scoped suite; emit exactly one canonical `DISPATCH` line per workflow dispatch.** Under the executor architecture, first mint the gate from the Step 5 plan (`mint-gate --plan-file <fix-plan> --issue-complexity <mapped> --plan-est-lines <from the plan's own estimated-lines>`), then dispatch the task through `dispatch --seat build --gate-file <gate.json> --plan-file <fix-plan>`. Collect code with `collect-work-product --run-id <run-id> --session-name <job> --target-ref refs/rawgentic/collect/<receipt-nonce> --expected-target-sha 0000000000000000000000000000000000000000 --kind code --promote-path <declared files> --expected-feature-ref <recorded fix ref> --workspace <workspace-file> --project <name>` and land it through audited `land-work-product --expected-ref <recorded fix ref> --pre-sha <recorded pre-task SHA> --new-sha <new_sha> --temp-ref refs/rawgentic/collect/<receipt-nonce> --run-id <run-id> --workspace <workspace-file> --project <name>` before the advance-and-content assertion and scoped suite. Under the declared LEGACY architecture, implement the task inline as today.
+**Inline implementation loop (D174): for each task in the 3-6-task fix plan, record pre-task state (HEAD + dirty baseline) → implement the task INLINE, reproduce-first TDD → commit → assert the branch advanced with non-empty content → run the scoped suite.** No dispatch machinery: the fix is written in this session. A genuinely parallelizable multi-task fix MAY use Agent-tool worktree subagents (vacuous-result check applies); the default is inline.
 
 Execute the plan from Step 5 using strict reproduce-first TDD:
 
@@ -357,7 +346,7 @@ Fixed code with passing tests on fix branch.
 
 ### Failure Modes
 
-- Reproduction test passes immediately → bug may not be reproducible in current code. Ask user to verify. **[Headless: QUESTION — post comment explaining bug may already be fixed, suspend.]**
+- Reproduction test passes immediately → bug may not be reproducible in current code. Ask user to verify.
 - Fix breaks other tests → investigate shared state or wrong approach
 - Fix requires changes beyond plan scope → flag and decide: expand plan or split into multiple fixes
 
@@ -392,16 +381,16 @@ Verification pass/fail.
 **Part A: Code Review**
 
 <!-- model-routing: role=review -->
-Dispatch these 2 review agents on the executor `review` seat per the `<model-routing-resolve>` contract (primary tier; the fast tier is a #491 lens/model choice, not a seat). **The fix diff is a REQUIRED input: dispatch with `--requires-context` (declaring the requirement) and `--context-file <diff>` (carrying it) (#826)** — declaring the requirement without a usable artifact is refused `review_context_required` at the dispatch choke-point. Both flags are mandatory here and a static test asserts this site passes them. Under the LEGACY architecture (declared, `defaultArchitecture: legacy`) they dispatch as `rawgentic:rawgentic-reviewer` agents via the Agent tool (`model: <review>` unless routing resolved `inherit`; effort dual-path per `<model-routing-resolve>` — pass it only where the dispatch layer supports effort, always logged; `resolution=fallback`). Every reviewer brief — whichever tier the slot resolves to — MUST restate the read-only execution clause (#510): Bash is for read-heavy inspection only — never execute the target project's entry-point scripts, deploy paths, or anything that mutates state or sends outward; the only sanctioned executions are the verification commands this brief names (from the project's `.rawgentic.json` testing config); an entry script invoked in an unexpected form may fall through to a live path — do not experiment with invocation forms; when a command's read-only-ness is uncertain, don't run it — report the uncertainty as part of the review.
+Run the review per the `<model-routing-resolve>` contract: the cross-model pass dispatches `hooks/review_runner.py review-code --base <default branch> --brief <brief.md>` from a read-only harness subagent, IN PARALLEL with your own inline self-review of the same diff (two independent passes, never merged). The runner carries the diff itself — the artifact-delivery guarantee is structural (#826). Every reviewer brief MUST restate the read-only execution clause (#510): Bash is for read-heavy inspection only — never execute the target project's entry-point scripts, deploy paths, or anything that mutates state or sends outward; the only sanctioned executions are the verification commands this brief names (from the project's `.rawgentic.json` testing config); an entry script invoked in an unexpected form may fall through to a live path — do not experiment with invocation forms; when a command's read-only-ness is uncertain, don't run it — report the uncertainty as part of the review.
 
-Launch a focused 2-agent code review in parallel. Under the EXECUTOR architecture (the default) both slots dispatch on executor `review` seats with the two DISTINCT briefs below — a failed executor dispatch retries within the executor entry point and then follows the ERROR protocol (NO Agent-tool or inline descent, #474). Under the declared LEGACY architecture only, launch via Agent tool calls (subagent_type per the PR review toolkit):
+Launch a focused 2-pass code review in parallel: the runner-dispatched cross-model review plus your inline self-review, using the two DISTINCT lenses below — a failed runner dispatch retries once and then follows the ERROR protocol (never a silent skip):
 
 1. `pr-review-toolkit:silent-failure-hunter` — silent failure detection (critical for bug fixes — ensure the fix doesn't suppress errors)
 2. `pr-review-toolkit:code-reviewer` — project standards compliance + general review
 
 For bug fixes, focus reviewers on: (a) is the fix correct and complete, (b) are there any new silent failures, (c) is the code simple and focused. Type design and code simplification are deferred — bug fixes should be minimal and targeted.
 
-**Per-slot fallback chain (#331 — LEGACY architecture only; under executor the chain does not exist: executor failure ends in the ERROR protocol, #474).** For EACH reviewer slot independently: dispatch the named `pr-review-toolkit` agent; if THAT slot's agent type fails to resolve, dispatch `rawgentic:rawgentic-reviewer` with that slot's brief; if that also fails, use a generic inline-prompt dispatch with that slot's brief — fallback in one slot never collapses the gate from two reviews to one. On a toolkit-absent machine BOTH slots run `rawgentic:rawgentic-reviewer` with their respective DISTINCT briefs (silent-failure-hunt brief + code-review brief) — two invocations, two reviews, never merged. Log which tier each slot ran; tiers map to #330's resolution: tier 1 `primary`, tier 2 `fallback`, tier 3 `generic`.
+**Two passes, never collapsed:** a failure in one pass never collapses the gate from two reviews to one — a failed cross-model dispatch (after its one retry) follows the ERROR protocol rather than silently leaving only the self-review; the two briefs stay DISTINCT (silent-failure-hunt lens + code-review lens), two reviews, never merged.
 
 **Dead-return detection (#331).** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that slot once at the same tier; on a second death, record the slot as REVIEW_DISPATCH_FAILED in session notes and invoke the workflow's ERROR protocol — the gate never proceeds with fewer than two live reviews. A dispatch that ERRORS mid-tier (a runtime failure, not a resolve-failure and not a vacuous return) retries once at that tier, then descends the chain; a tier-3 error takes the same REVIEW_DISPATCH_FAILED terminal action. (The same vacuous-return rule is applied to WF2's review sites — Steps 8a and 11 — by this change; WF2's pre-existing analog is the implementation-delegation rule at its Step 8 item 4.)
 
@@ -664,7 +653,7 @@ CI pass/fail status.
 
 - CI flaky failure → retry once
 - Genuine test failure → fix and push
-- CI timeout → wait and check again; if persistent, ask user for explicit approval before proceeding with local test results only. **[Headless: AUTO-RESOLVE — wait up to 2x timeout. If still not done, ERROR — post error comment with CI run URL, add rawgentic:ai-error label, exit.]**
+- CI timeout → wait and check again; if persistent, ask user for explicit approval before proceeding with local test results only.
 
 ---
 
@@ -764,7 +753,7 @@ read once.
    {
      "workflow": "fix-bug",
      "workflow_version": "<.claude-plugin/plugin.json version>",
-     "architecture": "executor|legacy",  // #474 REQUIRED at >= 3.93.0: the run's declared dispatch architecture
+     "architecture": "inline",           // optional-legacy since the executor retreat (#866): inline|executor|legacy when present
      "issue": {"number": <bug issue #>, "type": "bug",
                "complexity": "trivial|standard|complex|null"},
      "changes": {"files_changed": N, "insertions": N|null, "deletions": N|null,

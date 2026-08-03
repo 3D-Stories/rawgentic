@@ -2426,36 +2426,26 @@ class TestArchitectureField:
             rec["architecture"] = architecture
         return rec
 
-    def test_new_record_requires_architecture(self):
+    def test_architecture_optional_at_all_versions(self):
+        # M0b (#866, D174/D181): the executor is retired — a record can no
+        # longer truthfully say executor|legacy, so the field is optional-legacy
+        # at EVERY version (including malformed ones, which used to fail toward
+        # the requirement).
         from work_summary import validate_record
-        errs = validate_record(self._rec())
-        assert any("architecture" in e for e in errs)
+        for version in ("3.92.4", "3.93.0", "3.100.0", "3.121.0", "not-a-version"):
+            assert validate_record(self._rec(version=version)) == [], version
 
-    def test_new_record_with_architecture_valid(self):
+    def test_architecture_vocab_includes_inline(self):
+        # D181: plain-session comparison records carry architecture "inline".
         from work_summary import validate_record
-        for arch in ("executor", "legacy"):
-            assert validate_record(self._rec(architecture=arch)) == []
-
-    def test_old_record_without_architecture_valid(self):
-        from work_summary import validate_record
-        assert validate_record(self._rec(version="3.92.4")) == []
+        for arch in ("executor", "legacy", "inline"):
+            assert validate_record(self._rec(architecture=arch)) == [], arch
 
     def test_off_vocab_rejected_at_any_version(self):
         from work_summary import validate_record
         for version in ("2.33.0", "3.93.0"):
             errs = validate_record(self._rec(version=version, architecture="hybrid"))
             assert any("architecture" in e for e in errs), version
-
-    def test_semver_compare_is_tuple_not_lexical(self):
-        from work_summary import validate_record
-        # lexical would call "3.100.0" < "3.93.0" — tuple compare must require the field
-        errs = validate_record(self._rec(version="3.100.0"))
-        assert any("architecture" in e for e in errs)
-
-    def test_malformed_version_treated_as_new(self):
-        from work_summary import validate_record
-        errs = validate_record(self._rec(version="not-a-version"))
-        assert any("architecture" in e for e in errs)
 
     def test_detective_warns_on_non_primary_dispatch_in_executor_run(self, capsys):
         from work_summary import validate_record, architecture_dispatch_warnings
@@ -2477,11 +2467,11 @@ class TestArchitectureField:
         rec["dispatches"][0]["resolution"] = "fallback"
         assert architecture_dispatch_warnings(rec) == []
 
-    def test_whitespace_padded_version_is_malformed_treated_as_new(self):
+    def test_whitespace_padded_version_still_valid_without_architecture(self):
+        # The S11-F5 malformed-version trap died WITH the requirement (M0b):
+        # a padded version no longer forces the architecture field.
         from work_summary import validate_record
-        errs = validate_record(self._rec(version=" 3.92.4 "))
-        assert any("architecture" in e for e in errs)
-        assert any("not X.Y.Z" in e for e in errs)
+        assert validate_record(self._rec(version=" 3.92.4 ")) == []
 
 
 # --- #589: timing never auto-populates -----------------------------------

@@ -162,10 +162,6 @@ Wait for the choice.
 - **(b) Continue:** proceed to Step 3 as normal (valid when the user wants the full
   audit trail regardless of size).
 
-**[Headless: AUTO-RESOLVE — continue the full workflow. There is no interactive user to
-take over a "do it directly" hand-off, and continuing is the conservative default. Log
-`### WF2 Step 2 — trivial-work suggestion (auto-continued in headless)`.]**
-
 This is distinct from `<small-standard-lane>`: the lane makes a *non-trivial* change
 cheaper (collapses design ceremony, keeps review + security) while staying in the workflow;
 the trivial-work check asks whether running the workflow is warranted *at all*.
@@ -257,12 +253,12 @@ until then they stay dormant.
 
 4. Validate:
    - Issue exists and is open
-   - If closed: ask user if they want to reopen or use a different issue. **[Headless: ERROR — post error comment explaining issue is closed, add rawgentic:ai-error label, exit.]**
+   - If closed: ask user if they want to reopen or use a different issue.
 
 5. Check for WF1 origin:
    - If labels include "wf1-created": set `is_wf1_created = true`
    - Extract acceptance criteria, affected components, complexity from the issue body
-   - If any are missing (manually created issue): generate them from the description and ask user to confirm. **[Headless: AUTO-RESOLVE for WF1-created issues (accept generated ACs). QUESTION for manual issues — post comment with generated ACs for confirmation, suspend.]**
+   - If any are missing (manually created issue): generate them from the description and ask user to confirm.
 
 6. Display to user:
    ```
@@ -287,7 +283,7 @@ until then they stay dormant.
    /goal command above (or say "skip goal" to decline — declining is fine and never blocks).
    ```
 
-7. APPEND to session notes. Wait for user confirmation (and, in the same round-trip, whether they ran `/goal` or declined — see Step 1b; no second prompt). **[Headless: AUTO-RESOLVE for WF1-created issues (accept and proceed). QUESTION for manual issues — post summary comment for confirmation, suspend.]**
+7. APPEND to session notes. Wait for user confirmation (and, in the same round-trip, whether they ran `/goal` or declined — see Step 1b; no second prompt).
 
 8. **CI-quarantine staleness nag (#137):** if `capabilities.ci_quarantined == true` and `capabilities.ci_quarantined_since` is set, compute `(current local date from the workflow env) − (the YYYY-MM-DD date) > 30 calendar days`; if so, log a "fix or retire CI" advisory in session notes (quarantine is meant to be temporary; this keeps it from silently becoming permanent). Advisory only — never blocks. `ci_quarantined_since` is guaranteed a valid ISO date by `capabilities_lib` (a malformed value already fails the derive), so no parse-guard is needed here. If `ci_quarantined_since` is unset, note that a date should be added so staleness can be tracked.
 
@@ -356,14 +352,6 @@ This is an optional guard, not a gate — it never blocks the workflow.
 7. `fired` (the Stop-hook actually blocked a quit) is recorded manually only — no
    structured signal reaches the orchestrator when that happens.
 
-**[Headless: AUTO-RESOLVE — when `RAWGENTIC_EPIC_GOAL` is set (epic campaign),
-DEFER: the epic-level goal already guards the run, so emit nothing and log
-`(deferred: epic #<N> goal active)`. Otherwise, for WF1-created issues, emit the
-built goal text verbatim into the headless checkpoint for the driver to set via
-`claude -p "/goal …"` (session 1 cannot self-set it — the goal text needs the
-fetched issue body, though the driver MAY pre-derive it at launch); for
-unlabeled/manual issues, skip the guard and log the marker with (skipped).]**
-
 ### Failure Modes
 - User neither runs `/goal` nor says "skip" -> treat silence as decline, log `(skipped)`, proceed
 
@@ -388,7 +376,7 @@ Dispatch every Step 2 fan-out as a concurrent executor dispatch of the `analysis
    - `docs`: identify cross-references, linked pages, publishing scripts
    - `research`: primarily analysis notebooks, data pipelines, or literature review — testing means validation of results and reproducibility
 
-3. **Live environment probe (infrastructure projects only):** When `capabilities.project_type == "infrastructure"` and target hosts are known (from `config.infrastructure.hosts[]`), SSH to each target host to discover current state. This catches discrepancies between issue specs (which may be outdated) and reality. **[Headless: AUTO-RESOLVE — skip the SSH probes entirely; do local exploration only (file reads, grep, git). A headless run makes no outbound SSH, and `wal-guard` will block it regardless.]**
+3. **Live environment probe (infrastructure projects only):** When `capabilities.project_type == "infrastructure"` and target hosts are known (from `config.infrastructure.hosts[]`), SSH to each target host to discover current state. This catches discrepancies between issue specs (which may be outdated) and reality.
 
    Probe for:
    - **Server capacity:** `nproc` (CPU count), `free -g` (RAM), `df -h` (disk) — compare against issue requirements
@@ -462,7 +450,7 @@ Codebase analysis with complexity classification, small-standard lane eligibilit
 
 ### Failure Modes
 - Serena MCP unavailable: fall back to Grep/Glob
-- Issue references components that do not exist: flag discrepancy and ask user. **[Headless: QUESTION — post comment listing missing components with options (skip, create, abort), suspend.]**
+- Issue references components that do not exist: flag discrepancy and ask user.
 - Complexity uncertain: default to `standard_feature`
 - SSH to target host fails: log the failure but do not halt — proceed with issue-stated values and flag that live verification was not possible
 
@@ -580,8 +568,8 @@ Exit 0 → enabled; non-zero → skip silently (default; no temp file, no subpro
 Design document. NOT presented to user — goes to Step 4 for critique.
 
 ### Failure Modes
-- All approaches have significant trade-offs: present to user and let them choose. **[Headless: QUESTION — post comment with all approaches, pros/cons, and recommendation, suspend.]**
-- Design reveals much larger scope than estimated: flag for user decision. **[Headless: QUESTION — post comment with scope assessment and options (proceed, narrow, abort), suspend.]**
+- All approaches have significant trade-offs: present to user and let them choose.
+- Design reveals much larger scope than estimated: flag for user decision.
 
 ---
 
@@ -667,7 +655,7 @@ The self-review produces findings in the shape the gate consumes:
        --project-root .
      ```
      Splice the printed `{"label": "design_gate_close", ...}` object into the Step-16 run record's **TOP-LEVEL** `extra` list. All three write targets must resolve inside `--project-root` and must not be symlinks; `--gate` accepts only `4` (the carve-out is Step-4-only); a corrupt counters file, or any finding carrying an ambiguity/conflict marker, refuses the close even if `--breaker-result clear` was passed — the flag is cross-checked, never trusted.
-     The command re-checks eligibility itself via `plan_lib.design_close_eligible` (design source cap reached AND global cap NOT reached AND breaker `clear`), refuses a corrupt counters file via `plan_lib.counters_are_intact`, cross-checks the breaker flag against the findings via `plan_lib.findings_are_unambiguous`, builds the records via `plan_lib.budget_exhausted_close`, and writes the ledger all-or-nothing via `plan_lib.persist_close`; it exits non-zero writing nothing if the close is not permitted — never hand-write these artifacts and never call the helper directly to bypass the eligibility check. It emits one `adopted` ledger entry per applied finding, the TOP-LEVEL run-record `extra` row `{"label": "design_gate_close", ...}` (splice it into the Step-16 record's top-level `extra`, NOT into the gate row — a gate-row key validates silently and renders nothing), and the canonical session marker `### WF2 Step 4 — design gate CLOSED budget-exhausted (#<issue>: passes=N, <k> findings adopted, ledger <path>)`. Continue to Step 5. **[Headless: same — this is a legitimate close, NOT an ERROR; do not add the rawgentic:ai-error label.]**
+     The command re-checks eligibility itself via `plan_lib.design_close_eligible` (design source cap reached AND global cap NOT reached AND breaker `clear`), refuses a corrupt counters file via `plan_lib.counters_are_intact`, cross-checks the breaker flag against the findings via `plan_lib.findings_are_unambiguous`, builds the records via `plan_lib.budget_exhausted_close`, and writes the ledger all-or-nothing via `plan_lib.persist_close`; it exits non-zero writing nothing if the close is not permitted — never hand-write these artifacts and never call the helper directly to bypass the eligibility check. It emits one `adopted` ledger entry per applied finding, the TOP-LEVEL run-record `extra` row `{"label": "design_gate_close", ...}` (splice it into the Step-16 record's top-level `extra`, NOT into the gate row — a gate-row key validates silently and renders nothing), and the canonical session marker `### WF2 Step 4 — design gate CLOSED budget-exhausted (#<issue>: passes=N, <k> findings adopted, ledger <path>)`. Continue to Step 5.
    - **If the adversarial review sub-step (item 7) is enabled and still in flight when this loop-back fires:** do NOT wait for it and do NOT run the ambiguity breaker (thresholds did not pass). **Discard the in-flight adversarial result as stale** — it reviewed a design that is now being revised (this is the documented one-wasted-call tradeoff) — and log `### WF2 Step 4 — Adversarial Review (#<issue>, discarded: superseded by volume loop-back)`. Return to Step 3; the next Step 4 pass dispatches a fresh adversarial review against the revised design.
 
 6. **If thresholds pass:** Apply the ambiguity circuit breaker over the self-review findings — **unless** the adversarial review sub-step (item 7) is enabled for this run. When it is enabled, do NOT run the breaker here; **defer** it to the single merged-findings join barrier in item 7, so the breaker runs **exactly once** over the combined self-review + adversarial findings rather than twice. (The volume/loop-back checks in items 4–5 still run on the self-review findings as soon as the self-review returns; only the breaker is deferred.)
@@ -819,7 +807,7 @@ form (run them when not in the lane).
    **Plan format contract** (enforced by `plan_lib.parse_tasks`):
    - Each task begins with `### Task <id>: <title>` heading.
    - Each task body MUST contain a line `- riskLevel: high|standard`; high-risk tasks include a parenthesized reason: `- riskLevel: high (security surface)`.
-   - Tasks lacking a `riskLevel` line **fail closed** (parse error → STOP). **[Headless: ERROR — add `rawgentic:ai-error` label, post comment explaining the plan format contract.]**
+   - Tasks lacking a `riskLevel` line **fail closed** (parse error → STOP).
    - OPTIONAL: `- parallel_group: <id>` and `- files: <comma-separated paths>` (see Task ordering above). These are purely additive — absent fields just mean the task is not parallel-eligible; they never affect the `riskLevel` fail-closed contract or the pre-P15 migration.
 
    **Calibration check** — after task decomposition, compute the high-risk ratio and classify it. **Mind the real return shapes (#231 AC3 — each mismatch cost a round-trip):** `plan_lib.compute_risk_ratio(tasks)` returns a **3-tuple `(ratio, high_count, total_count)`**, NOT a bare float — unpack it and pass the SCALAR `ratio` (plus `total`) to `check_ratio_band`, never the whole tuple:
@@ -834,9 +822,9 @@ form (run them when not in the lane).
    - `skip` (N<3): silent.
    - `pass` (ratio ≤ WARN_PCT/100, default 30%): silent.
    - `implausible_zero` (ratio == 0 AND N≥5): log an info note: "0% high-risk on a complex feature is implausible — confirm." Continue.
-   - `warn` (WARN_PCT/100 < ratio ≤ HALT_PCT/100): log warning to session notes. Continue. **[Headless: AUTO-RESOLVE — log to session notes.]**
-   - `halt` (HALT_PCT/100 < ratio < 80%): STOP and ask user. **[Headless: QUESTION — post comment with risk-ratio breakdown + options (proceed-anyway, re-plan, abort), suspend.]**
-   - `decompose` (ratio ≥ 80%): STOP and recommend plan decomposition. Treat as halt with a different framing. **[Headless: QUESTION — post comment recommending multi-PR split, suspend.]**
+   - `warn` (WARN_PCT/100 < ratio ≤ HALT_PCT/100): log warning to session notes. Continue.
+   - `halt` (HALT_PCT/100 < ratio < 80%): STOP and ask user.
+   - `decompose` (ratio ≥ 80%): STOP and recommend plan decomposition. Treat as halt with a different framing.
 
    The 15–30% high-risk ratio is the documented calibration target. Anything above the WARN band signals that the criteria are being over-applied (dilution returns).
 
@@ -901,7 +889,7 @@ Plan drift check result.
 
 ### Failure Modes
 - Significant drift detected -> add missing tasks
-- Scope creep detected -> remove excess tasks or flag for user decision. **[Headless: AUTO-RESOLVE — remove excess tasks, document removed items in session notes.]**
+- Scope creep detected -> remove excess tasks or flag for user decision.
 
 ---
 
@@ -913,7 +901,7 @@ Plan drift check result.
    ```bash
    git status --porcelain
    ```
-   If dirty: stash, create branch, ask user about stash. **[Headless: AUTO-RESOLVE — always stash, log to session notes AND post a brief comment to the issue noting uncommitted changes were stashed (include `git stash list` output for the stash ref).]**
+   If dirty: stash, create branch, ask user about stash.
 
 2. Create the feature branch from a **freshly-fetched** default branch — never `git pull` into the current checkout first. `git pull origin <default>` merges the default INTO whatever branch is checked out; if the session still sits on a prior issue's feature branch (a multi-issue campaign, or a headless PR-terminal run that never ran Step 14), that mutates the sibling branch AND bases the new branch on the mixture, silently carrying the sibling's unmerged commits into this PR. Fetch, then branch off `origin/<default>` regardless of the starting checkout:
    ```bash
@@ -924,7 +912,7 @@ Plan drift check result.
    ```bash
    [ "$(git merge-base HEAD origin/${capabilities.default_branch})" = "$(git rev-parse origin/${capabilities.default_branch})" ] && echo BASE_OK || echo BASE_MISMATCH
    ```
-   `BASE_MISMATCH` → STOP and reconcile before writing any code (do not build on a wrong base). **[Headless: ERROR — post an error comment noting the base mismatch, add the `rawgentic:ai-error` label, exit.]** Because nothing is pulled into the current checkout, no pre-existing branch is mutated as a side effect.
+   `BASE_MISMATCH` → STOP and reconcile before writing any code (do not build on a wrong base). Because nothing is pulled into the current checkout, no pre-existing branch is mutated as a side effect.
 
 3. Push empty branch to origin:
    ```bash
@@ -940,7 +928,7 @@ Plan drift check result.
 Feature branch created and pushed, issue commented.
 
 ### Failure Modes
-- Branch already exists: ask user to resume or start fresh. **[Headless: AUTO-RESOLVE — always resume existing branch.]**
+- Branch already exists: ask user to resume or start fresh.
 - Push fails: continue locally, push later
 
 ---
@@ -1096,7 +1084,7 @@ original failure lived — a mid-UAT fix that never went back through Step 3/4.
   recoverable via its `stash_oid` even though the reset/clean itself didn't complete;
   never let a reset/clean failure silently drop the park's own audit reference. Then loop back to Step 3 with the flaw
   identified — the fresh build-seat context never observes a half-reset worktree.
-- If budget exhausted: STOP and escalate to user. **[Headless: ERROR — post error comment with design flaw description + loop-back history, add rawgentic:ai-error label, exit.]**
+- If budget exhausted: STOP and escalate to user.
 
 **Session checkpoint (APPEND, every 2-3 tasks).** After each batch of 2-3 tasks, APPEND a
 **lightweight progress checkpoint** to session notes — this is separate from and lighter
@@ -1110,9 +1098,7 @@ than the heavy `<headless-checkpoint>` (`references/headless.md`, for suspend/er
 ```
 
 APPEND it under the Step 8 section as you go (the Step 8 `— DONE` marker is APPENDed last);
-never overwrite an earlier entry, so the audit trail stays cumulative. **[Headless: ALSO
-write the heavy `<headless-checkpoint>` (format in `references/headless.md`) after every
-2-3 tasks to enable fresh-session resumption.]**
+never overwrite an earlier entry, so the audit trail stays cumulative.
 
 ---
 
@@ -1143,9 +1129,9 @@ Dispatch these reviewers on the executor `review` seat per the `<model-routing-r
    - **Critical:** must fix before Step 9 (block).
    - **High:** fix before Step 9 unless deferred-with-rationale. Persist the deferral via `plan_lib.append_deferral(<deferrals_path>, finding)` (the `finding` needs at least `finding_id`, `severity`, `originator_reviewer_slot`) — it **must be re-presented to Step 11** for resolution.
    - **Medium/Low:** advisory; log to review log only.
-5. **Ambiguity circuit breaker:** if any finding is ambiguous or two findings conflict, STOP and ask user. **[Headless: QUESTION — post comment with the ambiguous findings, suspend.]**
-6. **Design flaw detection:** if the review surfaces a design-level flaw (not a code-level issue), consume a loop-back via `plan_lib.consume_loopback(<counters_path>, "review_design")`. On success, increment counters — **park-then-reset the build seat's worktree** (same #637 contract as Step 8's design-flaw-discovery bullet above: `WorktreeManager.park_and_reset` before re-dispatching, `RoutingAuditLog.append_park` after, confirm the prior build-seat process is terminated first) — then return to Step 3. On exhaustion, STOP and escalate. **[Headless: ERROR — post error comment with design flaw + loop-back history, add `rawgentic:ai-error` label, exit.]**
-7. **Dispatch failure fallback:** if the Agent tool errors on a reviewer dispatch, retry once after 30s. On second failure, append an entry to the review log with `verdict: "REVIEW_DISPATCH_FAILED"` and **[Headless: QUESTION — post comment with failure details, suspend]**. **Dead-return detection:** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that reviewer once; on a second death treat it as a dispatch failure (item 7's REVIEW_DISPATCH_FAILED path).
+5. **Ambiguity circuit breaker:** if any finding is ambiguous or two findings conflict, STOP and ask user.
+6. **Design flaw detection:** if the review surfaces a design-level flaw (not a code-level issue), consume a loop-back via `plan_lib.consume_loopback(<counters_path>, "review_design")`. On success, increment counters — **park-then-reset the build seat's worktree** (same #637 contract as Step 8's design-flaw-discovery bullet above: `WorktreeManager.park_and_reset` before re-dispatching, `RoutingAuditLog.append_park` after, confirm the prior build-seat process is terminated first) — then return to Step 3. On exhaustion, STOP and escalate.
+7. **Dispatch failure fallback:** if the Agent tool errors on a reviewer dispatch, retry once after 30s. On second failure, append an entry to the review log with `verdict: "REVIEW_DISPATCH_FAILED"` and. **Dead-return detection:** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that reviewer once; on a second death treat it as a dispatch failure (item 7's REVIEW_DISPATCH_FAILED path).
 8. **Append to the review log** via `plan_lib.append_review_log(<log_path>, entry)` — ONE entry per high-risk task the wave covered, written ONLY when both reviewers acknowledged that task's sha (item 2); an unacknowledged sha is UNCOVERED and re-dispatches to the wave's reviewers before Step 9 (same wave, same reviewers; this is what keeps `assert_review_coverage` honest under #492). Each entry is:
    ```json
    {"task_id": "<id>", "sha": "<commit_sha>", "reviewers": ["R1","R2"],
@@ -1357,7 +1343,7 @@ Dispatch the 2 review agents on the executor `review` seat per the `<model-routi
 Code review result with filtered findings and fixes applied. The local, git-excluded `.rawgentic/review-state/<branch-sanitized>.json` reflects "applied" (not committed — #231 AC2).
 
 ### Failure Modes
-- Fundamental design flaw -> loop back to Step 3 if budget allows; if budget exhausted: **[Headless: ERROR — post error comment with design flaw description + code review findings + loop-back history, add rawgentic:ai-error label, exit.]**
+- Fundamental design flaw -> loop back to Step 3 if budget allows; if budget exhausted:
 - Excessive noise (>20 Low findings) -> filter at confidence >= 0.80
 
 ---
@@ -1424,10 +1410,7 @@ its fixes and committed, and BEFORE pushing in Step 12.
    `/rawgentic:setup` (which installs the scanners).
 
 6. **Ambiguity circuit breaker:** if a finding's validity or severity is unclear,
-   STOP and present to the user. **[Headless: if `gate.blocking` is non-empty and
-   cannot be auto-resolved, post an error comment listing the blocking findings,
-   add the `rawgentic:ai-error` label, and exit. A leaked *real* secret is ALWAYS
-   an escalation in headless mode — never auto-handle a live credential.]**
+   STOP and present to the user.
 
 Log a marker in `claude_docs/session_notes.md`:
 `### WF2 Step 11.5: Security Scan — DONE (#<issue>: blocking: N resolved, advisory: N, skipped: <kinds>)`
@@ -1698,7 +1681,7 @@ PR URL.
 **If `capabilities.has_ci == false`:** Log "No CI configured — skipping Gate 2" in session notes and proceed to Step 14.
 
 **If `capabilities.ci_quarantined == true` (#137 — CI present but human-declared untrustworthy):** the suite is chronically red for reasons unrelated to any diff, so a red run here is noise, not a gate. Still **observe** the run, but record its outcome as a **visible non-gate** — never block, never claim green:
-0. **Trust guard (a PR must not disable its own CI gate).** Quarantine only counts when it comes from the TRUSTED base config, not this branch's diff. Load the base config (`git show origin/${capabilities.default_branch}:<config-path>`) and compare via `capabilities_lib.ci_quarantine_change(base_config, head_config)`. If it returns a non-None reason (the branch INTRODUCED or ALTERED the quarantine), **the quarantine does NOT take effect for this run — CI GATES normally** (fall through to the active-CI path below), and surface the change for explicit owner approval. **[Headless: QUESTION — post a comment that the branch changes CI-quarantine config; suspend for approval rather than self-approving a gate bypass.]** Only when the quarantine is unchanged from base do you proceed as a non-gate:
+0. **Trust guard (a PR must not disable its own CI gate).** Quarantine only counts when it comes from the TRUSTED base config, not this branch's diff. Load the base config (`git show origin/${capabilities.default_branch}:<config-path>`) and compare via `capabilities_lib.ci_quarantine_change(base_config, head_config)`. If it returns a non-None reason (the branch INTRODUCED or ALTERED the quarantine), **the quarantine does NOT take effect for this run — CI GATES normally** (fall through to the active-CI path below), and surface the change for explicit owner approval. Only when the quarantine is unchanged from base do you proceed as a non-gate:
 1. Trigger/observe the run the same way (`gh run list ... --json status,conclusion,databaseId`).
 2. Record in session notes AND the Step 12 PR body, verbatim: `CI quarantined (<capabilities.ci_quarantine_reason>): run <status/conclusion>, not gating`. Include `since <capabilities.ci_quarantined_since>` when set.
 3. Do NOT diagnose/fix/block on a red run, and do NOT report it as passed. Proceed to Step 14 regardless of conclusion. Quarantine is read from config only — WF2 never enters or lifts it (that is a human edit to `config.ci.status`).
@@ -1710,7 +1693,7 @@ PR URL.
    gh run list --repo ${capabilities.repo} --branch <branch_name> --limit 1 --json status,conclusion,databaseId
    ```
 
-1a. **CI structurally unavailable → visible non-gate (#232 AC3).** If, after waiting up to CI_MAX_WAIT_MINUTES, **no run has spawned** for this branch (`gh run list` returns empty) OR a run cannot execute (Actions disabled / minutes exhausted — the platform, not this diff), then "PR open with green CI" is structurally **unsatisfiable** — this is NOT a red run to diagnose and NOT an ERROR condition. Record a **visible non-gate**, exactly like the quarantine path: session notes AND the Step 12 PR body, verbatim: `CI unavailable (no run spawned | Actions unavailable): not gating`. Then proceed to Step 14/16 — never force the ERROR protocol and never claim green. This is the interactive+headless answer to the live-run dead-end where CI simply never ran. **[Headless: AUTO-RESOLVE — record the non-gate note and proceed; do NOT ERROR just because CI never ran.]** (Distinguish from item 4: item 4 is a run that STARTED but hasn't finished; this is a run that never started.)
+1a. **CI structurally unavailable → visible non-gate (#232 AC3).** If, after waiting up to CI_MAX_WAIT_MINUTES, **no run has spawned** for this branch (`gh run list` returns empty) OR a run cannot execute (Actions disabled / minutes exhausted — the platform, not this diff), then "PR open with green CI" is structurally **unsatisfiable** — this is NOT a red run to diagnose and NOT an ERROR condition. Record a **visible non-gate**, exactly like the quarantine path: session notes AND the Step 12 PR body, verbatim: `CI unavailable (no run spawned | Actions unavailable): not gating`. Then proceed to Step 14/16 — never force the ERROR protocol and never claim green. This is the interactive+headless answer to the live-run dead-end where CI simply never ran. (Distinguish from item 4: item 4 is a run that STARTED but hasn't finished; this is a run that never started.)
 
 2. If CI passes: proceed to Step 14.
 
@@ -1720,7 +1703,7 @@ PR URL.
    lines instead of reading the full log (a failing run with an empty grep ⇒ inline —
    projection validation). Fix, push, CI re-runs.
 
-4. If CI times out (> CI_MAX_WAIT_MINUTES) on a run that DID start: ask user for explicit approval. **[Headless: AUTO-RESOLVE — wait up to 2x CI_MAX_WAIT_MINUTES. If a run started but still isn't done, ERROR — post error comment with CI run URL, add rawgentic:ai-error label, exit. If NO run ever spawned, use item 1a's visible non-gate instead of ERROR.]**
+4. If CI times out (> CI_MAX_WAIT_MINUTES) on a run that DID start: ask user for explicit approval.
 
 ### Output
 CI status, quarantine notice, or skip confirmation.
@@ -1731,11 +1714,9 @@ CI status, quarantine notice, or skip confirmation.
 
 ### Instructions
 
-**[Headless: AUTO-RESOLVE — SKIP THIS ENTIRE STEP. In headless mode the PR is the terminal deliverable: do NOT merge, do NOT deploy, do NOT SSH anywhere. Proceed directly to Step 16. CI handles deployment when a human merges the PR. (The `ssh`/`script`/`compose` deploy paths below would otherwise run unconditionally — this is the gap that caused the chorestory #309 dev-VM incident.) `wal-guard` also blocks any SSH at the hook layer as a backstop. Append the skip marker per Step 16 item 1b.]**
-
 **P15 pre-merge gate:** re-read via `plan_lib.read_review_state(repo_root, branch)`. If None or `last_review_log_status != "applied"`, refuse to merge. Cleanup of `claude_docs/.wf2-state/<issue>/` AND the branch's `.rawgentic/review-state/<branch-sanitized>.json` happens on merge success.
 
-**Quarantine × protection contradiction check (#139):** before attempting the merge, call `plan_lib.quarantine_protection_contradiction(capabilities.ci_quarantined, <protection state from Step 1 item 9>, <required_checks>)`. A non-None message means CI is quarantined (WF2 non-gating) but branch protection REQUIRES a status check — the squash-merge below would hit a server-side wall. Surface the message to the user and STOP rather than merging into the wall. **[Headless: QUESTION — post the contradiction message, suspend for a human to lift the quarantine, fix CI, or adjust protection.]**
+**Quarantine × protection contradiction check (#139):** before attempting the merge, call `plan_lib.quarantine_protection_contradiction(capabilities.ci_quarantined, <protection state from Step 1 item 9>, <required_checks>)`. A non-None message means CI is quarantined (WF2 non-gating) but branch protection REQUIRES a status check — the squash-merge below would hit a server-side wall. Surface the message to the user and STOP rather than merging into the wall.
 
 1. **Merge PR (squash merge):**
    ```bash
@@ -1789,7 +1770,7 @@ CI status, quarantine notice, or skip confirmation.
 
    Please deploy and confirm when complete.
    ```
-   Wait for user confirmation before proceeding to Step 15. **[Headless: not reachable — the whole step is skipped in headless mode (see the Step 14 header), so this manual-deploy confirmation only ever runs interactively.]**
+   Wait for user confirmation before proceeding to Step 15.
 
 ### Output
 Deployed (or manual deployment instructions provided and confirmed).
@@ -1804,8 +1785,6 @@ Deployed (or manual deployment instructions provided and confirmed).
 ## Step 15: Quality Gate — Post-Deploy Verification (Conditional)
 
 ### Instructions
-
-**[Headless: SKIP — no deployment occurred (Step 14 was skipped), so there is nothing to verify. Proceed to Step 16.]**
 
 **If `capabilities.has_deploy == false` AND no deployment was performed:** Skip with note "No deployment target — verification deferred to manual testing."
 

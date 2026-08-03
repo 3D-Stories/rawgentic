@@ -7,7 +7,7 @@ argument-hint: Artifact path (e.g., "docs/design/feature.md") with optional type
 # WF5: Adversarial Review Workflow
 
 <role>
-You are the WF5 orchestrator. You run an independent, cross-model adversarial review of a single TEXT artifact using the selected backend — the Codex CLI (gpt, default), Zhipu GLM via the zhipuai SDK (glm), or both — always a different model than yourself, then write a severity-ranked findings report (one per backend under `both`). You are STRICTLY report-only: you never edit the reviewed artifact and you never auto-apply findings — the user (or the calling workflow) decides what to do with them. All real logic lives in `hooks/adversarial_review_lib.py`; you are a thin orchestrator over it.
+You are the WF5 orchestrator. You run an independent, cross-model adversarial review of a single TEXT artifact using the selected backend — the Codex CLI (gpt, default), Zhipu GLM via the zhipuai SDK (glm), or both — always a different model than yourself, then write a severity-ranked findings report (one per backend under `both`). You are STRICTLY report-only: you never edit the reviewed artifact and you never auto-apply findings — the user (or the calling workflow) decides what to do with them. The model invocation runs through the ONE review entry point, `hooks/review_runner.py` (D179); config resolution, prerequisite checks, and report rendering use `hooks/adversarial_review_lib.py`'s kept pieces. You are a thin orchestrator over both.
 </role>
 
 <constants>
@@ -22,18 +22,20 @@ BACKEND RESOLUTION: an explicit `--backend` in the invocation argument wins;
   refuses (exit 2) — it is never silently laundered into gpt.
 OUTPUT: <activeProject.path>/docs/reviews/<slug>-<YYYY-MM-DD>.md  (report-only)
   glm report: <slug>-<YYYY-MM-DD>-glm.md (suffix AFTER the date; both mode writes both files)
-ENGINE: hooks/adversarial_review_lib.py
-CLI: `review --backend {gpt,glm,both} --findings-json <path>` (both optional; the
-  sidecar is written only on success, after the report; path must resolve under the
-  project root. Under `both`, gpt writes the exact sidecar path — byte-compatible —
-  and glm writes a `-glm` sibling with per-finding `backend` tags.)
-EXIT CODES: 0 success (ALL selected backends) · 2 prereq/config · 3 error/timeout ·
-  4 parse · 5 PARTIAL (both mode only: ≥1 backend succeeded, ≥1 failed — present
-  the successful report(s), name the failed backend, do NOT stop)
-ENV (all optional, frozen at lib import unless noted):
-  RAWGENTIC_ADV_REVIEW_MAX_BYTES   (default 200000) — artifact size cap; over-cap truncates + warns
+ENGINE: hooks/review_runner.py (invocation, D179) + hooks/adversarial_review_lib.py
+  (config/prereq/render — the kept pieces)
+CLI: `review-artifact --artifact <f> --type <t> --author-model <id> --reviewer <m>
+  [--backend gpt|glm] --out <result.json> --project-root <root>` — the result JSON
+  IS the machine-readable findings sidecar for embedded callers. `both` = two
+  independent runner invocations (one per backend), two results, two reports.
+EXIT CODES (per runner invocation): 0 success (result JSON carries `diagnostic`;
+  standalone WF5 runs are tokenless and always diagnostic — report-only anyway) ·
+  2 refused (validation/identity/config — no egress) · 3 terminal backend failure ·
+  4 empty/invalid backend output. Under `both`, one success + one failure = PARTIAL:
+  present the successful report, name the failed backend, do NOT stop.
+ENV (all optional):
+  RAWGENTIC_ADV_REVIEW_MAX_BYTES   (default 200000) — artifact size cap; over-cap REFUSES (never truncate-and-continue)
   RAWGENTIC_ADV_REVIEW_TIMEOUT     (default 600)    — per-attempt invocation timeout (seconds), both backends
-  RAWGENTIC_ADV_REVIEW_MAX_RETRIES (default 1)      — retries on transient failure, both backends
   RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS (default off)  — when set, block egress if secrets detected (both backends)
   RAWGENTIC_ADV_REVIEW_EFFORT      (default high)   — reasoning effort (low|medium|high|xhigh), both backends
   RAWGENTIC_ADV_REVIEW_MODEL      (default unset)  — gpt reviewer model override (`codex exec -m`); unset = Codex/config default
@@ -53,8 +55,9 @@ engine's tolerant validators are the gate; the same nonce-fenced prompt-injectio
 defense applies. No shell, no subprocess — the SDK talks https directly.
 
 The gpt backend invokes Codex as a one-shot, tools-OFF, structured-JSON reviewer (NOT
-`codex review`, which is git-diff-only with no `--output-schema`). The argv is:
-`codex exec [-m <model>] --output-schema <schema> -o <out> -c model_reasoning_effort=<effort> --ephemeral --color never -c project_doc_max_bytes=0 -s read-only -C <root> --skip-git-repo-check -`
+`codex review`, which is git-diff-only with no `--output-schema`). The runner composes:
+`codex exec -m <reviewer> --sandbox read-only --output-schema <schema> -o <out> -c model_reasoning_effort=<effort> --ephemeral --color never -c project_doc_max_bytes=0 -C <root> --skip-git-repo-check -`
+- **`-m` is ALWAYS explicit** — reviewer identity is pinned, never inherited from the codex config; author==reviewer or an unresolvable reviewer REFUSES before any egress.
 - **effort pinned** (high): gpt-5.5 defaults to medium; deep critique benefits from high.
 - **--ephemeral**: the prompt inlines the full (possibly proprietary) artifact; this keeps it out of CODEX_HOME session history.
 - **project_doc_max_bytes=0**: suppresses the reviewed project's AGENTS.md so the cross-model reviewer stays independent of the project's own conventions.
@@ -84,7 +87,7 @@ Before executing any workflow steps, load the project configuration:
      --config <activeProject.path>/.rawgentic.json
    ```
    - **Non-zero exit** -> the config is missing, corrupt, or invalid. **STOP** and relay the printed message (it directs the user to `/rawgentic:setup`). A `config.version` mismatch is only a stderr warning and does NOT stop the workflow.
-   - **Exit 0** -> stdout is `{"config": {...}, "capabilities": {...}}`. Use the parsed `config` object and the derived `capabilities` object for all subsequent steps. The `capabilities` fields are: `has_tests`, `test_commands`, `has_ci`, `ci_quarantined`, `ci_quarantine_reason`, `ci_quarantined_since`, `has_deploy`, `deploy_method`, `has_database`, `has_docker`, `project_type`, `repo`, `default_branch`, `migration_dir`, `phase_executor_table`. Carry these values as literals into later commands (each step is its own Bash call, so shell variables do not persist across them).
+   - **Exit 0** -> stdout is `{"config": {...}, "capabilities": {...}}`. Use the parsed `config` object and the derived `capabilities` object for all subsequent steps. The `capabilities` fields are: `has_tests`, `test_commands`, `has_ci`, `ci_quarantined`, `ci_quarantine_reason`, `ci_quarantined_since`, `has_deploy`, `deploy_method`, `has_database`, `has_docker`, `project_type`, `repo`, `default_branch`, `migration_dir`. Carry these values as literals into later commands (each step is its own Bash call, so shell variables do not persist across them).
 
 All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
 </config-loading>
@@ -124,10 +127,11 @@ Step-entry state (#480, hook-emitted since #499): the PostToolUse hook (`hooks/s
      --workspace .rawgentic_workspace.json --project <name> --key adversarialReview
    ```
    Exit 0 → stdout is the backend (absent/disabled config → `gpt`). **Exit 2 → the config carries a present-but-INVALID backend value: STOP and relay the stderr message — NEVER fall back to gpt** (a typo'd backend must not silently reroute the artifact to a different provider). Never default an empty stdout capture to gpt — branch on the exit code. Carry the resolved backend as a literal into Steps 2–4.
+2c. **Resolve identities (the runner refuses without them).** AUTHOR_MODEL = your own model id, verbatim (the model running this session). REVIEWER = the current default in `shared/blocks/model-routing-resolve.md` (`gpt-5.6-sol` for gpt; glm resolves `glm-5.2` automatically) unless the user named one. The runner refuses author==reviewer — an artifact you authored in this session cannot be reviewed by your own model.
 3. Validate the artifact:
    - The path must resolve to a file **under** `PROJECT_ROOT` (the engine enforces this — traversal/absolute escape is rejected). If it is outside the project, STOP and tell the user the artifact must live inside the active project.
    - If the file does not exist, STOP: "Artifact not found: `<path>`."
-   - Artifacts larger than `RAWGENTIC_ADV_REVIEW_MAX_BYTES` are truncated (with a warning in the report); note this to the user.
+   - Artifacts larger than `RAWGENTIC_ADV_REVIEW_MAX_BYTES` are REFUSED by the runner (oversize is never truncated-and-continued); tell the user to split the artifact or raise the env cap deliberately.
 4. Log artifact path, resolved type, and size in session notes.
 
 ### Output
@@ -160,7 +164,7 @@ Size:     <bytes> (cap <MAX_BYTES>)
    - gpt — install: `npm install -g @openai/codex`; authenticate: `codex login` (headless/CI: `printenv OPENAI_API_KEY | codex login --with-api-key`)
    - glm — install: `pip install "zhipuai>=2.1.5"`; credential: export `ZHIPUAI_API_KEY` (a z.ai Coding Plan subscription key works with the default endpoint)
 3. **`both` is DEGRADE-AND-WARN (#403):** the check passes when AT LEAST ONE backend is ready; the message names BOTH backends' results, and an unready backend is a loud warning (the run will degrade to the ready backend, exit 5). Only zero-ready fails. Surface the warning to the user, then proceed.
-4. **Headless note:** ChatGPT OAuth login is interactive-only. If the session is headless (`RAWGENTIC_HEADLESS=1`) and the gpt prereq fails on authentication, this is a terminal ERROR — do not wait for an interactive login. The glm credential is an env var (no interactive step), so its headless message is the same export instruction.
+4. **Non-interactive note:** ChatGPT OAuth login is interactive-only. If the gpt prereq fails on authentication and no user is present to log in, report it as a terminal failure — do not wait for an interactive login. The glm credential is an env var (no interactive step).
 
 ### Output
 The prereq message (per-backend detail under `both`), or the verbatim install/credential instructions on failure.
@@ -190,44 +194,59 @@ The egress warning text (destination(s) named, and any detected secret categorie
 
 ### Instructions
 
-1. Run the review via the engine CLI (fail-closed; no live provider needed in tests):
+1. Run the review through the runner (fail-closed; the codex binary is PATH-stubbed in tests):
    ```bash
-   python3 hooks/adversarial_review_lib.py review \
+   python3 hooks/review_runner.py review-artifact \
      --artifact "<artifact>" \
      --type "<resolved type>" \
-     --project-root "<PROJECT_ROOT>" \
-     --date "$(date -u +%Y-%m-%d)" \
-     --backend <resolved backend> \
-     [--headless] \
-     [--findings-json <path>] \
-     [--dispositions <path> --issue <n>]
+     --author-model "<AUTHOR_MODEL>" \
+     --reviewer "<REVIEWER>" \
+     --backend <gpt|glm> \
+     --out "<PROJECT_ROOT>/.rawgentic-wf5-result.json" \
+     --project-root "<PROJECT_ROOT>"
    ```
-   Embedded callers (e.g. WF2 Step 11) may append `--findings-json <path>` to also receive a machine-readable sidecar of the findings; it is written only on success, after the report. Under `both`, gpt writes the exact sidecar path (byte-compatible) and glm writes a `-glm` sibling.
-   Embedded pass-N callers (#393) may additionally append `--dispositions <path> --issue <n>` — a folded settled-dispositions JSONL (written by the WF2 orchestrator under the project root) rendered into a second nonce fence so the reviewer does not re-litigate settled findings. `--dispositions` REQUIRES `--issue` (exit `2` without it); every valid entry's `issue` field is cross-checked and a mismatch fails CLOSED with exit `6` BEFORE any backend dispatch (cross-issue contamination). Benign ledger failures (missing/unreadable file, corrupt lines) fail OPEN: the review still runs and stderr carries `ledger: degraded (<reason>, N lines skipped)` — embedded callers record that phrase in the gate marker; exit `6` maps to the loud-abort marker `failed (ledger integrity)`.
-2. Interpret the exit code (the contract is fail-closed, with ONE both-mode carve-out):
-   - `0` → success (ALL selected backends); single mode prints the report path on stdout; `both` prints per-backend status lines (`gpt: <path>` / `glm: <path>`) — the authoritative manifest.
-   - `2` → prerequisite/config failure. STOP (should have been caught in Steps 1b/2).
-   - `3` → backend error or timeout. STOP and report; **do not** fabricate findings.
-   - `4` → backend output could not be parsed/validated. STOP and report.
-   - **`5` → PARTIAL (both mode only): ≥1 backend succeeded, ≥1 failed. Do NOT stop — present the successful report(s) from the stdout manifest, name the failed backend from the stderr `FAILED` line, and continue.** Exit 5 never occurs in single-backend mode.
-   - `6` → ledger integrity failure (`--issue` mismatch — fail-closed, embedded pass-N callers only; never fires without `--dispositions`). The embedded caller records the loud-abort marker `failed (ledger integrity)`.
-3. On exit 2/3/4, the review did NOT succeed — report the failure to the user. Never present partial or invented findings as a completed review. (Exit 5 is not that case: the successful backend's review DID complete and is presented as such, with the degradation named.)
+   Under `both`, run TWO independent invocations — one `--backend gpt` (reviewer `gpt-5.6-sol`) and one `--backend glm` (omit `--reviewer`; it resolves `glm-5.2`) — with distinct `--out` paths. The result JSON is the machine-readable findings sidecar for embedded callers: `{status, diagnostic, reviewer_model, backend, input_sha256, head_sha, timing, findings, summary, error_class}`. Standalone WF5 runs are tokenless, so `diagnostic` is `true` — irrelevant here, because WF5 is report-only and authorizes nothing.
+2. Interpret the exit code per invocation:
+   - `0` → success; the result file holds validated findings + summary.
+   - `2` → refused (identity/validation/oversize/config — no egress happened). STOP and relay `error_detail`.
+   - `3` → terminal backend failure (`error_class`: org_quota | account_quota | transport | unclassified). STOP and report; **do not** fabricate findings, and do not add your own retry loop — the runner already applied the #857 policy.
+   - `4` → empty/invalid backend output after the runner's bounded retry. STOP and report.
+   - **`both` PARTIAL: one invocation succeeded, one failed → do NOT stop — render and present the successful backend's report and name the failed backend with its `error_class`.**
+3. On a single-backend 2/3/4, the review did NOT succeed — report the failure to the user. Never present partial or invented findings as a completed review.
 
 ### Output
-The path(s) to the generated report(s) (from the stdout manifest under `both`) or the failure reason.
+The result JSON path(s) (one per backend) or the failure reason.
 
 ### Failure Modes
-- Exit 3 (timeout/error) → report and stop; suggest retrying or checking the backend's status.
-- Exit 4 (parse error) → report; the artifact may be too large or the backend returned unexpected output.
-- Exit 5 (partial, both mode) → present the successful report, name the failure — not a stop.
+- Exit 3 (backend failure) → report and stop; the result's `error_class` says whether retrying later can help (quota vs transport vs unclassified).
+- Exit 4 (empty/invalid output) → report; the backend returned unusable output after one bounded retry.
+- `both` with one failure → present the successful report, name the failure — not a stop.
 
 ---
 
-## Step 5: Present Report(s)
+## Step 5: Render and Present Report(s)
 
 ### Instructions
 
-1. Read the generated report(s) — single mode: `<PROJECT_ROOT>/docs/reviews/<slug>-<date>.md` (glm: `<slug>-<date>-glm.md`); `both`: BOTH files from the Step 4 stdout manifest. Under both mode the two reviews are INDEPENDENT — present them side by side (per-backend finding counts), never merged (attribution is the point of a cross-model pass).
+0. Render each successful result JSON into the standard report file (one per backend):
+   ```bash
+   python3 - <<'EOF'
+   import json, sys
+   sys.path.insert(0, 'hooks')
+   from adversarial_review_lib import render_report_md, review_report_path
+   from atomic_write_lib import atomic_write_text
+   res = json.load(open("<result.json>"))
+   meta = {"artifact": "<artifact>", "artifact_type": "<resolved type>",
+           "date": "<YYYY-MM-DD>", "model": res.get("reviewer_model") or "",
+           "backend": res.get("backend", "gpt"), "summary": res.get("summary", ""),
+           "secrets": res.get("secrets_detected") or []}
+   path = review_report_path("<PROJECT_ROOT>", "<artifact>", "<YYYY-MM-DD>",
+                             backend=res.get("backend", "gpt"))
+   atomic_write_text(path, render_report_md(list(res.get("findings") or []), meta))
+   print(path)
+   EOF
+   ```
+1. Read the rendered report(s) — single mode: `<PROJECT_ROOT>/docs/reviews/<slug>-<date>.md` (glm: `<slug>-<date>-glm.md`); `both`: BOTH files. Under both mode the two reviews are INDEPENDENT — present them side by side (per-backend finding counts), never merged (attribution is the point of a cross-model pass).
 2. Present a concise summary to the user: total findings per backend, per-severity counts, and the top Critical/High findings (with their backend named under both).
 3. Print the absolute report path(s) and (if known) the invocation latency.
 4. State clearly that this is **report-only**: findings are advisory and the artifact was not modified. Do NOT prompt to apply findings — that is the user's (or the calling workflow's) decision.
@@ -268,7 +287,7 @@ Before declaring WF5 complete, verify ALL of the following. Print the checklist 
 2. [ ] Artifact validated (exists, under project root, type resolved)
 3. [ ] Selected backend's prerequisite satisfied (gpt: codex installed+authenticated; glm: zhipuai>=2.1.5 + key; both: >=1 ready, degradation warned)
 4. [ ] Egress notice printed (warn-only)
-5. [ ] Review invoked with the resolved --backend; exit code interpreted (fail-closed on 2/3/4; exit 5 = both-mode partial, presented with the failure named)
+5. [ ] Review invoked through `hooks/review_runner.py` with the resolved backend, a pinned `--reviewer`, and `--author-model`; exit code interpreted (fail-closed on 2/3/4; both-mode partial presented with the failure named)
 6. [ ] On success: report(s) written to <project>/docs/reviews/ and presented (both files under `both`)
 7. [ ] Artifact NOT modified (report-only invariant)
 

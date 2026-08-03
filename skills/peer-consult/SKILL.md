@@ -7,7 +7,7 @@ argument-hint: Problem/spec artifact path (e.g., "docs/design/feature.md") with 
 # WF13: Peer Consult Workflow
 
 <role>
-You are the WF13 orchestrator. You engage the selected backend — Codex (gpt, default), Zhipu GLM (glm), or both — always a different model than yourself, as an independent PEER senior engineer — not a reviewer — and ask it to produce its OWN design proposal for a problem/spec artifact, without seeing or critiquing any proposal of yours. You are STRICTLY report-only: you never edit the source artifact and you never auto-apply the peer's proposal — the user (or the calling workflow) decides what to do with it. All real logic lives in `hooks/adversarial_review_lib.py`; you are a thin orchestrator over it.
+You are the WF13 orchestrator. You engage the selected backend — Codex (gpt, default), Zhipu GLM (glm), or both — always a different model than yourself, as an independent PEER senior engineer — not a reviewer — and ask it to produce its OWN design proposal for a problem/spec artifact, without seeing or critiquing any proposal of yours. You are STRICTLY report-only: you never edit the source artifact and you never auto-apply the peer's proposal — the user (or the calling workflow) decides what to do with it. The model invocation runs through the ONE review entry point, `hooks/review_runner.py` (D179, `consult` verb); config resolution, prerequisite checks, and report rendering use `hooks/adversarial_review_lib.py`'s kept pieces. You are a thin orchestrator over both.
 </role>
 
 <constants>
@@ -22,17 +22,18 @@ BACKEND RESOLUTION: an explicit `--backend` in the invocation argument wins;
 OUTPUT: <activeProject.path>/docs/reviews/peer-<slug>-<YYYY-MM-DD>.md  (report-only)
   glm proposal report: peer-<slug>-<YYYY-MM-DD>-glm.md (suffix AFTER the date; both
   mode writes both). Under `both` the structured --out gets a -glm sibling too.
-EXIT CODES: 0 success (ALL selected backends) · 2 prereq/config · 3 error/timeout ·
-  4 parse · 5 PARTIAL (both mode only: present the successful proposal, name the
-  failed backend, do NOT stop)
-ENGINE: hooks/adversarial_review_lib.py
-ENV (all optional, frozen at lib import unless noted — shared with WF5/adversarial-review):
-  RAWGENTIC_ADV_REVIEW_MAX_BYTES   (default 200000) — artifact size cap; over-cap truncates + warns
+EXIT CODES (per runner invocation): 0 success · 2 refused (validation/identity/config —
+  no egress) · 3 terminal backend failure · 4 empty/invalid backend output. Under `both`,
+  one success + one failure = PARTIAL: present the successful proposal, name the failed
+  backend, do NOT stop.
+ENGINE: hooks/review_runner.py (`consult` verb, D179) + hooks/adversarial_review_lib.py
+  (config/prereq/render — the kept pieces)
+ENV (all optional — shared with WF5/adversarial-review):
+  RAWGENTIC_ADV_REVIEW_MAX_BYTES   (default 200000) — artifact size cap; over-cap REFUSES (never truncate-and-continue)
   RAWGENTIC_ADV_REVIEW_TIMEOUT     (default 600)    — per-attempt invocation timeout (seconds), both backends
-  RAWGENTIC_ADV_REVIEW_MAX_RETRIES (default 1)      — retries on transient failure, both backends
   RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS (default off)  — when set, block egress if secrets detected
   RAWGENTIC_ADV_REVIEW_EFFORT      (default high)   — reasoning effort (low|medium|high|xhigh), both backends
-  RAWGENTIC_ADV_REVIEW_MODEL       (default unset)  — override the gpt peer model (`codex exec -m`); unset = inherit Codex/config default (do NOT hardcode a model id)
+  RAWGENTIC_ADV_REVIEW_MODEL       (default unset)  — override the gpt peer model; the runner still requires a PINNED reviewer (flag or this env — an unresolvable identity refuses)
   RAWGENTIC_ADV_REVIEW_GLM_MODEL   (default glm-5.2) — glm model slug
   ZHIPUAI_API_KEY / ZHIPU_API_KEY / GLM_API_KEY (read at call time) — glm credential; a Coding Plan subscription key works
   ZHIPUAI_BASE_URL / GLM_JUDGE_BASE_URL (default https://api.z.ai/api/coding/paas/v4) — glm endpoint; https only, no userinfo/query/fragment
@@ -60,7 +61,7 @@ Before executing any workflow steps, load the project configuration:
      --config <activeProject.path>/.rawgentic.json
    ```
    - **Non-zero exit** -> the config is missing, corrupt, or invalid. **STOP** and relay the printed message (it directs the user to `/rawgentic:setup`). A `config.version` mismatch is only a stderr warning and does NOT stop the workflow.
-   - **Exit 0** -> stdout is `{"config": {...}, "capabilities": {...}}`. Use the parsed `config` object and the derived `capabilities` object for all subsequent steps. The `capabilities` fields are: `has_tests`, `test_commands`, `has_ci`, `ci_quarantined`, `ci_quarantine_reason`, `ci_quarantined_since`, `has_deploy`, `deploy_method`, `has_database`, `has_docker`, `project_type`, `repo`, `default_branch`, `migration_dir`, `phase_executor_table`. Carry these values as literals into later commands (each step is its own Bash call, so shell variables do not persist across them).
+   - **Exit 0** -> stdout is `{"config": {...}, "capabilities": {...}}`. Use the parsed `config` object and the derived `capabilities` object for all subsequent steps. The `capabilities` fields are: `has_tests`, `test_commands`, `has_ci`, `ci_quarantined`, `ci_quarantine_reason`, `ci_quarantined_since`, `has_deploy`, `deploy_method`, `has_database`, `has_docker`, `project_type`, `repo`, `default_branch`, `migration_dir`. Carry these values as literals into later commands (each step is its own Bash call, so shell variables do not persist across them).
 
 All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
 </config-loading>
@@ -93,10 +94,11 @@ This enables workflow resumption if context is lost.
      --workspace .rawgentic_workspace.json --project <name> --key peerConsult
    ```
    Exit 0 → stdout is the backend (absent/disabled → `gpt`). **Exit 2 → present-but-invalid config value: STOP and relay stderr — NEVER fall back to gpt, never default an empty stdout capture.** Carry the resolved backend as a literal into Steps 2–4.
+2c. **Resolve identities (the runner refuses without them).** AUTHOR_MODEL = your own model id, verbatim. PEER = the current default in `shared/blocks/model-routing-resolve.md` (`gpt-5.6-sol` for gpt; glm resolves `glm-5.2` automatically) unless the user named one. A peer proposal from your own model is not independent — the runner refuses author==reviewer.
 3. Validate the artifact:
    - The path must resolve to a file **under** `PROJECT_ROOT` (the engine enforces this — traversal/absolute escape is rejected). If it is outside the project, STOP and tell the user the artifact must live inside the active project.
    - If the file does not exist, STOP: "Artifact not found: `<path>`."
-   - Artifacts larger than `RAWGENTIC_ADV_REVIEW_MAX_BYTES` are truncated (with a warning); note this to the user.
+   - Artifacts larger than `RAWGENTIC_ADV_REVIEW_MAX_BYTES` are REFUSED by the runner (oversize is never truncated-and-continued); split the artifact or raise the env cap deliberately.
 4. Log artifact path and size in session notes.
 
 ### Output
@@ -127,7 +129,7 @@ Size:     <bytes> (cap <MAX_BYTES>)
    - gpt — install: `npm install -g @openai/codex`; authenticate: `codex login` (headless/CI: `printenv OPENAI_API_KEY | codex login --with-api-key`)
    - glm — install: `pip install "zhipuai>=2.1.5"`; credential: export `ZHIPUAI_API_KEY` (a z.ai Coding Plan subscription key works)
 3. **`both` is DEGRADE-AND-WARN (#403):** passes when ≥1 backend is ready; the message names both results; an unready backend degrades the run (exit 5), it does not block. Zero-ready fails.
-4. **Headless note:** ChatGPT OAuth login is interactive-only — headless gpt auth failure is a terminal ERROR. The glm credential is an env var; same export instruction headless.
+4. **Non-interactive note:** ChatGPT OAuth login is interactive-only — if the gpt prereq fails on authentication and no user is present to log in, report a terminal failure. The glm credential is an env var (no interactive step).
 
 ### Output
 The prereq message (per-backend detail under `both`) or the verbatim instructions on failure.
@@ -157,25 +159,24 @@ The egress warning text (and any detected secret categories).
 
 ### Instructions
 
-1. Run the consult via the engine CLI (fail-closed; no live provider needed in tests):
+1. Run the consult through the runner (fail-closed; the codex binary is PATH-stubbed in tests):
    ```bash
-   OUT="$(mktemp)"
-   python3 hooks/adversarial_review_lib.py consult \
+   python3 hooks/review_runner.py consult \
      --artifact "<artifact>" \
-     --project-root "<PROJECT_ROOT>" \
-     --out "$OUT" \
-     --date "$(date -u +%Y-%m-%d)" \
-     --backend <resolved backend> \
-     [--headless]
+     --author-model "<AUTHOR_MODEL>" \
+     --reviewer "<PEER>" \
+     --backend <gpt|glm> \
+     --out "<PROJECT_ROOT>/.rawgentic-wf13-result.json" \
+     --project-root "<PROJECT_ROOT>"
    ```
-   Under `both`, gpt writes the exact `$OUT` and glm writes a `-glm` sibling of it; both proposal reports land in docs/reviews/.
-2. **Interpret the run by its EXIT CODE and (under `both`) the per-backend stdout status lines — never by whether `$OUT` or the report file exists** (a failed run still writes an empty-proposal marker to its out file for callers that read-gate on the file):
-   - `0` → success (ALL selected backends); single mode prints the report path; `both` prints `gpt: <path>` / `glm: <path>` — the authoritative manifest.
-   - `2` → prerequisite/config failure. STOP (should have been caught in Steps 1/2).
-   - `3` → backend error or timeout. STOP and report; **do not** fabricate a proposal.
-   - `4` → backend output could not be parsed/validated. STOP and report.
-   - **`5` → PARTIAL (both mode only): present the successful backend's proposal from the stdout manifest, name the failed backend from the stderr FAILED line, do NOT stop.** Never occurs in single mode.
-3. On exit 2/3/4, the consult did NOT succeed — report the failure. Never present a partial or invented proposal as a completed consult. (Exit 5: the successful peer's proposal IS complete; the degradation is named.)
+   Under `both`, run TWO independent invocations — one `--backend gpt` (peer `gpt-5.6-sol`) and one `--backend glm` (omit `--reviewer`; it resolves `glm-5.2`) — with distinct `--out` paths. The result JSON carries the structured proposal: `{status, diagnostic, reviewer_model, backend, proposal: {approach, key_decisions, risks, sketch}, …}`. Consults are always `diagnostic: true` — a proposal never authorizes a fix round.
+2. **Interpret each invocation by its EXIT CODE — never by whether the out file exists:**
+   - `0` → success; the result file holds the validated proposal.
+   - `2` → refused (identity/validation/config — no egress happened). STOP and relay `error_detail`.
+   - `3` → terminal backend failure (`error_class` says quota vs transport vs unclassified). STOP and report; **do not** fabricate a proposal, and do not add your own retry loop — the runner already applied the #857 policy.
+   - `4` → empty/invalid backend output (an entirely-empty proposal is invalid_output, never a vacuous pass). STOP and report.
+   - **`both` PARTIAL: one invocation succeeded, one failed → present the successful backend's proposal, name the failed backend with its `error_class`, do NOT stop.**
+3. On a single-backend 2/3/4, the consult did NOT succeed — report the failure. Never present a partial or invented proposal as a completed consult.
 
 ### Output
 The path(s) to the generated peer report(s) or the failure reason.
@@ -187,11 +188,28 @@ The path(s) to the generated peer report(s) or the failure reason.
 
 ---
 
-## Step 5: Present Peer Proposal
+## Step 5: Render and Present Peer Proposal
 
 ### Instructions
 
-1. Read the generated report(s) — single mode: the path printed by Step 4; `both`: BOTH paths from the stdout manifest. Two proposals stay INDEPENDENT — present them side by side; synthesis is the caller's job, never a merge here.
+0. Render each successful result JSON into the standard peer report (one per backend):
+   ```bash
+   python3 - <<'EOF'
+   import json, sys
+   sys.path.insert(0, 'hooks')
+   from adversarial_review_lib import render_consult_md, consult_report_path
+   from atomic_write_lib import atomic_write_text
+   res = json.load(open("<result.json>"))
+   meta = {"artifact": "<artifact>", "date": "<YYYY-MM-DD>",
+           "model": res.get("reviewer_model") or "",
+           "backend": res.get("backend", "gpt")}
+   path = consult_report_path("<PROJECT_ROOT>", "<artifact>", "<YYYY-MM-DD>",
+                              backend=res.get("backend", "gpt"))
+   atomic_write_text(path, render_consult_md(res.get("proposal") or {}, meta))
+   print(path)
+   EOF
+   ```
+1. Read the rendered report(s) — one per successful backend. Two proposals stay INDEPENDENT — present them side by side; synthesis is the caller's job, never a merge here.
 2. Present a concise summary to the user: each peer's approach, key decisions, and risks (backend named under `both`).
 3. Print the absolute report path(s) and (if known) the invocation latency.
 4. State clearly that this is **report-only**: the proposal is one independent peer's opinion, advisory only, and the artifact was not modified. Do NOT prompt to apply the proposal — that is the user's (or the calling workflow's) decision. Do NOT frame it as a review or a set of findings — it is a proposal from a peer, not a reviewer.
@@ -231,7 +249,7 @@ Before declaring WF13 complete, verify ALL of the following. Print the checklist
 2. [ ] Artifact validated (exists, under project root)
 3. [ ] Selected backend's prerequisite satisfied (gpt: codex; glm: zhipuai>=2.1.5 + key; both: >=1 ready, degradation warned)
 4. [ ] Egress notice printed (warn-only)
-5. [ ] Consult invoked with the resolved --backend; exit code interpreted (fail-closed on 2/3/4; exit 5 = both-mode partial presented with failure named; never gated on file existence)
+5. [ ] Consult invoked through `hooks/review_runner.py` with the resolved backend, a pinned `--reviewer`, and `--author-model`; exit code interpreted (fail-closed on 2/3/4; both-mode partial presented with failure named; never gated on file existence)
 6. [ ] On success: peer report(s) written to <project>/docs/reviews/ and presented (both under `both`)
 7. [ ] Artifact NOT modified (report-only invariant)
 
