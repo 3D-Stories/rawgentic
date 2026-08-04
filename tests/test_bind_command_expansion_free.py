@@ -13,6 +13,13 @@ stops prompting on every `/rawgentic:switch`.
 
 This guard fails if either skill reintroduces command substitution into its
 registry-append block.
+
+It also guards the append TARGET (#885). The redirect was a bare, cwd-relative
+`>> claude_docs/session_registry.jsonl`, while the same command already carried
+the absolute workspace root as a printf argument for the JSON `cwd` field. With
+cwd drifted into a project directory, `>>` CREATES a registry in the wrong tree,
+exits 0, and a `tail -1` echoes the line back — indistinguishable from the
+documented first-bind case. Reads fail loudly; that one write did not.
 """
 import re
 
@@ -23,6 +30,10 @@ BIND_SKILLS = ["switch", "new-project"]
 
 # `$(` opens command substitution; a backtick inside a code fence is backtick substitution.
 CMD_SUBST_RE = re.compile(r"\$\(")
+
+# Every `>>` redirect target in the block, quoted or bare. Whitespace-tolerant so
+# `>>claude_docs/…` and `>>  claude_docs/…` cannot slip past (#885).
+APPEND_TARGET_RE = re.compile(r">>\s*\"?([^\"\s]+)")
 
 
 def _fenced_blocks(text: str):
@@ -73,6 +84,36 @@ def test_bind_command_has_no_command_substitution():
                 "substitution -> Claude Code flags it 'Contains expansion' and always "
                 f"prompts (cannot be allowlisted):\n{block}"
             )
+
+
+def test_bind_append_target_is_absolute():
+    """The registry-append target must not be cwd-relative (#885).
+
+    The bind step assumes cwd is the workspace root, but nothing enforces that at
+    the write, and the Bash tool's cwd persists across calls within a session. A
+    relative `>>` therefore lands — silently, exit 0 — in whatever tree cwd happens
+    to be, and because `>>` CREATES the file, a wrong-repo creation looks exactly
+    like the documented "create it if absent" first bind.
+
+    Both skills already interpolate the absolute workspace root as a printf argument
+    for the JSON `cwd` field, so the target reuses that same literal. A wrong root is
+    then visible in the registry line itself instead of misfiling in silence.
+    """
+    for skill in BIND_SKILLS:
+        for block in _registry_blocks(skill):
+            targets = APPEND_TARGET_RE.findall(block)
+            assert targets, (
+                f"{skill} registry-append block has a `>>` redirect the guard could "
+                f"not parse (guard would be vacuous):\n{block}"
+            )
+            for target in targets:
+                assert not target.startswith("claude_docs/"), (
+                    f"{skill} registry-append target {target!r} is cwd-relative -> a "
+                    "bind run from a drifted cwd silently CREATES a registry in the "
+                    "wrong tree and reports success (#885). Prefix it with the "
+                    "absolute workspace-root placeholder the same command already "
+                    f"passes for the `cwd` field:\n{block}"
+                )
 
 
 def test_bind_command_has_no_backtick_substitution():
