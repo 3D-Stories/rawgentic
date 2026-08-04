@@ -78,9 +78,16 @@ Three reasons it outranks an ordinary path bug:
 
 The fix reuses a value the command **already carried**: both bind templates pass the absolute
 workspace root as a printf argument for the JSON `cwd` field, so the redirect target interpolates
-that same literal. One value now feeds both, which means a wrong root shows up *in the registry
-line itself* instead of misfiling in silence — and because `>>` cannot create a missing parent
-directory, a bad absolute root fails loudly.
+that same literal.
+
+Be precise about how much that buys, because it is easy to overstate. A **nonexistent** root, or
+one with no `claude_docs/` directory, now fails **loudly** — `>>` cannot create a missing parent.
+But an **existing yet wrong** absolute root that happens to contain `claude_docs/` still misfiles
+**silently**, and the wrong root recorded in that misplaced line is *not* independent detection: it
+is the same wrong value written twice. So the absolute target removes the *cwd-drift* failure mode
+and nothing more. Correctness still depends on substituting the resolved directory that holds
+`.rawgentic_workspace.json` — which is exactly why Step 5 **defines** `<root>` rather than hinting
+at it.
 
 Rejected alternatives, so a rewrite does not reintroduce any of them:
 

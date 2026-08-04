@@ -35,6 +35,32 @@ CMD_SUBST_RE = re.compile(r"\$\(")
 # `>>claude_docs/…` and `>>  claude_docs/…` cannot slip past (#885).
 APPEND_TARGET_RE = re.compile(r">>\s*\"?([^\"\s]+)")
 
+# The EXACT target each bind skill must append to. An allowlist, not a
+# reject-one-spelling check: `./claude_docs/…`, `../claude_docs/…`,
+# `sub/claude_docs/…` and a single-quoted bare target are all still cwd-relative
+# and every one of them satisfied an earlier `startswith("claude_docs/")` test,
+# so the guard was fail-open in the one direction that matters — the defect could
+# be reintroduced and this file would stay green (#885, Step 8a cross-model review).
+EXPECTED_APPEND_TARGET = {
+    "switch": "<root>/claude_docs/session_registry.jsonl",
+    "new-project": "<WORKSPACE_ROOT>/claude_docs/session_registry.jsonl",
+}
+
+# Cwd-relative spellings that must never satisfy the guard. Regression corpus for
+# the fail-open hole above.
+RELATIVE_TARGET_FORMS = (
+    "claude_docs/session_registry.jsonl",
+    "./claude_docs/session_registry.jsonl",
+    "../claude_docs/session_registry.jsonl",
+    "project/claude_docs/session_registry.jsonl",
+    "'claude_docs/session_registry.jsonl'",
+)
+
+
+def _target_is_expected(target: str, expected: str) -> bool:
+    """The guard's predicate, isolated so it can be pinned in both directions."""
+    return target == expected
+
 
 def _fenced_blocks(text: str):
     """Yield the body (str) of each ``` fenced code block, indentation-tolerant.
@@ -107,6 +133,7 @@ def test_bind_append_target_is_absolute():
     remit.
     """
     for skill in BIND_SKILLS:
+        expected = EXPECTED_APPEND_TARGET[skill]
         for block in _registry_blocks(skill):
             targets = APPEND_TARGET_RE.findall(block)
             assert targets, (
@@ -114,12 +141,38 @@ def test_bind_append_target_is_absolute():
                 f"not parse (guard would be vacuous):\n{block}"
             )
             for target in targets:
-                assert not target.startswith("claude_docs/"), (
-                    f"{skill} registry-append target {target!r} is cwd-relative -> a "
-                    "bind run from a drifted cwd silently CREATES a registry in the "
-                    "wrong tree and reports success (#885). Prefix it with the "
+                assert _target_is_expected(target, expected), (
+                    f"{skill} registry-append target {target!r} is not the expected "
+                    f"{expected!r} -> a bind run from a drifted cwd can silently CREATE "
+                    "a registry in the wrong tree and report success (#885). Use the "
                     "absolute workspace-root placeholder the same command already "
                     f"passes for the `cwd` field:\n{block}"
+                )
+            assert f'>> "{expected}"' in block, (
+                f"{skill} registry-append target must stay DOUBLE-QUOTED as "
+                f'`>> "{expected}"` so a workspace root containing a space is still '
+                f"correct:\n{block}"
+            )
+
+
+def test_guard_rejects_every_cwd_relative_target_form():
+    """The guard must reject relative spellings, not just the bare one (#885).
+
+    Red-before-green corpus for a real fail-open hole: the first version of this
+    guard asserted `not target.startswith("claude_docs/")`, which every form below
+    except the bare one satisfied while keeping the silent wrong-tree write. `./` is
+    the form that matters most — it is exactly what a reader substituting the cwd for
+    the root placeholder produces.
+    """
+    for skill, expected in EXPECTED_APPEND_TARGET.items():
+        for form in RELATIVE_TARGET_FORMS:
+            targets = APPEND_TARGET_RE.findall(f'printf \'{{}}\' >> {form}\n')
+            assert targets, f"regex failed to parse the redirect in {form!r}"
+            for target in targets:
+                assert not _target_is_expected(target, expected), (
+                    f"cwd-relative target {form!r} would satisfy the {skill} guard "
+                    "-> the guard is fail-open and the defect could be reintroduced "
+                    "without turning this file red"
                 )
 
 
