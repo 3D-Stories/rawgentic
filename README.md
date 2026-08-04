@@ -779,7 +779,7 @@ For major changes, please open an issue first to discuss the approach.
   `--registry` is passed through unvalidated at all four CLI call sites, so provenance had to be
   established at the gate. No workflow-spine
   change (a launcher gate's comparison, not a station, gate, loop-back or lane) → no diagram REV.
-  Suite 4812→4872.
+  Suite 4812→4880.
 
 ### v3.125.5 (2026-08-04)
 - **driver_lib.py refuses CLI invocation loudly (#905, epic #875).** A bare
