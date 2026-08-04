@@ -31,8 +31,13 @@ mutation) that design #134 follow-up #2 deferred is intentionally NOT here — i
 stays evidence-gated. Extend this module with that layer only when campaign
 experience shows hand-maintained state transitions are error-prone.
 
-Pure, stdlib-only, no I/O and no side effects — safe to import from the driver
-pattern, the test suite, or a ``python3 -c`` one-liner in the docs.
+Pure, stdlib-only, no I/O and no side effects when imported — safe to import
+from the driver pattern, the test suite, or a ``python3 -c`` one-liner in the
+docs.
+
+Not a CLI: direct invocation (``python3 hooks/driver_lib.py …``) refuses loudly
+with exit 2 (#905) — the runnable commands live in ``hooks/launcher_lib.py``. A
+silent rc-0 here was once read as a passing gate while the real gate refused.
 """
 import copy
 import hashlib
@@ -2429,3 +2434,14 @@ def validate_campaign_start(state: dict) -> tuple[bool, list[str]]:
     """
     ok, errors = validate_driver_state(state)
     return len(list(errors)) == 0, list(errors)
+
+
+if __name__ == "__main__":
+    # #905: a bare `python3 hooks/driver_lib.py <anything>` used to import-and-exit 0
+    # silently — success-shaped nothing that was read as a passing gate. Refuse loudly.
+    # `sys` is imported HERE so the module's import-time surface stays byte-identical.
+    import sys
+    sys.stderr.write(
+        "driver_lib is a pure library with no CLI — "
+        "use `python3 hooks/launcher_lib.py <subcommand>`\n")
+    sys.exit(2)
