@@ -63,12 +63,14 @@ def measured_sizes() -> dict:
 
 
 def budget_violations(sizes: dict, budgets: dict, total_ceiling: int) -> list:
-    """All budget violations, one message per violation, each naming the path.
+    """All budget violations, one message per violation.
 
     Four classes: UNBUDGETED (globbed file with no budget entry), STALE BUDGET
     (budget entry with no file), OVER CEILING (file over its per-file ceiling),
-    OVER TOTAL (corpus over the total ceiling). Over-messages carry actual,
-    ceiling, and the byte delta (#856 AC4). Never quotes file content.
+    OVER TOTAL (corpus over the total ceiling). The three file-specific classes
+    name the offending path; the two over-classes carry actual, ceiling, and
+    the byte delta (#856 AC4) — OVER TOTAL is corpus-wide, so it names no
+    single file. Never quotes file content.
     """
     violations = []
     for path in sorted(sizes.keys() - budgets.keys()):
