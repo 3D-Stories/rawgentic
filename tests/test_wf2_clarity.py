@@ -210,6 +210,21 @@ class TestStep11DiffReview:
         assert "failed (invalid diffReviewMode config)" in s11
         assert "never default to `auto`" in s11
 
+    def test_every_other_nonzero_mode_exit_has_a_defined_marker(self):
+        """#879 review (Medium, the finding that fired the ambiguity breaker):
+        defining only exit 0 and exit 2 left an unreadable workspace or a loader
+        crash with no prescribed marker, so each run would improvise at a
+        security gate."""
+        s11 = _step11()
+        assert "failed (diffReviewMode resolution error:" in s11
+
+    def test_always_with_unavailable_base_ref_is_surfaced_in_the_pr_body(self):
+        """#879 review (High x2): under `always` a base-ref failure still skips the
+        review and its `failed` marker satisfies the completion gate — so the unmet
+        every-diff promise must reach the PR body, not only session notes."""
+        s11 = _step11()
+        assert "the mandated every-diff review did NOT run" in s11
+
     def test_dispatch_command_shape(self):
         # M0b (#866): the diff review dispatches the runner, tokenless (report-only).
         s11 = _step11()

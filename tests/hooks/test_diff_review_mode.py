@@ -242,6 +242,33 @@ class TestDiffReviewModeSubcommand:
         assert r.returncode == 0
         assert r.stdout.strip() == "always"
 
+    @pytest.mark.parametrize("bad,shown", [("alwyas", "'alwyas'"), (5, "5"), (True, "True")])
+    def test_rejected_value_is_not_double_quoted(self, tmp_path, bad, shown):
+        """#879 review (Low): `diff_review_mode_error_value` ALREADY holds repr(raw),
+        so formatting it with !r again would double-quote it — int 5 would surface as
+        "'5'" and its type would be hidden, defeating the diagnostic the field exists
+        for. The rejected value must appear exactly as repr() rendered it, once."""
+        ws = _write_ws(tmp_path, [_proj(adversarialReview={
+            "enabled": True, "workflows": ["x"], "diffReviewMode": bad})])
+        r = _run_mode_cmd(ws, "p")
+        assert r.returncode == 2
+        assert f"value {shown} in the" in r.stderr
+        # the double-quoted form must NOT appear
+        assert f'"{shown}"' not in r.stderr
+        assert f"'{shown}'" not in r.stderr
+
+    def test_backend_verb_rejected_value_also_not_double_quoted(self, tmp_path):
+        """The same wart existed on the `backend` verb; both were fixed together so
+        the two sibling verbs keep reporting rejected values identically."""
+        ws = _write_ws(tmp_path, [_proj(adversarialReview={
+            "enabled": True, "workflows": ["x"], "backend": 5})])
+        r = subprocess.run(
+            [sys.executable, CLI, "backend", "--workspace", str(ws), "--project", "p"],
+            capture_output=True, text=True, timeout=30)
+        assert r.returncode == 2
+        assert "value 5 in the" in r.stderr
+        assert "'5'" not in r.stderr
+
     def test_help_lists_the_new_verb(self):
         r = subprocess.run([sys.executable, CLI, "--help"],
                            capture_output=True, text=True, timeout=30)

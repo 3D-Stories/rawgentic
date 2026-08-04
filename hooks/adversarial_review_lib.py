@@ -1582,8 +1582,11 @@ def main(argv: list[str] | None = None) -> int:
         if cfg.backend == "invalid":
             # _coerce_backend already printed the naming warning at load time;
             # repeat the rejected value here so THIS invocation's stderr carries it.
+            # backend_error_value ALREADY holds repr(raw); formatting it with !r
+            # again would double-quote it, so int 5 would surface as "'5'" and
+            # hide its type (#879 review, Low). Interpolate it plainly.
             print(
-                f"invalid `backend` value {cfg.backend_error_value!r} in the "
+                f"invalid `backend` value {cfg.backend_error_value} in the "
                 f"{args.key} config for project {args.project!r}; expected one of "
                 f"{list(BACKENDS)} — refusing (no egress)",
                 file=sys.stderr,
@@ -1597,8 +1600,10 @@ def main(argv: list[str] | None = None) -> int:
         if cfg.diff_review_mode == "invalid":
             # _coerce_diff_review_mode already printed the naming warning at load
             # time; repeat the rejected value so THIS invocation's stderr carries it.
+            # Plain interpolation, not !r — the field already holds repr(raw), so
+            # !r would double-quote it and hide the rejected value's real type.
             print(
-                f"invalid `diffReviewMode` value {cfg.diff_review_mode_error_value!r} "
+                f"invalid `diffReviewMode` value {cfg.diff_review_mode_error_value} "
                 f"in the {args.key} config for project {args.project!r}; expected one "
                 f"of {list(DIFF_REVIEW_MODES)} — refusing (the diff review gate cannot "
                 "resolve a mode)",
