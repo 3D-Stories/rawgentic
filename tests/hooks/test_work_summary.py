@@ -2037,6 +2037,23 @@ class TestGateRowForStep11_5Forbidden:
         from work_summary import validate_record
         assert validate_record(self._rec_with_11_5()) == []
 
+    def test_load_store_keeps_a_historical_11_5_row(self, tmp_path):
+        """Pin the REAL consumer, not just the function it calls. `load_store` is what
+        reads the committed store and it validates leniently, so a record carrying the
+        forbidden row must survive it with an EMPTY excluded list. Live equivalent at
+        the time of this change: the committed store loaded 205 records, 0 excluded,
+        with all 28 `11.5` rows still readable. (Added from the Step-11 cross-model
+        review, which correctly noted the lenient pin above exercises `validate_record`
+        rather than the read path that actually consumes the store.)"""
+        from work_summary import load_store
+        rec = _store_rec(gates=list(_valid_record()["gates"])
+                         + [dict(self.HISTORICAL_ROW)])
+        p = _write_store(tmp_path / "s.jsonl", [rec])
+        records, excluded = load_store(p)
+        assert excluded == [], excluded
+        assert len(records) == 1
+        assert any(g["step"] == "11.5" for g in records[0]["gates"])
+
     def test_cli_write_rejects_11_5_row_and_does_not_persist(self, tmp_path):
         import subprocess
         rf = tmp_path / "rec.json"

@@ -743,8 +743,10 @@ For major changes, please open an issue first to discuss the approach.
   rewritten (the store is append-only), so those summaries keep their duplicate line as a stated
   consequence. Tests: 6 new — strict rejection, index naming, the actionable `security_scan` pointer,
   the same record passing once the row is removed, the CLI write path exiting 1 without persisting,
-  and a lenient-read pin that goes red if the guard is ever moved out of strict mode. No
-  workflow-spine change → no diagram REV. Suite 4880→4886.
+  and two lenient-read pins that go red if the guard is ever moved out of strict mode — one on
+  `validate_record`, one on `load_store` itself (the read path that actually consumes the store),
+  the latter added from the Step-11 cross-model review. No workflow-spine change → no diagram REV.
+  Suite 4880→4887.
 
 ### v3.125.6 (2026-08-04)
 - **The `project_switched` handoff gate compares `project_path` path-equivalently, and says which
