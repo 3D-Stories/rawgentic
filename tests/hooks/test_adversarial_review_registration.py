@@ -46,11 +46,13 @@ def test_marketplace_registers_skill():
 # rather than pass vacuously — the whole point is finding out here instead of
 # after a release ships with a stale surface.
 #
-# THREE surfaces must agree, not four: #866 M0d retired the `phase_executor`
-# canary, and CLAUDE.md now reads "The version lives in THREE surfaces that must
-# match". Two of them are files; the third is the pinned literal below, which is
-# why bumping a version means editing a TEST — a scoped local run that skips this
-# file is exactly how the miss reaches CI.
+# THREE surfaces must agree, not four: #866 M0d retired the fourth (a version
+# constant in the deleted phase-package), and CLAUDE.md now reads "The version
+# lives in THREE surfaces that must match". Two of them are files; the third is
+# the pinned literal below, which is why bumping a version means editing a TEST —
+# a scoped local run that skips this file is exactly how the miss reaches CI.
+# Deliberately not naming the retired module here: tests/test_retirement_tripwire.py
+# scans active surfaces for retired vocabulary and flagged the earlier wording.
 EXPECTED_PLUGIN_VERSION = "3.125.2"
 
 VERSION_SURFACE_FILES = (
