@@ -664,13 +664,15 @@ def run_review(*, verb: str, artifact=None, artifact_type: str = "generic",
     truncation_retries = 0
     word_confidence_retries = 0
     switch_note = ""
-    # #902 (8a F1): a valid parse whose confidence needed mapping is HELD while
-    # the one bounded re-roll runs. The re-roll replaces it ONLY when itself
-    # valid, fully native, and non-empty — any other outcome (empty, invalid,
-    # transport-failed) accepts the held mapped result. A review already
-    # validly in hand never becomes a failure or an empty pass because its
-    # polish re-roll went sideways, and no transport/truncation retry or
-    # backend switch is ever spent on the re-roll.
+    # #902 (8a F1 + Step-11 F1): a valid parse whose confidence needed mapping
+    # is HELD while the one bounded re-roll runs. A valid, fully native,
+    # non-empty re-roll is UNION-merged with the held findings (native copy
+    # wins an exact dedupe-key match; no held finding is ever lost); any other
+    # outcome (empty, still-mapped, invalid, transport-failed) accepts the
+    # held mapped result outright. A review already validly in hand never
+    # becomes a failure or an empty pass because its polish re-roll went
+    # sideways, and no transport/truncation retry or backend switch is ever
+    # spent on the re-roll.
     held_mapped = None  # (parsed, stderr_of_that_attempt)
 
     def _accept(parsed, any_mapped, stderr_text):
@@ -794,11 +796,28 @@ def run_review(*, verb: str, artifact=None, artifact_type: str = "generic",
                   "before mapping (#902)", file=sys.stderr)
             continue
         if held_mapped is not None and (any_mapped or not parsed["findings"]):
-            # The re-roll is only better when fully native AND non-empty;
-            # otherwise the held review wins — a re-roll never loses findings.
+            # A still-mapped or empty re-roll is not better — the held review
+            # wins outright.
             print("review_runner: confidence re-roll not strictly better — "
                   "accepting the held mapped result (#902)", file=sys.stderr)
             return _accept(held_mapped[0], True, held_mapped[1])
+        if held_mapped is not None:
+            # Native non-empty re-roll: UNION-merge (Step-11 F1) — every held
+            # finding survives; on an exact dedupe-key match the native copy
+            # wins. A re-roll can only ADD findings or upgrade provenance,
+            # never silently lose a held finding.
+            key = lambda f: (f["severity"], f.get("location") or "",
+                             f["description"])
+            merged = list(parsed["findings"])
+            have = {key(f) for f in merged}
+            merged.extend(f for f in held_mapped[0]["findings"]
+                          if key(f) not in have)
+            merged.sort(key=lambda x: (arl._SEVERITY_RANK[x["severity"]],
+                                       x["category"]))
+            parsed = {"findings": merged, "summary": parsed["summary"],
+                      "proposal": parsed["proposal"]}
+            any_mapped = any(f.get("confidence_source") == "mapped"
+                             for f in merged)
         return _accept(parsed, any_mapped, att["stderr"])
 
 

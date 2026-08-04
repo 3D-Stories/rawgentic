@@ -143,6 +143,8 @@ def test_coerce_confidence_numeric_strings_map_with_mapped_flag(value, expected_
     1.5, -0.1, "1.5", "-3",            # out of range
     float("nan"), float("inf"), "nan", "inf", "1e300",  # non-finite / overflow
     [], {}, ("high",),
+    10 ** 400,                         # Step-11 F2: float(huge int) raises
+    -(10 ** 400),                      # OverflowError — must refuse, not crash
 ])
 def test_coerce_confidence_garbage_refuses(value):
     assert arl.coerce_confidence(value) is None

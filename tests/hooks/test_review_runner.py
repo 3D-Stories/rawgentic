@@ -596,6 +596,37 @@ class TestNumericConfidence:
         assert r["confidence_mapped"] is True
         assert len(r["findings"]) == 1
 
+    def test_native_reroll_merges_instead_of_replacing_held(self, stub, project):
+        # Step-11 F1 (#902): a native non-empty re-roll must never silently
+        # LOSE held findings — the union is kept (native copy wins only on an
+        # exact dedupe-key match).
+        stub.env["CODEX_STUB_BODY_FIRST"] = WORD_BODY
+        stub.env["CODEX_STUB_BODY"] = json.dumps({"summary": "fresh", "findings": [
+            dict(VALID_FINDING, confidence=0.75,
+                 description="a different native finding"),
+        ]})
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        r = _result(project)
+        descs = {f["description"] for f in r["findings"]}
+        assert descs == {"fail-open guard", "a different native finding"}
+        by_desc = {f["description"]: f for f in r["findings"]}
+        assert by_desc["fail-open guard"]["confidence_source"] == "mapped"
+        assert by_desc["a different native finding"]["confidence_source"] == "native"
+        assert r["confidence_mapped"] is True  # a mapped held finding survived
+
+    def test_native_reroll_matching_finding_takes_native_copy(self, stub, project):
+        # Same finding (identical dedupe key) in both rounds: the native
+        # re-roll copy wins the collapse, so nothing is mapped in the result.
+        stub.env["CODEX_STUB_BODY_FIRST"] = WORD_BODY
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        r = _result(project)
+        assert len(r["findings"]) == 1
+        assert r["findings"][0]["confidence"] == 0.85
+        assert r["findings"][0]["confidence_source"] == "native"
+        assert r["confidence_mapped"] is False
+
     def test_retry_diagnostic_names_non_native_confidence(self, stub, project):
         # 8a F3: numeric strings route here too — the diagnostic must not
         # claim "word-form".

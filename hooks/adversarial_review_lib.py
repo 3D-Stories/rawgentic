@@ -220,7 +220,12 @@ def coerce_confidence(value: object):
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        v = float(value)
+        try:
+            v = float(value)
+        except OverflowError:
+            # A JSON integer of arbitrary precision (e.g. 1 followed by 400
+            # zeros) overflows float() — refuse, never crash (Step-11 F2).
+            return None
         if math.isfinite(v) and 0.0 <= v <= 1.0:
             return v, "native"
         return None
