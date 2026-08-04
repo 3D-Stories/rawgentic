@@ -803,31 +803,12 @@ class TestDelegatedReads:
             "post-creation asserts")
 
 
-# --- #344 Task 5: Step 12 design-artifact style-resolution vocabulary ---
-
-class TestDesignArtifactStyleVocabulary:
-    """Drift guard for the #344 Step 12/2b style-resolution contract. When the
-    design-artifact template vocabulary expanded (plain-only default → the full
-    seven-template set defaulting to `design`), the WF2 render prose had to state
-    the new contract. Content pin on the implement-feature corpus (the sentence
-    lives in references/steps.md), whitespace-normalized (prose hard-wraps)."""
-
-    CANONICAL = (
-        "Design artifacts render with the template resolved by "
-        "`design_artifact_style` — the full design-language vocabulary, "
-        "defaulting to `design` when the config sets no style."
-    )
-
-    def test_style_resolution_canonical_sentence_present(self):
-        corpus = " ".join(skill_corpus("implement-feature").split())
-        assert self.CANONICAL in corpus, (
-            "the #344 Step 12 design-artifact style-resolution sentence must be "
-            "present in the implement-feature corpus")
-
-
-# --- #330 DISPATCH grammar: retired by the M0b retreat (#866) — current runs emit
-# --- no DISPATCH lines; docs/run-records.md keeps the legacy capture contract for
-# --- historical records (TestDispatchCaptureDoc below still pins it there).
+# --- #874 AC3: two wording-only guards were removed here — the #344 Step-12
+# --- design-artifact style sentence and the #330 DISPATCH capture example. Both
+# --- pinned prose phrasing only (the #330 one for a mechanism M0b RETIRED), so
+# --- their failure would have meant "prose was reworded", never "a gate stopped
+# --- being enforceable". The retired-vocabulary invariant itself is still guarded
+# --- by TestDispatchRegexIsLegacyOnly below and by tests/test_no_executor_prose.py.
 
 
 class TestDispatchesAssembly:
@@ -849,36 +830,6 @@ class TestDispatchesAssembly:
 
 
 # --- #330: dispatches[] capture contract + worked example, docs/run-records.md ---
-
-class TestDispatchCaptureDoc:
-    """Direct-file guard (docs/run-records.md is not part of the skill corpus, so
-    this reads the file directly rather than via skill_corpus) pinning the #330
-    `### Capture` subsection's worked example. Header-index-sliced to the
-    `## dispatches (#329)` section (repo convention: TestTieredLoopback, :444-454)
-    so a stray match elsewhere in the doc can't false-positive the pin."""
-
-    RUN_RECORDS = REPO_ROOT / "docs" / "run-records.md"
-
-    def _dispatches_section(self) -> str:
-        text = self.RUN_RECORDS.read_text()
-        start = text.index("## dispatches (#329)")
-        end = text.index("## Fail-closed for the store", start)
-        return text[start:end]
-
-    def test_capture_subsection_pins_null_model_assembled_entry(self):
-        section = self._dispatches_section()
-        assert "### Capture (#330)" in section, (
-            "docs/run-records.md's dispatches section must have a #330 Capture "
-            "subsection")
-        canonical_line = (
-            '{"role": "analysis", "subagent_type": "generic-analysis", '
-            '"model": null, "effort": null, "outcome": "ok", '
-            '"resolution": "generic"}'
-        )
-        assert canonical_line in section, (
-            "the #330 worked example's null-model assembled JSON entry must be "
-            "present verbatim in the dispatches section")
-
 
 class TestDispatchRegexIsLegacyOnly:
     """M0b (#866): the canonical DISPATCH regex left the active prose with the
@@ -1094,12 +1045,6 @@ class TestRunFeedbackWiring:
         "workflow completion — log and continue."
     )
 
-    def test_wiring_sentence_present(self):
-        corpus = " ".join(_text().split())
-        assert self.WIRING in corpus, (
-            "Step 16 must carry the #338 canonical runFeedback wiring "
-            "sentence verbatim")
-
     def test_gate_command_uses_runfeedback_key(self):
         corpus = " ".join(_text().split())
         assert ("--skill implement-feature --key runFeedback") in corpus, (
@@ -1311,19 +1256,22 @@ class TestProbeBeforeDesign:
     def _probe_block(self) -> str:
         return " ".join(_block(_text(), "probe-before-design").split())
 
-    def test_canonical_probe_directive_sentence(self):
-        # AC1's contract, single-sourced in the <probe-before-design> block.
+    def test_exact_invocation_rule_is_pinned(self):
+        """RESTORED after review F2: I deleted this as 'wording' during the AC3
+        sweep and that was a misclassification. It pins a RULE — probe the exact
+        shipped invocation, never a proxy — and the surviving cross-reference
+        test only proves the marker appears, so without this a proxy probe could
+        be presented as feasibility evidence with every guard green."""
         assert (
             "run a SHORT live probe of the EXACT invocation the design will "
             "ship — never a proxy composition — and cite the probe's real "
             "result in the `platform_apis:` feasibility block"
         ) in self._probe_block()
 
-    def test_spike_references_actual_invocation_sentence(self):
-        # AC1's spike rule: the claim names the shipped invocation, not a proxy.
-        block = self._probe_block()
+    def test_spike_must_reference_the_shipped_invocation(self):
+        """RESTORED after review F2 — same misclassification."""
         assert ("a `verified via spike` claim must reference the actual "
-                "shipped invocation") in block
+                "shipped invocation") in self._probe_block()
 
     def test_feasibility_sites_point_at_canonical_block(self):
         # AC2: the Step 3 platform_apis rules and the Step 4 feasibility gate
@@ -1405,8 +1353,11 @@ class TestEarlySmokeInstall:
     def _smoke_block(self) -> str:
         return " ".join(_block(_text(), "early-smoke-install").split())
 
-    def test_canonical_early_smoke_directive_sentence(self):
-        # AC1's contract, single-sourced in the <early-smoke-install> block.
+    def test_the_check_is_actually_prescribed(self):
+        """RESTORED after review F3: deleting this left only the deploy-GATING
+        sentence, so the instruction to actually run the check could vanish
+        while the remaining guard passed. Gating without the instruction gates
+        nothing."""
         assert (
             "after the first runnable commit boots something, run a cheap "
             "live smoke-install/boot check (install / start / health) before "
@@ -1525,12 +1476,6 @@ class TestTimingAssembly:
     def test_step16_never_fabricates_durations(self):
         assert ("hand-estimate durations into `timing`" in self._step16()), (
             "§16 must forbid hand-estimated durations (#506 AC4)")
-
-    def test_run_record_doc_pins_timing_schema(self):
-        doc = " ".join((REFERENCES / "run-record.md").read_text().split())
-        assert "**`timing` (OPTIONAL, #506):**" in doc, (
-            "run-record.md must document the timing key (#506 AC5)")
-
 
 class TestStep4BudgetExhaustedClose:
     """#798 — the Step-4 design gate closes budget-exhausted instead of escalating.
@@ -1707,3 +1652,89 @@ class TestSplitFileOrdering:
 
     def test_monolith_is_gone(self):
         assert not (REFERENCES / "steps.md").exists()  # tripwire-exempt: negative guard
+
+
+class TestSixContractAreasStillGuarded:
+    """#874 AC3: the sweep removes WORDING pins, so something must prove it did
+    not also remove a CONTRACT.
+
+    Review F1/F5 rewrote this. The first version checked for `class X:` SOURCE
+    TEXT and for sibling files EXISTING — so a class emptied of its assertions,
+    or a sibling file emptied of its contents, both passed while the contract
+    became unenforced. It was theatre for exactly the regression it claimed to
+    detect. It now parses the AST and counts real assert statements, and reads
+    the siblings' content rather than their existence.
+
+    The executor-vocabulary area is a NEGATIVE invariant over a scope, not
+    ownership of one canonical sentence, so it is asserted separately and is
+    deliberately NOT counted as a prose pin.
+    """
+
+    AREA_GUARDS = {
+        "mandatory review sites": ("TestStep11DiffReview", "TestReviewLensRouting"),
+        "artifact delivery": ("TestStep11DiffReview", "TestDelegatedReads"),
+        "loop-back debit": ("TestTieredLoopback", "TestStep4BudgetExhaustedClose"),
+        "deferral honesty": ("TestDeferredVerification", "TestDispositionLedger"),
+    }
+    MIN_ASSERTS = 2
+
+    @staticmethod
+    def _assert_counts() -> dict:
+        """Class name -> number of executable assert statements, via AST.
+
+        AST, not grep: a commented-out or string-literal `assert` must not count,
+        and a renamed-away class must not be found by a substring match.
+        """
+        import ast
+        tree = ast.parse(Path(__file__).read_text())
+        out = {}
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef):
+                out[node.name] = sum(1 for n in ast.walk(node)
+                                     if isinstance(n, ast.Assert))
+        return out
+
+    def test_each_contract_area_retains_a_guard_with_real_assertions(self):
+        counts = self._assert_counts()
+        missing = []
+        for area, names in self.AREA_GUARDS.items():
+            best = max((counts.get(n, 0) for n in names), default=0)
+            if best < self.MIN_ASSERTS:
+                missing.append(
+                    f"{area}: none of {names} carries >= {self.MIN_ASSERTS} "
+                    f"assertions (best was {best})")
+        assert not missing, (
+            "AC3 deleted a CONTRACT, not just wording:\n" + "\n".join(missing))
+
+    def test_this_meta_check_cannot_pass_on_an_empty_parse(self):
+        """Review F1: the floor must fail loudly if it can no longer see the
+        classes it grades, rather than grading an empty mapping as clean."""
+        counts = self._assert_counts()
+        assert len(counts) >= 20, f"AST parse looks broken: {sorted(counts)}"
+        assert sum(counts.values()) >= 100, "assertion count implausibly low"
+
+    def test_reviewer_not_author_guard_has_content_not_just_a_file(self):
+        """Review F5: previously asserted the sibling file EXISTED, so emptying
+        it passed. The reviewer!=author separation is enforced by the runner and
+        pinned in that file — check the pin, not the inode."""
+        sibling = Path(__file__).resolve().parent / "hooks" / "test_wf_review_sites.py"
+        assert sibling.exists(), "the reviewer!=author guard file is missing"
+        body = sibling.read_text()
+        assert body.count("assert ") >= 3, (
+            "test_wf_review_sites.py has lost its assertions — reviewer!=author "
+            "would be unenforced while this floor stayed green")
+        assert "review_runner" in body
+
+    def test_executor_vocabulary_negative_scan_has_content(self):
+        """Sixth area, counted separately from prose pins. Review F5: content,
+        not existence."""
+        src = Path(__file__).read_text()
+        assert "class TestDispatchRegexIsLegacyOnly:" in src
+        repo_wide = Path(__file__).resolve().parent / "test_no_executor_prose.py"
+        assert repo_wide.exists(), (
+            "the repo-wide executor-vocabulary negative scan must exist "
+            "(tests/test_no_executor_prose.py)")
+        body = repo_wide.read_text()
+        assert body.count("assert ") >= 2, (
+            "test_no_executor_prose.py has lost its assertions — the "
+            "executor-vocabulary prohibition would be unenforced")
