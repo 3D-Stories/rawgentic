@@ -1020,7 +1020,7 @@ _HANDOFF_BUILDERS = frozenset({
     "build_pane_get_argv", "perform_handoff", "retire_predecessor",
 })
 # A herdr COMMAND, not the bare word: `herdr` also appears legitimately as a terminal-backend
-# NAME in capabilities_lib, driver_lib and executor_routing_lib, and a guard that fired on that
+# NAME in capabilities_lib and driver_lib (and, pre-#866, the executor routing lib), and a guard that fired on that
 # would be a keyword alarm rather than a check.
 # The DRIVING verbs only. A read-only `herdr api snapshot` or `herdr pane list` is not a handoff
 # path, and flagging it would make this guard fire on any module that merely observes herdr — which

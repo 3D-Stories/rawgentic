@@ -40,9 +40,9 @@ WORKSPACE_MARKER = ".rawgentic_workspace.json"
 DEFAULT_MAX_AGE_MIN = 240
 CLOCK_SKEW_MIN = 5  # future-dated entered_at beyond this is corrupt, not "fresh forever"
 
-# Local reimplementation of the phase_executor/capture.py `sanitize_component`
-# idiom (that module deliberately doesn't import `hooks/` — see its own
-# docstring — so this is a conceptual port, not a shared import): neutralize
+# Local reimplementation of the retired executor capture module's
+# `sanitize_component` idiom (a conceptual port — that module deliberately
+# didn't import `hooks/`, and it is deleted since #866 M0d): neutralize
 # every char outside the safe set (in particular `/` and `\\`, so no
 # sanitized name can ever contain a path separator) rather than reject
 # outright, then still reject anything that collapses to all-dots/empty.

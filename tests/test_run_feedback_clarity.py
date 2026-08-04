@@ -389,7 +389,7 @@ class TestSuggestOnlyFiling:
                 and "file only the approved ones, exactly as drafted" in s), (
             "interactive default must be suggest-first (#507 AC1)")
 
-    def test_headless_and_embed_stay_autonomous(self):
+    def test_embedded_callers_stay_autonomous(self):
         s = self._step4()
         assert "keeps today's filing byte-for-byte" in s, (
             "headless/embedded path must not gain an interactive gate (#507 AC2)")

@@ -264,7 +264,7 @@ threshold keeps the threshold on its step and books the excess to `phases.idle`
 with `idle_gap: true` (a quota pause or owner-away stall is never silently
 attributed to the step it interrupted). `status` distinguishes complete
 (first event at step ≤ 2 AND an event at/after the PR-creation step — wf2 12 /
-wf3 10, the last step every path incl. headless reaches BEFORE assembly runs
+wf3 10, the last step every path reaches BEFORE assembly runs
 the CLI; the completion step's own event lands only after timing is embedded,
 #506 review F1) / partial / absent —
 missing history degrades visibly, never into invented numbers. Populate via

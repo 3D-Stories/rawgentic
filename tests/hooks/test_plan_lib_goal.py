@@ -93,19 +93,6 @@ class TestWf3:
         assert "should never appear" not in result
 
 
-class TestHeadless:
-    def test_headless_matches_non_headless(self):
-        wf2_a = plan_lib.build_goal_text(156, ["Foo"], headless=True)
-        wf2_b = plan_lib.build_goal_text(156, ["Foo"], headless=False)
-        assert wf2_a == wf2_b
-        assert "merged" not in wf2_a
-
-        wf3_a = plan_lib.build_goal_text(12, [], variant="wf3", headless=True)
-        wf3_b = plan_lib.build_goal_text(12, [], variant="wf3", headless=False)
-        assert wf3_a == wf3_b
-        assert "merged" not in wf3_a
-
-
 class TestEscapeDisjunctAlwaysPresent:
     def test_present_in_happy_path(self):
         assert plan_lib.build_goal_text(1, ["A"]).endswith(ESCAPE_DISJUNCT)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """WF2 resumption step-detection for the implement-feature workflow skill.
 
-WF2 may span multiple Claude Code sessions (context compaction, fresh headless
+WF2 may span multiple Claude Code sessions (context compaction, fresh
 sessions, worktrees). On every resume the orchestrator must decide which of the
 16 steps to re-enter. That decision is a *priority-ordered cascade*: a merged PR
 resumes at post-deploy verification even if a stale design doc also exists; a
@@ -53,17 +53,6 @@ NOTES_STATES = ("none", "issue-validated", "design-doc")
 # gate and terminate rather than redo Step 15.
 COMPLETION_GATE = "completion-gate"
 
-# Executor JobRegistry dimension (#470). This dimension is ADVISORY: it NEVER
-# changes the resume step (the step cascade above is the single source of the
-# ordering). It only surfaces what the resuming orchestrator must do about live
-# executor jobs before re-dispatching a seat. ABSENT is the pre-#470 default —
-# a caller that omits it gets byte-identical behavior (no advisory).
-#   absent     -> no executor registry dir for this run (pre-#470)  -> no advisory
-#   none-live  -> registry present, no live jobs                    -> "resume normally" note
-#   live-jobs  -> registry present, live jobs for this run_id       -> recover-adopt advisory
-REGISTRY_STATES = ("absent", "none-live", "live-jobs")
-
-
 def detect_resume_step(
     pr_state: str,
     branch_state: str,
@@ -71,7 +60,6 @@ def detect_resume_step(
     *,
     markers_complete: bool = False,
     completion_gate_printed: bool = False,
-    headless: bool = False,
 ) -> int | str:
     """Return the WF2 step to resume at given the gathered facts.
 
@@ -82,8 +70,7 @@ def detect_resume_step(
     restarting an in-flight workflow because a fact was mistyped would be worse
     than failing loudly.
 
-    ``headless`` (issue #47): in headless mode WF2 is PR-terminal — it never
-    merges or deploys. A ``ready-to-merge`` PR (which non-headless would merge at
+
     Step 14) and a ``merged`` PR (whose post-deploy at Step 15 is meaningless when
     the bot performed no deploy) both resume at Step 16 (completion). ``open`` is
     deliberately NOT remapped: the bot may still fix CI by pushing to its own PR
@@ -99,19 +86,15 @@ def detect_resume_step(
                 f"invalid {name} {value!r} (expected one of {list(valid)})"
             )
 
-    # Rule 0 (precedence above everything except the headless check, which the
-    # skill runs first in prose): a fully-marked run that never printed its gate.
+    # Rule 0 (highest precedence): a fully-marked run that never printed its gate.
     if markers_complete and not completion_gate_printed:
         return COMPLETION_GATE
 
     # PR cascade (rules 1-3) — a PR outranks branch/notes state.
-    # Headless (issue #47) is PR-terminal: ready-to-merge and merged both collapse
-    # to Step 16 (no merge, no deploy, no post-deploy). `open` is unchanged so the
-    # bot can still push CI fixes (a local op) before completing.
     if pr_state == "merged":
-        return 16 if headless else 15
+        return 15
     if pr_state == "ready-to-merge":
-        return 16 if headless else 14
+        return 14
     if pr_state == "open":
         return 13
 
@@ -131,45 +114,6 @@ def detect_resume_step(
 
     # Rule 9: nothing detected — start from the top.
     return 1
-
-
-def registry_advisory(registry_state: str) -> str | None:
-    """Return the executor-JobRegistry advisory for a resume, or None (#470).
-
-    This is ADDITIVE to step detection — it NEVER changes the resume step (the
-    step cascade is the single source of the ordering); it only tells the
-    resuming orchestrator what to do about live executor jobs before it
-    re-dispatches any seat. ``absent`` (the pre-#470 default) returns None so a
-    caller that omits the registry state gets byte-identical output.
-
-    ``none-live`` returns a "resume normally" note; ``live-jobs`` returns the
-    recover-adopt advisory naming ``supervisor.recover(run_id)`` (tmux session
-    identity is the adoption key; identity-matched jobs are ADOPTED with the D-12
-    permit re-established under the adopting pid, mismatches QUARANTINED), which
-    must run BEFORE re-dispatching a seat. An unrecognized state raises
-    ``ValueError`` (fail-closed at the boundary, matching the step-cascade enums)
-    rather than silently dropping the advisory.
-    """
-    if registry_state not in REGISTRY_STATES:
-        raise ValueError(
-            f"invalid registry_state {registry_state!r} "
-            f"(expected one of {list(REGISTRY_STATES)})"
-        )
-    if registry_state == "absent":
-        return None
-    if registry_state == "none-live":
-        return (
-            "registry advisory: executor JobRegistry present, no live executor "
-            "jobs for this run_id — resume normally."
-        )
-    # live-jobs
-    return (
-        "registry advisory: live executor jobs for this run_id — run "
-        "supervisor.recover(run_id) BEFORE re-dispatching any seat. "
-        "Identity-matched jobs (tmux session identity is the adoption key) are "
-        "ADOPTED (D-12 quota permit re-established under the adopting pid); "
-        "mismatches are QUARANTINED (surfaced to the user, never adopted)."
-    )
 
 
 def main(argv=None) -> int:
@@ -208,19 +152,6 @@ def main(argv=None) -> int:
     p.add_argument("--completion-gate-printed", choices=["true", "false"],
                    default="false", dest="completion_gate_printed",
                    help="whether the completion gate was already printed")
-    p.add_argument("--headless", choices=["true", "false"], default="false",
-                   dest="headless",
-                   help="whether running in headless mode (PR-terminal: "
-                        "ready-to-merge/merged resume at Step 16, no merge/deploy)")
-    # Executor JobRegistry state (#470). Optional; ABSENT (default) is the
-    # pre-#470 behavior — byte-identical output, no advisory. When present, an
-    # ADVISORY line is written to STDERR so stdout stays the bare step for
-    # `STEP=$(... detect-step ...)` capture; the step itself never changes.
-    p.add_argument("--registry-state", choices=list(REGISTRY_STATES),
-                   default="absent", dest="registry_state",
-                   help="executor JobRegistry state for this run_id; ADVISORY "
-                        "only (never changes the step). live-jobs => recover-adopt "
-                        "advisory on stderr before re-dispatching a seat")
 
     args = parser.parse_args(argv)
 
@@ -230,16 +161,11 @@ def main(argv=None) -> int:
                 args.pr_state, args.branch_state, args.notes_state,
                 markers_complete=(args.markers_complete == "true"),
                 completion_gate_printed=(args.completion_gate_printed == "true"),
-                headless=(args.headless == "true"),
             )
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 1
         print(step)
-        # Registry advisory (#470): stderr only, so stdout stays the bare step.
-        advisory = registry_advisory(args.registry_state)
-        if advisory is not None:
-            print(advisory, file=sys.stderr)
         return 0
 
     return 1

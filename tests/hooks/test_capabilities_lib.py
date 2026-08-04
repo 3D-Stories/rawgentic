@@ -539,112 +539,6 @@ class TestProbeParallelismCleanupSafety:
         assert capabilities_lib.probe_parallelism(str(tmp_path)) == "worktree"
 
 
-# --- #445: phaseExecutorTable -> phase_executor_table ---
-
-class TestPhaseExecutorTable:
-    def _derive(self, **cfg_kwargs):
-        from capabilities_lib import derive_capabilities
-        return derive_capabilities(_base_config(**cfg_kwargs))
-
-    def test_absent_section_is_none(self):
-        assert self._derive()["phase_executor_table"] is None
-
-    def test_valid_descriptor_yields_file_path(self):
-        caps = self._derive(phaseExecutorTable={
-            "version": 1, "file": "claude_docs/routing/phase-executor-table.json"})
-        assert caps["phase_executor_table"] == "claude_docs/routing/phase-executor-table.json"
-
-    def test_comment_key_is_tolerated(self):
-        caps = self._derive(phaseExecutorTable={
-            "$comment": "docs", "version": 1, "file": "t.json"})
-        assert caps["phase_executor_table"] == "t.json"
-
-    @pytest.mark.parametrize("bad", [
-        "a-string", 7, [], True,                      # section not an object
-        {"file": "t.json"},                            # version missing
-        {"version": 2, "file": "t.json"},              # unsupported version
-        {"version": True, "file": "t.json"},           # bool masquerading as int
-        {"version": 1},                                # file missing (sentinel must be explicit)
-        {"version": 1, "file": ""},                    # empty
-        {"version": 1, "file": 3},                     # wrong type
-        {"version": 1, "file": "/abs/table.json"},     # absolute
-        {"version": 1, "file": "../escape.json"},      # traversal
-        {"version": 1, "file": "a/../../b.json"},      # embedded traversal
-    ])
-    def test_present_but_invalid_raises_never_none(self, bad):
-        from capabilities_lib import CapabilitiesError
-        with pytest.raises(CapabilitiesError):
-            self._derive(phaseExecutorTable=bad)
-
-    def test_field_registered_in_canonical_set(self):
-        from capabilities_lib import CAPABILITY_FIELDS
-        assert "phase_executor_table" in CAPABILITY_FIELDS
-
-    # --- #531: answered-defaults sentinel {"version": 1, "file": null} ---
-
-    def test_sentinel_null_file_is_answered_defaults(self):
-        # Explicit file: null records "answered — keep package defaults" so the
-        # staleness nudge stops; derivation is identical to an absent section.
-        caps = self._derive(phaseExecutorTable={"version": 1, "file": None})
-        assert caps["phase_executor_table"] is None
-
-    def test_sentinel_tolerates_extra_keys_like_real_pointer(self):
-        # Parity with test_comment_key_is_tolerated: unknown keys are tolerated
-        # alongside the sentinel exactly as alongside a real pointer.
-        caps = self._derive(phaseExecutorTable={
-            "$comment": "docs", "version": 1, "file": None})
-        assert caps["phase_executor_table"] is None
-
-    def test_sentinel_still_requires_version(self):
-        from capabilities_lib import CapabilitiesError
-        with pytest.raises(CapabilitiesError, match="version must be 1"):
-            self._derive(phaseExecutorTable={"file": None})
-
-
-# --- #638: executorTerminalBackend (build-seat backend config-gate) ---------
-
-class TestExecutorTerminalBackend:
-    def _derive(self, **cfg_kwargs):
-        from capabilities_lib import derive_capabilities
-        return derive_capabilities(_base_config(**cfg_kwargs))
-
-    def test_absent_section_defaults_to_tmux(self):
-        assert self._derive()["executor_terminal_backend"] == "tmux"
-
-    def test_valid_tmux_descriptor(self):
-        caps = self._derive(executorTerminalBackend={"version": 1, "build": "tmux"})
-        assert caps["executor_terminal_backend"] == "tmux"
-
-    def test_valid_herdr_descriptor(self):
-        caps = self._derive(executorTerminalBackend={"version": 1, "build": "herdr"})
-        assert caps["executor_terminal_backend"] == "herdr"
-
-    def test_comment_key_is_tolerated(self):
-        caps = self._derive(executorTerminalBackend={
-            "$comment": "docs", "version": 1, "build": "herdr"})
-        assert caps["executor_terminal_backend"] == "herdr"
-
-    @pytest.mark.parametrize("bad", [
-        "a-string", 7, [], True,                       # section not an object
-        {"build": "herdr"},                            # version missing
-        {"version": 2, "build": "herdr"},               # unsupported version
-        {"version": True, "build": "herdr"},            # bool masquerading as int
-        {"version": 1},                                 # build missing (no silent tmux fallback)
-        {"version": 1, "build": ""},                    # empty
-        {"version": 1, "build": 3},                     # wrong type
-        {"version": 1, "build": "not-a-backend"},        # unknown backend name
-        {"version": 1, "build": None},                   # no answered-defaults sentinel here
-    ])
-    def test_present_but_invalid_raises_never_silently_falls_back(self, bad):
-        from capabilities_lib import CapabilitiesError
-        with pytest.raises(CapabilitiesError):
-            self._derive(executorTerminalBackend=bad)
-
-    def test_field_registered_in_canonical_set(self):
-        from capabilities_lib import CAPABILITY_FIELDS
-        assert "executor_terminal_backend" in CAPABILITY_FIELDS
-
-
 class TestConfigTemplateRetiredKeys:
     """M0c (#866): the retired executor config keys left the template and setup
     surfaces. derive_capabilities KEEPS handling them until M0d (the shim —
@@ -655,19 +549,7 @@ class TestConfigTemplateRetiredKeys:
     def test_template_parses_and_carries_no_retired_examples(self):
         with open(self._REPO / "templates" / "rawgentic-json-schema.json") as f:
             tpl = json.load(f)  # invalid JSON would raise — the validity half of the cell
-        for retired in ("phaseExecutorTable", "executorTerminalBackend", "telemetryAlerts"):
+        for retired in ("phaseExecutorTable", "executorTerminalBackend", "telemetryAlerts"):  # tripwire-exempt: negative guard
             assert retired not in tpl, f"retired template example resurrected: {retired}"
 
 
-class TestPhaseExecutorTableControlChars:
-    @pytest.mark.parametrize("bad", ["a\x00b.json", "a\nb.json", "dir\\t.json"])
-    def test_control_and_backslash_rejected(self, bad):
-        from capabilities_lib import derive_capabilities, CapabilitiesError
-        with pytest.raises(CapabilitiesError, match="control or backslash"):
-            derive_capabilities(_base_config(phaseExecutorTable={"version": 1, "file": bad}))
-
-
-def test_phase_executor_table_version_float_rejected():
-    from capabilities_lib import derive_capabilities, CapabilitiesError
-    with pytest.raises(CapabilitiesError, match="version must be 1"):
-        derive_capabilities(_base_config(phaseExecutorTable={"version": 1.0, "file": "t.json"}))

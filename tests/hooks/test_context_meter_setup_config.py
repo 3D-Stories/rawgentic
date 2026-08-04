@@ -7,8 +7,8 @@ cost showed up live on 2026-07-29: a 1M-context session was told it was at 88% o
 was working exactly as designed against a window nobody had been asked to declare.
 
 The validator lives in `context_meter.py` beside the constants it enforces, exposed as a
-`validate-config` subcommand — the same shape `setup` already uses for `telemetryAlerts`
-(`seat_outcomes_lib.py validate-config`). That placement is the whole point rather than a
+`validate-config` subcommand — the same shape setup's retired telemetry-alerts block
+used. That placement is the whole point rather than a
 convenience: MIN_TIER_GAP_PCT and the 1..99 range are the hook's, so a validator anywhere else would
 have to copy them, and a copy is exactly the drift this issue exists to remove. It adds nothing to
 the reading, thresholds or nag behaviour #687 settled and its tests pin.
@@ -204,12 +204,12 @@ def test_setup_states_the_units_and_the_denominator(setup_body) -> None:
 
 
 def test_setup_shells_out_to_the_shared_validator(setup_body) -> None:
-    """AC3, and the same discipline as `telemetryAlerts`: never re-implement the rules in prose."""
+    """AC3, and the retired telemetry-alerts block's discipline: never re-implement the rules in prose."""
     assert "context_meter.py validate-config" in setup_body
 
 
 def test_setup_declines_by_writing_nothing(setup_body) -> None:
-    """AC5. Deliberately UNLIKE `telemetryAlerts`, which stages an answered-defaults sentinel: a
+    """AC5. Deliberately UNLIKE the retired telemetry-alerts block, which staged an answered-defaults sentinel: a
     contextMeter block that restates 60/70 is indistinguishable from a deliberate choice on the next
     read, so a later change to the shipped defaults would silently never reach that project."""
     assert "absent" in setup_body.lower()

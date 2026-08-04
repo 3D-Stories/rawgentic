@@ -377,7 +377,7 @@ PR picks them up (WF5 convention).
 to **suggest-first**: present every candidate fully drafted — conventional title,
 complete body, labels, dup-check verdict — and file only the approved ones, exactly
 as drafted (same cap, same dup-check, same labels). AUTONOMOUS filing — the
-pre-#507 behavior — applies ONLY when `RAWGENTIC_HEADLESS=1` or the explicit
+pre-#507 behavior — applies ONLY when the explicit
 `--file-issues` flag is present; embedded WF2 Step 16 / WF3 Step 14 callers pass
 `--file-issues` (see those steps' wiring sentence) — `--record` alone is NOT an
 autonomy signal, because it is also a first-class human invocation (a standalone

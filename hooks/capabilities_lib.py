@@ -24,7 +24,6 @@ import subprocess
 import sys
 import tempfile
 from datetime import datetime
-from pathlib import PurePosixPath
 
 
 # Canonical capability field set. The docs table (docs/config-reference.md) and
@@ -46,8 +45,6 @@ CAPABILITY_FIELDS = (
     "has_database",
     "has_docker",
     "migration_dir",
-    "phase_executor_table",
-    "executor_terminal_backend",
 )
 
 
@@ -241,76 +238,6 @@ def derive_capabilities(config) -> dict:
         else:
             caps["migration_dir"] = _require_nonempty_str(
                 mig, "config.database.migrationsDir")  # null/wrong/empty -> error
-
-    # --- phaseExecutorTable -> phase_executor_table (#445) ---
-    # Versioned descriptor naming the project-owned seat-table FILE (a complete replacement
-    # for the phase_executor package default, never a merge overlay). None when the section
-    # is ABSENT or carries the #531 answered-defaults sentinel ("file": null, staged by
-    # setup Step 2i on decline/keep-defaults so the answer is recordable — see below);
-    # any other present-but-invalid section raises (fail-closed) — resolution must
-    # never silently fall back to the package default on a malformed override (the
-    # false-cutover class executor_routing_lib.parse_executor_routing refuses). Shape-only
-    # here: existence/content validation is load-time (executor_routing_lib.resolve_table).
-    pet = _optional_section(config, "phaseExecutorTable")  # raises if present-non-object
-    if pet is _MISSING:
-        caps["phase_executor_table"] = None
-    else:
-        version = pet.get("version", _MISSING)
-        # Bool is an int subclass — reject it explicitly (True == 1 would sneak through).
-        if version is _MISSING or not isinstance(version, int) or isinstance(version, bool) or version != 1:
-            raise CapabilitiesError(
-                f"config.phaseExecutorTable.version must be 1 "
-                f"(got {None if version is _MISSING else version!r}). Run /rawgentic:setup.")
-        file_raw = pet.get("file", _MISSING)
-        if file_raw is None:
-            # #531 answered-defaults sentinel: an EXPLICIT "file": null records that
-            # setup asked and the user kept the package defaults (key presence stops
-            # the post_update_reconcile staleness nudge). Derivation is identical to
-            # an absent section; a MISSING file key still raises (the sentinel must
-            # be explicit — {"version": 1} alone stays fail-closed).
-            caps["phase_executor_table"] = None
-        else:
-            file_val = _require_nonempty_str(
-                file_raw, "config.phaseExecutorTable.file")
-            p = PurePosixPath(file_val)
-            if p.is_absolute() or ".." in p.parts:
-                raise CapabilitiesError(
-                    f"config.phaseExecutorTable.file must be a project-relative path with no "
-                    f"'..' traversal (got {file_val!r}). Run /rawgentic:setup.")
-            if any(ord(c) < 0x20 for c in file_val) or "\\" in file_val:
-                # NUL/control chars make pathlib/os raise ValueError downstream (escaping the
-                # uniform exit-2 mapping); backslashes are path separators on no supported
-                # platform here and only invite confusion. Same class as _UNSAFE_COMPONENT.
-                raise CapabilitiesError(
-                    f"config.phaseExecutorTable.file contains control or backslash characters "
-                    f"(got {file_val!r}). Run /rawgentic:setup.")
-            caps["phase_executor_table"] = file_val
-
-    # --- executorTerminalBackend -> executor_terminal_backend (#638) ---
-    # Which TerminalBackend the executor's `build` seat launches under. `null` section
-    # (absent) -> "tmux" (the package default, unchanged behavior). A PRESENT section
-    # must be fully valid or derive errors (fail-closed) — never silently falls back to
-    # "tmux" on a malformed override, same posture as phaseExecutorTable above.
-    etb = _optional_section(config, "executorTerminalBackend")
-    if etb is _MISSING:
-        caps["executor_terminal_backend"] = "tmux"
-    else:
-        version = etb.get("version", _MISSING)
-        if version is _MISSING or not isinstance(version, int) or isinstance(version, bool) or version != 1:
-            raise CapabilitiesError(
-                f"config.executorTerminalBackend.version must be 1 "
-                f"(got {None if version is _MISSING else version!r}). Run /rawgentic:setup.")
-        build_raw = etb.get("build", _MISSING)
-        if build_raw is _MISSING:
-            raise CapabilitiesError(
-                "config.executorTerminalBackend.build is required when the section is "
-                "present. Run /rawgentic:setup.")
-        build = _require_nonempty_str(build_raw, "config.executorTerminalBackend.build")
-        if build not in ("tmux", "herdr"):
-            raise CapabilitiesError(
-                f"config.executorTerminalBackend.build must be \"tmux\" or \"herdr\" "
-                f"(got {build!r}). Run /rawgentic:setup.")
-        caps["executor_terminal_backend"] = build
 
     # --- infrastructure.docker -> has_docker (must null-guard the docker object:
     #     infrastructure can legitimately exist with only `hosts` and no docker) ---

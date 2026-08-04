@@ -53,18 +53,6 @@ def test_step2_triggers_trivial_work_check(skill_name):
     assert "trivial-work-check" in step2.lower()
 
 
-@pytest.mark.parametrize("skill_name", ["implement-feature", "fix-bug"], ids=["wf2", "wf3"])
-def test_headless_auto_continues_trivial_suggestion(skill_name):
-    # LOCATION pin: the AUTO-RESOLVE interaction list must live in the skill's
-    # references/headless.md specifically — reads that file directly.
-    text = (SKILLS_DIR / skill_name / "references" / "headless.md").read_text(encoding="utf-8")
-    auto = _section(text, "AUTO-RESOLVE interactions", "QUESTION interactions")
-    assert "trivial" in auto.lower()
-    # Headless must CONTINUE the full workflow (no interactive user to hand off to),
-    # not bail to a direct edit.
-    assert "continue" in auto.lower()
-
-
 def test_wf2_mandatory_steps_carveout_for_trivial_exit():
     """The trivial-work exit must be reconciled with <mandatory-steps>, so a future
     orchestrator doesn't read it as 'skipping a mandatory step'."""

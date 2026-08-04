@@ -32,15 +32,6 @@ def test_interactive_error_protocol_defined():
     assert "#232" in block
 
 
-def test_headless_error_protocol_creates_ai_error_label():
-    # AC2 (confirmed): the ERROR protocol must CREATE rawgentic:ai-error before
-    # adding it — the first error in a repo otherwise fails ("label not found").
-    headless = (SKILLS / "references" / "headless.md").read_text()
-    err = _section(headless, "ERROR protocol", "**Label management:**")
-    assert "gh label create" in err, "ERROR protocol never creates the label"
-    assert "rawgentic:ai-error" in err
-
-
 def test_step13_ci_unavailable_is_visible_nongate():
     # AC3: Step 13 must treat "no CI run spawned / Actions unavailable" as a
     # visible non-gate (like the quarantine path), not force the ERROR protocol.

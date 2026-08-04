@@ -1,23 +1,25 @@
-# Hermes offload seat + owner-comms primitives (#568 Phase-2)
+# Hermes owner-comms primitives (#568 Phase-2)
 
-Operator doc for the `offload` executor seat and the Phase-2 bridge primitives. Full design:
+Operator doc for the Phase-2 bridge primitives. Full design:
 `docs/planning/2026-07-22-568-phase2-hermes-offload-design.md`.
+
+> **The `offload` executor seat was RETIRED with the executor (M0d, #866).** The
+> owner-comms primitives below survive and point at the away-mode direction
+> (epic #871). The gateway enablement runbook is kept for future gateway work.
 
 ## What shipped (v3.88.0)
 
-- **`offload` executor seat** (`hooks/executor_routing_lib.py` WIRED_SEATS; routing table
-  `phase_executor/src/phase_executor/routing/rawgentic.routing-table.json`): a read-only seat on
-  the new `hermes` engine (`adapters/hermes_http.py`), talking to the EXISTING darwin Hermes
-  gateway's OpenAI-compatible `/v1/runs` HTTP API. **No second Hermes instance** — it taps the
-  gateway already running on darwin (10.0.17.204, systemd `hermes-gateway.service`).
+- **`offload` executor seat — RETIRED (M0d #866):** was a read-only seat on the `hermes`
+  engine talking to the darwin Hermes gateway's OpenAI-compatible `/v1/runs` HTTP API
+  (gateway still runs on darwin 10.0.17.204, systemd `hermes-gateway.service`).
 - **Numbered-option owner asks** (`hooks/hermes_bridge.py`): `ask_owner(options=, response_mode=)`
   so an unattended run can text a question with numbered choices and the owner replies "1".
 - **Unattended fallback policy** (`hooks/hermes_policy.py`): a pure decision table for
   gateway-down / delivery-uncertain / reply-ambiguous / terminal-substitution.
 
-## The activation gate (why the seat is inert today)
+## The activation gate (historical — why the seat was inert)
 
-The seat's adapter probes the gateway backend before every dispatch and **REFUSES** unless the
+The seat's adapter probed the gateway backend before every dispatch and **REFUSES** unless the
 gateway reports a confirmably **sandboxed** terminal backend. rawgentic's `tool_grants:["read"]`
 is caller-side capability-selection — it does NOT constrain the gateway, which runs agent work
 with full host access when `terminal.backend: local`. Fail-closed: an absent/unknown/`local`
@@ -55,12 +57,11 @@ classifier correctly refuses credential transfer off darwin and mid-run firewall
 3. **Sandbox precondition (REQUIRED before the seat dispatches):** set a sandboxed gateway backend
    (`hermes config set terminal.backend docker` or equivalent) and restart the gateway. Verify
    `/v1/capabilities` reports a non-`local` backend.
-4. **Live cell:** `RUN_LIVE=1 pytest tests/phase_executor/test_hermes_adapter.py -m live`
-   (authenticated .205→gateway submit→poll→complete; also surfaces gateway model-backend auth
-   staleness — 401s to `chatgpt.com/backend-api/codex` were seen in the pre-restart journal).
+4. **Live cell — retired with the seat** (its adapter test was deleted with the
+   executor trees in M0d).
 
-## Deferred to Phase-3
+## Deferred (post-retreat: folds into epic #871)
 
-Operational wiring of the seat into WF2 phases (a caller that dispatches research subtasks);
-gateway sandboxed backend; interprocess per-token CAS for the Phase-1 concurrent-poller window;
-session affinity; SSE streaming; TLS; usage/cost enrichment. See design §14.
+Gateway sandboxed backend; interprocess per-token CAS for the Phase-1 concurrent-poller window;
+session affinity; SSE streaming; TLS; usage/cost enrichment. See design §14. (The old Phase-3
+"wire the seat into WF2 phases" item died with the executor.)

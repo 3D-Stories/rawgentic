@@ -1,7 +1,8 @@
-"""Consult mode + --key backward compatibility for adversarial_review_lib."""
+"""Consult-mode library pieces + --key backward compatibility for
+adversarial_review_lib. The `consult` CLI verb moved to hooks/review_runner.py
+(#866 M0d); its subprocess coverage lives in tests/hooks/test_review_runner.py."""
 import json
 import os
-import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -19,89 +20,11 @@ def _ws(tmp_path, entry):
     return str(p)
 
 
-# --- CLI runner-level tests (subprocess entry path, PATH-stubbed codex) ---
-# Mirrors the stub/run pattern in test_adversarial_review_cli.py exactly.
-
-def _make_codex_stub(bin_dir: Path, *, login_rc=0, exec_body="", exec_rc=0):
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    script = bin_dir / "codex"
-    body = exec_body.replace("'", "'\\''")
-    script.write_text(
-        "#!/usr/bin/env bash\n"
-        'if [ "$1" = "login" ] && [ "$2" = "status" ]; then exit %d; fi\n' % login_rc
-        + 'if [ "$1" = "exec" ]; then\n'
-        "  out=\"\"; while [ $# -gt 0 ]; do if [ \"$1\" = \"-o\" ]; then out=\"$2\"; fi; shift; done\n"
-        f"  if [ -n \"$out\" ]; then printf '%s' '{body}' > \"$out\"; fi\n"
-        f"  exit {exec_rc}\n"
-        "fi\nexit 0\n"
-    )
-    script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-
-
-def _run(args, *, extra_path: Path | None = None, strip_codex=False):
-    env = dict(os.environ)
-    if strip_codex:
-        env["PATH"] = os.pathsep.join(
-            d for d in env.get("PATH", "").split(os.pathsep)
-            if d and not os.path.isfile(os.path.join(d, "codex"))
-        )
-    if extra_path is not None:
-        env["PATH"] = str(extra_path) + os.pathsep + env.get("PATH", "")
+def _run(args):
     return subprocess.run(
         ["python3", str(LIB), *args],
-        capture_output=True, text=True, timeout=30, env=env,
+        capture_output=True, text=True, timeout=30, env=dict(os.environ),
     )
-
-
-def test_cli_consult_success_writes_proposal_to_out(tmp_path):
-    # Stub emits an extra, out-of-schema field so the assertion can only pass
-    # if run_codex_consult actually parsed + re-serialized (not just passed
-    # the stub's raw bytes through untouched).
-    raw = json.dumps({"approach": "A", "key_decisions": ["d1"], "risks": ["r1"],
-                       "sketch": "s", "unexpected_field": "must be stripped"})
-    _make_codex_stub(tmp_path / "bin", exec_body=raw)
-    root = tmp_path / "proj"; root.mkdir()
-    art = root / "problem.md"; art.write_text("# Problem")
-    out = tmp_path / "out.json"
-    r = _run(["consult", "--artifact", str(art), "--project-root", str(root),
-              "--out", str(out), "--date", "2026-07-03"],
-             extra_path=tmp_path / "bin")
-    assert r.returncode == 0
-    data = json.loads(out.read_text())
-    assert data == {"approach": "A", "key_decisions": ["d1"], "risks": ["r1"], "sketch": "s"}
-    assert "unexpected_field" not in data
-
-
-def test_cli_consult_codex_error_exit3_writes_marker(tmp_path):
-    _make_codex_stub(tmp_path / "bin", exec_rc=1)
-    root = tmp_path / "proj"; root.mkdir()
-    art = root / "problem.md"; art.write_text("x")
-    out = tmp_path / "out.json"
-    r = _run(["consult", "--artifact", str(art), "--project-root", str(root),
-              "--out", str(out)], extra_path=tmp_path / "bin")
-    assert r.returncode == 3
-    assert json.loads(out.read_text()) == arl._EMPTY_PROPOSAL
-
-
-def test_cli_consult_parse_error_exit4_writes_marker(tmp_path):
-    _make_codex_stub(tmp_path / "bin", exec_body="not json")
-    root = tmp_path / "proj"; root.mkdir()
-    art = root / "problem.md"; art.write_text("x")
-    out = tmp_path / "out.json"
-    r = _run(["consult", "--artifact", str(art), "--project-root", str(root),
-              "--out", str(out)], extra_path=tmp_path / "bin")
-    assert r.returncode == 4
-    assert json.loads(out.read_text()) == arl._EMPTY_PROPOSAL
-
-
-def test_cli_consult_not_installed_exit2_writes_marker(tmp_path):
-    root = tmp_path / "proj"; root.mkdir()
-    art = root / "problem.md"; art.write_text("x")
-    out = tmp_path / "out.json"
-    r = _run(["consult", "--artifact", str(art), "--project-root", str(root),
-              "--out", str(out)], strip_codex=True)
-    assert r.returncode == 2
-    assert json.loads(out.read_text()) == arl._EMPTY_PROPOSAL
 
 
 def test_cli_is_enabled_peerconsult_key_via_subprocess(tmp_path):

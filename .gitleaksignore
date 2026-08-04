@@ -4,3 +4,13 @@
 # - transcript.md:321 is a captured characterization-test transcript quoting the same fixture pattern
 0d6d6a14906ddb6444c865529182d0cc5bdb38ed:tests/hooks/test_adversarial_review_io.py:generic-api-key:97
 8460c98f26b51ae8d1b9581595971bc46c1f5f9a:skills/refactor-workspace/iteration-1/characterization-tests-sentinel/with_skill/outputs/transcript.md:generic-api-key:321
+
+# Confirmed false positives (2026-08-04, #866 M0d): the generic-api-key rule matched a
+# harmless prose phrase in retirement notes describing the deleted headless machinery —
+# a gate-related keyword followed by a slash-joined protocol name it read as the secret.
+# The current tree rewords the phrase; these pins cover the historical branch blobs the
+# range scan (origin/main..HEAD) still sees. No real secret is involved. (The third pin
+# is this file's own first version, whose comment quoted the phrase verbatim.)
+bce86de221dd4c654fb8597f04906b0cf2b8854a:README.md:generic-api-key:1335
+ee222227d636fa3c5817b20cf9bdd1ebfdb4bb0c:tests/hooks/test_headless.py:generic-api-key:3
+7456578114dd53d9e769e118d9726e5813e10432:.gitleaksignore:generic-api-key:9

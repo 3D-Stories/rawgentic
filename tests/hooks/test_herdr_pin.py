@@ -7,9 +7,9 @@ the pin can never silently disagree with the version floor the build seat alread
 enforces.
 
 The load-bearing test here is `test_pin_version_matches_herdr_version_floor`:
-`HERDR_VERSION_FLOOR` in `phase_executor/src/phase_executor/herdr_backend.py` and the pin
-file are two records of ONE fact. Mirrored constants drift silently, so they are asserted
-equal — neither can move without the other.
+`HERDR_VERSION_FLOOR` in the executor's herdr backend and the pin file were two
+records of ONE fact; the executor died in the M0 retreat (#866), so the pin file is
+now the single self-authoritative record.
 
 The same file also carries the `integrations` block (#610): what herdr's per-agent hook
 installs do to a host. Those guards come in two kinds, and the distinction is deliberate
@@ -43,17 +43,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 HOOKS = REPO_ROOT / "hooks"
 PIN_PATH = HOOKS / "herdr-pin.json"
 
-if str(HOOKS) not in sys.path:
-    sys.path.insert(0, str(HOOKS))
-import executor_routing_lib as er  # noqa: E402
-
-er._ensure_pe_importable()  # put phase_executor/src on sys.path for this test module
-# phase_executor resolves at runtime via _ensure_pe_importable; pylint (astroid) can't see it from
-# tests/hooks/ (unlike tests/phase_executor/), so the static no-name-in-module here is a false
-# positive. Scoped disable, not a blanket one.
-# pylint: disable=no-name-in-module
-from phase_executor.herdr_backend import HERDR_VERSION_FLOOR  # noqa: E402
-
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -78,16 +67,13 @@ def test_pin_carries_the_upstream_identity(pin: dict) -> None:
     assert p["tag"] in p["release_url"]
 
 
-def test_pin_version_matches_herdr_version_floor(pin: dict) -> None:
-    """The pin and the build seat's enforced floor are two records of one fact (#609).
-
-    If this fails, one of them was bumped alone — reconcile, do not relax the assert.
-    """
+def test_pin_is_self_authoritative(pin: dict) -> None:
+    """M0d (#866): the executor herdr-backend version-floor constant was deleted
+    with the executor — this pin file is now the ONE record of the qualified
+    herdr version (#609 provenance intact). The pin must carry a parseable
+    version so future bumps stay deliberate."""
     pinned = tuple(int(part) for part in pin["pin"]["version"].split("."))
-    assert pinned == HERDR_VERSION_FLOOR, (
-        f"herdr-pin.json pins {pinned} but phase_executor.herdr_backend."
-        f"HERDR_VERSION_FLOOR is {HERDR_VERSION_FLOOR} — bump both or neither"
-    )
+    assert len(pinned) == 3 and all(p >= 0 for p in pinned)
 
 
 def test_every_asset_digest_is_a_bare_lowercase_sha256(pin: dict) -> None:

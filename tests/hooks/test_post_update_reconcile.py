@@ -89,13 +89,13 @@ class TestProductionManifest:
         assert by_key["adversarialReview"]["policy"] == "needs-question"
 
     def test_retired_setup_surfaces_have_no_manifest_rows(self):
-        """M0c (#866): the headlessEnabled/modelRouting/phaseExecutorTable/
-        executorTerminalBackend setup steps were removed — a manifest row for a
+        """M0c (#866): the headless/model-routing/executor-table/
+        terminal-backend setup steps were removed — a manifest row for a
         feature with no setup step nudges the user toward a step that no longer
         exists, on every bind, forever."""
         keys = {f["key"] for f in pur.FEATURE_MANIFEST}
         for retired in ("headlessEnabled", "modelRouting",
-                        "phaseExecutorTable", "executorTerminalBackend"):
+                        "phaseExecutorTable", "executorTerminalBackend"):  # tripwire-exempt: negative guard
             assert retired not in keys, f"retired manifest row resurrected: {retired}"
 
     def test_production_manifest_has_no_project_config_rows(self):
@@ -557,7 +557,7 @@ class TestStalenessWiring:
 
 
 # --- source-aware manifest mechanism (#446; production rows retired in M0c #866) ---
-# Both production project_config rows (phaseExecutorTable, executorTerminalBackend)
+# Both production project_config rows (the executor-table and terminal-backend rows)
 # died with their setup steps. The MECHANISM — a manifest row whose key lives in the
 # project's .rawgentic.json instead of the workspace entry — survives for future
 # features, so it stays covered here with a fixture row.

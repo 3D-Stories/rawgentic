@@ -27,7 +27,7 @@ def test_canonical_routing_sentence():
     doc = _doc_normalized()
     assert (
         "route it through `/rawgentic:peer-consult` (WF13) or the "
-        "`adversarial_review_lib.py consult` CLI — never a bare "
+        "`hooks/review_runner.py consult` CLI — never a bare "
         "`codex:codex-rescue` dispatch" in doc
     ), "the canonical consult-routing rule must stay in codex-reliability.md"
 

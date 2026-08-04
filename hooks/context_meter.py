@@ -926,7 +926,7 @@ def read_meter_config(project_path):
 
     Seven hooks already read `.rawgentic.json` directly for their own key
     (security-guard.py:81-96, security_guard_lib.py:206-223,
-    seat_outcomes_lib.py:1237-1247, plan_lib.py:765, …), each fail-open on a
+    plan_lib.py:765, …), each fail-open on a
     malformed file. Deliberately NOT `capabilities_lib.py derive`: a subprocess
     on a hook that rides PostToolUse is a per-tool-call cost this has not
     earned, and derive returns a whole capabilities object to answer a
@@ -1553,8 +1553,8 @@ def main(argv=None) -> int:
     p_read = sub.add_parser("read", help="print the current reading as JSON")
     p_read.add_argument("--session-id", default=None)
     p_read.add_argument("--transcript", default=None)
-    # #701 — the shape `/rawgentic:setup` already uses for `telemetryAlerts`
-    # (`seat_outcomes_lib.py validate-config`): exit 0 = stage it, non-zero = show stderr and
+    # #701 — the validate-config shape retired setup blocks also used:
+    # exit 0 = stage it, non-zero = show stderr and
     # re-offer. Never stage a block this refuses.
     p_val = sub.add_parser("validate-config",
                            help="validate a contextMeter block for setup (#701)")

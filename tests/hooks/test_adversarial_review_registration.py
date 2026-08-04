@@ -41,7 +41,7 @@ def test_marketplace_registers_skill():
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "3.122.0"
+    assert plugin["version"] == "3.123.0"
 
 
 def test_descriptions_consistent_count():
@@ -380,7 +380,7 @@ def test_config_reference_scope_out_dropped():
 def test_setup_has_no_step_2i():
     text = skill_corpus("setup")
     assert "Step 2i" not in text
-    assert "phaseExecutorTable" not in text
+    assert "phaseExecutorTable" not in text  # tripwire-exempt: negative guard
 
 
 def test_manifest_project_config_entries_have_setup_anchor():

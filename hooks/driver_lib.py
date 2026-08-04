@@ -1412,7 +1412,7 @@ def campaign_deps_satisfied_by(state: dict) -> str:
     """The campaign's persisted `policy.deps_satisfied_by`, or the strict default. PURE.
 
     #840 Step-11 round 4, High 1. `fresh_session_handoff` took `next_ready_issue`'s `"merged"`
-    default and silently discarded the persisted policy, so the documented headless stacked-PR
+    default and silently discarded the persisted policy, so the documented unattended stacked-PR
     flow (`deps_satisfied_by: "pr_open"`, dependents advance once their prerequisite has an open
     PR) reported `blocked` — which the driver reads as "nothing left" and stops on. #840's own
     gate work is what routed selection through that path, so it shipped the regression.
@@ -2377,7 +2377,7 @@ def validate_driver_state(state: dict) -> tuple[bool, list[str]]:
 
     # Serial-active invariant: the driver builds one issue at a time, so at most
     # one issue may be in_progress. pr_open is NOT counted — PRs may accumulate
-    # awaiting human merge (the headless stacked-PR flow, deps_satisfied_by=
+    # awaiting human merge (the unattended stacked-PR flow, deps_satisfied_by=
     # "pr_open"). More than one in_progress is corrupt state that makes resumption
     # ambiguous (which issue is "the" active build?).
     active = [
@@ -2420,20 +2420,12 @@ def campaign_goal_text(state: dict) -> str:
     return build_goal_text(epic, [], variant="campaign", child_issues=ordered)
 
 
-def validate_campaign_start(state: dict, headless: bool = False) -> tuple[bool, list[str]]:
+def validate_campaign_start(state: dict) -> tuple[bool, list[str]]:
     """Validate a driver state is fit to *start* a campaign, else return errors.
 
-    Structural readability (``validate_driver_state``) plus the start-only rule
-    from #163 AC5: a **headless** campaign MUST be anchored to an ``epic`` issue,
-    because in headless mode the epic is the STATUS/QUESTION channel — a headless
-    run with no epic has no way to surface a blocker, so it must refuse to start
-    rather than silently degrade.
+    Structural readability (``validate_driver_state``). (The old #163 AC5
+    headless-campaign epic-anchor rule left with the headless orchestration —
+    M0d, #866.)
     """
     ok, errors = validate_driver_state(state)
-    errors = list(errors)
-    if headless and not _is_int(state.get("epic")):
-        errors.append(
-            "headless campaign requires an epic issue number "
-            "(the STATUS/QUESTION channel) — refusing to start"
-        )
-    return len(errors) == 0, errors
+    return len(list(errors)) == 0, list(errors)

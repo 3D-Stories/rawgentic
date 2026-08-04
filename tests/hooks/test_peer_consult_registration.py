@@ -35,7 +35,10 @@ def test_wf2_step3_integration_present():
     text = skill_corpus("implement-feature")
     assert "--key peerConsult" in text          # gate check
     assert "blind" in text.lower()
-    assert "empty-proposal marker" in text       # timeout handling
+    # M0d (#866): the consult goes through the runner; failures are exit-code
+    # classified (never a marker file) and non-blocking for Step 3.
+    assert "hooks/review_runner.py consult" in text
+    assert "by its EXIT CODE" in text
     assert "before reading" in text.lower() or "must not read" in text.lower()
 
 

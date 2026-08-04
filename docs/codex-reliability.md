@@ -10,19 +10,21 @@ that close it. The sentences below are drift-guarded by
 ## 1. Routing rule (which Codex path to use)
 
 The plugin ships THREE sanctioned, timeout-enforced Codex entry points, all backed by
-`hooks/adversarial_review_lib.py` (hard `RAWGENTIC_ADV_REVIEW_TIMEOUT` subprocess
-timeout, default 600s; fail-closed exit contract 0/2/3/4; the prompt requests no
-shell tool, so the failing bwrap sandbox path is not reached):
+`hooks/review_runner.py` — the ONE review entry point since #866 M0d, with the shared
+config/prereq/prompt/render pieces in `hooks/adversarial_review_lib.py` (hard
+`RAWGENTIC_ADV_REVIEW_TIMEOUT` subprocess timeout, default 600s; fail-closed exit
+contract 0/2/3/4; the prompt requests no shell tool, so the failing bwrap sandbox
+path is not reached):
 
 | Need | Path |
 |---|---|
-| Critique an artifact (find flaws) | `/rawgentic:adversarial-review` (WF5) → `review` subcommand |
-| Independent peer PROPOSAL / thought partner | `/rawgentic:peer-consult` (WF13) → `consult` subcommand |
-| Embedded review inside WF2/WF3 gates | the same engine, invoked by the workflow step |
+| Critique an artifact (find flaws) | `/rawgentic:adversarial-review` (WF5) → `review-artifact` verb |
+| Independent peer PROPOSAL / thought partner | `/rawgentic:peer-consult` (WF13) → `consult` verb |
+| Embedded review inside WF2/WF3 gates | the same runner, invoked by the workflow step |
 
 **The rule:** when cross-model consult or thought-partner input is load-bearing,
 route it through `/rawgentic:peer-consult` (WF13) or the
-`adversarial_review_lib.py consult` CLI — never a bare `codex:codex-rescue` dispatch.
+`hooks/review_runner.py consult` CLI — never a bare `codex:codex-rescue` dispatch.
 The rescue path (third-party `openai-codex` plugin, `codex-companion.mjs`) is fine for
 opportunistic, non-blocking side work, but it has NO wall-clock watchdog: its only
 timeout is a 240s status-poll wait (`codex-companion.mjs:69`), the job itself can run

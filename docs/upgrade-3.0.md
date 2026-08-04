@@ -31,8 +31,9 @@ No action needed — listed so a jump from an early 2.x lands oriented:
 - **WF2/WF3 spines split** (#158/#159): SKILL.md is a short spine; per-step
   detail lives in each skill's `references/`.
 - **WF9's tooling survived** as the standalone `/rawgentic:scan` skill (#160).
-- **Bundled subagents** (#164): reviews/implementation dispatch through
-  `rawgentic:rawgentic-reviewer` / `rawgentic:rawgentic-implementer`.
+- **Bundled subagents** (#164): reviews/implementation dispatched through the
+  bundled reviewer/implementer agent pair (the implementer retired in the M0
+  executor retreat #866; the reviewer survives as a runner-dispatch subagent).
 - **Opt-in features** shipped across 2.x (`modelRouting`, `peerConsult`,
   `adversarialReview` diff stage, `designArtifact`, whole-issue delegation) are
   unchanged; the version-aware setup prompt (#184) tells you when a future

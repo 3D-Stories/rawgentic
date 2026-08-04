@@ -33,9 +33,9 @@ def _body(number: int) -> str:
 # candidate with `git cat-file -e origin/main:<path>`. The `resolves` set is the
 # injected endpoint-resolution fact; `cited_paths` itself does no I/O.
 MEASURED = {
-    838: {"expected": "paths",
-          "resolves": {"hooks/executor_routing_lib.py",
-                       "phase_executor/src/phase_executor/supervisor.py"}},
+    838: {"expected": "paths",  # measured fact: issue #838's body cites since-retired paths
+          "resolves": {"hooks/executor_routing_lib.py",  # tripwire-exempt: recorded measurement
+                       "phase_executor/src/phase_executor/supervisor.py"}},  # tripwire-exempt: recorded measurement
     # CHANGED after the Step-11 review: #734 names three path-shaped tokens and only two
     # resolve, so the body is only PARTLY readable. Under the corrected rule — any unresolved
     # candidate makes the whole body ambiguous — its true classification is `ambiguous`, not

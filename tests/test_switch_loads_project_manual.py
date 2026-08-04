@@ -13,7 +13,6 @@ three things that would silently disable it:
 1. the TOOL CLASS — swapping `Read` for `cat`/`head`/`jq` loads nothing, and reads
    perfectly correct;
 2. the POSITION — before the registry append `hooks/wal-bind-guard` Gate 1 denies the
-   read; before the headless verdict, project-controlled prose could influence its own
    fail-closed authorization;
 3. the SILENCE — 14 of 24 active projects have no `CLAUDE.md` and must bind with no
    warning at all.
@@ -32,7 +31,6 @@ SKILL_MD = REPO_ROOT / "skills" / "switch" / "SKILL.md"
 
 # Section anchors, in the order they must appear in the file.
 REGISTRY_APPEND_ANCHOR = "session_registry.jsonl"
-HEADLESS_ANCHOR = "### 3. Headless Access Check"
 LOAD_ANCHOR = "### 3b. Load the project's operating rules"
 READY_ANCHOR = "### 4. Confirm Ready"
 
@@ -69,7 +67,7 @@ def test_anchors_are_non_vacuous():
     because neither string was found.
     """
     text = _text()
-    for anchor in (REGISTRY_APPEND_ANCHOR, HEADLESS_ANCHOR, LOAD_ANCHOR, READY_ANCHOR):
+    for anchor in (REGISTRY_APPEND_ANCHOR, LOAD_ANCHOR, READY_ANCHOR):
         assert anchor in text, f"anchor missing from switch SKILL.md: {anchor!r}"
 
 
@@ -98,16 +96,6 @@ def test_load_is_after_the_registry_append():
         "the bind-time load must come AFTER the session_registry.jsonl append — before "
         "the append the session is unbound and hooks/wal-bind-guard Gate 1 denies a Read "
         "of any active project's files"
-    )
-
-
-def test_load_is_after_the_headless_verdict():
-    """Project prose must never influence its own fail-closed authorization check."""
-    text = _text()
-    assert text.index(HEADLESS_ANCHOR) < text.index(LOAD_ANCHOR), (
-        "the bind-time load must come AFTER the Headless Access Check — loading a "
-        "project's own rules before the fail-closed verdict lets project-controlled "
-        "text influence whether this session may operate on that project"
     )
 
 

@@ -8,7 +8,7 @@ reader wants the reasoning.
 
 Nothing else in the suite pins that outcome. The 16 constraints the trim had to
 respect are all PRESENCE pins (the canonical load sentence, the expansion-free
-registry append, the fail-closed headless wording, the staleness advisory): every
+registry append, the staleness advisory): every
 one of them still passes if a maintainer re-inlines the rationale and the file
 grows back to its old size. These two guards pin the SIZE and the RELOCATION, so
 the regression this issue exists to prevent cannot land silently.
@@ -65,8 +65,6 @@ REQUIRED_RATIONALE_ANCHORS = (
     "protection level",
     # Step 5b item 2b — the staleness nudge's failure mode.
     "fail-open",
-    # Step 5b item 3 — the headless verdict's failure mode.
-    "fails CLOSED",
     # Step 5b item 3b — the bind-time load, which is the whole point of #721.
     "bind-time load",
 )

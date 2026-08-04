@@ -270,8 +270,8 @@ class TestNoiseStrip:
         "--- a/hooks/x.py\n+++ b/hooks/x.py\n@@ -1 +1 @@\n-old\n+new\n"
         "diff --git a/docs/assets/wf2-light.png b/docs/assets/wf2-light.png\n"
         "Binary files a/docs/assets/wf2-light.png and b/docs/assets/wf2-light.png differ\n"
-        "diff --git a/phase_executor/uv.lock b/phase_executor/uv.lock\n"
-        "--- a/phase_executor/uv.lock\n+++ b/phase_executor/uv.lock\n@@ -1 +1 @@\n-a\n+b\n"
+        "diff --git a/vendored/uv.lock b/vendored/uv.lock\n"
+        "--- a/vendored/uv.lock\n+++ b/vendored/uv.lock\n@@ -1 +1 @@\n-a\n+b\n"
     )
 
     def test_strips_only_the_fixed_list(self):
@@ -279,7 +279,7 @@ class TestNoiseStrip:
         assert "hooks/x.py" in stripped
         assert "docs/assets/wf2-light.png" not in stripped
         assert "uv.lock" not in stripped
-        assert set(paths) == {"docs/assets/wf2-light.png", "phase_executor/uv.lock"}
+        assert set(paths) == {"docs/assets/wf2-light.png", "vendored/uv.lock"}
 
     def test_markdown_is_never_stripped(self):
         # No generic docs-only skip: SKILL.md IS executable behavior here.

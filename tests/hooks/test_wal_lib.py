@@ -460,7 +460,7 @@ echo "$WAL_CLAUDE_DOCS"
     def test_absolute_outside_home_rejected(self, make_workspace, tmp_path):
         """#262 (C21): an absolute claudeDocsPath OUTSIDE $HOME is rejected with
         a warning and falls back to workspace-relative — the same containment
-        the sibling resolvers (wal-stop/wal-suspend/wal-bind-guard) always
+        the sibling resolvers (wal-stop/wal-bind-guard) always
         applied. Before the unification the lib trusted it, so WAL/registry
         writes could land where the guards never read."""
         fake_home = tmp_path / "fakehome"
@@ -560,12 +560,12 @@ class TestSharedResolutionRouting:
     same containment semantic). Every bash consumer sources the lib instead of
     carrying an inline copy; inline copies are what diverged (C7/C21)."""
 
-    CONSUMERS = ["wal-stop", "wal-suspend", "wal-bind-guard", "session-start"]
+    CONSUMERS = ["wal-stop", "wal-bind-guard", "session-start"]
     # These three had full inline resolver copies before #262 and have NO other
     # legitimate claudeDocsPath use, so the string must be entirely absent.
     # (session-start keeps two non-resolution uses: the migration presence
     # check and the migration write — both act on the raw field, not a path.)
-    NO_INLINE = ["wal-stop", "wal-suspend", "wal-bind-guard"]
+    NO_INLINE = ["wal-stop", "wal-bind-guard"]
 
     @pytest.mark.parametrize("script", CONSUMERS)
     def test_consumer_sources_wal_lib(self, script):

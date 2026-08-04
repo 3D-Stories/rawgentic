@@ -63,10 +63,10 @@ counts verbatim so an implausible split is reviewable.
 
 **Operator override (#225).** When the operator judges an over-cutoff change bounded, the
 surfacing block below gains choice **(c) Force lane** — re-call `lane_decision(...,
-operator_override=True)`. In **headless** mode there is no interactive choice: set the
+operator_override=True)`. In an **unattended** run there is no interactive choice: set the
 per-run env `RAWGENTIC_WF2_FORCE_LANE=1` to elect it (precedent: `RAWGENTIC_EPIC_GOAL`, the
-per-run headless-signal pattern; the wiring is prose-enforced at this call site —
-`lane_decision` stays pure); otherwise headless auto-resolve stays conservative (full).
+per-run signal pattern; the wiring is prose-enforced at this call site —
+`lane_decision` stays pure); otherwise unattended auto-resolve stays conservative (full).
 **The architecture-change / migration / new-dependency guards force the full spine
 regardless — neither the secondary signal nor the operator override can bypass them (and a
 complex_feature classification is likewise unbypassable: re-tag it, don't force it).**
@@ -96,12 +96,11 @@ Step 2 → SMALL-STANDARD detected (<N files, complexity>). Recommend the small-
       case; re-calls lane_decision with operator_override=True)
 ```
 This is a **suggestion, never a hard gate** — the orchestrator must NOT silently pick the lane;
-continuing the full workflow is always valid. In **headless** mode there is no interactive user,
-so AUTO-RESOLVE the lane-vs-full choice: take the lane for eligible changes and the full spine for
-`complex_feature`; the tier=="full"-on-count-alone case stays full unless the per-run
+continuing the full workflow is always valid. In an **unattended** run there is no interactive
+user, so AUTO-RESOLVE the lane-vs-full choice: take the lane for eligible changes and the full
+spine for `complex_feature`; the tier=="full"-on-count-alone case stays full unless the per-run
 `RAWGENTIC_WF2_FORCE_LANE=1` env elects the override (see the Operator override paragraph).
-Log the choice in session notes. (Stated as inline prose, not a bracketed
-annotation, to keep the per-skill headless-annotation count stable.)
+Log the choice in session notes.
 
 ### Keep / collapse table (the contract)
 
@@ -309,7 +308,7 @@ This is an optional guard, not a gate — it never blocks the workflow.
 
 1. **Why.** A skill cannot set a session goal itself; `/goal` is a session command
    (see code.claude.com/docs/en/goal.md), not something a skill body can invoke. So
-   this step CONSTRUCTS the goal text and the user (or the headless driver) is the
+   this step CONSTRUCTS the goal text and the user (or the epic driver) is the
    one who runs it, giving the session's Stop-hook a concrete condition so the
    workflow can't be silently abandoned before the ACs are met.
 
@@ -344,7 +343,7 @@ This is an optional guard, not a gate — it never blocks the workflow.
 
 6. **Record the marker** (Step 16 reads this to populate the run-record
    `goal_guard` field — `set` when emitted, `deferred` under an epic campaign,
-   `skipped` when the user declines / an unlabeled headless run):
+   `skipped` when the user declines / an unattended run with no goal channel):
    ```
    ### WF2 Step 1b — Goal guard (set|deferred|skipped): #<issue> — <first 80 chars of text | epic #N | decline reason>
    ```
@@ -403,7 +402,7 @@ This is an optional guard, not a gate — it never blocks the workflow.
    over the item-1 component map, then call the decision (see `<small-standard-lane>` for the
    exact `python3 -c` invocation): `tier == "lane"` → `small_standard_lane_eligible = true`, else
    `false`. When eligible and not already forced/declined, present the suggested-never-silent
-   surfacing block from `<small-standard-lane>` and WAIT for the choice (headless auto-resolves
+   surfacing block from `<small-standard-lane>` and WAIT for the choice (unattended runs auto-resolve
    per that block). `fast_path_eligible` remains a **deprecated alias**
    (`fast_path_eligible = small_standard_lane_eligible`) so the Step-4 self-review-vs-critique
    readers are unchanged. Trivial changes (item 9) exit via `<trivial-work-check>`, which takes
@@ -451,16 +450,17 @@ Exit 0 → enabled; non-zero → skip silently (default; no temp file, no subpro
      --workspace .rawgentic_workspace.json --project <name> --key peerConsult
    ```
    Exit 0 → stdout is the backend (`gpt`|`glm`|`both`; absent config → `gpt`). **Exit 2 → the config carries an invalid backend value: abort THIS consult sub-step loudly (log the stderr message; the sub-step is skipped, never defaulted to gpt)** — non-blocking for Step 3, which proceeds with your own design alone. Never default an empty stdout capture to gpt; branch on the exit code.
-1b. Write the issue body + the Step 2 codebase-analysis summary to a problem file UNDER the project root (e.g. `<root>/.rawgentic-peer-problem-<n>.md` — `resolve_artifact_path` rejects any `--artifact` outside `project_root`, so a `/tmp` path fails closed silently as an empty proposal). Launch the consult as a BACKGROUND process writing structured output to a temp out-file (the out-file may live anywhere; the step gates on exit code, not its location):
+1b. Write the issue body + the Step 2 codebase-analysis summary to a problem file UNDER the project root (e.g. `<root>/.rawgentic-peer-problem-<n>.md` — the runner's path containment rejects any `--artifact` or `--out` outside `project_root`, refusing before egress). Launch the consult through the runner as a BACKGROUND process (or a read-only dispatch subagent), one invocation per resolved backend — under `both`, TWO independent invocations with distinct `--out` paths (`--backend gpt` with `--reviewer gpt-5.6-sol`; `--backend glm` omitting `--reviewer`):
    ```bash
-   python3 hooks/adversarial_review_lib.py consult \
-     --artifact <problem-file> --project-root <root> --out <out-file> \
-     --backend <resolved backend> --date "$(date -u +%Y-%m-%d)" &
+   python3 hooks/review_runner.py consult \
+     --artifact <problem-file> --author-model <your model id, verbatim> \
+     --backend <resolved backend> [--reviewer <peer>] \
+     --out <root>/.rawgentic-peer-result-<n>[-<backend>].json --project-root <root> &
    ```
-2. **Blindness rule:** draft your OWN design first and write it to the design doc. You MUST NOT read `<out-file>` (or its `-glm` sibling) before your own draft is on disk.
-3. After your draft is written, read the proposal(s). Under `gpt`/`glm`: read `<out-file>`. Under `both`: select the proposal files from the consult's per-backend stdout status lines (`gpt: <path>` / `glm: FAILED (<status>)`) — the authoritative manifest of THIS invocation; read `<out-file>` AND its `-glm` sibling for the backends the manifest marks successful (each failed backend's file holds the explicit empty-proposal marker). On timeout/failure a file holds the empty-proposal marker (never partial content) — proceed with your design alone. Otherwise synthesize best-of-all and record each peer's contributions (provenance, backend named) in the design doc. Delete the problem file now that the consult has completed.
-4. **Gate on the background process's EXIT CODE, not just file content** — the empty-proposal write is best-effort, so on an unwritable out-path a non-zero exit can leave the file missing or unreadable entirely. Exit `0` = all selected backends succeeded; **exit `5` = both-mode PARTIAL — use the successful backend's proposal and log the failed backend (success-with-warning, not a failure)**; any other non-zero OR a missing/unreadable file → treat as an empty proposal and proceed.
-5. Backend failure is non-blocking: log and proceed. This sub-step never gates Step 3.
+   Consults are always `diagnostic: true` — a proposal never authorizes a fix round, so no reopen token is minted here.
+2. **Blindness rule:** draft your OWN design first and write it to the design doc. You MUST NOT read any consult result file before your own draft is on disk.
+3. After your draft is written, collect each invocation **by its EXIT CODE — never by whether the out file exists**: `0` = the result JSON's `proposal` is valid; `2`/`3`/`4` = refused / terminal backend failure / empty-invalid output — that backend produced NO proposal (never partial content), and the runner already applied its own transport policy, so add no retry loop. Under `both`, one success + one failure is a PARTIAL: use the successful backend's proposal and log the failed backend (success-with-warning, not a failure). Synthesize best-of-all successful proposals and record each peer's contributions (provenance, backend named) in the design doc. Delete the problem file now that the consult has completed.
+4. Backend failure is non-blocking: log and proceed with your own design alone. This sub-step never gates Step 3.
 
 1. **Design approach:** For complex features, use the Agent tool with a brainstorming prompt to generate 2-3 implementation approaches. For standard features, design inline with 1-2 approaches.
 
@@ -849,7 +849,7 @@ Apply ambiguity circuit breaker on findings. If clear: apply automatically.
 python3 hooks/adversarial_review_lib.py is-enabled \
   --workspace .rawgentic_workspace.json --project <name> --skill implement-feature
 ```
-The command exits `0` when enabled and non-zero otherwise; if non-zero, **skip silently**. When enabled, write the plan to a temp file under the project and invoke `/rawgentic:adversarial-review <plan-path> plan`. On a pass-N dispatch, apply the Step 4 item 7 disposition-ledger fold (#393) here too — fold, join backstop, gate-close persistence; the plan review shares the issue's ledger. It is report-only; merge its findings (tagged `source: adversarial`) with the self-review findings and apply the circuit breaker over the **merged** list (do not run two separate breakers). At this gate's close, persist each Critical/High finding's terminal disposition via `plan_lib.append_disposition` (Step 4's gate-close persistence sentence is canonical). If the merged list contains one or more Critical/High design-level flaws, consume **exactly one** existing `design` loop-back counter and return to Step 3 once with the unified constraints. **Codex failure is non-blocking** (additive review): on any non-success — including headless unmet-prerequisite — skip the adversarial layer, log loudly (headless: STATUS comment), and continue with the self-review result; never ERROR or block WF2. Log: `### WF2 Step 6 — Adversarial Review (#<issue>, invoked|skipped): <report path or skip reason>`.
+The command exits `0` when enabled and non-zero otherwise; if non-zero, **skip silently**. When enabled, write the plan to a temp file under the project and invoke `/rawgentic:adversarial-review <plan-path> plan`. On a pass-N dispatch, apply the Step 4 item 7 disposition-ledger fold (#393) here too — fold, join backstop, gate-close persistence; the plan review shares the issue's ledger. It is report-only; merge its findings (tagged `source: adversarial`) with the self-review findings and apply the circuit breaker over the **merged** list (do not run two separate breakers). At this gate's close, persist each Critical/High finding's terminal disposition via `plan_lib.append_disposition` (Step 4's gate-close persistence sentence is canonical). If the merged list contains one or more Critical/High design-level flaws, consume **exactly one** existing `design` loop-back counter and return to Step 3 once with the unified constraints. **Codex failure is non-blocking** (additive review): on any non-success — including an unmet prerequisite — skip the adversarial layer, log loudly, and continue with the self-review result; never ERROR or block WF2. Log: `### WF2 Step 6 — Adversarial Review (#<issue>, invoked|skipped): <report path or skip reason>`.
 
 ### Output
 Plan drift check result.
@@ -870,7 +870,7 @@ Plan drift check result.
    ```
    If dirty: stash, create branch, ask user about stash.
 
-2. Create the feature branch from a **freshly-fetched** default branch — never `git pull` into the current checkout first. `git pull origin <default>` merges the default INTO whatever branch is checked out; if the session still sits on a prior issue's feature branch (a multi-issue campaign, or a headless PR-terminal run that never ran Step 14), that mutates the sibling branch AND bases the new branch on the mixture, silently carrying the sibling's unmerged commits into this PR. Fetch, then branch off `origin/<default>` regardless of the starting checkout:
+2. Create the feature branch from a **freshly-fetched** default branch — never `git pull` into the current checkout first. `git pull origin <default>` merges the default INTO whatever branch is checked out; if the session still sits on a prior issue's feature branch (a multi-issue campaign, or a prior run that ended at its PR without merging), that mutates the sibling branch AND bases the new branch on the mixture, silently carrying the sibling's unmerged commits into this PR. Fetch, then branch off `origin/<default>` regardless of the starting checkout:
    ```bash
    git fetch origin ${capabilities.default_branch}
    git checkout -b <branch_name> origin/${capabilities.default_branch}
@@ -1571,7 +1571,7 @@ are failures: never treat either as the fallback.
    ```
 
 4. **Pre-PR test gate** (conditional):
-   - If `capabilities.has_tests`: the full-suite evidence is the Step 9 run — re-run the full suite here ONLY when a commit landed after Step 9 touching code or a test-pinned surface (per `<test-run-discipline>`, SKILL.md); block the PR on any failure. **Prose-only scoped exception (#527):** when EVERY post-Step-9 commit touches ONLY prose/doc files (`*.md`, `docs/`) plus their own guard test files under `tests/` (no `hooks/`, no `phase_executor/`, no `scripts/`, no shared behavior code, and no shared test infrastructure — `conftest.py`, `tests/corpus.py`, cross-file test helpers), run the affected guard test files plus `tests/hooks/test_adversarial_review_registration.py` (the version pin) SCOPED and consume the Step 9 full-suite result as the regression evidence — log a session-note marker naming the scoped set (e.g. `#### Step 12 pre-PR gate: scoped (<files>)`); any code-bearing commit keeps the full re-run.
+   - If `capabilities.has_tests`: the full-suite evidence is the Step 9 run — re-run the full suite here ONLY when a commit landed after Step 9 touching code or a test-pinned surface (per `<test-run-discipline>`, SKILL.md); block the PR on any failure. **Prose-only scoped exception (#527):** when EVERY post-Step-9 commit touches ONLY prose/doc files (`*.md`, `docs/`) plus their own guard test files under `tests/` (no `hooks/`, no `scripts/`, no shared behavior code, and no shared test infrastructure — `conftest.py`, `tests/corpus.py`, cross-file test helpers), run the affected guard test files plus `tests/hooks/test_adversarial_review_registration.py` (the version pin) SCOPED and consume the Step 9 full-suite result as the regression evidence — log a session-note marker naming the scoped set (e.g. `#### Step 12 pre-PR gate: scoped (<files>)`); any code-bearing commit keeps the full re-run.
    - If NOT `capabilities.has_tests`: re-run key verification commands, document results
 
 4a. **Review-completeness check:** before opening the PR, confirm Step 11's exit gate passed (item 8 — no unresolved Critical/High deferral) and every Step 8a covered task's verdict is `applied` or a persisted deferral. A suspend that never resolved must not reach PR creation.
@@ -1642,7 +1642,7 @@ PR URL.
    gh run list --repo ${capabilities.repo} --branch <branch_name> --limit 1 --json status,conclusion,databaseId
    ```
 
-1a. **CI structurally unavailable → visible non-gate (#232 AC3).** If, after waiting up to CI_MAX_WAIT_MINUTES, **no run has spawned** for this branch (`gh run list` returns empty) OR a run cannot execute (Actions disabled / minutes exhausted — the platform, not this diff), then "PR open with green CI" is structurally **unsatisfiable** — this is NOT a red run to diagnose and NOT an ERROR condition. Record a **visible non-gate**, exactly like the quarantine path: session notes AND the Step 12 PR body, verbatim: `CI unavailable (no run spawned | Actions unavailable): not gating`. Then proceed to Step 14/16 — never force the ERROR protocol and never claim green. This is the interactive+headless answer to the live-run dead-end where CI simply never ran. (Distinguish from item 4: item 4 is a run that STARTED but hasn't finished; this is a run that never started.)
+1a. **CI structurally unavailable → visible non-gate (#232 AC3).** If, after waiting up to CI_MAX_WAIT_MINUTES, **no run has spawned** for this branch (`gh run list` returns empty) OR a run cannot execute (Actions disabled / minutes exhausted — the platform, not this diff), then "PR open with green CI" is structurally **unsatisfiable** — this is NOT a red run to diagnose and NOT an ERROR condition. Record a **visible non-gate**, exactly like the quarantine path: session notes AND the Step 12 PR body, verbatim: `CI unavailable (no run spawned | Actions unavailable): not gating`. Then proceed to Step 14/16 — never force the ERROR protocol and never claim green. This is the answer to the live-run dead-end where CI simply never ran. (Distinguish from item 4: item 4 is a run that STARTED but hasn't finished; this is a run that never started.)
 
 2. If CI passes: proceed to Step 14.
 
@@ -1783,7 +1783,7 @@ measurable signal — not just a sentence the user reads once.
    ```
    Step 14 item 2b already ran this on the merge path; this is the **idempotent
    reconciliation** that catches every other case — a run interrupted between the merge and
-   here, a headless run whose PR is the terminal deliverable (`pr_open`), or a blocked child
+   here, an unattended run whose PR is the terminal deliverable (`pr_open`), or a blocked child
    (`deferred`/`abandoned`). Recording a status the child already has is a no-op, so the
    repeat costs nothing.
 
@@ -1917,9 +1917,9 @@ measurable signal — not just a sentence the user reads once.
    run beats an unassessed one); on rc 2 WF14's own `--record` fail-closed path
    yields a degraded/unscored assessment. The assessment is report-only for the
    plugin SOURCE (it never edits skills/hooks/docs mid-assessment) and
-   PR-terminal-safe (it never touches the just-created PR), so it runs in headless
-   mode too — but its outward writes are WF14's own Step 4 actions and run
-   autonomously there: the report pair + session-note marker (the only FILE
+   PR-terminal-safe (it never touches the just-created PR), so it runs in
+   unattended runs too — but its outward writes are WF14's own Step 4 actions and
+   run autonomously there: the report pair + session-note marker (the only FILE
    writes), up to 3 filed issues against `3D-Stories/rawgentic`, and one mempalace
    memory.
 

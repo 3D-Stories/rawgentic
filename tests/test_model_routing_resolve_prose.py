@@ -152,7 +152,7 @@ def test_gate_preservation_sentence_in_shared_source():
 
 def test_no_executor_vocabulary_in_shared_source():
     shared = _shared()
-    for needle in ("executor_routing_lib", "begin-run", "mint-gate", "--seat",
-                   "rawgentic:rawgentic-implementer", "rawgentic:rawgentic-reviewer",
+    for needle in ("executor_routing_lib", "begin-run", "mint-gate", "--seat",  # tripwire-exempt: negative guard
+                   "rawgentic:rawgentic-implementer", "rawgentic:rawgentic-reviewer",  # tripwire-exempt: negative guard
                    "model_routing_lib"):
         assert needle not in shared, f"executor vocabulary {needle!r} re-entered the shared block"

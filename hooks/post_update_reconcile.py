@@ -60,8 +60,8 @@ STATE_FILENAME = "rawgentic-reconciled-version"
 # never appears — un-skipped it would nudge every project on the version crossing,
 # even configured ones). No production row uses it today.
 #
-# M0c (#866): the headlessEnabled, modelRouting, phaseExecutorTable, and
-# executorTerminalBackend rows were removed WITH their setup steps — a manifest
+# M0c (#866): the headless, model-routing, executor-table, and
+# terminal-backend rows were removed WITH their setup steps — a manifest
 # row for a feature with no setup step nudges the user toward a step that no
 # longer exists, on every /rawgentic:switch bind, forever.
 FEATURE_MANIFEST = [
