@@ -36,7 +36,7 @@ a real commit with a later-step command (``git commit … && gh pr create``)
 loses the downstream stamp — classify-and-stop suppresses it, a CHOSEN
 trade-off (a lagging pointer beats a false non-monotonic jump from message
 prose; pinned by test). A conventional cross-issue branch-cut REBINDS the
-issue from the branch name (``feature/<n>-…`` / ``fix/<n>-…``); an
+issue from the branch name (``feat/<n>-…`` / ``feature/<n>-…`` / ``fix/<n>-…``); an
 unconventional branch name still reuses the existing record's issue.
 epic-run carve-out: its markers are not ``### WF<n>``-shaped and it has no
 signature table, so its skill prose KEEPS the mandatory manual write.
@@ -201,7 +201,9 @@ def detect_marker(command: str) -> "dict | None":
             "step_title": f"{title} ✓done", "issue": issue}
 
 
-_BRANCH_ISSUE_RE = re.compile(r"git checkout -b (?:feature|fix)/(\d{1,9})\b")
+# #880: `feat` is the WF2 prefix (BRANCH_PREFIX_FEATURE); `feature` retained
+# so old and sibling-project branches keep rebinding.
+_BRANCH_ISSUE_RE = re.compile(r"git checkout -b (?:feat|feature|fix)/(\d{1,9})\b")
 
 
 def _branch_issue(command) -> "int | None":

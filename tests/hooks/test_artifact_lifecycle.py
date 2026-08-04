@@ -281,3 +281,20 @@ def test_style_non_list_projects_never_raises(tmp_path, capsys):
     assert arl.design_artifact_style(str(ws), "p") == "design"
     assert "non-list" in capsys.readouterr().err
     assert arl.design_artifact_shared_doc(str(ws), "p") is None
+
+
+class TestConfigReferenceRendererPointer:
+    """#880 Defect F (AC-F): docs/config-reference.md must not name
+    hooks/render_artifact.py — #807 deleted it from main (verified:
+    `git show origin/main:hooks/render_artifact.py` -> does not exist) and
+    moved the engine into the design-doc-publish add-on. A doc naming a
+    deleted file sends the next reader hunting for what cannot be found;
+    the workspace manual already corrected this same stale pointer once."""
+
+    DOC = Path(__file__).resolve().parent.parent.parent / "docs" / "config-reference.md"
+
+    def test_no_reference_to_the_deleted_renderer(self):
+        assert "render_artifact" not in self.DOC.read_text(encoding="utf-8")
+
+    def test_names_the_add_on_instead(self):
+        assert "design-doc-publish" in self.DOC.read_text(encoding="utf-8")

@@ -635,3 +635,26 @@ class TestProjectConfigSourceMechanism:
         ws, entry = _ws_with_project(tmp_path, config=BASE_CFG)
         projects, changes, needs_q = pur.reconcile_projects([entry], MANIFEST_446)
         assert all(key != "fancyProjectKey" for _, key, _ in needs_q)
+
+
+class TestStalenessNudgePath:
+    """#880 Defect C location pin (AC-C): the Step 5b-2b command must invoke by
+    plugin-root absolute path. A bind runs with cwd = the WORKSPACE ROOT, where
+    no hooks/ exists, so the old relative `python3 hooks/post_update_reconcile.py`
+    exited 2 on every bind and the nudge never fired — masked as "nothing to
+    nudge" by the advisory contract (re-verified live 2026-08-04, twice).
+
+    ${CLAUDE_PLUGIN_ROOT} IS substituted here because this is a SKILL.md BODY
+    loaded as a skill (#807 fact 1; a references/ file could NOT use this —
+    fact 2). Same call form as pane-handoff/SKILL.md's launcher invocations.
+    """
+
+    SWITCH = Path(__file__).resolve().parent.parent.parent / "skills" / "switch" / "SKILL.md"
+
+    def test_nudge_invokes_by_plugin_root(self):
+        text = self.SWITCH.read_text(encoding="utf-8")
+        assert 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/post_update_reconcile.py"' in text
+
+    def test_relative_invocation_is_gone(self):
+        text = self.SWITCH.read_text(encoding="utf-8")
+        assert "python3 hooks/post_update_reconcile.py" not in text

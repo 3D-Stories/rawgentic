@@ -211,8 +211,10 @@ not a task
 
     def test_invalid_risklevel_value_treated_as_missing(self):
         """A `riskLevel: super-high` line doesn't match the regex (high|standard
-        only), so the task is considered untagged. If it's the only task, the
-        pre-P15 path applies; if mixed with a tagged task, fail-closed."""
+        only). Since #880 an ATTEMPTED riskLevel line that fails the format
+        raises PlanFormatError outright (word-anchored attempt trigger) — the
+        old lone-task silent pre-P15 downgrade is gone; the mixed plan below
+        raises at the malformed line."""
         mod = _reload_plan_lib()
         plan_mixed = """
 ### Task 1: ok
@@ -571,12 +573,14 @@ class TestReviewLog:
         assert ok is False
 
     def test_assert_coverage_missing_log_file(self, tmp_path):
+        """#880 Defect A(iv): a missing log with a high-risk task RAISES
+        (fail-closed) — the old (False, [...]) return was indistinguishable
+        from an ordinary uncovered task, hiding a wrong path."""
         mod = _reload_plan_lib()
         log = tmp_path / "noexist.jsonl"
         plan_tasks = [_t("1", "high", "x")]
-        ok, missing = mod.assert_review_coverage(str(log), plan_tasks, {"1": "a1"})
-        assert ok is False
-        assert len(missing) == 1
+        with pytest.raises(mod.ReviewLogError):
+            mod.assert_review_coverage(str(log), plan_tasks, {"1": "a1"})
 
 
 class TestDeferrals:
@@ -2212,3 +2216,349 @@ class TestPublicFileLock:
         lines = [ln for ln in order.read_text(encoding="utf-8").splitlines() if ln]
         assert lines == ["child-in", "child-out", "parent-in"], (
             f"parent acquired the lock before the child released it: {lines}")
+
+
+# --- #880 Defect E: parse_tasks fails loudly; token ids (red-first) ---
+
+
+class TestParseTasksFailLoud:
+    """#880 Defect E: a plan can no longer silently parse to zero tasks.
+
+    Before this fix `_TASK_HEADER_RE` required a numeric id, and a
+    non-matching `### Task ` heading was silently ignored — a `### Task T1:`
+    plan parsed to ZERO tasks, the riskLevel fail-closed rule never fired
+    (no tasks to check), Step 8a never fired (no high-risk task), and Step 9's
+    coverage gate passed vacuously. The #879 run hit this live.
+    """
+
+    def test_token_id_parses(self):
+        """AC-E(i): `### Task T1:` parses to one task with id == "T1"."""
+        mod = _reload_plan_lib()
+        plan = "### Task T1: widen the id\n- riskLevel: high (parser)\n"
+        tasks = mod.parse_tasks(plan)
+        assert [t.id for t in tasks] == ["T1"]
+        assert tasks[0].risk_level == "high"
+
+    def test_mixed_token_ids_parse(self):
+        mod = _reload_plan_lib()
+        plan = (
+            "### Task 1: numeric\n- riskLevel: standard\n\n"
+            "### Task 1a: alnum\n- riskLevel: standard\n\n"
+            "### Task 2.3: dotted\n- riskLevel: standard\n"
+        )
+        assert [t.id for t in mod.parse_tasks(plan)] == ["1", "1a", "2.3"]
+
+    def test_missing_colon_heading_raises_with_line_number(self):
+        """AC-E(ii) + gate amendment: `### Task T1` (no colon) raises — the
+        most direct typo must never silently drop a task."""
+        mod = _reload_plan_lib()
+        plan = "# plan\n\n### Task T1\n- riskLevel: high (x)\n"
+        with pytest.raises(mod.PlanFormatError, match=r"line 3"):
+            mod.parse_tasks(plan)
+
+    def test_empty_title_heading_raises(self):
+        mod = _reload_plan_lib()
+        plan = "### Task 1:\n- riskLevel: standard\n"
+        with pytest.raises(mod.PlanFormatError):
+            mod.parse_tasks(plan)
+
+    def test_prose_task_heading_raises_with_remediation(self):
+        """A prose heading beginning `Task ` inside a PLAN raises loudly with
+        remediation text — a loud rename beats a silent drop (owner-approved
+        Step 4 disposition, 2026-08-04)."""
+        mod = _reload_plan_lib()
+        plan = "### Task Decomposition\n\n### Task 1: real\n- riskLevel: standard\n"
+        with pytest.raises(mod.PlanFormatError, match=r"### Task <id>: <title>"):
+            mod.parse_tasks(plan)
+
+    def test_non_task_headings_still_ignored(self):
+        """`### Tasks` / `### Task-notes` (no whitespace after `Task`) never
+        match the attempt trigger; only `### Task <ws>` does."""
+        mod = _reload_plan_lib()
+        plan = (
+            "### Tasks\n\n### Task-notes\n\n### Overview\n\n"
+            "### Task 1: real\n- riskLevel: standard\n"
+        )
+        assert [t.id for t in mod.parse_tasks(plan)] == ["1"]
+
+    def test_numeric_plans_byte_identical(self):
+        """AC-E(iii): the existing numeric corpus parses identically."""
+        mod = _reload_plan_lib()
+        plan = (
+            "### Task 1: foo\n- riskLevel: standard\n\n"
+            "### Task 2: bar\n- riskLevel: high (module boundary)\n\n"
+            "### Task 3.5: baz\n- riskLevel: standard\n"
+        )
+        tasks = mod.parse_tasks(plan)
+        assert [t.id for t in tasks] == ["1", "2", "3.5"]
+        assert [t.risk_level for t in tasks] == ["standard", "high", "standard"]
+        assert tasks[1].reason == "module boundary"
+
+    def test_wrapped_risklevel_reason_raises(self):
+        """AC-E(iv): the wrapped reason is FORBIDDEN. Before this fix it
+        silently downgraded high -> standard via the pre-P15 path (reproduced
+        live on this run), which disables Step 8a."""
+        mod = _reload_plan_lib()
+        plan = (
+            "### Task 1: t\n"
+            "- riskLevel: high (a reason that continues\n"
+            "  onto a second line)\n"
+        )
+        with pytest.raises(mod.PlanFormatError, match=r"riskLevel"):
+            mod.parse_tasks(plan)
+
+    def test_lone_invalid_risklevel_value_raises_not_downgrades(self):
+        """A lone `riskLevel: super-high` used to fall into the pre-P15
+        default-to-standard path (docstring-only claim, never pinned). It now
+        raises — an ATTEMPTED riskLevel line that fails the regex is a typo,
+        not a pre-P15 plan."""
+        mod = _reload_plan_lib()
+        plan = "### Task 1: bad level\n- riskLevel: super-high\n"
+        with pytest.raises(mod.PlanFormatError):
+            mod.parse_tasks(plan)
+
+    def test_pre_p15_plan_still_defaults(self):
+        """Backward compat: a plan with NO riskLevel lines at all (pre-P15)
+        still defaults every task to standard with the warning — the new raise
+        fires only on a line that LOOKS like a riskLevel attempt."""
+        mod = _reload_plan_lib()
+        plan = "### Task 1: old style\n- some content\n\n### Task 2: also old\n- more\n"
+        tasks = mod.parse_tasks(plan)
+        assert [t.risk_level for t in tasks] == ["standard", "standard"]
+
+
+class TestTaskIdShellSafety:
+    """#880 gate round 2: ids flow into the Step 8a append-review-log shell
+    command, so the grammar is [A-Za-z0-9][A-Za-z0-9._-]* — a metacharacter id
+    RAISES via the fail-loud rule instead of parsing."""
+
+    @pytest.mark.parametrize("bad_id", ["1;rm", "$(x)", "`x`", 'a"b', "a'b", "a\\b", ";x"])
+    def test_metacharacter_ids_raise(self, bad_id):
+        mod = _reload_plan_lib()
+        plan = f"### Task {bad_id}: t\n- riskLevel: standard\n"
+        with pytest.raises(mod.PlanFormatError):
+            mod.parse_tasks(plan)
+
+    def test_underscore_dash_dot_ids_parse(self):
+        mod = _reload_plan_lib()
+        plan = ("### Task a_1: t\n- riskLevel: standard\n\n"
+                "### Task b-2: t\n- riskLevel: standard\n\n"
+                "### Task 3.5: t\n- riskLevel: standard\n")
+        assert [t.id for t in mod.parse_tasks(plan)] == ["a_1", "b-2", "3.5"]
+
+
+class TestRiskLevelMissingColon:
+    """#880 Step 6 gate (owner-authorized direct amendment): the attempt
+    trigger is word-anchored, not colon-anchored."""
+
+    @pytest.mark.parametrize("line", ["- riskLevel high", "- riskLevel"])
+    def test_colonless_risklevel_attempt_raises(self, line):
+        """`- riskLevel high` slipped the colon-anchored trigger and silently
+        downgraded a SINGLE-task plan via the pre-P15 path."""
+        mod = _reload_plan_lib()
+        plan = f"### Task 1: t\n{line}\n"
+        with pytest.raises(mod.PlanFormatError, match=r"riskLevel"):
+            mod.parse_tasks(plan)
+
+
+class TestRiskLevelContinuationBound:
+    def test_valid_line_with_stray_continuation_keeps_level_loses_fragment(self):
+        """Gate round 2 accepted bound: the level is always correct; only
+        advisory reason text is lost; the fragment reads as body prose."""
+        mod = _reload_plan_lib()
+        plan = "### Task 1: t\n- riskLevel: high (short)\n  more text)\n"
+        tasks = mod.parse_tasks(plan)
+        assert tasks[0].risk_level == "high" and tasks[0].reason == "short"
+
+
+# --- #880 Defect A: coverage gate structure (red-first) ---
+
+
+class TestReviewLogStructure:
+    """#880 Defect A: the gate distinguishes no-log / wrong-file / empty-log
+    instead of conflating them all into entries == []. Fail-mode: CLOSED."""
+
+    def _high(self):
+        return _t("1", "high", "sec")
+
+    def _std(self):
+        return _t("1", "standard")
+
+    def test_missing_log_without_high_risk_passes_with_stderr(self, tmp_path, capsys):
+        """AC-A(iv) quiet half: ok=True but NEVER silent — stderr names the path."""
+        mod = _reload_plan_lib()
+        path = str(tmp_path / "absent.jsonl")
+        ok, missing = mod.assert_review_coverage(path, [self._std()], {"1": "abc"})
+        assert ok is True and missing == []
+        assert path in capsys.readouterr().err
+
+    def test_wrong_file_raises_distinct_error(self, tmp_path):
+        """AC-A(iii): >0 non-blank lines, 0 parsed entries -> ReviewLogError —
+        the session_notes.md-as-log_path case measured on the #879 run."""
+        mod = _reload_plan_lib()
+        p = tmp_path / "notes.md"
+        p.write_text("# Session notes\n\n### WF2 Step 8a: DONE\n- prose\n")
+        with pytest.raises(mod.ReviewLogError, match="parsed"):
+            mod.assert_review_coverage(str(p), [self._std()], {"1": "abc"})
+
+    def test_wrong_file_of_unrelated_objects_raises(self, tmp_path):
+        """Gate round 3: {} and foreign dicts are malformed, not entries — a
+        wrong .jsonl (e.g. dispositions.jsonl) cannot dodge the wrong-file
+        error via mere dict-ness."""
+        mod = _reload_plan_lib()
+        p = tmp_path / "foreign.jsonl"
+        p.write_text('{}\n{"foo":"bar"}\n{"finding_key":"x","disposition":"adopted"}\n')
+        with pytest.raises(mod.ReviewLogError):
+            mod.assert_review_coverage(str(p), [self._std()], {"1": "abc"})
+
+    def test_byte_empty_log_is_ordinary_miss_not_wrong_file(self, tmp_path):
+        """An empty file is legitimate state (Step 8a not run yet): a
+        high-risk task is an ordinary coverage miss, never a wrong-file error."""
+        mod = _reload_plan_lib()
+        p = tmp_path / "review_log.jsonl"
+        p.write_text("")
+        ok, missing = mod.assert_review_coverage(str(p), [self._high()], {"1": "abc"})
+        assert ok is False and len(missing) == 1
+
+    def test_blank_lines_only_counts_as_empty(self, tmp_path):
+        """Physical-line semantics pinned: whitespace-only lines are not
+        content, so this is empty (pass for a standard task), not wrong-file."""
+        mod = _reload_plan_lib()
+        p = tmp_path / "review_log.jsonl"
+        p.write_text("\n   \n\n")
+        ok, missing = mod.assert_review_coverage(str(p), [self._std()], {"1": "abc"})
+        assert ok is True and missing == []
+
+    def test_non_dict_json_line_is_malformed_not_crash(self, tmp_path, capsys):
+        """Latent crash found during #880 Step 2: a line `123` is valid JSON
+        but not a dict; the gate died with AttributeError. Now malformed."""
+        mod = _reload_plan_lib()
+        p = tmp_path / "review_log.jsonl"
+        p.write_text('123\n{"task_id":"1","sha":"abc","verdict":"applied"}\n')
+        ok, missing = mod.assert_review_coverage(str(p), [self._high()], {"1": "abc"})
+        assert ok is True and missing == []
+        assert "malformed" in capsys.readouterr().err
+
+    def test_truncated_final_line_is_malformed_not_entry(self, tmp_path, capsys):
+        mod = _reload_plan_lib()
+        p = tmp_path / "review_log.jsonl"
+        p.write_text('{"task_id":"1","sha":"abc","verdict":"applied"}\n{"task_id":"2","sha":"de')
+        ok, _ = mod.assert_review_coverage(str(p), [self._high()], {"1": "abc"})
+        assert ok is True
+        assert "malformed" in capsys.readouterr().err
+
+    def test_dispatch_failed_is_valid_entry_but_never_coverage(self, tmp_path):
+        """Verdict qualification stated: REVIEW_DISPATCH_FAILED parses as an
+        entry (no wrong-file error) yet never covers a task."""
+        mod = _reload_plan_lib()
+        p = tmp_path / "review_log.jsonl"
+        p.write_text('{"task_id":"1","sha":"abc","verdict":"REVIEW_DISPATCH_FAILED"}\n')
+        ok, missing = mod.assert_review_coverage(str(p), [self._high()], {"1": "abc"})
+        assert ok is False and len(missing) == 1
+
+    def test_warnings_capped_with_final_count(self, tmp_path, capsys):
+        """AC-A(v): 50 corrupt {-lines warn at most the cap + one final count."""
+        mod = _reload_plan_lib()
+        p = tmp_path / "review_log.jsonl"
+        p.write_text("".join('{"broken %d\n' % i for i in range(50)))
+        with pytest.raises(mod.ReviewLogError):
+            mod.assert_review_coverage(str(p), [self._std()], {"1": "abc"})
+        err = capsys.readouterr().err
+        assert err.count("skipping malformed") <= mod._REVIEW_LOG_WARN_CAP
+        assert "50" in err
+
+    def test_prose_lines_do_not_warn_per_line(self, tmp_path, capsys):
+        """The 8,878-line flood fix: prose (no leading '{') gets no per-line
+        warning; the final count still reports it."""
+        mod = _reload_plan_lib()
+        p = tmp_path / "notes.md"
+        p.write_text("# heading\n" * 100)
+        with pytest.raises(mod.ReviewLogError):
+            mod.assert_review_coverage(str(p), [self._std()], {"1": "abc"})
+        err = capsys.readouterr().err
+        assert err.count("skipping malformed") == 0
+        assert "100" in err
+
+
+class TestAppendReviewLogCLI:
+    """#880: the sanctioned Step 8a writer — validates, then delegates to
+    append_review_log. Fail-closed at exit 2 with nothing written."""
+
+    PLAN_LIB = HOOKS_DIR / "plan_lib.py"
+
+    def _run(self, *args):
+        return subprocess.run(
+            [sys.executable, str(self.PLAN_LIB), "append-review-log", *args],
+            capture_output=True, text=True)
+
+    def test_appends_valid_entry(self, tmp_path):
+        log = tmp_path / "review_log.jsonl"
+        r = self._run("--log", str(log), "--task-id", "1", "--sha", "abc123",
+                      "--reviewers", "inline-mechanical,runner-security",
+                      "--verdict", "applied", "--findings", "0,1,2,0,1",
+                      "--project-root", str(tmp_path))
+        assert r.returncode == 0, r.stderr
+        entry = json.loads(log.read_text().strip())
+        assert entry["task_id"] == "1" and entry["sha"] == "abc123"
+        assert entry["verdict"] == "applied"
+        assert entry["findings"] == {"crit": 0, "high": 1, "med": 2, "low": 0, "dropped": 1}
+        assert entry["reviewers"] == ["inline-mechanical", "runner-security"]
+        assert "ts" in entry
+
+    def test_bad_verdict_exits_2_writes_nothing(self, tmp_path):
+        log = tmp_path / "review_log.jsonl"
+        r = self._run("--log", str(log), "--task-id", "1", "--sha", "abc",
+                      "--reviewers", "a", "--verdict", "LGTM",
+                      "--findings", "0,0,0,0,0", "--project-root", str(tmp_path))
+        assert r.returncode == 2 and not log.exists()
+
+    def test_bad_findings_arity_exits_2(self, tmp_path):
+        log = tmp_path / "review_log.jsonl"
+        r = self._run("--log", str(log), "--task-id", "1", "--sha", "abc",
+                      "--reviewers", "a", "--verdict", "applied",
+                      "--findings", "0,1,2", "--project-root", str(tmp_path))
+        assert r.returncode == 2 and not log.exists()
+
+    def test_log_outside_project_root_refused(self, tmp_path):
+        inner = tmp_path / "root"; inner.mkdir()
+        r = self._run("--log", str(tmp_path / "escape.jsonl"), "--task-id", "1",
+                      "--sha", "abc", "--reviewers", "a", "--verdict", "applied",
+                      "--findings", "0,0,0,0,0", "--project-root", str(inner))
+        assert r.returncode == 2
+
+
+class TestBranchProtectionStringBody:
+    """#880 Defect B: the probe's raw JSON TEXT — the natural reading of WF2
+    Step 1 item 9 — silently classified `unknown` (the less-safe answer)
+    instead of `unprotected`. Hit live by the #856 run; reproduced on the real
+    GitHub 404 body during this run's own Step 1."""
+
+    REAL_404_BODY = ('{"message":"Branch not protected","documentation_url":'
+                     '"https://docs.github.com/rest/branches/branch-protection'
+                     '#get-branch-protection","status":"404"}')
+
+    def test_real_404_body_as_string_is_unprotected(self):
+        mod = _reload_plan_lib()
+        state, details = mod.classify_branch_protection(404, self.REAL_404_BODY)
+        assert state == "unprotected"
+        assert details["required_checks"] == []
+
+    def test_protection_object_as_string_is_protected(self):
+        mod = _reload_plan_lib()
+        body = '{"required_status_checks": {"contexts": ["ci/build"]}}'
+        state, details = mod.classify_branch_protection(200, body)
+        assert state == "protected"
+        assert details["required_checks"] == ["ci/build"]
+
+    def test_unparseable_string_stays_unknown(self):
+        mod = _reload_plan_lib()
+        assert mod.classify_branch_protection(404, "Not Found")[0] == "unknown"
+        assert mod.classify_branch_protection(200, "surprise")[0] == "unknown"
+
+    @pytest.mark.parametrize("decodes_to_non_dict", ['[1,2]', '123', 'null', '"str"'])
+    def test_string_decoding_to_non_dict_stays_unknown(self, decodes_to_non_dict):
+        """Gate finding: JSON truthiness must not widen the classifier —
+        only an object body is evidence."""
+        mod = _reload_plan_lib()
+        assert mod.classify_branch_protection(404, decodes_to_non_dict)[0] == "unknown"
+        assert mod.classify_branch_protection(200, decodes_to_non_dict)[0] == "unknown"

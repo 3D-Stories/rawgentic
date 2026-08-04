@@ -32,6 +32,18 @@ class PlanFormatError(ValueError):
     """Raised when the plan markdown does not conform to the WF2 contract."""
 
 
+class ReviewLogError(ValueError):
+    """Raised when the Step 9 coverage gate's review log is structurally
+    unusable (#880 Defect A): the file is missing while high-risk tasks need
+    coverage, or it has content that parses to zero valid entries (a wrong
+    file — e.g. session notes passed as log_path, measured on the #879 run).
+
+    Fail-mode: CLOSED. This gate's whole purpose is to refuse; input it cannot
+    evaluate must never read as a pass (decision guide: security boundary →
+    fail-closed). Distinct from an ordinary coverage miss, which stays a
+    (False, [...]) return."""
+
+
 @dataclass(frozen=True)
 class Task:
     id: str
@@ -169,11 +181,21 @@ SEVERITY_BANDED_CONFIDENCE: Final[dict[str, float]] = {
 
 # --- parse_tasks: plan markdown -> [Task] ---
 
-_TASK_HEADER_RE = re.compile(r"^###\s+Task\s+([0-9.]+)\s*:\s*(.+?)\s*$")
+# #880 Defect E: the id is any shell-safe token (T1, 1a, 2.3 — not just numeric).
+# Charset deliberately narrower than \S+: ids flow into the Step 8a
+# `append-review-log` shell command as an argument, so metacharacters must not
+# parse (gate round 2, owner-approved). A `### Task ` heading that fails this
+# regex RAISES via _TASK_ATTEMPT_RE below — it is never silently skipped.
+_TASK_HEADER_RE = re.compile(r"^###\s+Task\s+([A-Za-z0-9][A-Za-z0-9._-]*)\s*:\s*(.+?)\s*$")
+_TASK_ATTEMPT_RE = re.compile(r"^###\s+Task\s+")
 _RISKLEVEL_RE = re.compile(
     r"^\s*[-*]\s*riskLevel\s*:\s*(high|standard)(?:\s*\(([^)]+)\))?\s*$",
     re.IGNORECASE,
 )
+# #880: word-anchored (not colon-anchored) so `- riskLevel high` — the missing
+# colon typo — is an ATTEMPT that must validate, not prose to skip (Step 6
+# gate, owner-authorized). An attempt that fails _RISKLEVEL_RE raises.
+_RISKLEVEL_ATTEMPT_RE = re.compile(r"^\s*[-*]\s*riskLevel\b", re.IGNORECASE)
 # Optional parallel-execution annotations (PR 3a). Both purely additive — their
 # absence never changes the riskLevel fail-closed contract or the pre-P15 migration.
 _PARALLEL_GROUP_RE = re.compile(r"^\s*[-*]\s*parallel_group\s*:\s*(\S+)\s*$", re.IGNORECASE)
@@ -202,12 +224,21 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
     """Extract Task objects from a WF2 plan markdown.
 
     Contract:
-    - Each task starts with `### Task <id>: <title>` heading.
+    - Each task starts with `### Task <id>: <title>` heading; the id matches
+      `[A-Za-z0-9][A-Za-z0-9._-]*` (shell-safe — ids reach the Step 8a
+      `append-review-log` command line; #880).
+    - A line beginning `### Task ` that does NOT parse as a task heading raises
+      PlanFormatError naming the line (#880 — a typo like `### Task T1` with a
+      missing colon must never silently drop a task and its mandatory review).
     - Each task MUST include a `- riskLevel: high|standard` line within its body
       (before the next ### heading); high-risk tasks may include a parenthesized
-      reason: `- riskLevel: high (security surface)`.
-    - Tasks without a riskLevel line raise PlanFormatError (fail-closed).
-    - Non-task `###` headings (anything not starting with `Task `) are ignored.
+      reason: `- riskLevel: high (security surface)` — reason on ONE line
+      (wrapped reasons are forbidden and raise, #880).
+    - A bullet beginning with the word `riskLevel` that does not validate raises
+      PlanFormatError (#880 — `- riskLevel high` and `- riskLevel: super-high`
+      were silent downgrades via the pre-P15 path).
+    - Tasks without ANY riskLevel attempt raise PlanFormatError (fail-closed).
+    - Non-task `###` headings (no `Task ` + whitespace prefix) are ignored.
 
     Backward compatibility: if NO task in the plan has a riskLevel line, the
     plan is treated as pre-P15 (created before this feature shipped) and every
@@ -223,6 +254,15 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
     while i < len(lines):
         m = _TASK_HEADER_RE.match(lines[i])
         if not m:
+            if _TASK_ATTEMPT_RE.match(lines[i]):
+                # #880 Defect E: an attempted-but-unparseable task heading is a
+                # typo, never prose — silently skipping it dropped the task and
+                # its mandatory Step 8a review.
+                raise PlanFormatError(
+                    f"line {i + 1}: unparseable task heading {lines[i].strip()!r} — "
+                    f"task headings must be `### Task <id>: <title>` with id matching "
+                    f"[A-Za-z0-9][A-Za-z0-9._-]*; rename prose headings that begin 'Task '"
+                )
             i += 1
             continue
         task_id, title = m.group(1), m.group(2)
@@ -241,6 +281,16 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
             if mm:
                 risk_level = mm.group(1).lower()
                 reason = mm.group(2).strip() if mm.group(2) else None
+            elif _RISKLEVEL_ATTEMPT_RE.match(lines[j]):
+                # #880 Defect E: an attempted riskLevel line that fails the
+                # format is a typo (missing colon, off-vocab value, wrapped
+                # reason) — before this it silently downgraded high->standard
+                # via the pre-P15 path, disabling Step 8a.
+                raise PlanFormatError(
+                    f"line {j + 1}: unparseable riskLevel line {lines[j].strip()!r} — "
+                    f"must be `- riskLevel: high|standard`, any parenthesized reason "
+                    f"on the SAME line (wrapped reasons are forbidden)"
+                )
             pg = _PARALLEL_GROUP_RE.match(lines[j])
             if pg:
                 parallel_group = pg.group(1)
@@ -1172,27 +1222,72 @@ def append_review_log(log_path: str, entry: dict) -> None:
         f.write(line)
 
 
-def _read_review_log(log_path: str) -> list[dict]:
-    if not os.path.exists(log_path):
-        return []
-    out = []
+# #880: warnings are capped — session_notes.md passed as log_path produced
+# 8,878 per-line warnings on the #879 run. Per-line detail only for plausible
+# entries (a leading '{'); the final count line ALWAYS prints when anything
+# was malformed, so nothing is silently discarded (gate rounds 1-3).
+_REVIEW_LOG_WARN_CAP = 10
+_REVIEW_VERDICTS = ("applied", "deferred", "REVIEW_DISPATCH_FAILED")
+
+
+def _valid_review_entry(obj) -> bool:
+    """Schema-valid review entry (#880): the identity triple of the documented
+    Step 8a shape — non-empty str task_id + sha, vocab verdict. Shared by the
+    reader and the append-review-log CLI so they cannot drift. Anything else
+    that decodes (123, null, [], {}, a foreign object) is malformed, never an
+    entry — mere dict-ness must not dodge wrong-file detection."""
+    return (isinstance(obj, dict)
+            and isinstance(obj.get("task_id"), str) and bool(obj["task_id"])
+            and isinstance(obj.get("sha"), str) and bool(obj["sha"])
+            and obj.get("verdict") in _REVIEW_VERDICTS)
+
+
+def _scan_review_log(log_path: str) -> tuple[list[dict], dict]:
+    """Entries plus structure stats: {exists, lines, parsed, malformed}.
+
+    `lines` counts non-blank physical lines (whitespace-only lines are not
+    content); `parsed` counts schema-valid entries; everything else non-blank
+    is `malformed`."""
+    stats = {"exists": os.path.exists(log_path), "lines": 0, "parsed": 0, "malformed": 0}
+    if not stats["exists"]:
+        return [], stats
+    out: list[dict] = []
+    warned = 0
     with open(log_path, "r", encoding="utf-8") as f:
         for lineno, raw in enumerate(f, start=1):
             raw = raw.strip()
             if not raw:
                 continue
+            stats["lines"] += 1
             try:
-                out.append(_json.loads(raw))
+                obj = _json.loads(raw)
             except _json.JSONDecodeError:
-                # Surface corruption to operator; do not raise — the
-                # assert_review_coverage gate will fail cleanly.
+                obj = None
+            if obj is not None and _valid_review_entry(obj):
+                out.append(obj)
+                stats["parsed"] += 1
+                continue
+            stats["malformed"] += 1
+            if raw.startswith("{") and warned < _REVIEW_LOG_WARN_CAP:
+                warned += 1
                 print(
                     f"plan_lib: skipping malformed review log line "
                     f"{lineno} in {log_path}: {raw[:80]!r}",
                     file=sys.stderr,
                 )
-                continue
-    return out
+    if stats["malformed"]:
+        tail = " (per-line details capped)" if stats["malformed"] > warned else ""
+        print(
+            f"plan_lib: {stats['malformed']} malformed review log line(s) "
+            f"in {log_path}{tail}",
+            file=sys.stderr,
+        )
+    return out, stats
+
+
+def _read_review_log(log_path: str) -> list[dict]:
+    entries, _ = _scan_review_log(log_path)
+    return entries
 
 
 def read_review_log(log_path: str) -> list[dict]:
@@ -1214,10 +1309,41 @@ def assert_review_coverage(
     """Verify every high-risk task has a matching applied review log entry.
 
     Returns (ok, missing) where `missing` is a list of human-readable
-    descriptions of the gaps. REVIEW_DISPATCH_FAILED entries do NOT count
-    as coverage.
+    descriptions of the gaps. Only verdicts `applied` and `deferred` qualify
+    as coverage; REVIEW_DISPATCH_FAILED never does.
+
+    Structural failures raise ReviewLogError — fail-CLOSED (#880 Defect A):
+    - missing log + >=1 high-risk task -> raise (Step 8a's append never ran,
+      or the path is wrong);
+    - missing log + no high-risk tasks -> (True, []) WITH a stderr line naming
+      the absent path (never a silent vacuous pass);
+    - content present but zero valid entries -> raise ("wrong file" — e.g.
+      session notes as log_path, the #879 incident);
+    - genuinely empty file -> ordinary coverage semantics (Step 8a simply has
+      not written yet).
     """
-    entries = _read_review_log(log_path)
+    entries, stats = _scan_review_log(log_path)
+    high_risk_count = sum(1 for t in plan_tasks if t.risk_level == "high")
+    if not stats["exists"]:
+        if high_risk_count:
+            raise ReviewLogError(
+                f"review log {log_path} does not exist but the plan has "
+                f"{high_risk_count} high-risk task(s) — Step 8a's append never "
+                f"ran, or log_path is wrong"
+            )
+        print(
+            f"plan_lib: review log {log_path} absent; no high-risk tasks, so "
+            f"coverage is vacuously satisfied — saying so rather than passing "
+            f"silently (#880)",
+            file=sys.stderr,
+        )
+        return (True, [])
+    if stats["lines"] > 0 and stats["parsed"] == 0:
+        raise ReviewLogError(
+            f"review log {log_path} has {stats['lines']} non-blank line(s) but "
+            f"0 parsed entries — wrong file? (a review log is JSONL with "
+            f"task_id/sha/verdict per line; session notes are not it)"
+        )
     applied_shas = {
         e.get("sha")
         for e in entries
@@ -2190,7 +2316,19 @@ def classify_branch_protection(status_code: int, body) -> tuple[str, dict]:
       or the contradiction check would be skipped).
     - 403/401/other -> 'unknown'.
     `details` always carries `required_checks: list[str]`.
+
+    #880 Defect B: `body` may be the probe's raw JSON TEXT (`str`) — the
+    natural reading of WF2 Step 1 item 9. A str is parsed first; only a
+    genuinely unparseable string (or one decoding to a non-dict) classifies
+    'unknown'. Dict-input behavior is byte-identical. Before this, a string
+    body silently returned 'unknown' — the LESS-safe answer — with no error
+    (hit live by the #856 run).
     """
+    if isinstance(body, str):
+        try:
+            body = _json.loads(body)
+        except _json.JSONDecodeError:
+            return ("unknown", {"required_checks": []})
     if status_code == 200:
         if not isinstance(body, dict) or not (_PROTECTION_KEYS & set(body)):
             return ("unknown", {"required_checks": []})
@@ -2864,6 +3002,44 @@ def _cmd_assert_pr_body(args) -> int:
     return 0
 
 
+def _cmd_append_review_log(args) -> int:
+    """Step 8a's sanctioned coverage writer (#880): validate, then delegate to
+    append_review_log. Fail-CLOSED: any validation or containment failure is
+    exit 2 with nothing written — a malformed entry must never land in the log
+    the Step 9 gate reads."""
+    def refuse(msg: str) -> int:
+        sys.stderr.write(f"append-review-log: {msg}\n")
+        return 2
+    if args.verdict not in _REVIEW_VERDICTS:
+        return refuse(f"--verdict {args.verdict!r} must be one of "
+                      f"{', '.join(_REVIEW_VERDICTS)}")
+    parts = [p.strip() for p in args.findings.split(",")]
+    if len(parts) != 5 or not all(p.isdigit() for p in parts):
+        return refuse("--findings must be five non-negative integers: "
+                      "crit,high,med,low,dropped")
+    reviewers = [r.strip() for r in args.reviewers.split(",") if r.strip()]
+    if not reviewers:
+        return refuse("--reviewers must be a non-empty comma list")
+    if not args.task_id.strip() or not args.sha.strip():
+        return refuse("--task-id and --sha must be non-empty")
+    log_path = args.log if os.path.isabs(args.log) \
+        else os.path.join(args.project_root, args.log)
+    if os.path.islink(log_path) or not _contained(log_path, args.project_root):
+        return refuse(f"--log {args.log!r} must resolve inside --project-root "
+                      f"and must not be a symlink")
+    crit, high, med, low, dropped = (int(p) for p in parts)
+    entry = {
+        "task_id": args.task_id.strip(), "sha": args.sha.strip(),
+        "reviewers": reviewers, "verdict": args.verdict,
+        "findings": {"crit": crit, "high": high, "med": med,
+                     "low": low, "dropped": dropped},
+    }
+    if not _valid_review_entry(entry):
+        return refuse("entry failed schema validation")
+    append_review_log(log_path, entry)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
     parser = argparse.ArgumentParser(prog="plan_lib")
@@ -2904,6 +3080,21 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--project-root", default=".",
                    help="the token write target must resolve inside this root")
     r.set_defaults(func=_cmd_review_reopen)
+    w = sub.add_parser("append-review-log",
+                       help="append a validated Step 8a coverage entry (#880)")
+    w.add_argument("--log", required=True,
+                   help="claude_docs/.wf2-state/<issue>/review_log.jsonl")
+    w.add_argument("--task-id", required=True, dest="task_id")
+    w.add_argument("--sha", required=True)
+    w.add_argument("--reviewers", required=True,
+                   help="non-empty comma list, e.g. inline-mechanical,runner-security")
+    w.add_argument("--verdict", required=True,
+                   help="applied, deferred, or REVIEW_DISPATCH_FAILED")
+    w.add_argument("--findings", required=True,
+                   help="five non-negative ints: crit,high,med,low,dropped")
+    w.add_argument("--project-root", default=".", dest="project_root",
+                   help="--log must resolve inside this root")
+    w.set_defaults(func=_cmd_append_review_log)
     args = parser.parse_args(argv)
     return args.func(args)
 

@@ -1558,3 +1558,72 @@ class TestStep4BudgetExhaustedClose:
         # The SKILL.md carve-out must fence itself to the design source.
         text = " ".join(_text().split())
         assert "The carve-out is deliberately narrow and does NOT generalize" in text
+
+
+class TestPlanFormatContractIdRule:
+    """#880 Defect E AC-(v): Step 5's contract states the id grammar, the
+    fail-loud heading rule, and the one-line (wrapped-forbidden) reason rule —
+    the prose gap that let `### Task T1:` silently parse to zero tasks."""
+
+    def test_step5_contract_states_id_grammar_and_fail_loud(self):
+        step5 = _section(_text(), "## Step 5:", "## Step 6:")
+        assert "[A-Za-z0-9][A-Za-z0-9._-]*" in step5
+        norm = " ".join(step5.split())
+        assert ("An unparseable `### Task ` heading fails closed "
+                "(parse error naming the line → STOP), never silently skipped.") in norm
+
+    def test_step5_contract_forbids_wrapped_reason(self):
+        step5 = _section(_text(), "## Step 5:", "## Step 6:")
+        norm = " ".join(step5.split())
+        assert "the reason stays on ONE line" in norm
+        assert "a wrapped reason is forbidden and fails closed" in norm
+
+
+class TestReviewLogWiring:
+    """#880 Defect A location pins (AC-A i/ii) — these read the FILE directly,
+    not the corpus: the append instruction must live in Step 8a's body and the
+    explicit log path in Step 9's body, where the executing orchestrator reads
+    them."""
+
+    STEPS = Path(__file__).resolve().parent.parent / \
+        "skills" / "implement-feature" / "references" / "steps.md"
+
+    def test_step8a_prescribes_the_append_with_entry_shape(self):
+        text = self.STEPS.read_text(encoding="utf-8")
+        s8a = text[text.index("### Step 8a sub-step"):text.index("### Step 8a Failure Modes")]
+        assert "append-review-log" in s8a
+        assert 'claude_docs/.wf2-state/<issue>/review_log.jsonl' in s8a
+        norm = " ".join(s8a.split())
+        assert "{task_id, sha, reviewers, verdict, findings:{crit,high,med,low,dropped}, ts}" in norm
+
+    def test_step9_names_the_log_path_and_helper(self):
+        text = self.STEPS.read_text(encoding="utf-8")
+        s9 = text[text.index("## Step 9:"):text.index("## Step 10:")]
+        assert "claude_docs/.wf2-state/<issue>/review_log.jsonl" in s9
+        assert "assert_review_coverage" in s9
+        assert "NEVER the session notes" in s9
+
+
+class TestBranchPrefixDrift:
+    """#880 Defect G (AC-G i/ii): the constant and the Step 5 prose are pinned
+    TOGETHER so they cannot separate again — the old pair (`feature` constant
+    vs the repo manual's feat/|fix/ rule) was unsatisfiable as written and
+    produced mixed branches across projects."""
+
+    SKILL = Path(__file__).resolve().parent.parent / \
+        "skills" / "implement-feature" / "SKILL.md"
+    STEPS = Path(__file__).resolve().parent.parent / \
+        "skills" / "implement-feature" / "references" / "steps.md"
+
+    def test_constant_and_prose_agree_on_feat(self):
+        assert 'BRANCH_PREFIX_FEATURE = "feat"' in self.SKILL.read_text(encoding="utf-8")
+        step5 = _section(self.STEPS.read_text(encoding="utf-8"), "## Step 5:", "## Step 6:")
+        assert "`feat/<issue-number>-<kebab-case-summary>`" in step5
+
+    def test_no_active_wf2_prose_prescribes_a_feature_branch(self):
+        """AC-G(ii): neither the SKILL body nor steps.md tells the reader to
+        CREATE a feature/ branch. (`(?:feat|feature|fix)` in hooks and
+        historical diagram revs/changelog entries are records, not
+        instructions.)"""
+        for path in (self.SKILL, self.STEPS):
+            assert "feature/<issue" not in path.read_text(encoding="utf-8"), path
