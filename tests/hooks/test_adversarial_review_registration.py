@@ -5,6 +5,7 @@ invocation present in the expected steps; consolidation WF5 text).
 """
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -76,8 +77,13 @@ VERSION_SURFACE_FILES = (
 # measured against the live corpus: 0 misses on 225 and 227 token-bearing entries.
 SUITE_DELTA_RE = re.compile(
     r"Suite\s+\d+(?:\+\d+skip)?\s*(?:→|->)\s*\d+(?:\+\d+skip)?")
+# `(?<!not )` blocks a NEGATED declaration. Without it a tail reading
+# "Decision is not no diagram REV. Suite 1→2." satisfied every check while expressly
+# WITHHOLDING the required decision — an unanchored substring search cannot tell an
+# affirmation from its negation. Costs nothing on the live corpus: 225 token-bearing
+# entries, 0 new misses (#822, adversarial diff layer).
 DIAGRAM_DECISION_RE = re.compile(
-    r"(?:no diagram REV|diagram REVs?\s+\d+\.\d+\.\d+)(?!\w)")
+    r"(?<!not )(?:no diagram REV|diagram REVs?\s+\d+\.\d+\.\d+)(?!\w)")
 
 # How much of an entry counts as its TAIL for the newest-entry gate. The tokens are
 # a tail convention, and searching a whole entry is fail-open: an entry that merely
@@ -96,12 +102,17 @@ LEGACY_DIAGRAM_EXCEPTIONS = frozenset({"v3.121.0"})    # "the diagram REV is DEF
 def _changelog_entries():
     """[(version, entry_text)] newest-first. Fail-CLOSED on an unreadable changelog."""
     readme = (REPO_ROOT / "README.md").read_text()
-    marker = "## Changelog"
-    assert marker in readme, (
-        f"README.md has no {marker!r} section — the changelog guards cannot "
-        "evaluate, so they fail rather than pass vacuously"
+    # EXACT heading match, not a substring test. `"## Changelog" in readme` is
+    # satisfied by `## Changelog Archive` or `## Changelog-old`, so a renamed or
+    # duplicated heading passed while the guards silently parsed the wrong section —
+    # the opposite of the fail-closed behaviour claimed here (#822, adversarial layer).
+    heads = list(re.finditer(r"(?m)^## Changelog$", readme))
+    assert len(heads) == 1, (
+        f"README.md must have EXACTLY ONE `## Changelog` heading; found {len(heads)}. "
+        "The changelog guards cannot decide which section is authoritative, so they "
+        "fail rather than pass vacuously."
     )
-    body = readme[readme.index(marker):]
+    body = readme[heads[0].start():]
     # Split on EVERY level-3 heading, not on a `### v` lookahead. Splitting on the
     # narrower lookahead was fail-OPEN and cross-model review caught it: a malformed
     # newest heading (say `### 3.125.2`, missing the v) is not a split point, so that
@@ -152,6 +163,32 @@ def test_plugin_version_bumped():
     )
 
 
+def test_no_unregistered_plugin_manifest_version_surface():
+    """Discovery: every tracked plugin manifest must be a REGISTERED version surface.
+
+    `VERSION_SURFACE_FILES` is a static tuple, so on its own it stays green if a THIRD
+    plugin manifest appears — the guard would then be checking two of three surfaces
+    and calling that agreement (#822, adversarial layer). Enumerating the tracked
+    manifests turns "three surfaces" from a comment into something checked.
+
+    Scope stated honestly: this discovers plugin MANIFESTS (`*plugin.json`), which is
+    the class that has actually drifted here. It cannot discover an arbitrary version
+    constant declared in source; that remains a convention, not a mechanical guarantee.
+    """
+    out = subprocess.run(
+        ["git", "ls-files"], cwd=REPO_ROOT,
+        capture_output=True, text=True, check=True).stdout.split()
+    manifests = sorted(p for p in out if p.endswith("plugin.json"))
+    # marketplace.json is a registry of skills, not a versioned manifest surface.
+    expected = sorted(VERSION_SURFACE_FILES)
+    assert manifests == expected, (
+        f"tracked plugin manifests {manifests} != registered version surfaces "
+        f"{expected}. A new manifest must be added to VERSION_SURFACE_FILES (and the "
+        "THREE-surfaces prose updated) or the guard is checking a subset and calling "
+        "it agreement."
+    )
+
+
 def test_newest_changelog_entry_carries_both_tail_tokens():
     """The newest entry must carry the diagram decision AND the `Suite old→new` delta.
 
@@ -165,6 +202,17 @@ def test_newest_changelog_entry_carries_both_tail_tokens():
     green. Cross-model review caught that (#822).
     """
     version, entry = _changelog_entries()[0]
+    # Tie the checked entry to the RELEASE. Without this the guard validated
+    # whichever entry happened to be first, so bumping all three version surfaces
+    # while forgetting the changelog entry left every guard green with the current
+    # release's tail tokens never checked at all (#822, adversarial layer). This is
+    # also the mechanical half of the repo's "one PR = one bump = one changelog
+    # entry" rule.
+    assert version == f"v{EXPECTED_PLUGIN_VERSION}", (
+        f"newest changelog entry is {version} but the plugin version is "
+        f"v{EXPECTED_PLUGIN_VERSION} — every bump needs its own changelog entry, "
+        "newest-first"
+    )
     tail = entry.rstrip()[-TAIL_CHARS:]
     assert DIAGRAM_DECISION_RE.search(tail), (
         f"newest changelog entry {version} carries no diagram decision in its last "
