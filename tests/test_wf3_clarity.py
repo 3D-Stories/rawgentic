@@ -482,3 +482,68 @@ class TestTimingAssemblyWF3:
                 "--issue <issue>") in sec, (
             "WF3 Step 14 assembly must compute timing via the step_state CLI (#506)")
         assert "hand-estimate durations into `timing`" in sec
+
+
+class TestClosingKeywordGuardWF3:
+    """#901 (WF3 surface): the same closing-keyword rule on WF3's PR step.
+
+    WF3 is the delicate case. A WF3 run fixes exactly ONE bug, so its own issue is
+    a GENUINE closure — Step 10's `(closes #<issue>)` commit and the body's
+    `Fixes #<issue-number>` are correct and must survive. `test_step14_*` already
+    pins that Step 14 relies on that linkage. So this guard asserts the new rule
+    is present AND that it explicitly preserves the intended linkage, rather than
+    forbidding closing keywords outright and contradicting the sibling pin.
+    """
+
+    STEPS = REPO_ROOT / "skills" / "fix-bug" / "references" / "steps.md"
+
+    def _gate_section(self) -> str:
+        text = self.STEPS.read_text()
+        return " ".join(_section(
+            text, "3b. **Closing-keyword check", "4. Create PR:").split())
+
+    def test_wf3_pr_step_carries_the_rule(self):
+        sec = self._gate_section()
+        assert "never place a closing keyword" in sec, (
+            "WF3's PR step must state the never-place-a-closing-keyword rule (#901)")
+        assert '"leaves #N open"' in sec
+
+    def test_all_nine_closing_keywords_are_named(self):
+        sec = self._gate_section()
+        for kw in ("close", "closes", "closed",
+                   "fix", "fixes", "fixed",
+                   "resolve", "resolves", "resolved"):
+            assert f"`{kw}`" in sec, f"keyword {kw!r} must be named in WF3's rule"
+
+    def test_intended_linkage_is_explicitly_preserved(self):
+        """Guards against the rule being read as 'strip every closing keyword',
+        which would break Step 14's documented reliance on the linkage."""
+        sec = self._gate_section()
+        assert "(closes #<issue>)" in sec, (
+            "WF3's rule must explicitly preserve Step 10's intended "
+            "`(closes #<issue>)` commit linkage")
+        assert "Fixes #<issue-number>" in sec
+        assert "binds every OTHER issue the body mentions" in sec, (
+            "the rule's scope must be stated as 'every other issue', or it "
+            "contradicts test_step14's reliance on the linkage")
+
+    def test_gate_command_runs_before_pr_creation(self):
+        """Anchored to the COMMAND invocations, not prose: the rule's own sentence
+        says "runs BEFORE `gh pr create`", so a bare index() match on that string
+        finds the mention and the assertion goes vacuous (it did, first run)."""
+        text = self.STEPS.read_text()
+        gate = re.search(r"^\s*python3 hooks/plan_lib\.py check-pr-refs",
+                         text, re.MULTILINE)
+        create = re.search(r"^\s*gh pr create", text, re.MULTILINE)
+        assert gate, "the check-pr-refs command invocation is missing from WF3 steps.md"
+        assert create, "the gh pr create command invocation is missing from WF3 steps.md"
+        assert gate.start() < create.start(), (
+            "the check-pr-refs gate must be invoked BEFORE `gh pr create` in WF3's "
+            "steps.md (#901 AC2)")
+
+    def test_gate_command_declares_this_runs_issue(self):
+        sec = self._gate_section()
+        assert "python3 hooks/plan_lib.py check-pr-refs" in sec
+        assert "--closes <this run's issue>" in sec, (
+            "WF3 closes its own issue, so its gate invocation must declare it — "
+            "otherwise the documented command flags the legitimate closure")

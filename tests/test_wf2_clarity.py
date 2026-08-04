@@ -1738,3 +1738,85 @@ class TestSixContractAreasStillGuarded:
         assert body.count("assert ") >= 2, (
             "test_no_executor_prose.py has lost its assertions — the "
             "executor-vocabulary prohibition would be unenforced")
+
+
+class TestClosingKeywordGuardWF2:
+    """#901: a negated "does not close #N" in a PR body still closes #N, because
+    GitHub's parser ignores the negation. Fired twice for real (#568 on the #573
+    merge, #874 on the #898 merge), both on PRs that were deliberately `Part of`.
+
+    These pins anchor the prose rule and the mechanical gate to `step-12.md` — the
+    ONE file that owns Step 12 — deliberately NOT to the corpus and NOT to a
+    `references/steps.md` path, which #874 deleted. A citation to a moved file is
+    the exact rot class that left #903's AC2 pointing at a file that no longer
+    exists.
+    """
+
+    STEP12 = REFERENCES / "step-12.md"
+
+    def _gate_section(self) -> str:
+        text = self.STEP12.read_text()
+        return " ".join(_section(
+            text, "4b. **Closing-keyword check", "5. **Create PR:**").split())
+
+    def test_step12_owns_the_closing_keyword_rule(self):
+        assert self.STEP12.exists(), (
+            "step-12.md must exist — the pin anchors here, not to the deleted "
+            "references/steps.md (#874)")
+        sec = self._gate_section()
+        assert "never place a closing keyword" in sec, (
+            "WF2 Step 12 must state the never-place-a-closing-keyword rule (#901)")
+
+    def test_all_nine_closing_keywords_are_named(self):
+        sec = self._gate_section()
+        for kw in ("close", "closes", "closed",
+                   "fix", "fixes", "fixed",
+                   "resolve", "resolves", "resolved"):
+            assert f"`{kw}`" in sec, (
+                f"the closing keyword {kw!r} must be named in the Step-12 rule — "
+                "an unlisted keyword reads as safe")
+
+    def test_replacement_phrasing_is_prescribed(self):
+        sec = self._gate_section()
+        assert '"leaves #N open"' in sec, (
+            'Step 12 must prescribe the replacement phrasing "leaves #N open" — '
+            "naming the hazard without the fix leaves the author guessing")
+
+    def test_gate_command_runs_before_pr_creation(self):
+        """The load-bearing ordering: flagging after `gh pr create` is useless.
+
+        Both anchors are the COMMAND invocations (a bash line), not prose: the
+        rule's own sentence says "runs BEFORE `gh pr create`", so a bare
+        `index("gh pr create")` matches that mention and the assertion becomes
+        vacuous — it did, on the first run of this pin.
+        """
+        text = self.STEP12.read_text()
+        gate = re.search(r"^\s*python3 hooks/plan_lib\.py check-pr-refs",
+                         text, re.MULTILINE)
+        create = re.search(r"^\s*gh pr create", text, re.MULTILINE)
+        assert gate, "the check-pr-refs command invocation is missing from step-12.md"
+        assert create, "the gh pr create command invocation is missing from step-12.md"
+        assert gate.start() < create.start(), (
+            "the check-pr-refs gate must be invoked BEFORE `gh pr create` in "
+            "step-12.md (#901 AC2) — a check that runs after the PR exists "
+            "cannot prevent the closure")
+
+    def test_gate_command_and_exit_codes_are_stated(self):
+        sec = self._gate_section()
+        assert "python3 hooks/plan_lib.py check-pr-refs" in sec
+        assert "--pr-body-file" in sec and "--closes" in sec
+        assert "rc 2" in sec, "the empty-body refusal must be documented"
+
+    def test_omitting_closes_means_closes_nothing(self):
+        """Fail toward asking: the default must flag, never wave through."""
+        sec = self._gate_section()
+        assert 'Omitting `--closes` means "this PR closes nothing"' in sec, (
+            "the fail-closed default must be explicit — a reader who assumes "
+            "omission means 'skip the check' gets the #901 defect back")
+        assert "fails toward asking" in sec
+
+    def test_multi_pr_rule_kept_with_the_gate(self):
+        sec = self._gate_section()
+        assert "only the LAST PR declares `--closes`" in sec, (
+            "the multi-PR convention (earlier PRs are Part of) must ride with "
+            "the gate, since that is exactly when the defect fires")
