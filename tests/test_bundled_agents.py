@@ -1,26 +1,26 @@
-"""Drift guards for the plugin-bundled subagent definitions (#164).
+"""Drift guards for the plugin-bundled subagent definitions (#164, reshaped by #866 M0c).
 
-The plugin ships agents/rawgentic-implementer.md and agents/rawgentic-reviewer.md
-(auto-discovered from the plugin-root agents/ directory; the installed agent type
-is namespaced "rawgentic:<name>"). Routing stays per-project config, so the
-definitions declare `model: inherit` and WF2 passes the resolved role model
-per-invocation — the Agent tool's model parameter overrides frontmatter (documented
-resolution order: env var > per-invocation param > frontmatter > session model).
+Since the M0c config contraction the plugin ships ONE bundled agent definition:
+agents/rawgentic-reviewer.md, the runner-dispatch subagent (auto-discovered from
+the plugin-root agents/ directory; the installed agent type is namespaced
+"rawgentic:<name>"). Its job is mechanical — run exactly one
+hooks/review_runner.py command from the orchestrator's brief and report the
+result path + exit code; the cross-model review itself happens inside the
+runner. agents/rawgentic-implementer.md was DELETED in M0c (implementation runs
+inline per D174; genuinely parallel tasks use generic Agent-tool worktree
+subagents, never a bundled type).
 
-These pins keep the definitions' safety properties from silently eroding:
-never-Haiku, worktree isolation on the implementer, read-only tooling on the
-reviewer, and WF2 actually referencing the shipped types.
+These pins keep the definition's safety properties from silently eroding:
+read-only tooling, the #510 read-only execution clause, the no-caller-retry
+contract, and the corpus never naming the namespaced agent types.
 """
 import re
 from pathlib import Path
-
-import pytest
 
 from tests.corpus import SKILLS_DIR, skill_corpus
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AGENTS_DIR = REPO_ROOT / "agents"
-IMPLEMENTER = AGENTS_DIR / "rawgentic-implementer.md"
 REVIEWER = AGENTS_DIR / "rawgentic-reviewer.md"
 
 
@@ -28,7 +28,7 @@ def _frontmatter(path: Path) -> dict:
     """Parse the simple `key: value` YAML frontmatter block.
 
     ponytail: single-line values only — a folded/multi-line YAML value would be
-    dropped or mis-keyed; the shipped definitions use none."""
+    dropped or mis-keyed; the shipped definition uses none."""
     text = path.read_text(encoding="utf-8")
     m = re.match(r"\A---\n(.*?)\n---\n", text, re.DOTALL)
     assert m, f"{path.name} missing YAML frontmatter"
@@ -40,55 +40,37 @@ def _frontmatter(path: Path) -> dict:
     return fields
 
 
-@pytest.mark.parametrize("path", [IMPLEMENTER, REVIEWER], ids=["implementer", "reviewer"])
-def test_definition_exists_with_name_and_description(path):
-    assert path.exists(), f"plugin must ship {path.relative_to(REPO_ROOT)}"
-    fm = _frontmatter(path)
-    assert fm.get("name") == path.stem
-    assert fm.get("description"), f"{path.name} needs a description (drives dispatch selection)"
+def test_implementer_definition_removed():
+    """M0c (#866): the implementer agent is deleted — implementation is inline
+    (D174). A resurrected definition would re-offer a retired dispatch path."""
+    assert not (AGENTS_DIR / "rawgentic-implementer.md").exists()
 
 
-@pytest.mark.parametrize("path", [IMPLEMENTER, REVIEWER], ids=["implementer", "reviewer"])
-def test_model_is_inherit_never_haiku(path):
-    """Routing is per-project config a static file can't read: the definition
-    declares inherit and the per-invocation model param carries the routed value.
-    A haiku frontmatter model would silently route coding/review to Haiku."""
-    fm = _frontmatter(path)
-    # == "inherit" is strictly stronger than any not-haiku check, so it is the
-    # single assertion; the body-level never-Haiku prose is pinned separately.
-    assert fm.get("model") == "inherit", f"{path.name} model must be inherit (routing overrides per-invocation)"
+def test_reviewer_definition_exists_with_name_and_description():
+    assert REVIEWER.exists(), f"plugin must ship {REVIEWER.relative_to(REPO_ROOT)}"
+    fm = _frontmatter(REVIEWER)
+    assert fm.get("name") == REVIEWER.stem
+    assert fm.get("description"), "reviewer needs a description (drives dispatch selection)"
 
 
-def test_implementer_is_worktree_isolated():
-    fm = _frontmatter(IMPLEMENTER)
-    assert fm.get("isolation") == "worktree", (
-        "implementer mutates the tree — parallel dispatch requires worktree isolation"
-    )
-
-
-@pytest.mark.parametrize("path", [IMPLEMENTER, REVIEWER], ids=["implementer", "reviewer"])
-def test_body_states_never_haiku_contract(path):
-    body = path.read_text(encoding="utf-8")
-    assert "never" in body.lower() and "haiku" in body.lower(), (
-        f"the never-Haiku guarantee must be stated in {path.name} itself"
-    )
+def test_reviewer_model_is_inherit():
+    """The dispatch is mechanical; the REVIEW model is the runner's pinned
+    backend identity, never this subagent — inherit keeps the definition
+    routing-neutral."""
+    fm = _frontmatter(REVIEWER)
+    assert fm.get("model") == "inherit"
 
 
 def test_reviewer_tools_are_read_heavy():
-    """The reviewer reads and reports; it must not carry file-editing tools.
-
-    Bash stays in the list (git log/show/diff, running the suite), so this list
-    alone does not prove read-only — the definition's prose therefore claims
-    "no file-editing tools", not "read-only", and instructs Bash be used for
-    inspection only. This guard pins the tool list; the prose pin is below."""
+    """The dispatcher runs one command and reports; it must not carry
+    file-editing tools. Bash stays in the list (the runner invocation itself,
+    git log/show/diff), so this list alone does not prove read-only — the
+    definition's prose bounds Bash explicitly (pinned below)."""
     fm = _frontmatter(REVIEWER)
     tools = [t.strip() for t in fm.get("tools", "").split(",") if t.strip()]
     assert tools, "reviewer must declare an explicit read-heavy tools list"
     for forbidden in ("Write", "Edit", "NotebookEdit"):
         assert forbidden not in tools, f"reviewer tools must not include {forbidden}"
-    # Bash is REQUIRED, not merely tolerated — the definition's contract relies
-    # on it (git log/show/diff, running the suite); its write capability is
-    # bounded by prose (pinned below), not by the tool layer.
     for required in ("Read", "Grep", "Glob", "Bash"):
         assert required in tools, f"reviewer tools must include {required}"
 
@@ -99,22 +81,35 @@ def test_reviewer_is_not_isolated():
     assert "isolation" not in fm
 
 
-def test_wf2_references_no_bundled_agent_types():
-    """M0b (#866): the retreat removed every bundled-agent dispatch from WF2
-    prose — the definitions survive on disk until M0c, but the corpus may not
-    name them (tests/test_no_executor_prose.py is the repo-wide guard; this is
-    the corpus-level mirror)."""
-    corpus = skill_corpus("implement-feature")
-    assert corpus.count("rawgentic:rawgentic-implementer") == 0
-    assert corpus.count("rawgentic:rawgentic-reviewer") == 0
+def test_reviewer_is_a_runner_dispatcher():
+    """M0c: the definition's contract is ONE review_runner.py command, no
+    caller-side retry (the runner owns transport policy, #857), and the --out
+    result file as the dispatch's only permitted write."""
+    body = REVIEWER.read_text(encoding="utf-8")
+    assert "review_runner.py" in body
+    norm = _normalized(body)
+    assert "never add their own retry loop" in norm
+    assert "only permitted write" in norm
+    assert "--out" in body
 
 
 def test_reviewer_prose_limits_bash_to_inspection():
     """The Bash escape hatch is real; the definition must bound it explicitly."""
-    body = REVIEWER.read_text(encoding="utf-8")
-    assert "no file-editing tools" in body.lower()
-    assert "read-only inspection" in body.lower()
-    assert "never to mutate" in body.lower()
+    body = REVIEWER.read_text(encoding="utf-8").lower()
+    assert "no file-editing tools" in body
+    assert "read-only inspection" in body
+    assert "never to" in body and "mutate the tree or commit" in body
+
+
+def test_wf2_references_no_bundled_agent_types():
+    """M0b/M0c (#866): the retreat removed every bundled-agent dispatch from
+    WF2 prose — runner dispatch goes through a generic read-only subagent, so
+    the corpus may not name the namespaced types
+    (tests/test_no_executor_prose.py is the repo-wide guard; this is the
+    corpus-level mirror)."""
+    corpus = skill_corpus("implement-feature")
+    assert corpus.count("rawgentic:rawgentic-implementer") == 0
+    assert corpus.count("rawgentic:rawgentic-reviewer") == 0
 
 
 # #510: a reviewer live-ran a fleet-mutating entry script (sentinel epic #45,
@@ -136,14 +131,15 @@ def _normalized(text: str) -> str:
 
 def test_reviewer_definition_carries_read_only_execution_clause():
     """#510 AC1+AC2: the definition forbids executing project entry points,
-    names the sanctioned-executions boundary, covers the observed
-    unexpected-invocation-form failure mode, and tells the reviewer to report
-    (not run) a command whose read-only-ness is uncertain."""
+    names the sanctioned-execution boundary (the one runner command the brief
+    names), covers the observed unexpected-invocation-form failure mode, and
+    tells the dispatcher to report (not run) a command whose read-only-ness is
+    uncertain."""
     body = _normalized(REVIEWER.read_text(encoding="utf-8"))
     assert _READONLY_CLAUSE_ANCHOR in body
     assert _INVOCATION_FORM_SENTENCE in body
     assert "report the uncertainty" in body
-    assert "verification commands" in body
+    assert "sanctioned execution" in body
 
 
 def _steps_section(path: Path, header: str) -> str:
@@ -191,8 +187,6 @@ def test_wf2_step8_reconciles_worktree_commit():
     # else receipt Rule 4 diffs an un-advanced HEAD and rejects every build
     assert "Collect BEFORE validating" in corpus
     assert "Collect before validation" in corpus  # references/whole-issue-delegation.md section
-    impl = IMPLEMENTER.read_text(encoding="utf-8")
-    assert "does NOT land" in impl and "commit SHA" in impl
 
 
 def test_wf2_documents_worktree_fallback():

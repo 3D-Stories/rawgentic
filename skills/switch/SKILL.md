@@ -97,8 +97,10 @@ Only when `RAWGENTIC_HEADLESS=1`. Read the project's `headlessEnabled` — bool 
   `$RAWGENTIC_HEADLESS_TRIGGER` is in it. Non-member, unset env or malformed `triggers`
   **fails CLOSED** → STOP: "Headless mode for **[project-name]** does not allow this trigger
   (RAWGENTIC_HEADLESS_TRIGGER is not in the headlessEnabled.triggers allowlist)."
-- anything else → STOP: "Headless mode is not enabled for **[project-name]**. Run
-  `/rawgentic:setup` to enable it, or set `headlessEnabled: true` in `.rawgentic_workspace.json`."
+- anything else → STOP: "Headless mode is not enabled for **[project-name]**. Set
+  `headlessEnabled: true` in the project's `.rawgentic_workspace.json` entry to enable it."
+  (Setup no longer stages this key — M0c #866 removed its config surface; the manual
+  workspace edit is the only path until the headless machinery itself retires in M0d.)
 
 ### 3b. Load the project's operating rules
 

@@ -2,7 +2,7 @@
 
 Operational reference for the herdr terminal multiplexer as this workspace uses it.
 
-herdr is load-bearing: `projects/rawgentic` and `projects/thewanderinginn` both route their WF2 **build seat** through it (`executorTerminalBackend: {"build": "herdr"}`), so a broken herdr install takes the build seat with it.
+herdr is load-bearing for this workspace's pane workflows (pane-handoff, sibling sessions, the launcher's herdr mode). Until the M0 executor retreat (#866), `projects/rawgentic` and `projects/thewanderinginn` also routed their WF2 **build seat** through it (`executorTerminalBackend: {"build": "herdr"}`) — the build seat left the workflows in M0b and that config surface was removed in M0c, so nothing routes executor work through herdr anymore; the herdr install, pin, and launcher integration below are unchanged.
 
 **Scope of this page today (#610).** It covers the **Claude Code integration** — what installing it changes, how to prove the rest of the harness survived, and how to remove it. The binary pin itself lives in `hooks/herdr-pin.json` and its provenance in `docs/reviews/2026-07-27-609-herdr-supply-chain-vet.md`. Section 7 covers the launcher's herdr mode (#611). Sections 9-12 cover the workspace conventions, the attach/detach/remote recipes, the measured rough edges, and a from-scratch walkthrough (#613).
 

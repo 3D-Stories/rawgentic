@@ -22,7 +22,7 @@ The full annotated schema lives at `templates/rawgentic-json-schema.json` in the
 This spine carries every step heading in order with a short summary; the detailed
 prose for the heavier steps lives in `references/`. Read the pointed-to reference
 file **before executing** that step:
-- **Steps 2c, 2d, 2f, 2g, 2h** → `references/integrations.md` (Step 2e stays in this spine)
+- **Steps 2d, 2g, 2h** → `references/integrations.md` (Step 2e stays in this spine)
 - **Step 3** → `references/detect-flows.md`
 - **Steps 4, 4b** → `references/config-reference.md`
 </references>
@@ -104,18 +104,6 @@ Check if `CLAUDE.md` (in the Claude root) contains either of these markers from 
 
 ---
 
-## Step 2c: Headless Mode Access
-
-Runs on **every** setup invocation (including Sub-flow A re-runs). Checks the
-active project's `headlessEnabled` field in `.rawgentic_workspace.json`: prompts
-(default n) on first-time configuration, or shows status and allows toggling on
-re-configuration. Headless mode grants an external orchestrator autonomous
-access, so it stays opt-in.
-
-**Read `references/integrations.md` before executing Step 2c.**
-
----
-
 ## Step 2d: Adversarial Review (WF5) Integration
 
 Runs on **every** setup invocation (including Sub-flow A re-runs). Asks whether an
@@ -158,7 +146,9 @@ skipped scanner is a real coverage gap, so setup installs whatever is missing.
    In an interactive setup, tell the user this is happening and that they can
    decline. If they decline, persist it: read `.rawgentic_workspace.json`, set
    top-level `"installScanners": false`, write it back (and skip the install).
-   In **headless** mode do NOT install — just record the gap.
+   When `RAWGENTIC_HEADLESS=1`, do NOT install — just record the gap. (The
+   headless machinery retires in M0d; this unattended-install guard leaves
+   with it, never before it.)
 
 3. **Report** which scanners are now present and which remain missing (so the
    user knows the WF2/WF9 scan will skip those). The installer's `--check` mode
@@ -180,43 +170,32 @@ is the explicit, user-visible confirmation.
 
 ### New features are ON by default (opt-OUT)
 
-The feature steps above (2c headless, 2d adversarial review, 2e scanners, 2f model
-routing, 2g peer consult) run on **every** setup invocation, including Sub-flow A
-re-runs against an existing `.rawgentic.json`. When the plugin gains a capability,
-re-running setup therefore **enriches an older config and turns the new feature on
-by default** — features are opt-OUT, not opt-in. Four deliberate exceptions, which
-always require an explicit answer and are never force-enabled:
+The feature steps above (2d adversarial review, 2e scanners, 2g peer consult,
+2h design artifacts) run
+on **every** setup invocation, including Sub-flow A re-runs against an existing
+`.rawgentic.json`. When the plugin gains a capability, re-running setup therefore
+**enriches an older config and turns the new feature on by default** — features
+are opt-OUT, not opt-in. Three deliberate exceptions, which always require an
+explicit answer and are never force-enabled:
 
-- **Headless mode (2c)** stays opt-in — it grants an external orchestrator
-  autonomous access to the project, so it must be a conscious choice (default n).
 - **Adversarial review / WF5 (2d)** depends on an OpenAI account for the Codex CLI,
   so setup asks the account question; "yes" turns it on for the applicable
   workflows, "no" leaves it off.
-- **Model routing (2f)** stays opt-in — it has no dependency to gate on, but routing
-  is a deliberate per-project choice; declining stages nothing (absent = inherit
-  everywhere, byte-identical to today).
 - **Peer consult / WF13 (2g)** mirrors 2d's answer-required pattern (same Codex CLI
   dependency) but, unlike WF5, has no default-on recommendation — it always asks,
   and "no" leaves the WF2 integration off (the standalone skill still works).
+- **Design artifact / lifecycle (2h)** stays default-off — it always asks its two
+  questions; declining stages a disabled block (byte-identical behavior), and it
+  is never force-enabled by a re-run.
 
 Everything else (e.g. the security scanners) installs/enables by default unless the
 user has an opt-out on record. The SessionStart post-update reconcile
 (`hooks/post_update_reconcile.py`) applies this same policy without a setup re-run:
 on a version change it enables any new opt-OUT feature whose flag is absent (honoring
-recorded opt-outs), leaves headless and WF5 alone, and nudges the user to run
+recorded opt-outs), leaves WF5 alone, and nudges the user to run
 `/rawgentic:setup` for the answer-required ones.
 
 ---
-
-## Step 2f: Model Routing (optional)
-
-Runs on **every** setup invocation (including Sub-flow A re-runs). Offers
-per-project subagent model routing for the three dispatch roles (review, analysis,
-implementation); stages the `modelRouting` field in the project's
-`.rawgentic_workspace.json` entry. Stays opt-in — declining stages nothing (absent
-block = inherit everywhere).
-
-**Read `references/integrations.md` before executing Step 2f.**
 
 ## Step 2g: Peer Consult (WF13) Integration
 
@@ -239,86 +218,6 @@ dashboard). Stages the `designArtifact` field (with optional `sharedDoc`) in the
 project's `.rawgentic_workspace.json` entry.
 
 **Read `references/integrations.md` before executing Step 2h.**
-
-## Step 2i: Phase-Executor Seat Table (optional, #446)
-
-Runs on **every** setup invocation (including Sub-flow A re-runs). Shows the RESOLVED
-per-phase seat models (`show-table`) and offers a sparse tweak (per-seat `primary`/`chain`
-only) validated through `apply-table --validate-only`. When the config has no
-`phaseExecutorTable` key, declining or accepting the defaults **stages the
-answered-defaults sentinel `"phaseExecutorTable": {"version": 1, "file": null}`** —
-resolution stays byte-identical package-default (capabilities_lib derives the sentinel
-exactly like an absent section), but key presence records the answer so the
-`post_update_reconcile` staleness nudge stops re-firing (#531). An existing key (real
-pointer or sentinel) is kept verbatim on decline — never rewritten. This step only
-COLLECTS: the validated `phaseExecutorTable` pointer (or the sentinel) is merged into the
-`.rawgentic.json` draft at Step 3 and applied at the Step 6 write (it is a project-config
-field, NOT a workspace field — it never rides Step 8); materialization of the table file
-happens after the Step-5 confirm, immediately before Step 6.
-
-**Read `references/integrations.md` before executing Step 2i.**
-
----
-
-## Step 2j: Telemetry Alerts (optional, #473)
-
-Runs on **every** setup invocation. Surfaces the #473 I3 seat-outcomes **advisory alert**
-config (`telemetryAlerts`) — the layer that flags per-seat regressions at WF2/WF3 completion.
-State up front that it is **advisory only**: nothing here can gate, block, or change an exit
-code. Offer the defaults (`enabled: true`, `windowSize: 30`, `minSamples: 5`, all rules on with
-count rules firing above 0) or a tweak. **Validate any customized block STRICTLY before
-staging** through the shared validator:
-```bash
-python3 hooks/seat_outcomes_lib.py validate-config --json '<the telemetryAlerts block>'
-```
-(exit 0 = stage it; non-zero = show the stderr errors and re-offer — never stage an invalid
-block). When the config has no `telemetryAlerts` key, declining or accepting the defaults
-**stages the answered-defaults sentinel `"telemetryAlerts": {"version": 1}`** — runtime resolves
-it identically to an absent section (all defaults), and key presence records the answer.
-Declining customization is NOT the same as disabling alerts: to disable, stage
-`{"version": 1, "enabled": false}`. An existing key is kept verbatim on decline — never
-rewritten. This step only COLLECTS: the validated block (or sentinel) is merged into the
-`.rawgentic.json` draft at Step 3 and applied at the Step 6 write (a project-config field, never
-a workspace field).
-
-**Read `references/integrations.md` before executing Step 2j.**
-
----
-
-## Step 2k: Executor Terminal Backend (optional, #638)
-
-Runs on **every** setup invocation. Chooses which `TerminalBackend` the executor's **`build`
-seat** launches under — `tmux` (the package default) or `herdr`. Only the build seat is
-gateable; review/analysis and every other seat always launch under tmux regardless of this
-answer, so say that when you present the choice.
-
-**State the operational precondition before accepting `herdr`, because it is the one that
-bites:** `herdr pane split --current` resolves the **calling process's own pane**, so a
-build-seat dispatch from a process with no controlling pane — a cron-launched or otherwise
-detached headless run — has nothing to resolve and **fails loud**. Choosing `herdr` means
-build-seat dispatches and unattended cron-resumed runs are **mutually exclusive** for that
-project. Confirm the user accepts that before staging it; default to `tmux` if they are unsure.
-
-Validate any answer through the sanctioned reader before staging:
-```bash
-python3 hooks/capabilities_lib.py derive --config <the drafted .rawgentic.json>
-```
-(`capabilities.executor_terminal_backend` must equal the chosen value; a present-but-invalid
-section raises rather than falling back — never stage a block that does not derive.)
-
-When the config has no `executorTerminalBackend` key, declining or accepting the default
-**stages the answered-defaults sentinel `"executorTerminalBackend": {"version": 1, "build":
-"tmux"}`** — resolution is byte-identical to an absent section, and key presence records the
-answer so the `post_update_reconcile` staleness nudge stops re-firing (#531). An existing key is
-kept verbatim on decline — never rewritten. This step only COLLECTS: the validated block (or
-sentinel) is merged into the `.rawgentic.json` draft at Step 3 and applied at the Step 6 write
-(a project-config field, never a workspace field — it does not ride Step 8).
-
-**Read `references/integrations.md` before executing Step 2k.**
-
----
-
----
 
 ## Step 2l: Context-Pressure Meter (optional, #701)
 
@@ -352,9 +251,9 @@ squeezed pair is **refused with the reason**: it leaves no band in which to look
 advisory tier becomes unreachable and the session jumps straight to "break now".
 
 **Declining leaves the block ABSENT** — do not stage a block that merely restates the shipped
-defaults. This is deliberately **unlike** Step 2j's `telemetryAlerts` answered-defaults sentinel: a
-written-out `60`/`70` is indistinguishable from a deliberate choice on the next read, so a later
-change to the shipped defaults would silently never reach that project.
+defaults (deliberately unlike an answered-defaults sentinel): a written-out `60`/`70` is
+indistinguishable from a deliberate choice on the next read, so a later change to the shipped
+defaults would silently never reach that project.
 
 An existing `contextMeter` key is **preserved verbatim** on decline and read-modify-written on
 accept — never overwrite keys the user has already tuned. This step only COLLECTS; the validated
@@ -423,15 +322,6 @@ After user approval, write the final config to `<activeProject.path>/.rawgentic.
 Requirements:
 - Must include `"version": 1` as the first field
 - Must include the three required sections: `project`, `repo`, and at minimum an empty `custom: {}`
-- Include the `phaseExecutorTable` pointer when Step 2i staged one (materialize the table
-  file first — re-run `apply-table` with `--expected-candidate-digest` from the Step-2i
-  validate-only output; on any later abort the fresh-created file is retained and named in
-  a warning, never auto-deleted). When Step 2i staged the answered-defaults **sentinel**
-  (`{"version": 1, "file": null}`, #531) instead, include it as-is — no table file exists
-  or is materialized for the sentinel
-- Include the `executorTerminalBackend` block Step 2k staged — either the chosen value or the
-  answered-defaults sentinel `{"version": 1, "build": "tmux"}` (#638). Nothing is materialized
-  for it; it is config-only
 - Omit optional sections that have no content (don't write empty objects/arrays for undetected capabilities)
 - Format as pretty-printed JSON (2-space indent)
 - Show the user the exact content before writing and get a final "go ahead"
@@ -484,7 +374,7 @@ All suggestions require explicit user approval. If the user declines, leave Laye
 
 ## Step 8: Update Workspace
 
-Read `.rawgentic_workspace.json`, find the active project entry, and set `"configured": true`. Apply any pending per-project field changes collected earlier in this run — `headlessEnabled` (Step 2c), `adversarialReview` (Step 2d), `modelRouting` (Step 2f), `peerConsult` (Step 2g), and `designArtifact` (Step 2h) — in a single read-modify-write so no step clobbers another's field. Write the file back once.
+Read `.rawgentic_workspace.json`, find the active project entry, and set `"configured": true`. Apply any pending per-project field changes collected earlier in this run — `adversarialReview` (Step 2d), `peerConsult` (Step 2g), and `designArtifact` (Step 2h) — in a single read-modify-write so no step clobbers another's field. Write the file back once.
 
 ### Step 8b: Ensure Session Notes Infrastructure
 

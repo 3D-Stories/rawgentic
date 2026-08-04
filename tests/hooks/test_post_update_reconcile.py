@@ -84,10 +84,24 @@ class TestReconcileProjects:
 
 
 class TestProductionManifest:
-    def test_headless_is_opt_in_and_wf5_is_needs_question(self):
+    def test_wf5_is_needs_question(self):
         by_key = {f["key"]: f for f in pur.FEATURE_MANIFEST}
-        assert by_key["headlessEnabled"]["policy"] == "opt-in"
         assert by_key["adversarialReview"]["policy"] == "needs-question"
+
+    def test_retired_setup_surfaces_have_no_manifest_rows(self):
+        """M0c (#866): the headlessEnabled/modelRouting/phaseExecutorTable/
+        executorTerminalBackend setup steps were removed — a manifest row for a
+        feature with no setup step nudges the user toward a step that no longer
+        exists, on every bind, forever."""
+        keys = {f["key"] for f in pur.FEATURE_MANIFEST}
+        for retired in ("headlessEnabled", "modelRouting",
+                        "phaseExecutorTable", "executorTerminalBackend"):
+            assert retired not in keys, f"retired manifest row resurrected: {retired}"
+
+    def test_production_manifest_has_no_project_config_rows(self):
+        """Both project_config-sourced rows died in M0c; the source-aware
+        mechanism survives for future features (fixture-tested below)."""
+        assert not any(f.get("source") == "project_config" for f in pur.FEATURE_MANIFEST)
 
     def test_no_feature_is_both_silently_forced_and_answer_required(self):
         for f in pur.FEATURE_MANIFEST:
@@ -542,7 +556,17 @@ class TestStalenessWiring:
         assert "--staleness-project" in sw
 
 
-# --- #446: source-aware manifest (phaseExecutorTable lives in .rawgentic.json) ---
+# --- source-aware manifest mechanism (#446; production rows retired in M0c #866) ---
+# Both production project_config rows (phaseExecutorTable, executorTerminalBackend)
+# died with their setup steps. The MECHANISM — a manifest row whose key lives in the
+# project's .rawgentic.json instead of the workspace entry — survives for future
+# features, so it stays covered here with a fixture row.
+
+PROJECT_CFG_FEAT = {"key": "fancyProjectKey", "policy": "needs-question",
+                    "nudge": "fancy project key (fixture)", "since": "3.55.0",
+                    "source": "project_config"}
+MANIFEST_446 = MANIFEST + [PROJECT_CFG_FEAT]
+
 
 def _ws_with_project(tmp_path, config=None, path="proj", entry_path=None):
     """Workspace file + a project dir; config=None -> no .rawgentic.json (ENOENT)."""
@@ -553,8 +577,7 @@ def _ws_with_project(tmp_path, config=None, path="proj", entry_path=None):
             config if isinstance(config, str) else json.dumps(config), encoding="utf-8")
     ws = tmp_path / ".rawgentic_workspace.json"
     entry = {"name": "p1", "path": entry_path or path, "active": True,
-             "adversarialReview": {}, "modelRouting": {}, "peerConsult": {},
-             "designArtifact": {}, "headlessEnabled": False}
+             "adversarialReview": {}, "peerConsult": {}, "designArtifact": {}}
     ws.write_text(json.dumps({"projects": [entry]}), encoding="utf-8")
     return ws, entry
 
@@ -563,146 +586,52 @@ BASE_CFG = {"version": 1, "project": {"type": "application"},
             "repo": {"fullName": "o/p", "defaultBranch": "main"}}
 
 
-class TestProjectConfigSource:
+class TestProjectConfigSourceMechanism:
     def _gaps(self, tmp_path, ws, entry):
         state, pcfg = pur._project_config_state(str(ws), entry)
         return pur.project_feature_gaps(
-            entry, pur.FEATURE_MANIFEST, "3.55.0",
+            entry, MANIFEST_446, "3.55.0",
             project_config=pcfg if state == "ok" else None), state
 
     def test_gap_fires_when_key_missing(self, tmp_path):
         ws, entry = _ws_with_project(tmp_path, config=BASE_CFG)
         gaps, state = self._gaps(tmp_path, ws, entry)
         assert state == "ok"
-        assert ("phaseExecutorTable", "phase-executor seat table (setup Step 2i)") in gaps
+        assert ("fancyProjectKey", "fancy project key (fixture)") in gaps
 
     def test_no_gap_when_key_present(self, tmp_path):
-        cfg = dict(BASE_CFG, phaseExecutorTable={"version": 1, "file": "t.json"})
+        cfg = dict(BASE_CFG, fancyProjectKey={"version": 1})
         ws, entry = _ws_with_project(tmp_path, config=cfg)
-        gaps, state = self._gaps(tmp_path, ws, entry)
-        assert all(k != "phaseExecutorTable" for k, _ in gaps)
-
-    def test_no_gap_when_sentinel_present(self, tmp_path):
-        # #531: the answered-defaults sentinel counts as answered — presence (any
-        # value) already satisfies the gap check; this pins the sentinel shape.
-        cfg = dict(BASE_CFG, phaseExecutorTable={"version": 1, "file": None})
-        ws, entry = _ws_with_project(tmp_path, config=cfg)
-        gaps, state = self._gaps(tmp_path, ws, entry)
-        assert state == "ok"
-        assert all(k != "phaseExecutorTable" for k, _ in gaps)
+        gaps, _ = self._gaps(tmp_path, ws, entry)
+        assert all(k != "fancyProjectKey" for k, _ in gaps)
 
     def test_enoent_config_silent_no_gap(self, tmp_path):
         ws, entry = _ws_with_project(tmp_path, config=None)
         gaps, state = self._gaps(tmp_path, ws, entry)
-        assert state == "absent"
-        assert all(k != "phaseExecutorTable" for k, _ in gaps)
+        assert state != "ok"
+        assert all(k != "fancyProjectKey" for k, _ in gaps)
 
     def test_corrupt_config_uninspectable_no_gap(self, tmp_path):
         ws, entry = _ws_with_project(tmp_path, config="{not json")
         gaps, state = self._gaps(tmp_path, ws, entry)
-        assert state == "uninspectable:parse_error"
-        assert all(k != "phaseExecutorTable" for k, _ in gaps)
+        assert state != "ok"
+        assert all(k != "fancyProjectKey" for k, _ in gaps)
 
     def test_escaping_entry_path_uninspectable(self, tmp_path):
         ws, entry = _ws_with_project(tmp_path, config=BASE_CFG, entry_path="../outside")
-        state, pcfg = pur._project_config_state(str(ws), entry)
-        assert state == "uninspectable:path_escape" and pcfg is None
+        _, state = self._gaps(tmp_path, ws, entry)
+        assert state != "ok"
 
     def test_workspace_entries_unaffected(self, tmp_path):
+        # without a parsed project config the workspace-sourced keys behave exactly
+        # as before (all present in entry -> no workspace-key gaps)
         ws, entry = _ws_with_project(tmp_path, config=BASE_CFG)
-        gaps = pur.project_feature_gaps(entry, pur.FEATURE_MANIFEST, "3.55.0")
-        # the 5 workspace-sourced keys behave exactly as before (all present in entry -> no gaps)
-        assert all(k == "phaseExecutorTable" for k, _ in gaps) or gaps == []
-
-
-    def test_staleness_cli_warns_on_uninspectable(self, tmp_path):
-        import subprocess, sys as _sys
-        ws, entry = _ws_with_project(tmp_path, config="{not json")
-        r = subprocess.run([_sys.executable, str(HOOKS_DIR / "post_update_reconcile.py"),
-                            "--staleness-project", "p1", "--workspace", str(ws),
-                            "--state-dir", str(tmp_path)],
-                           capture_output=True, text=True)
-        assert r.returncode == 0  # advisory, never blocks
-        assert "cannot inspect" in r.stderr and "p1" in r.stderr and "parse_error" in r.stderr
-
-    def test_staleness_cli_nudges_missing_key(self, tmp_path):
-        import subprocess, sys as _sys
-        ws, entry = _ws_with_project(tmp_path, config=BASE_CFG)
-        r = subprocess.run([_sys.executable, str(HOOKS_DIR / "post_update_reconcile.py"),
-                            "--staleness-project", "p1", "--workspace", str(ws),
-                            "--state-dir", str(tmp_path)],
-                           capture_output=True, text=True)
-        assert r.returncode == 0
-        assert "phase-executor seat table" in r.stdout
-
-    def test_staleness_cli_silent_on_sentinel(self, tmp_path):
-        # #531 end-to-end: sentinel config -> zero stdout. The workspace entry in
-        # _ws_with_project answers the four workspace-sourced needs-question features,
-        # so the only gap candidates are the project_config-sourced ones — BOTH of them
-        # must be answered here for stdout to be empty (#638 added the second, setup
-        # Step 2k; add its sentinel alongside any future project_config feature).
-        import subprocess, sys as _sys
-        cfg = dict(BASE_CFG,
-                   phaseExecutorTable={"version": 1, "file": None},
-                   executorTerminalBackend={"version": 1, "build": "tmux"})
-        ws, entry = _ws_with_project(tmp_path, config=cfg)
-        r = subprocess.run([_sys.executable, str(HOOKS_DIR / "post_update_reconcile.py"),
-                            "--staleness-project", "p1", "--workspace", str(ws),
-                            "--state-dir", str(tmp_path)],
-                           capture_output=True, text=True)
-        assert r.returncode == 0
-        assert r.stdout.strip() == ""
+        gaps = pur.project_feature_gaps(entry, MANIFEST_446, "3.55.0")
+        assert all(k == "fancyProjectKey" for k, _ in gaps) or gaps == []
 
     def test_reconcile_projects_skips_project_config_entries(self, tmp_path):
+        # the key never lives in the WORKSPACE dict — reconcile_projects must NOT
+        # surface it as needs_question (P2-G1).
         ws, entry = _ws_with_project(tmp_path, config=BASE_CFG)
-        # entry lacks phaseExecutorTable in the WORKSPACE dict (it never lives there) —
-        # reconcile_projects must NOT surface it as needs_question (P2-G1).
-        projects, changes, needs_q = pur.reconcile_projects([entry], pur.FEATURE_MANIFEST)
-        assert all(key != "phaseExecutorTable" for _, key, _ in needs_q)
-
-
-
-class TestExecutorTerminalBackendGap:
-    """#638 setup Step 2k: the executorTerminalBackend choice is project_config-sourced,
-    exactly like phaseExecutorTable. Pinned at 3.98.0 (its `since`) — at any earlier
-    `current` the feature does not exist yet and must not nudge."""
-
-    KEY = "executorTerminalBackend"
-    LABEL = "executor terminal backend (setup Step 2k)"
-
-    def _gaps(self, tmp_path, cfg, current="3.98.0"):
-        ws, entry = _ws_with_project(tmp_path, config=cfg)
-        state, pcfg = pur._project_config_state(str(ws), entry)
-        return pur.project_feature_gaps(
-            entry, pur.FEATURE_MANIFEST, current,
-            project_config=pcfg if state == "ok" else None)
-
-    def test_gap_fires_when_key_missing(self, tmp_path):
-        assert (self.KEY, self.LABEL) in self._gaps(tmp_path, BASE_CFG)
-
-    def test_no_gap_before_its_since(self, tmp_path):
-        # the whole point of `since`: a project on 3.97.4 is not "behind" on a feature
-        # that ships in 3.98.0.
-        assert all(k != self.KEY for k, _ in self._gaps(tmp_path, BASE_CFG, current="3.97.4"))
-
-    def test_no_gap_when_herdr_chosen(self, tmp_path):
-        cfg = dict(BASE_CFG, executorTerminalBackend={"version": 1, "build": "herdr"})
-        assert all(k != self.KEY for k, _ in self._gaps(tmp_path, cfg))
-
-    def test_no_gap_when_answered_defaults_sentinel_present(self, tmp_path):
-        # #531 sentinel: resolves identically to absent, but presence records the answer
-        # so the nudge stops re-firing. This pins the sentinel shape setup Step 2k stages.
-        cfg = dict(BASE_CFG, executorTerminalBackend={"version": 1, "build": "tmux"})
-        assert all(k != self.KEY for k, _ in self._gaps(tmp_path, cfg))
-
-    def test_uninspectable_config_does_not_nudge(self, tmp_path):
-        # fail-open: cannot confirm absence -> no gap (the caller warns separately).
-        assert all(k != self.KEY for k, _ in self._gaps(tmp_path, "{not json"))
-
-    def test_manifest_entry_is_project_config_sourced(self):
-        # a workspace-sourced entry would nudge EVERY project on the version crossing,
-        # including configured ones — the #446 comment in the manifest says why.
-        feat = next(f for f in pur.FEATURE_MANIFEST if f["key"] == self.KEY)
-        assert feat["source"] == "project_config"
-        assert feat["policy"] == "needs-question"
-        assert feat["nudge"] == self.LABEL
+        projects, changes, needs_q = pur.reconcile_projects([entry], MANIFEST_446)
+        assert all(key != "fancyProjectKey" for _, key, _ in needs_q)

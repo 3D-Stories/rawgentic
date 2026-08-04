@@ -1379,13 +1379,25 @@ class TestHeadlessStatusCorpus:
         assert "RAWGENTIC_HEADLESS_TRIGGER" in content
         assert "fails CLOSED" in content
 
-    def test_setup_step_2c_surfaces_triggers_and_auth(self):
-        """AC5: setup offers the per-trigger allowlist and records auth-mode."""
+    def test_setup_no_longer_configures_headless(self):
+        """M0c (#866): setup Step 2c was removed with the headless config
+        surface — the runtime gate (session-start, switch skill) survives
+        until M0d, but nothing stages `headlessEnabled` anymore."""
         content = (SKILLS_DIR / "setup" / "references" /
                    "integrations.md").read_text()
-        assert "`headlessEnabled` accepts two shapes" in content
-        assert "subscription-oauth" in content
-        assert "RAWGENTIC_HEADLESS_TRIGGER" in content
+        assert "headlessEnabled" not in content
+        spine = (SKILLS_DIR / "setup" / "SKILL.md").read_text()
+        assert "headlessEnabled" not in spine and "Step 2c" not in spine
+
+    def test_setup_step_2e_keeps_headless_install_guard(self):
+        """M0c review finding 2: the headless RUNTIME survives until M0d, so
+        Step 2e's unattended-install guard survives with it — a
+        headless-enabled project running setup must not install packages
+        unattended. The guard leaves in M0d with the machinery, never before."""
+        spine = (SKILLS_DIR / "setup" / "SKILL.md").read_text()
+        assert "RAWGENTIC_HEADLESS=1" in spine
+        norm = " ".join(spine.split())
+        assert "do NOT install — just record the gap" in norm
 
 
 class TestHeadlessInteractionBlock:

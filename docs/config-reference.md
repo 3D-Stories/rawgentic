@@ -260,142 +260,6 @@ The older `security.exceptions` array (per-rule + per-path exceptions) is still
 supported for backward compatibility but deprecated. Migrate to
 `guards.securityExcludePaths` for simpler path-based exclusions.
 
-### `phaseExecutorTable`
-
-Optional versioned descriptor naming the project-owned **phase-executor seat table** (#445 —
-"projects own their tables"; the engine is policy-free):
-
-```json
-"phaseExecutorTable": { "version": 1, "file": "claude_docs/routing/phase-executor-table.json" }
-```
-
-`file` is a project-relative path to a full routing-table JSON (the phase_executor
-`routing-table.schema.json` shape) that **completely replaces** the package default — never a
-merge overlay. Seeded (and optionally per-seat tweaked) from the package table by `/rawgentic:setup` Step 2i (#446); an un-tweaked project resolves a digest-identical table to the shipped default.
-
-**Per-project override recipe.** In the project's committed `.rawgentic.json`, set
-`"phaseExecutorTable": { "version": 1, "file": "claude_docs/routing/phase-executor-table.json" }`.
-`executor_routing_lib.resolve_table` then resolves that complete replacement table. With no
-`phaseExecutorTable.file` override, it resolves the package default; a declared but broken
-override refuses at resolution and never silently falls back.
-
-**Answered-defaults sentinel (#531):** `"phaseExecutorTable": { "version": 1, "file": null }`
-records that setup asked and the user kept the package defaults. It derives and resolves
-exactly like an absent section (package default, no table file), but the key's presence stops
-the `post_update_reconcile` staleness nudge from re-firing on every `/rawgentic:switch`.
-Staged automatically by setup Step 2i when the user declines/keeps defaults and no
-`phaseExecutorTable` key exists yet.
-
-Semantics (one shared resolution: `executor_routing_lib.resolve_table`, used by BOTH the
-executor CLI and the driver-bench):
-- **Absent section (or absent `.rawgentic.json`)** → the package default
-  (`phase_executor.routing.default_table_path()`). This is the only silent default.
-- **Present and valid** → the named file, loaded fail-closed (schema + referential integrity +
-  a statically-dead-seat check: a seat whose entire primary+chain is forbidden by context-free
-  `forbidden_combinations` rows refuses at resolution). `resolve-seat` reports `table_source` +
-  `config_digest` for auditability.
-- **Present but unusable** — malformed shape (`version` ≠ 1, absolute/`..` path), a declared
-  file that is missing/unreadable/a directory, a symlink escaping the project root, or content
-  that fails validation → **refuses (exit 2) with the path named; never a silent fallback to
-  the package default** (the same false-cutover posture as `executorRouting`).
-
-Distinct from two neighbors: [`modelRouting`](#modelrouting) routes *prose subagent roles*
-(fail-open); the workspace [`executorRouting`](#executorrouting) block is validated but does
-not select a routing tier — the workspace-level `defaultArchitecture` does (absent = executor).
-`phaseExecutorTable` decides *which table* the executor routes on. Capability surface:
-[`phase_executor_table`](#config-loading-protocol).
-
-The official workflow diagram (`docs/workflow-diagram.html`) renders this resolved table
-per WF2 phase — seat, default model, fallback chain, routing-mode classification — generated
-from `resolve_table` by `hooks/diagram_seat_data.py` (#447), never hand-hardcoded.
-
-### `executorTerminalBackend`
-
-Optional versioned descriptor selecting which `TerminalBackend` the executor's `build`
-seat launches under (#638, epic #635 C2 — tmux stays the default until herdr is
-independently proven; every other seat is unaffected):
-
-```json
-"executorTerminalBackend": { "version": 1, "build": "herdr" }
-```
-
-`build` is `"tmux"` (the package default) or `"herdr"`. **Absent section** → `"tmux"`, the
-only silent default. **Present** → `version` must be `1` and `build` must be one of the
-two known values, or derive refuses (exit non-zero) — a malformed section never silently
-falls back to tmux. Capability surface: [`executor_terminal_backend`](#config-loading-protocol).
-
-**REQUIRED before trusting `build: "herdr"` across a herdr version bump (#639).** The herdr
-backend launches via `pane run <pane> exec <argv>`, which herdr neither documents nor endorses —
-its own guidance is the plain non-`exec` form. A future herdr release could wrap the command in a
-child process instead of `exec`-replacing the pane's shell, and every PID the supervisor holds
-would then name the wrong process. That regression is silent: nothing fails, the supervisor simply
-tracks and kills a shell while the real worker runs on. Re-qualify (do not re-derive) with the
-committed #633 §AC1 protocol before trusting the backend on a new herdr version:
-
-```bash
-python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate
-```
-
-20 cold-pane + 20 reused-pane reps; the GO threshold (0 failures per condition) is encoded in the
-check, and the verdict is tri-state, carried in the **exit code** so a script can gate on it:
-`0` = `GO` (re-qualified), `2` = `NO_GO` (a real PID-identity regression), `3` = `ERROR` (the run
-could not answer — environment fault, never a pass), `4` = prerequisites unavailable, i.e. **the
-gate did not run**. Nothing but `GO` exits 0.
-
-It must be run from a session that is itself inside a herdr pane (`pane split --current` needs a
-calling pane); elsewhere it exits `4`.
-
-The same protocol is also wired as a pytest module for ordinary suite collection:
-
-```bash
-RUN_LIVE=1 pytest tests/phase_executor/live/test_herdr_pid_identity_live.py -v
-```
-
-Use that form to read per-rep detail, **not** as the gate: `pytest` exits `0` when every test
-SKIPS, so on a host without herdr (CI, or any pane-less process) a green exit there means "the
-check did not run", not "the backend is qualified". Skipping is deliberate for CI — herdr is absent
-from it entirely, so the module must skip visibly rather than redden a lane — which is exactly why
-the pre-upgrade gate is the `--gate` entry point above.
-
-### `telemetryAlerts`
-
-Optional per-project config for the #473 **I3 seat-outcomes advisory alerts** (AC-K5). It
-tunes only the advisory alert layer that runs at WF2/WF3 completion — **no setting here can
-ever gate, block, or change an exit code** (AC-K3: an alert asks the owner to look).
-
-```json
-"telemetryAlerts": { "version": 1, "enabled": true, "windowSize": 30, "minSamples": 5,
-                     "thresholds": { "fallback_fired": 0, "seat_wall_time_p90": true } }
-```
-
-- `enabled` (bool, default `true`) — `false` disables alert *evaluation* entirely (the sidecar
-  still harvests rows). Parsed FIRST and independently, so a valid `enabled: false` beside a
-  malformed sibling key still disables.
-- `windowSize` (int 1..1000, default 30) and `minSamples` (int 1..windowSize, default 5) size
-  the rolling per-`(seat, model)` baselines; a metric with fewer than `minSamples` rows reports
-  `insufficient_history` and its percentile rules report `not_evaluated` (never a fabricated
-  number).
-- `thresholds` — **COUNT rules** (`fallback_fired`, `dispatch_failures`) take
-  `false | a non-negative int` (`false` disables that one rule; the int is the
-  fire-above count, default `0`); **TOGGLE rules** (`model_mismatch`, `parse_failure`,
-  `seat_wall_time_p90`, `seat_cost_p90`, `review_findings_p90`) take a bool (default `true`).
-  No quota-pause rule ships yet (deferred — no producer signal; #559 OPS follow-up).
-
-**Answered-defaults sentinel:** `"telemetryAlerts": { "version": 1 }` records that setup asked
-and the user kept the defaults; it behaves identically to an absent section. Absent section ≡
-all defaults.
-
-**Two validation postures (one shared validator).** Setup Step 2j validates **strictly** via
-`hooks/seat_outcomes_lib.py validate-config` before staging (unknown keys rejected, version must
-be 1, per-rule value contract, bounds). At runtime `load_thresholds` calls the SAME
-`validate_telemetry_alerts` but **fails open** — a malformed block degrades to the documented
-defaults with one loud advisory (a bad config never breaks a run). The full row schema,
-baselines, alert rules, and non-destructive harvest live in
-[`docs/run-records.md`](run-records.md) (the I3 sidecar section). Distinct from
-[`modelRouting`](#modelrouting) (routes prose subagents) and
-[`phaseExecutorTable`](#phaseexecutortable) (which table the executor routes on);
-`telemetryAlerts` only shapes the post-run advisory read of what those dispatches did.
-
 ## Workspace-File Fields
 
 Beyond each project's committed [`.rawgentic.json`](#core-sections), a few settings live in
@@ -408,56 +272,16 @@ to any project repo — and are set by `/rawgentic:setup`.
 |-------|------|-------------|
 | `critiqueMethod` | `string` | **Deprecated / ignored (#205).** Formerly selected the critique tool; the external reflexion dependency was removed and quality gates now use the in-repo quality-bar rubric. A leftover value in a workspace file is inert. |
 | `adversarialReview` | `object` \| `bool` | Opt-in cross-model adversarial review (WF5) at workflow quality gates. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"], "backend"?: "gpt" \| "glm" \| "both" }`. Default disabled; `backend` absent → `gpt`. A present-but-INVALID `backend` value refuses at run time (exit 2, no egress) rather than silently defaulting (#403). Bool shorthand `true` enables the standalone skill mindset but lists no workflows (embedded gates stay off). Fail-closed: missing/malformed → disabled. See [Adversarial Review Data Handling](#adversarial-review-data-handling). |
-| `modelRouting` | `object` | Opt-in per-role subagent model routing (`review`/`analysis`/`implementation` → `opus`/`sonnet`/`haiku`/`fable`, or a `{model, effort}` object; string shorthand ≡ `{model, effort: null}`). Absent or absent-role = `inherit` (session model). Fail-open: malformed/unknown model or effort values warn and resolve to `inherit`/`null`, never block. See [`modelRouting`](#modelrouting). |
-| `executorRouting` | `object` | Opt-in per-seat routing of executor seats THROUGH the deterministic phase-execution engine (#427, E4; vocabulary extended to the full 7-seat set by #464/W1). Shape: `{ "version": 1, "seats": { "ship"\|"intake"\|"plan"\|"analysis"\|"build"\|"review": "inherit" \| "executor" } }`. `design` is **competitive-only** (the bake-off owns its dispatch, #428) — declaring it here refuses at run time (exit 2), as does any unknown seat key. Since #474 the seat modes NO LONGER select the tier — [`defaultArchitecture`](#defaultarchitecture-and-the-legacy-rollback) does (absent = executor). A declared mode must AGREE with the architecture (a contradicting mode refuses at run time naming the seat); an absent block or absent seat simply follows the architecture. A **present-but-malformed** block (non-object value, unsupported `version`, unknown/competitive-only seat key, or a mode outside `{inherit, executor}`) refuses at run time (exit 2), NOT a silent inherit — an enforcement/verification boundary fails closed, not open (contrast `modelRouting`). A `build`-role dispatch additionally requires an authenticated launch-bound gate (`--gate-file` + `--plan-file`, from which the dispatch mints the canonical plan context INTERNALLY and refuses `gate_stale_for_plan` on live-plan drift — #464 §E as hardened by #470; no caller-assembled context input exists). Consumed by `hooks/executor_routing_lib.py` (`resolve-seat` / `dispatch`); the WF2/WF3 prose that calls it shipped in #470 (the real #417). See [`executorRouting`](#executorrouting). |
 | `peerConsult` | `object` \| `bool` | Opt-in cross-model peer design consult (WF13) at the WF2 design step. Shape: `{ "enabled": bool, "workflows": ["implement-feature"], "backend"?: "gpt" \| "glm" \| "both" }` — mirrors `adversarialReview` incl. the #403 backend field. Default disabled. Fail-closed: missing/malformed → disabled. See [`peerConsult`](#peerconsult). |
 | `runFeedback` | `object` \| `bool` | Opt-in embedded post-run self-assessment (WF14, `/rawgentic:run-feedback`) at workflow completion. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"] }` — same loader and fail-closed semantics as `peerConsult` (`load_adversarial_review_config(..., key="runFeedback")`). Default disabled. Wired at WF2 Step 16 / WF3 Step 14 (rawgentic #338); the standalone skill always works regardless. |
 | `wholeIssueDelegation` | `object` \| `bool` | Opt-in whole-issue delegated build mode (WF2 Step 8): one build-subagent implements all plan tasks and returns a receipt the orchestrator validates before re-running every gate against the real tree. Shape: `{ "enabled": bool, "workflows": ["implement-feature"] }` — mirrors `adversarialReview`. Default disabled. Fail-closed: missing/malformed → disabled. See [`wholeIssueDelegation`](#wholeissuedelegation). |
 | `designArtifact` | `object` \| `bool` | Opt-in HTML design-artifact lifecycle (#174): WF1 renders + publishes the issue spec artifact; WF2/WF3 create-or-update the `docs/planning/<issue>.{md,html}` artifact (with run telemetry embedded) inside the feature PR before `gh pr create`. Shape: `{ "enabled": bool, "workflows": ["create-issue", "implement-feature", "fix-bug"], "sharedDoc"?: "docs/planning/<name>.md", "style"?: "plain" \| "roadmap" \| "report" \| "design" \| "dashboard" \| "review" \| "spec" }` — mirrors `adversarialReview` plus an optional `sharedDoc` and `style`. Default disabled (byte-identical behavior for opted-out projects). **Two distinct fail behaviors:** a missing/malformed `designArtifact` block fails **closed → disabled** (feature off); but an invalid `sharedDoc` *value* (absolute, `..`, or not a `docs/*.md` path) fails **safe → per-issue** (feature stays enabled, just doesn't use the bad shared path). **`sharedDoc` (optional, project-relative path):** when set, WF1/WF2/WF3 update that ONE rolling design doc across every issue — the multi-issue / campaign model, one program doc refreshed per slot (like this repo's modernization dashboard) — instead of a per-issue `<issue>-<slug>.{md,html}` file; unset = per-issue (default). Absolute paths or `..` traversal in `sharedDoc` fail safe to per-issue. **`style` (optional, #199, vocabulary expanded #344)** — accepts the seven design-language template names (plain, roadmap, report, design, dashboard, review, spec); absent → `design` (the documented default); an invalid value → `plain` plus a stderr warning. Every non-plain template shares the one visual system (see `docs/design-language.md`); `dashboard`/`roadmap` render each `##` section as a bubble card with a completion chip (green (done/shipped) / amber (abandoned/blocked) / neutral (planned)), for a campaign/roadmap log that matches the modernization dashboard. Rendering uses `hooks/render_artifact.py` (self-contained, CSP-safe, escape-first, mountain-time datetime stamp; `--style` flag). |
-| `headlessEnabled` | `object` \| `bool` | Opt-in to headless (non-interactive) execution. Default `false`. Bool `true` allows any trigger; object shape `{ "enabled": bool, "triggers": ["issue-label"], "auth": "subscription-oauth" \| "api-key" }` adds a per-trigger allowlist matched against `RAWGENTIC_HEADLESS_TRIGGER` (fail-closed on non-member/unset/malformed; absent `triggers` = any) plus the recorded Action auth mode (#165). See [Per-Project Access Control](#per-project-access-control). |
-| `headlessAllowSSH` | `bool` | Escape hatch for the headless SSH guard. Default `false` (SSH blocked in headless). Fail-closed. See [Per-Project Access Control](#per-project-access-control). |
 
 ### Top-Level Fields (siblings of `projects[]`)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `defaultArchitecture` | `string` | **#474 — the dispatch architecture selector.** `"executor"` (the DEFAULT when absent — no config anywhere means executor) or `"legacy"` (the manual joint rollback: every seat resolves back to the Agent-tool path). Any other value/type refuses at run time (exit 2) — a typo'd architecture never silently picks a side; a corrupt/unreadable workspace fails CLOSED at every executor entry point. Per-project `executorRouting` seat modes no longer select the tier: an explicit mode CONTRADICTING the architecture (an `"inherit"` seat under executor, an `"executor"` seat under legacy) refuses naming the offending seat; agreeing modes are a valid no-op. See [`defaultArchitecture` + rollback](#defaultarchitecture-and-the-legacy-rollback). |
 | `crossProjectAllowedPaths` | `string[]` | **Opt-in (#49).** Glob patterns that relax the `wal-bind-guard` **Gate 2** (bound-session cross-project guard) for SPECIFIC paths in *other active projects* — e.g. `["docs/**", "CLAUDE.md"]` lets a bound session Read/Write those paths in a sibling project (the headless-retrospective case: writing findings to several projects' `docs/`). **Missing or empty → deny-all preserved** (current behavior). The pattern is matched (bash glob) against the file's path **relative to the target project root**; a `docs/**` pattern never matches `docs-extra/…` because the pattern's own `docs/` prefix anchors it. **A bare `*` or `**` matches everything — it grants full cross-project Read/Write (source code included), defeating the code-vs-docs distinction; keep patterns specific.** **Realpath-hardened:** the file is canonicalized and must still resolve *under* the target project's directory, so a symlink or `../` cannot escape it. Allowed ops log a stderr warning. Gate 1 (unbound sessions) is unaffected. |
-
-### `defaultArchitecture` and the legacy rollback
-
-**Since #474 the executor IS the dispatch architecture everywhere by default** — an absent
-key, an absent workspace, an unconfigured project all mean `executor`. A run is 100% executor
-or 100% legacy, never mixed: under the EXECUTOR architecture WF2/WF3 declare each run at Step 2 via
-`python3 hooks/executor_routing_lib.py begin-run --run-id <id> --workspace <ws> --project <n>`
-(the one producer of the run ledger's `initial` record; begin-run is executor-only —
-under legacy it refuses, and a legacy run declares via session note + the run-record
-`architecture` field instead), and every executor entry point
-(`dispatch`, `recover-run`, `close-run`) consumes that pin — an undeclared run refuses
-(`run_not_declared`, exit 4), a mixed dispatch refuses (`mixed_architecture_run_refused`,
-exit 4). An executor failure follows the ERROR protocol; there is NO runtime fallback to the
-Agent tool. Legacy runs write no ledger; their declaration is the session-note line plus the
-run-record `architecture` field.
-
-**Rollback — a deliberate JOINT config change (owner + operator together), never automatic:**
-
-1. Close (or `recover-run` + `close-run`) in-flight executor runs FIRST — after the
-   architecture edit, `recover-run` refuses (the lever stops recovery too), so the orderly
-   recover+close window is BEFORE the edit; runs left open simply stop loudly at their next
-   dispatch/recovery.
-2. Set `"defaultArchitecture": "legacy"` at the top level of `.rawgentic_workspace.json`.
-3. Remove (or set to `"inherit"`) any per-project `executorRouting` seat modes saying
-   `"executor"` — a contradicting explicit mode is refused by design (the error names the
-   seat). Preflight: `grep -n executorRouting .rawgentic_workspace.json`.
-4. New runs now resolve `inherit` (the Agent-tool path). The bundled agent definitions
-   (`agents/rawgentic-implementer.md`, `agents/rawgentic-reviewer.md`) remain in-tree as the
-   rollback target; their first-instruction architecture SELF-CHECK allows them to run only
-   under a declared-legacy workspace. Roll-forward is the same edit in reverse.
-
-Pre-3.93 ledgers (an `initial` record with no `architecture` field) are treated as executor
-with a stderr advisory — every ≤3.92 ledger producer was an executor CLI path, so the
-inference is by construction; the tolerance is bounded to the 3.93.x line. The mechanical
-Agent-tool interceptor (PreToolUse guard + session-run binding) is tracked in #606.
 
 ### `critiqueMethod`
 
@@ -470,8 +294,8 @@ reads `critiqueMethod` anymore — a leftover value in a workspace file is inert
 ### `adversarialReview`
 
 Cross-model review (WF5, `/rawgentic:adversarial-review`). The field is a
-**per-project entry in `.rawgentic_workspace.json`** (sibling to `critiqueMethod` /
-`headlessEnabled`), NOT in `.rawgentic.json` — it is workspace-scoped, not committed to
+**per-project entry in `.rawgentic_workspace.json`** (sibling to `critiqueMethod`),
+NOT in `.rawgentic.json` — it is workspace-scoped, not committed to
 the project repo.
 
 **Default (setup):** WF5 is **on by default for the applicable workflows** — its
@@ -545,7 +369,7 @@ When enabled and the running skill is listed:
 > at each gate close.
 
 In every embedded workflow the review is **non-blocking / fail-closed**: any Codex
-failure (including a missing/unauthenticated CLI, even in headless mode) is logged and
+failure (including a missing/unauthenticated CLI) is logged and
 skipped, never blocking the host workflow. Only the standalone WF5 skill ERRORs on an
 unmet prerequisite.
 
@@ -553,101 +377,6 @@ Loading is **fail-closed**: a missing file, malformed JSON, missing field, or ba
 resolves to disabled — a workflow never crashes and never silently enables. Bool shorthand
 (`"adversarialReview": true`) enables the standalone-skill intent but lists no workflows,
 so the embedded gates stay off.
-
-### `modelRouting`
-
-Per-project subagent model routing. The field is a **per-project entry in
-`.rawgentic_workspace.json`** (sibling to `critiqueMethod` / `adversarialReview`),
-NOT in `.rawgentic.json` — it is workspace-scoped, not committed to the project repo.
-
-**Default:** absent, which resolves every role to `inherit` (the session's own model)
-— byte-identical to routing not existing at all. Setup (Step 2f) offers to opt in;
-declining stages nothing.
-
-Shape:
-
-```json
-"modelRouting": {
-  "review": { "model": "opus", "effort": "high" },
-  "analysis": "sonnet",
-  "implementation": { "model": "opus", "effort": null }
-}
-```
-
-Three roles, each independently optional (an absent role inherits):
-
-- `review` — code/design review subagent dispatch
-- `analysis` — codebase-analysis subagent dispatch
-- `implementation` — implementation subagent dispatch
-
-Each role's value is either a bare model string, or a `{model, effort}` object — the
-two are equivalent: a plain string `"<model>"` is shorthand for
-`{"model": "<model>", "effort": null}`, so every config written before the dict shape
-existed still parses unchanged. `model` is one of `opus` / `sonnet` / `haiku` / `fable`
-/ `inherit`; `effort` is one of `low` / `medium` / `high` / `xhigh` / `max`, or `null`
-(no effort preference). An invalid `effort` value **fails open**: it warns on stderr
-and is ignored (treated as `null`) — the model half of the value still resolves
-normally, and the CLI still exits 0.
-
-Resolved via
-`hooks/model_routing_lib.py resolve --workspace <path> --project <name> --role <role>`,
-which is invoked by the dispatching skill's `<model-routing-resolve>` preamble
-(right after `<config-loading>`, before any subagent dispatch). `resolve()` returns
-the `(model, effort)` pair; the CLI's default stdout still prints only the model
-(back-compat, unchanged), and a new `--effort` flag prints the resolved effort tier
-instead (or the literal string `none` when there is no effort).
-
-rawgentic **never uses Haiku for routed work**: a `haiku` value is accepted (not
-rejected to `inherit`) but hard-bumped to `sonnet` with a warning, for every role —
-the bump applies to the `model` member only; a configured `effort` alongside a
-bumped `haiku` is preserved and still resolved normally.
-
-**Delivery is dual-path.** The Agent tool has no per-invocation effort parameter, so
-a resolved non-null effort is carried two ways: passed through wherever the dispatch
-layer itself supports an effort setting (e.g. the Workflow tool's `agent()` options,
-or a Codex dispatch's reasoning-effort flag), and always recorded in the dispatch's
-session-note/audit line regardless, so the resolved tier stays observable even on a
-dispatch path with no effort knob to plug it into (WF2/WF3 — see their
-`<model-routing-resolve>` preambles).
-
-**Fail-open by design** — routing is an optimization knob, never a gate:
-a missing workspace file, malformed JSON, a non-dict `modelRouting` block, or an
-unknown/invalid model or effort value all resolve to `inherit` / `null` with a stderr
-warning; the CLI always exits 0 and never blocks the calling workflow.
-
-**Per-lens review tiering — `modelRouting.reviewLenses` (#491, optional).** Review
-dispatches at WF2 Steps 4/8a/11 select a model per LENS via
-`resolve --role review --lens <lens>` / `select_review_lens_model`. Lens vocabulary:
-`security`, `mechanical`, `ac_completeness`, `test_coverage`, `bug_logic`. Defaults:
-the `security` lens is **pinned** to the resolved `review` model (a
-`reviewLenses.security` override is ignored with a warning — config can never
-downgrade the security lens); every other lens defaults to `sonnet`. Example:
-
-```json
-"modelRouting": {
-  "review": "opus",
-  "reviewLenses": { "bug_logic": "opus" }
-}
-```
-
-Same fail-open contract as the rest of the block: an invalid lens value warns and
-falls back to the `sonnet` default; `haiku` anywhere floors to `sonnet` (never-Haiku,
-enforced inside `select_review_lens_model`); an unknown lens name fails safe to the
-strong review model.
-
-**Soft opus floor (review only):** an explicit `sonnet` for the `review` role still
-applies (routing is honored, not overridden) but emits an advisory stderr warning
-that review quality may drop below the recommended `opus` floor. An explicit `haiku`
-for `review` does **not** merely warn-and-apply — it is bumped to `sonnet` by the
-never-Haiku rule above. `analysis` and `implementation` have no opus floor.
-
-**`implementation` is a ceiling, not a blanket assignment.** The resolved value is
-the *maximum* model WF2 Step 8 will use, not the model every task gets. Step 8 calls
-`model_routing_lib.select_impl_model(ceiling, riskLevel, complexity)` per task:
-high-risk or `complex_feature` tasks get the ceiling; standard/simple tasks
-down-route to `sonnet`, escalating to the ceiling if a down-routed task struggles.
-Same `modelRouting.implementation` key throughout; the only schema change is the
-role value itself gaining the optional `{model, effort}` object shape above.
 
 ### `peerConsult`
 
@@ -716,85 +445,6 @@ Loading is **fail-closed**, identical to `adversarialReview`: a missing file,
 malformed JSON, missing field, or bad value resolves to disabled — Step 8 runs its
 normal per-task path. Default disabled; absent field → unchanged behavior.
 
-### `executorRouting`
-
-Opt-in per-seat routing of executor seats THROUGH the deterministic phase-execution engine
-(`phase_executor`), #427 (epic #422, E4). Since #464 (W1, epic #475) the accepted seat
-vocabulary is the full set `ship` / `intake` / `plan` / `analysis` / `build` / `review`
-(`design` is competitive-only — the bake-off owns its dispatch — and is refused here). A
-**per-project entry in `.rawgentic_workspace.json`** (sibling to `modelRouting`), NOT in
-`.rawgentic.json` — it is workspace-scoped runtime policy, not committed to the project repo.
-Shape:
-
-```json
-"executorRouting": { "version": 1, "seats": { "ship": "inherit", "intake": "inherit", "plan": "inherit" } }
-```
-
-Semantics (consumed by `hooks/executor_routing_lib.py`) — **rewritten by #474: the seat modes no
-longer select the tier;** [`defaultArchitecture`](#defaultarchitecture-and-the-legacy-rollback)
-does (absent = executor). The block is still VALIDATED, and a declared mode must AGREE with the
-architecture. Thus a workspace-entry block documents intent and refuses a contradiction; it
-does not route a seat or select the architecture:
-
-- **`inherit`** (a seat's mode) — the legacy Agent-tool path. Valid ONLY under
-  `defaultArchitecture: "legacy"` (an `"inherit"` seat under the executor architecture is a
-  mixed-architecture config and refuses at run time, exit 2, naming the seat).
-- **`executor`** — the seat is dispatched through `run_seat`, which runs the routed model as a real
-  subprocess, verifies the provider-reported `actual_model` (`verify_post`), and appends a receipt +
-  observation to a per-run routing-audit log. There is **no driver-inline fallback**: it either
-  returns a verified routed observation or fails loud (the orchestrator runs the ERROR protocol).
-  Valid ONLY under the executor architecture (the default); a redundant declaration is a no-op.
-
-**Absence vs invalidity — fail-CLOSED on invalidity** (unlike `modelRouting`'s fail-open): an absent
-block / absent seat simply follows the architecture (executor by default since #474), but a
-PRESENT-but-malformed block (a non-object value, an unsupported `version`, an unknown seat key, a
-mode outside `{inherit, executor}`, or a mode contradicting the architecture) makes `resolve-seat`
-/ `dispatch` return **exit 2** — a typo'd value must fail loud, never silently pick a side (a false
-cutover, either direction). Executor routing is an enforcement/verification choke point, so a
-config it cannot evaluate denies rather than degrades.
-
-**AC1 live workspace mutation procedure.** To add `executorRouting` blocks to a live
-`.rawgentic_workspace.json`, make one read-modify-write operation: read and retain a backup,
-add **only** the `executorRouting` key to the chosen project entries, write the complete JSON to
-a temporary file in the same directory, then atomically replace the workspace file with
-`os.replace`. After the replacement, validate both the JSON round-trip and
-`parse_executor_routing()` over **every** project entry. If either validation fails, restore the
-backup and report the failure; do not alter any other workspace key.
-
-Seat ↔ WF-step mapping (the prose wiring lands in #417): `intake` → WF2 Step 2 (analyze),
-`plan` → Step 5 (plan), `ship` → Step 12 (README/changelog/version/docs). Driver-only stages
-(`merge`, `ci_triage`, `deploy_verify`, `step16`) are NEVER seats — `resolve-seat` returns
-`driver_only` for them. Since #464 (W1) the `build` seat IS dispatchable, but only through the
-attested gate path: `phase_executor.enforce.check_pre` requires a launch-bound `GateAttestation`
-(minted at the hooks boundary from an authenticated #429 `GateDecision` via `--gate-file` plus
-`--plan-file`, whose canonical plan context the dispatch mints internally (#470); a `bakeoff` outcome refuses single dispatch). `design`
-is competitive-only and refused from single-dispatch. Capture/permit dirs are derived under the
-project repo's git-ignored `.rawgentic/runs/` + `.rawgentic/runtime/`.
-
-**Live run status (#471, W8 — AC-J):** `status --workspace <ws> --project <name> --run <id>`
-prints one JSON doc of per-seat rows derived from the durable job registry + launch specs +
-capture dirs — derived `state` (valid sentinel → `completed`; live session → `running`;
-probe could not determine liveness → `liveness_unknown`; confirmed-dead+no-sentinel →
-`exited_no_sentinel`; terminal recorded states pass through) alongside
-`recorded_state` (so every OQ-8 state, including `launched`, stays distinguishable and stale
-entries are visible, never hidden), requested vs actual model/effort, elapsed times, an honest
-`"eta": "no estimate"` until AC-I3 history exists (#449), and the latest capture write + tail
-line. **Read-only invariant (AC-J3):** the verb reads registry/spec/capture and probes the
-record's own terminal backend only — it never mutates run state (a corrupt `jobs.json` is a
-structured exit 5, `registry_corrupt`, never an empty view).
-
-**Backend-resolved liveness (#647).** The probe resolves each record's backend from
-`record.terminal_backend` (the lifted `supervisor.resolve_backend`, the same rule
-`TmuxSupervisor._resolve_backend` applies) instead of always invoking tmux — a herdr record's
-`run_socket` is a herdr *workspace id*, so an unconditional `tmux -S <run_socket>` failed for
-an ordinary reason and the row reported `exited_no_sentinel` as established fact. `state` is
-now `liveness_unknown` whenever the probe itself could not answer (daemon unreachable, socket
-permission error, unparseable body, or a herdr record with no herdr backend configured), and
-the row's `probe_error` carries why. A *confirmed* absence — tmux's routine "no sessions on
-this socket" — still derives `exited_no_sentinel` with `probe_error: null`, unchanged.
-`liveness_unknown` is derived-only and is never written to the registry, so the recorded-state
-vocabulary is untouched.
-
 ### Adversarial Review Data Handling
 
 When the adversarial review runs (standalone or embedded), the **text of the reviewed
@@ -806,7 +456,7 @@ tokens, private keys) and names any detected categories in the notice. Set
 Findings reports are written locally to `<project>/docs/reviews/` and are never uploaded.
 The gpt backend requires the Codex CLI installed (`npm install -g @openai/codex`)
 and authenticated (`codex login`, or `printenv OPENAI_API_KEY | codex login --with-api-key`
-for headless/CI). The glm backend (#403) requires `pip install "zhipuai>=2.1.5"` and a key in
+for CI/unattended use). The glm backend (#403) requires `pip install "zhipuai>=2.1.5"` and a key in
 `ZHIPUAI_API_KEY` — its egress goes to z.ai/Zhipu (a distinct provider and jurisdiction),
 named in the consent notice. Under `both`, prerequisites degrade-and-warn: the run proceeds
 when at least one backend is ready.
@@ -835,7 +485,7 @@ explicit rubric to curb inflation.
 ### `setupPrompt` (workspace-level) and the version-aware setup prompt
 
 When a plugin update ships a feature that needs setup answers to turn on
-(`adversarialReview`, `modelRouting`, `peerConsult`, `designArtifact` — the
+(`adversarialReview`, `peerConsult`, `designArtifact` — the
 fields `/rawgentic:setup` stages into workspace entries), the SessionStart
 post-update reconcile (`hooks/post_update_reconcile.py`) prints a one-time
 notice naming the new feature(s) and the active projects missing them, and
@@ -868,7 +518,6 @@ is what guarantees the same version never nags twice.
       "path": "./projects/chorestory",
       "active": true,
       "configured": true,
-      "headlessEnabled": true,
       "adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug"] }
     },
     {
@@ -880,279 +529,6 @@ is what guarantees the same version never nags twice.
   ]
 }
 ```
-
-## Headless Mode
-
-Headless mode enables workflow skills to run non-interactively. When a skill
-hits a user interaction point, instead of blocking for terminal input it posts
-a structured comment to the GitHub issue and exits cleanly. An external
-orchestrator resumes the session after the user replies.
-
-### Per-Project Access Control
-
-Each project must explicitly opt in to headless mode via `headlessEnabled` in
-its workspace entry. Default is `false` (safe — must opt in). The field accepts
-two shapes (#165):
-
-```json
-{
-  "projects": [
-    {
-      "name": "my-app",
-      "headlessEnabled": true,
-      "headlessAllowSSH": false
-    },
-    {
-      "name": "my-other-app",
-      "headlessEnabled": {
-        "enabled": true,
-        "triggers": ["issue-label"],
-        "auth": "subscription-oauth"
-      }
-    }
-  ]
-}
-```
-
-- **bool** (legacy): `true` allows headless via any trigger.
-- **object**: `enabled` is the master switch; `triggers` is a per-trigger
-  allowlist matched against the orchestrator-set `RAWGENTIC_HEADLESS_TRIGGER`
-  env var (absent `triggers` = any trigger; a present list **fails closed** on
-  a non-member, an unset trigger env, or a malformed value); `auth` records the
-  repo's Action auth-mode decision (see below). The bundled
-  `.github/workflows/rawgentic-auto.yml` pilot sets
-  `RAWGENTIC_HEADLESS_TRIGGER=issue-label`.
-
-Set during `/rawgentic:setup` (Step 2c) or manually in `.rawgentic_workspace.json`.
-When `RAWGENTIC_HEADLESS=1` is set but the project has `headlessEnabled: false`
-(or missing), the session-start hook blocks headless execution and the agent
-is instructed to exit immediately.
-
-### Action Auth Mode (#165 AC7)
-
-Label-triggered Action runs authenticate one of two ways; the decision is
-recorded per repo in `headlessEnabled.auth`:
-
-- **`subscription-oauth`** (default — the majority case): owner runs
-  `claude setup-token` once and saves the output as the repo secret
-  `CLAUDE_CODE_OAUTH_TOKEN`. Runs share the owner's plan bucket — schedule
-  off-hours; a plan lockout maps to DEFER (the run simply fails and the label
-  can be re-applied later).
-- **`api-key`**: repo secret `ANTHROPIC_API_KEY` — an isolated dollar budget
-  instead of the plan bucket, at API prices.
-
-Secrets are referenced by NAME in the workflow yml, never by value (AC8).
-
-**`headlessAllowSSH`** (boolean, default `false`) — the SSH escape hatch for the
-headless remote-ops guard (issue #47). In headless mode the bot's job ends at PR
-creation: no merge, no deploy, no outbound SSH. `wal-guard` therefore **blocks any
-`ssh`/`scp`/`rsync`/`sftp` invocation** while `RAWGENTIC_HEADLESS=1`, regardless of
-which workflow step (or skill) issues it, and **independent of `protectionLevel`**
-— it fires even under `sandbox`. Set `headlessAllowSSH: true` on the project's
-workspace entry to opt back in (for a project that genuinely needs headless remote
-ops). Resolution is **fail-closed**: anything other than a literal `true` (absent,
-`false`, null, non-boolean, unresolved project) leaves SSH blocked. Like
-`headlessEnabled`, this flag is **workspace-scoped** (it lives on the
-`.rawgentic_workspace.json` project entry, not in the project's `.rawgentic.json`),
-so all headless access-control stays in one place. `git`/`gh` (which use their own
-transport, not the `ssh` program) are never blocked.
-
-### Environment Variable
-
-Set `RAWGENTIC_HEADLESS=1` before invoking Claude Code. The `session-start`
-hook detects this and injects headless context into `additionalContext`.
-
-### Suspend State File
-
-When a skill suspends, it writes `claude_docs/headless_suspend.json`:
-
-```json
-{
-  "session_id": "...",
-  "issue": 155,
-  "step": 4,
-  "question_id": "uuid",
-  "comment_url": "https://github.com/.../comments/...",
-  "clarification_round": 0,
-  "suspended_at": "2026-03-21T..."
-}
-```
-
-The orchestrator reads this file to get the `session_id` for `--resume`.
-
-### WAL SUSPEND Phase
-
-A new `SUSPEND` WAL phase indicates a session was intentionally paused (not
-crashed). The `wal-stop` hook writes `SUSPENDED` status to session notes and
-`SUSPEND` to the WAL when a valid suspend state file exists with a matching
-session_id. The `session-start` hook treats `SUSPEND` entries as "session in
-progress" and does not archive them.
-
-### Orchestrator Interface Contract
-
-Every orchestrator cycle is a **fresh `claude` invocation** — no `--resume`, no
-session_id tracking. The skill reconstructs its own state from git artifacts,
-session notes, and the suspend file.
-
-```bash
-# Every cycle — same command, no session tracking
-cd /sandbox/<repo>
-RAWGENTIC_HEADLESS=1 claude --print \
-  --permission-mode bypassPermissions --output-format json \
-  -p "/rawgentic:implement-feature <issue-url>"
-```
-
-`bypassPermissions` is required because workflow skills invoke Bash commands
-(git, gh, pytest) that would otherwise prompt for interactive confirmation.
-`acceptEdits` only auto-approves file edits — Bash commands still block.
-WAL guards and security guards remain active as the last line of defense.
-
-The skill handles everything on each invocation:
-1. Resumption protocol detects progress from git + session notes
-2. If `headless_suspend.json` exists, reads it and fetches user's reply from
-   GitHub issue comments via `gh api`
-3. Removes `rawgentic:ai-waiting` label, deletes suspend file
-4. Continues workflow from where it left off
-5. May hit another interaction point → posts new comment, re-adds label, exits
-6. Or completes the workflow → creates PR, exits
-
-### Label Lifecycle
-
-| Label | Set By | Meaning |
-|-------|--------|---------|
-| `rawgentic:ai-ready` | Human | "Bot, pick this up" — explicit opt-in per issue |
-| `rawgentic:ai-in-progress` | Orchestrator | Claude is actively working on this issue |
-| `rawgentic:ai-waiting` | Skill | Posted a question, waiting for human reply |
-| `rawgentic:ai-error` | Skill | Terminal failure, needs human triage |
-
-The orchestrator polls for two signals: `rawgentic:ai-ready` (new work) and
-`rawgentic:ai-waiting` with a new reply (continuation). One headless workflow
-per project at a time — the orchestrator enforces this via `ai-in-progress`.
-
-### Interaction Inventory (WF2)
-
-| Step | Interaction | Headless Behavior |
-|------|-------------|-------------------|
-| Step 1 | Issue closed | ERROR |
-| Step 1 | Confirm ACs (WF1-created) | AUTO-RESOLVE |
-| Step 1 | Confirm ACs (manual issue) | QUESTION |
-| Step 1 | Confirm capabilities (WF1-created) | AUTO-RESOLVE |
-| Step 1 | Confirm capabilities (manual issue) | QUESTION |
-| Step 2 | Components don't exist | QUESTION |
-| Step 2 | Live environment SSH probe | AUTO-RESOLVE (skip SSH probes, local exploration only) |
-| Step 3 | Design approach trade-offs | QUESTION |
-| Step 3 | Scope larger than estimated | QUESTION |
-| Step 4 | Ambiguity circuit breaker | QUESTION |
-| Step 4 | Design loop-back budget exhausted | ERROR |
-| Step 4 | Global loop-back budget exhausted | ERROR |
-| Step 5 | Scope creep detected | AUTO-RESOLVE |
-| Step 7 | Dirty directory | AUTO-RESOLVE (stash + comment) |
-| Step 7 | Branch exists | AUTO-RESOLVE (resume) |
-| Step 8 | Design flaw + budget exhausted | ERROR |
-| Step 8 | Periodic checkpoint | Checkpoint to session notes |
-| Step 11 | Design flaw + budget exhausted | ERROR |
-| Step 13 | CI timeout | AUTO-RESOLVE (2x wait, then ERROR) |
-| Step 14 | Merge and deploy | AUTO-RESOLVE (skip entire step — PR creation is the terminal deliverable; no merge, no deploy) |
-| Step 14 | Manual deploy confirmation | n/a — Step 14 is skipped in headless, so this is interactive-only |
-| Step 15 | Post-deploy verification | AUTO-RESOLVE (skip — no deployment occurred) |
-
-### Structured Comment Format
-
-Skills post comments with hidden JSON metadata:
-
-```markdown
-## [WF2 Step N] Question Title
-
-**Context:** [what the workflow is doing]
-**Question:** [the decision needed]
-
-**Options:**
-1. [option 1]
-2. [option 2]
-
-Reply to this comment with your choice.
-
-<!-- rawgentic-headless: {"question_id":"uuid","step":4,"type":"circuit_breaker"} -->
-```
-
-The `rawgentic:ai-waiting` label is added when a question is posted and
-removed when the session resumes.
-
-### Python Helper
-
-`hooks/headless_interaction.py` provides testable functions:
-- `format_comment()` — generates structured comments with sanitized content
-- `format_suspend_state()` / `write_suspend_state()` / `read_suspend_state()`
-
-It also exposes a CLI so workflow skills drive the headless protocol from Bash
-without reconstructing fragile inline `python3 -c` snippets.
-
-QUESTION-suspend side:
-- `new-id` — print a fresh question_id (uuid4)
-- `format-comment` — render the structured comment body to stdout
-- `write-suspend` — write the suspend state file (atomic, fail-closed on empty
-  `--question-id`/`--comment-url`, non-positive `--issue`, or an out-of-range
-  `--step`)
-
-Resume side:
-- `read-suspend` — read AND validate the suspend file in one step. Exit `0` with
-  the validated state JSON on stdout; exit `3` when the file is absent (benign
-  "no pending question"); exit `1` when the file parses but is unusable (empty
-  identifier, non-positive `issue`, missing `suspended_at`, bad `step`). The
-  distinct `3` vs `1` lets the caller proceed normally vs escalate.
-- `parse-reply` — extract an unambiguous option choice (e.g. `a`, `2`) from a
-  user's free-text reply. Exit `0` + the token when the whole reply IS a literal
-  option; exit `1` otherwise, so natural-language replies fall back to the
-  skill's own judgement / a clarification round rather than a wrong guess.
-
-The QUESTION-suspend commands run as one atomic `set -euo pipefail` block so the
-generated `$QID` and captured `$COMMENT_URL` flow consistently into the comment
-and the suspend file.
-
-### Resume Step Detection
-
-`hooks/resume_lib.py` encodes the WF2 resumption cascade — the priority-ordered
-rules that decide which of the 16 steps a fresh session resumes at. Applying that
-order by hand in prose is how a resume silently lands on the wrong step (redoing
-finished work, or skipping a quality gate), so the ordering lives in one tested
-function exposed as a CLI:
-
-- `detect-step` — print the step to resume at given the gathered facts. Takes
-  three composite-enum flags and two optional markers:
-  - `--pr-state {none,open,ready-to-merge,merged}` (`ready-to-merge` = CI green
-    OR project has no CI — the orchestrator collapses the "or no CI" rule while
-    gathering facts)
-  - `--branch-state {none,empty,changes,verified}`
-  - `--notes-state {none,issue-validated,design-doc}`
-  - `--markers-complete` / `--completion-gate-printed` (for the "all markers
-    present but the gate was never printed" case → prints `completion-gate`)
-
-  The orchestrator still *gathers* the facts (git/gh for the PR and branch,
-  session notes for design/issue/test status); `detect-step` just applies the
-  canonical precedence. An unrecognized state value exits non-zero (fail-closed)
-  rather than defaulting to Step 1, so a mistyped fact fails loudly instead of
-  restarting an in-flight workflow.
-
-### Security Notes
-
-- `session_id` is excluded from public GitHub comments (kept only in the
-  suspend state file)
-- Dynamic values in comments are sanitized against `-->` HTML comment injection
-  and markdown link/image injection (`[`, `]`, `(`, `)`, `!` escaped)
-- `bypassPermissions` mode removes human oversight — WAL guards and security
-  guards are the last line of defense in headless mode. Guard blocks are
-  logged to the WAL as `GUARD_BLOCK` entries for audit visibility.
-- **Headless = no outbound remote ops.** Beyond the per-step workflow guards,
-  `wal-guard` blocks every `ssh`/`scp`/`rsync`/`sftp` invocation while
-  `RAWGENTIC_HEADLESS=1` (unless `headlessAllowSSH: true`), so an ad-hoc SSH from
-  *any* step or skill is denied even if the skill author forgot to annotate it.
-  This is a hook-level safety net for the chorestory #309 class of incident (a
-  headless run SSHing to a live host); container-level SSH removal (arc #1) is the
-  complementary outer layer.
-- The `suspended_at` timestamp uses UTC wall-clock time. The orchestrator host
-  and Claude host must have synchronized clocks (NTP) for the 24h TTL-based
-  stale file cleanup to work correctly. Clock skew may cause premature or
-  delayed cleanup.
 
 ## CI review auth {#ci-review-auth}
 

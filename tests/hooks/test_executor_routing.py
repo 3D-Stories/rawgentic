@@ -1055,14 +1055,14 @@ class TestResolveTerminalBackend:
         with pytest.raises(er.MalformedConfig):
             er.resolve_terminal_backend(repo)
 
-    def test_real_repo_resolves_herdr(self):
+    def test_real_repo_resolves_tmux_after_m0c(self):
         # Smoke test on the REAL config file, not the logic (that is TestSelectLaunch...
         # below): rawgentic's own .rawgentic.json must parse and resolve to what it
-        # declares. It declared nothing -> "tmux" until 2026-07-27, when the herdr build
-        # seat was switched on for this project after UAT-3 passed live (epic #635).
-        # If the gate is ever flipped back, update this line with the config.
+        # declares. herdr was on 2026-07-27..2026-08-03; M0c (#866) removed the
+        # executorTerminalBackend key with its config surface, so absent derives
+        # the package default until M0d deletes this resolver with the executor.
         repo = Path(er.__file__).resolve().parent.parent
-        assert er.resolve_terminal_backend(repo) == "herdr"
+        assert er.resolve_terminal_backend(repo) == "tmux"
 
 
 class TestSelectLaunchTerminalBackend:
@@ -3205,15 +3205,17 @@ def test_single_snapshot_read(tmp_path, monkeypatch):
     assert len(ws_reads) <= 1, f"workspace read {len(ws_reads)} times: {ws_reads}"
 
 
-def test_legacy_rollback_target_definitions_exist():
-    # #474 guard (c) proxy: the bundled legacy agent definitions stay in-tree as the rollback
-    # target (frontmatter-shaped: leading --- block with a name: line)
+def test_legacy_rollback_target_retired():
+    # M0c (#866): the #474 legacy rollback target no longer ships — the
+    # implementer definition is deleted (implementation is inline, D174) and
+    # rawgentic-reviewer.md is now the runner-dispatch subagent, not a legacy
+    # dispatch path. A partial rollback target is no rollback.
     repo = Path(__file__).resolve().parents[2]
-    for name in ("rawgentic-implementer", "rawgentic-reviewer"):
-        p = repo / "agents" / f"{name}.md"
-        assert p.is_file(), f"rollback target missing: {p}"
-        head = p.read_text(encoding="utf-8").split("---")
-        assert len(head) >= 3 and "name:" in head[1], f"frontmatter malformed: {p}"
+    assert not (repo / "agents" / "rawgentic-implementer.md").is_file()
+    p = repo / "agents" / "rawgentic-reviewer.md"
+    assert p.is_file(), f"runner-dispatch definition missing: {p}"
+    head = p.read_text(encoding="utf-8").split("---")
+    assert len(head) >= 3 and "name:" in head[1], f"frontmatter malformed: {p}"
 
 
 # --- #474 T3: begin-run + entry-point architecture enforcement ---------------------------------
