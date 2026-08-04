@@ -102,6 +102,13 @@ Rejected alternatives, so a rewrite does not reintroduce any of them:
   and a subprocess, to a step whose entire constraint is staying expansion-free would cost more
   than reusing the literal already in hand.
 
+**Already-misfiled records are NOT migrated** — the fix is prospective only. If you find a stray
+`claude_docs/session_registry.jsonl` under a project directory, the sessions recorded in it were
+never visible to anything reading the workspace registry; the remedy is to re-run the bind for any
+session that still matters and delete the stray file. There is deliberately no automatic migration:
+moving session records between trees on upgrade is a riskier operation than re-binding, and the one
+observed occurrence was remediated by hand at report time.
+
 **`<root>` is therefore DEFINED in Step 5 itself**, not left implicit: an undefined placeholder
 is worse than a reminder, because a reader who substitutes the cwd produces
 `>> "./claude_docs/session_registry.jsonl"` — byte-for-byte as broken as the original while

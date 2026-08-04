@@ -50,18 +50,32 @@ EXPECTED_APPEND_TOKEN = {
     "new-project": '"<WORKSPACE_ROOT>/claude_docs/session_registry.jsonl"',
 }
 
-# Tokens that must never satisfy the guard. Regression corpus for BOTH fail-open
-# holes found in this guard: the cwd-relative spellings, and the adjacent-suffix
-# forms that hid behind a quoted segment.
+# Cwd-relative spellings that must never satisfy the guard, whichever skill is
+# under test — they name no placeholder at all, so they are skill-independent.
 REJECTED_TARGET_FORMS = (
     "claude_docs/session_registry.jsonl",
     "./claude_docs/session_registry.jsonl",
     "../claude_docs/session_registry.jsonl",
     "project/claude_docs/session_registry.jsonl",
     "'claude_docs/session_registry.jsonl'",
-    '"<root>/claude_docs/session_registry.jsonl".bak',
-    '"<root>/claude_docs/session_registry.jsonl"$SUFFIX',
 )
+
+# Text adjacent to the closing quote — the second fail-open this guard had, where a
+# quote-terminating parser read the prefix as the whole target.
+ADJACENT_SUFFIXES = (".bak", "$SUFFIX")
+
+
+def _rejected_forms_for(expected: str) -> tuple:
+    """Every token that must be rejected when `expected` is the correct one.
+
+    The adjacent-suffix cases are derived from the skill's OWN expected token rather
+    than hard-coded. A fixed `<root>`-based string is rejected by new-project's guard
+    merely for naming the wrong placeholder, so hard-coding them made this corpus
+    advertise two-skill coverage it did not have: a regression to the quote-terminating
+    parser could accept `"<WORKSPACE_ROOT>/…jsonl".bak` for new-project and this file
+    would have stayed green (#885, found by the adversarial diff layer).
+    """
+    return REJECTED_TARGET_FORMS + tuple(expected + s for s in ADJACENT_SUFFIXES)
 
 
 def _target_is_expected(target: str, expected: str) -> bool:
@@ -184,10 +198,12 @@ def test_guard_rejects_every_bad_target_form():
       `"<root>/…jsonl"$SUFFIX` parsed as the expected target and passed every check
       while the shell appended somewhere else.
 
-    Both were found by cross-model review, not by the author.
+    Both were found by cross-model review, not by the author. The adjacent-suffix
+    cases are derived PER SKILL (`_rejected_forms_for`) so neither skill's variant is
+    waved through merely for naming the other's placeholder.
     """
     for skill, expected in EXPECTED_APPEND_TOKEN.items():
-        for form in REJECTED_TARGET_FORMS:
+        for form in _rejected_forms_for(expected):
             tokens = APPEND_TARGET_RE.findall(f'printf \'{{}}\' >> {form}\n')
             assert tokens, f"regex failed to parse the redirect in {form!r}"
             for token in tokens:
