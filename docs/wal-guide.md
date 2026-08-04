@@ -5,7 +5,7 @@
 The WAL logs every mutation tool use (Bash, Edit, Write, NotebookEdit, Task) for
 session recovery and audit. Each invocation produces an INTENT before execution
 and a DONE or FAIL after. Sessions end with a STOP marker (or SUSPEND for
-headless sessions awaiting user input).
+sessions awaiting user input).
 
 WAL files live under the `claude_docs/` directory:
 - Per-project: `claude_docs/wal/<project>.jsonl`
@@ -181,16 +181,8 @@ Wal-guard blocks two categories:
 
 All patterns are case-insensitive and match anywhere in the command string.
 
-**2. Blanket SSH-family block in headless mode** (issue #47): when
-`RAWGENTIC_HEADLESS=1`, wal-guard denies **any** `ssh`/`scp`/`rsync`/`sftp`
-invocation — not just prod-targeting ones — because a headless run's job ends at
-PR creation (no merge, no deploy, no remote access). This fires **regardless of
-`protectionLevel`** (even under `sandbox`) and is detected via the tested
-`hooks/headless_ssh_guard.py` matcher (which sees through env-assignments,
-wrappers like `sudo`/`timeout`, `bash -c`, `$(...)`, and absolute paths, but never
-flags `git`/`gh`, which use their own transport). Set `headlessAllowSSH: true` on
-the project's `.rawgentic_workspace.json` entry to opt out (see
-`docs/config-reference.md`). This block does **not** apply in interactive mode.
+(The old unattended blanket SSH block — issue #47 — retired with the headless
+orchestration in M0d, #866.)
 
 ### What Is NOT Blocked
 
@@ -199,14 +191,11 @@ Destructive local commands (`rm -rf`, `git push --force`, `git reset --hard`,
 behavior already prompts the user before running these operations, and
 hard-blocking via hooks would prevent the user from approving when they
 intentionally want to proceed (hooks have no warn-and-confirm mechanism).
-`git`/`gh` are never treated as SSH commands even in headless mode.
 
 ### Fail-Closed Behavior
 
 If `jq` is unavailable, wal-guard denies **all** commands. This prevents
-unguarded execution when the pattern-matching infrastructure is broken. The
-headless SSH block is likewise fail-closed: an unresolvable `headlessAllowSSH`
-(or an unavailable matcher) leaves SSH-family commands blocked.
+unguarded execution when the pattern-matching infrastructure is broken.
 
 ## Troubleshooting
 

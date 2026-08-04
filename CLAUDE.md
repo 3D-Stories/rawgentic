@@ -25,24 +25,19 @@ Every claim below carries its evidence; when a doc and a test disagree, **the te
   - **Narrow, real exception, so the rule stops contradicting the tree (#687):** a HOOK that needs
     its OWN single config block reads `.rawgentic.json` directly and fail-open. That is the
     established pattern, not a deviation — `security-guard.py:81-96`,
-    `security_guard_lib.py:206-223`, `seat_outcomes_lib.py:1237-1247`, `plan_lib.py:765`,
-    `post_update_reconcile.py:158-172`, `wal-lib.sh:275-330`, `context_meter.py` all do it, and
-    `executor_routing_lib.py` mixes both. Reason it is not `derive`: several of these run per tool
+    `security_guard_lib.py:206-223`, `plan_lib.py:765`,
+    `post_update_reconcile.py:158-172`, `wal-lib.sh:275-330`, `context_meter.py` all do it.
+    Reason it is not `derive`: several of these run per tool
     call, where a subprocess is a cost they have not earned, and `derive` returns a whole
     capabilities object to answer a one-key question. Rule for a new hook: read only your own
     block, cap the read, fail open, and validate the values (strict parse, clamp, safe default,
-    stderr warning — `seat_outcomes_lib.load_thresholds_from_block` is the exemplar). Anything
+    stderr warning — `context_meter.py`'s config loader is the exemplar). Anything
     that needs the *capabilities object* still goes through `derive`.
-- **Fourth layer (since #424): `phase_executor/`** — a self-contained uv-native package (src
-  layout: `phase_executor/pyproject.toml`+`uv.lock`, code under `phase_executor/src/phase_executor/`)
-  that is NOT part of the hooks/skills machinery. It is the deterministic model-seat execution
-  engine (Observation JSON-schema contract, engine adapters, routing, inter-process quota),
-  extraction-ready for kukakuka, so it deliberately does NOT import `hooks/`. Its tests live under
-  `tests/phase_executor/` (collected by the normal `pytest tests/` gate via a localized
-  `conftest.py` sys.path shim to `phase_executor/src` — the repo has no root packaging, so do NOT
-  add a root pyproject/conftest). Live provider-call tests are `@pytest.mark.live`, skipped unless
-  `RUN_LIVE=1` (they need real CLIs/SDK auth, never CI). The CI lint lanes (`pylint hooks/*.py`,
-  `pylint tests/`) do not yet cover `phase_executor/src/` — lint it directly when editing.
+- **The former fourth layer, `phase_executor/`, was DELETED in the M0 executor retreat
+  (#866 M0d, roadmap 2026-08-03).** Cross-model review runs through `hooks/review_runner.py`
+  (one entry point, pinned reviewer identity); analysis and implementation run inline (D174).
+  Do not resurrect executor machinery — a retirement tripwire test fails on retired
+  imports/commands/config keys outside archival dirs.
 - **The repo is NOT the running plugin.** Sessions load from
   `~/.claude/plugins/cache/rawgentic/rawgentic/<version>/` — editing this repo changes
   nothing live until reinstall AND a new session; one session can hold skills from
@@ -98,12 +93,11 @@ Every claim below carries its evidence; when a doc and a test disagree, **the te
 
 **Versioning — one PR = one issue = one bump = one changelog entry**
 - Patch for fix/chore/docs/ci; minor for feat; major is rare and curated.
-- The version lives in FOUR surfaces that must match: `.claude-plugin/plugin.json`,
-  `plugins/rawgentic/.codex-plugin/plugin.json`, the pinned assert
-  `tests/hooks/test_adversarial_review_registration.py::test_plugin_version_bumped`,
-  and `phase_executor/src/phase_executor/canary.py` `EXPECTED_PLUGIN_VERSION`
-  (since #470; a mismatch fails `tests/phase_executor/test_canary_evidence.py` with
-  12 refuse-verdict errors). Two are TESTS — a scoped local run misses them; CI fails.
+- The version lives in THREE surfaces that must match (#866 M0d retired the canary
+  fourth): `.claude-plugin/plugin.json`, `plugins/rawgentic/.codex-plugin/plugin.json`,
+  and the pinned assert
+  `tests/hooks/test_adversarial_review_registration.py::test_plugin_version_bumped`.
+  One is a TEST — a scoped local run misses it; CI fails.
 - Version→PR archaeology: walk `git log -- .claude-plugin/plugin.json`; no map is kept.
 
 **README changelog — the exact entry shape** (README `## Changelog`, one line per
@@ -197,7 +191,7 @@ load-bearing for resume. Never edit or truncate an existing entry.
   (`security-guard-check.sh:49-55`).
 - **One helper, one home.** Before writing any new script, check `hooks/` — `plan_lib`,
   `work_summary`, `capabilities_lib`, `security_scan`,
-  `registry_prune`, `driver_lib`, `resume_lib`, `headless_interaction` cover most needs.
+  `registry_prune`, `driver_lib`, `resume_lib`, `review_runner` cover most needs.
 - **Timeout ≠ failure for mutating calls** (gh/API): check the resource's real state
   before retrying — the write may have landed; a blind retry double-creates.
 - **`quality-bar.md` is single-sourced (since #276).** The one source is
@@ -207,10 +201,9 @@ load-bearing for resume. Never edit or truncate an existing entry.
 
 ## 4. Mistakes a weaker model WILL make here — and the rule that prevents each
 
-1. **Bumping some but not all FOUR version surfaces** (canary.py's
-   `EXPECTED_PLUGIN_VERSION` is the one everyone forgets — #552 found it the hard
-   way; pinned by `tests/phase_executor/test_canary_digest_pin.py`). Rule: all four (§2), then
-   `pytest tests/hooks/test_adversarial_review_registration.py tests/phase_executor/test_canary_digest_pin.py tests/phase_executor/test_canary_evidence.py -q`.
+1. **Bumping some but not all THREE version surfaces** (the codex-plugin copy is
+   the one everyone forgets since the canary retired, #866 M0d). Rule: all three (§2),
+   then `pytest tests/hooks/test_adversarial_review_registration.py -q`.
 2. **Adding a skill by touching only `skills/<name>/`.** Registration spans **up to
    seven surfaces plus count guards — the authoritative list lives in the `add-skill`
    workspace skill; do not trust any restated count here or in the workspace manual.**
@@ -300,7 +293,7 @@ load-bearing for resume. Never edit or truncate an existing entry.
 - [ ] `python3 hooks/security_scan.py scan --project-root . --project-type library
       --base-ref origin/main` — findings fixed or user-decided; absent scanners noted as
       a visible skip in the PR body
-- [ ] Version ×4 surfaces; `test_plugin_version_bumped` + `test_canary_evidence.py` pass
+- [ ] Version ×3 surfaces; `test_plugin_version_bumped` passes
 - [ ] README updated INCLUDING a changelog entry in the exact §2 shape (diagram decision
       + `Suite old→new` tail); count strings still true
 - [ ] Relevant `docs/*.md` updated for the area touched
@@ -392,8 +385,7 @@ deferred silently. Report it as a distinct action.
   stale — §3), `docs/multi-issue-driver.md`, `docs/run-records.md`,
   `docs/codex-reliability.md` (Codex consult routing + dead-job protocol + host
   userns runbook — read BEFORE any load-bearing `codex:codex-rescue` dispatch)
-- Hook registration map: `hooks/hooks.json` (note `wal-suspend` exists but is
-  unregistered — not every hook file is wired to an event)
+- Hook registration map: `hooks/hooks.json` (not every hook file is wired to an event)
 - Workspace skills that execute this manual's checklists: `pr-preflight`, `merge-watch`,
   `design-doc-publish`, `add-skill`, `rev-diagram`, `epic-run` (workspace
   `.claude/skills/`)

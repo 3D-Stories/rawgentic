@@ -41,8 +41,6 @@ truth (skills no longer hand-derive it in prose). The fields are:
 | `has_database` | `config.database.type` exists |
 | `has_docker` | `config.infrastructure.docker.composeFiles` is a non-empty array |
 | `migration_dir` | `config.database.migrationsDir` (else `null`) |
-| `phase_executor_table` | `config.phaseExecutorTable.file` when the versioned descriptor is present and valid (`version` must be 1; `file` a project-relative path, no `..`); `null` when the section is absent OR carries the answered-defaults sentinel `"file": null` (#531) — any other present-but-invalid section raises, never silently falls back (#445) |
-| `executor_terminal_backend` | `config.executorTerminalBackend.build` (`"tmux"` or `"herdr"`) when the versioned descriptor is present and valid (`version` must be 1); `"tmux"` when the section is absent — any other present-but-invalid section raises, never silently falls back (#638) |
 
 **Parallelism probe (`probe-parallelism`, #136).** Separate from the config-derived
 capabilities above (it inspects git, not `.rawgentic.json`), a sibling subcommand
