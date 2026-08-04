@@ -60,11 +60,13 @@ _INLINE_CONTEXT_SITES = {
     ("skills/fix-bug/SKILL.md",
      "review-code --base <default branch> --brief <brief.md>"):
         "the bespoke WF3 contract's command shape, not a dispatch site.",
-    ("skills/implement-feature/references/steps.md",
+    # #874: Step 4 detail now lives in step-04.md
+    ("skills/implement-feature/references/step-04.md",
      "review-artifact --artifact <design-doc> --type design --author-model"):
         "Step 4 item 7: the opt-in adversarial-on-design layer — a continuation of the "
         "Step-4 marker-annotated site; the artifact is carried by the mandatory --artifact.",
-    ("skills/implement-feature/references/steps.md",
+    # #874: Step 11 detail now lives in step-11.md
+    ("skills/implement-feature/references/step-11.md",
      "review-code --base origin/<default> --brief <brief.md> \\"):
         "Step 11 item 1a: the opt-in diff-review layer, tokenless/report-only; the diff is "
         "composed by the runner itself from --base (structural carrier).",

@@ -42,11 +42,34 @@ SKILL_DIR = REPO_ROOT / "skills" / "implement-feature"
 
 # Actual + modest headroom (2.4%–19% per file, ~3.1% total). Sized so a small
 # operative edit fits but a paste-class regression (~30 KB) fails loudly.
-# references/steps.md is due to SHRINK in the #874 split — small headroom only.
+# #874: references/steps.md was SPLIT into per-step files. These 19 rows are
+# PROVISIONAL — sized at actual + max(1 KiB, 10%) — because the follow-up content
+# commit moves blocks between SKILL.md and step-03/08/16, which changes their
+# actual sizes. They are recalibrated there, and #874's AC7 stale-ceiling check
+# lands only after those sizes are final (so it never runs against rows it would
+# itself condemn).
 TOTAL_CEILING_BYTES = 245_000
 PER_FILE_CEILING_BYTES = {
     "SKILL.md": 46_000,
-    "references/steps.md": 158_000,
+    "references/step-00-preamble.md": 19_825,
+    "references/step-01.md": 5_132,
+    "references/step-01b.md": 4_212,
+    "references/step-02.md": 10_239,
+    "references/step-03.md": 9_434,
+    "references/step-04.md": 24_856,
+    "references/step-05.md": 8_469,
+    "references/step-06.md": 3_763,
+    "references/step-07.md": 2_892,
+    "references/step-08.md": 24_678,
+    "references/step-09.md": 7_134,
+    "references/step-10.md": 1_969,
+    "references/step-11.md": 15_737,
+    "references/step-11_5.md": 5_311,
+    "references/step-12.md": 13_919,
+    "references/step-13.md": 4_389,
+    "references/step-14.md": 4_382,
+    "references/step-15.md": 2_288,
+    "references/step-16.md": 12_094,
     "references/run-record.md": 23_000,
     "references/whole-issue-delegation.md": 8_500,
     "references/state-and-resume.md": 7_000,

@@ -160,11 +160,14 @@ def test_dispatch_briefs_restate_read_only_clause():
     alone does not reach pr-review-toolkit slots or generic-tier fallbacks,
     and each surface is asserted separately (a match in one section must not
     satisfy the pin for another)."""
-    wf2_steps = SKILLS_DIR / "implement-feature" / "references" / "steps.md"
+    # #874: the Step 8a sub-step is a level-3 heading INSIDE Step 8, so it now lives
+    # in step-08.md (there is no `## Step 8a` top-level section, hence no step-08a.md).
+    wf2_steps = SKILLS_DIR / "implement-feature" / "references" / "step-08.md"
+    wf2_step11 = SKILLS_DIR / "implement-feature" / "references" / "step-11.md"
     wf3_steps = SKILLS_DIR / "fix-bug" / "references" / "steps.md"
     surfaces = [
         (wf2_steps, "### Step 8a sub-step: Per-task Review"),
-        (wf2_steps, "## Step 11: Pre-PR Code Review"),
+        (wf2_step11, "## Step 11: Pre-PR Code Review"),
         (wf3_steps, "## Step 9: Code Review"),
     ]
     for path, header in surfaces:
@@ -204,7 +207,7 @@ def test_wf2_step8_documents_worktree_collection():
     backstop, and the content-bearing branch-advance assert (an empty commit
     passes every diff-scoped gate vacuously, #767)."""
     section = _steps_section(
-        SKILLS_DIR / "implement-feature" / "references" / "steps.md", "## Step 8: Implementation")
+        SKILLS_DIR / "implement-feature" / "references" / "step-08.md", "## Step 8: Implementation")
     assert "cherry-pick or fast-forward the reported sha" in section
     assert "⊆ the task's declared `files`" in section
     assert "an empty commit lets every diff-scoped gate pass vacuously" in section
@@ -216,7 +219,7 @@ def test_wf2_whole_issue_dispatches_worktree_subagent():
     subagent (it authors the receipt's task_shas commits in its own worktree);
     the executor/legacy architecture split is gone from both surfaces."""
     section = _steps_section(
-        SKILLS_DIR / "implement-feature" / "references" / "steps.md", "## Step 8: Implementation")
+        SKILLS_DIR / "implement-feature" / "references" / "step-08.md", "## Step 8: Implementation")
     assert "agent-tool worktree subagent" in section
     ref = " ".join((SKILLS_DIR / "implement-feature" / "references"
                     / "whole-issue-delegation.md").read_text(encoding="utf-8").split())

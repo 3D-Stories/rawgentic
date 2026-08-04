@@ -261,7 +261,20 @@ def test_present_but_empty_declaration_blocks():
 # --------------------------------------------------------------------------
 
 SKILLS = REPO_ROOT / "skills"
-WF2_STEPS = (SKILLS / "implement-feature" / "references" / "steps.md").read_text()
+def _wf2_steps_text() -> str:
+    """WF2's per-step detail, concatenated in step order.
+
+    #874 split `references/steps.md` into `step-*.md` files. This LOCAL
+    concatenation keeps the existing pins byte-for-byte equivalent for the
+    mechanical commit; #874's AC3 sweep re-anchors each pin to the one step file
+    it owns and removes this helper. Deliberately not shared via tests/corpus.py —
+    a shared concatenator would outlive the sweep and re-monolith the pins.
+    """
+    refs = SKILLS / "implement-feature" / "references"
+    return "".join(p.read_text() for p in sorted(refs.glob("step-*.md")))
+
+
+WF2_STEPS = _wf2_steps_text()
 WF3_STEPS = (SKILLS / "fix-bug" / "references" / "steps.md").read_text()
 
 
