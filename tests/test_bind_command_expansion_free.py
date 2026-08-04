@@ -122,8 +122,12 @@ def test_bind_append_target_is_absolute():
     like the documented "create it if absent" first bind.
 
     Both skills already interpolate the absolute workspace root as a printf argument
-    for the JSON `cwd` field, so the target reuses that same literal. A wrong root is
-    then visible in the registry line itself instead of misfiling in silence.
+    for the JSON `cwd` field, so the target reuses that same literal. What that buys
+    is bounded, and `why.md` says so: it removes the cwd-DRIFT failure mode. A
+    nonexistent root, or one with no `claude_docs/`, now fails loudly because `>>`
+    cannot create a missing parent; an existing but WRONG absolute root containing
+    `claude_docs/` can still misfile silently, so correctness still depends on
+    substituting the resolved directory that holds `.rawgentic_workspace.json`.
 
     Editing note: `_registry_blocks` reads the skill CORPUS, so a FENCED
     counter-example anywhere in `references/*.md` would be selected and fail this
