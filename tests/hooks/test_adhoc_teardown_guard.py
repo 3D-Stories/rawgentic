@@ -446,3 +446,45 @@ class TestThreeGuardStates:
         out = ll.perform_handoff(**_teardown(r, read_text=unreadable))
         assert out["ok"] is False
         assert not _closed(r, "w1:p1")
+
+
+# ---------------------------------------------------------------------------
+# #880 AC-D(iii) — the STILL-ARMED wording asserts only what was checked
+# ---------------------------------------------------------------------------
+
+SATISFIED_ROW = json.dumps({"attachment": {"type": "goal_status", "met": True,
+                                           "reason": "satisfied",
+                                           "condition": PRED_CONDITION}})
+
+
+class TestStillArmedAccuracy:
+    def test_no_teardown_with_a_retired_goal_does_not_claim_armed(self) -> None:
+        """Predecessor transcript available and its newest state is the
+        satisfied evaluation — the guard note must not assert STILL ARMED
+        (the #880 false alarm sent the owner to fix a non-problem)."""
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, teardown=False, predecessor_session=PRED_SESSION,
+            read_text=PredState(r, history=[ARMED_ROW, SATISFIED_ROW])))
+        assert out["ok"] is True
+        guard = out["predecessor_guard"]
+        assert guard and "STILL ARMED" not in guard
+        assert "NO live goal" in guard
+
+    def test_no_teardown_with_an_armed_goal_still_says_so(self) -> None:
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, teardown=False, predecessor_session=PRED_SESSION,
+            read_text=PredState(r, history=[ARMED_ROW])))
+        assert out["ok"] is True
+        assert "STILL ARMED" in out["predecessor_guard"]
+
+    def test_no_teardown_without_transcript_uses_conditional_wording(self) -> None:
+        """No predecessor_session (the CLI --no-teardown shape): the message
+        must not ASSERT armedness it never checked."""
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(r, teardown=False))
+        guard = out["predecessor_guard"]
+        assert guard and "MAY still" in guard
+        assert "is STILL ARMED" not in guard
+        assert "/goal clear" in guard

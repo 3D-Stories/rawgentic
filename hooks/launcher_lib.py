@@ -903,8 +903,9 @@ def _corroborates(row: dict, cond, last: dict | None) -> bool:
     True only when every one of these holds, which is what keeps both #758 forgery directions
     dead while unblocking the ordinary post-evaluation teardown:
 
-    - `met` is literally `False` — so a sentinel-less `met: true` can still never spoof "already
-      cleared" (`test_a_forged_sentinelless_clear_cannot_spoof_already_cleared`).
+    - `met` is literally `False` — a sentinel-less `met: true` is NOT corroboration; since #880
+      it is handled by the separate `_retires` predicate below, whose own preconditions keep the
+      forgery directions dead (`test_a_sentinelless_met_true_after_a_trusted_arm_retires_the_goal`).
     - the condition is a non-blank string AND **byte-equal to the condition of the last row we
       already trust** — so a sentinel-less row can never inject a goal of its own choosing
       (`test_a_forged_sentinelless_unmet_row_cannot_inject_a_phantom_goal`, where no trusted row
@@ -917,6 +918,36 @@ def _corroborates(row: dict, cond, last: dict | None) -> bool:
     fixed at the source from here.
     """
     return (row.get("met") is False
+            and isinstance(cond, str) and bool(cond.strip())
+            and last is not None and cond == last.get("condition"))
+
+
+def _retires(row: dict, cond, last: dict | None) -> bool:
+    """#880 Defect D (owner decision 2026-08-04, narrow accept) — is this
+    sentinel-less row the Stop hook's SATISFIED evaluation of the goal we
+    already trust?
+
+    When a goal is MET the harness auto-clears it and the `met: true`
+    evaluation row IS the record of that retirement — no separate clear row is
+    ever written (sessions f5411321 / 160a9114: two goal rows total, arm +
+    met:true evaluation). Before this predicate, strict mode refused that
+    state, so the retire path was permanently unavailable after ANY successful
+    run, and the refusal's own REMEDY (/goal clear) was a no-op on the gone
+    goal (measured: two retries, byte-identical refusal).
+
+    Why this opens no forgery direction (#758 posture, owner-ratified over
+    four review rounds): the `sentinel` field is NOT an authentication token —
+    any writer able to place top-level transcript rows can already set
+    `sentinel: true` and be fully trusted today. The real provenance boundary
+    is top-level `attachment` position (nested rows in user/tool content are
+    never read by this reader), which is unchanged. On top of that this
+    predicate requires a prior genuinely-TRUSTED row to have established the
+    exact condition, byte-equal — so an accepted row can never introduce a
+    condition of its own, and every chain stays anchored to the last trusted
+    condition. A different condition, a blank condition, no prior trusted row,
+    and torn tails all still refuse.
+    """
+    return (row.get("met") is True
             and isinstance(cond, str) and bool(cond.strip())
             and last is not None and cond == last.get("condition"))
 
@@ -985,6 +1016,12 @@ def live_owner_goal(transcript_text: str, *, strict: bool = False) -> str | None
             # the goal stays live). Deliberately does NOT clear `suspicious`: corroboration is
             # neutral, so a torn line earlier in the tail still refuses.
             pass
+        elif _retires(row, cond, last):
+            # #880 — the SATISFIED evaluation (see _retires's contract). Setting `last` is what
+            # flips the final verdict to "no live goal": the verdict logic below is unchanged.
+            # Like corroboration, this does NOT clear `suspicious` — a torn line earlier in the
+            # tail still refuses.
+            last = row
         else:
             suspicious = "a trusted-origin goal_status row that fails validation"
     if strict and suspicious is not None:
@@ -997,9 +1034,12 @@ def live_owner_goal(transcript_text: str, *, strict: bool = False) -> str | None
             "no longer reaches here, so this refusal now means the tail is genuinely "
             "unreadable: a torn write, a malformed 'met', or a row proposing a DIFFERENT "
             "condition. Inspect the last few goal_status lines of this transcript before "
-            "assuming otherwise. Running '/goal clear' in this pane and retrying appends a "
-            "trusted row and lets teardown proceed; to hand off WITHOUT retiring this pane, "
-            "re-run with '--no-teardown' and relay the manual retirement steps yourself")
+            "assuming otherwise. REMEDY, conditional (#880): if a goal is still armed in this "
+            "pane, running '/goal clear' and retrying appends a trusted row and lets teardown "
+            "proceed — but if '/goal clear' reports no goal is set, it writes NOTHING this "
+            "validator reads, so do not retry in a loop; inspect the transcript tail by hand "
+            "or hand off WITHOUT retiring this pane by re-running with '--no-teardown' and "
+            "relaying the manual retirement steps yourself")
     if last is None or last.get("met") is not False:
         return None
     return last["condition"]
@@ -2110,10 +2150,36 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     elif not teardown:
         # #700 field defect 3, and the one that actually bit: the default path left the guard armed
         # and said NOTHING, so the owner met a pane that looped its Stop hook with no idea why.
-        out["predecessor_guard"] = (
-            f"the predecessor pane {anchor_pane} is still running and its /goal is STILL ARMED — "
-            f"it will keep re-prompting itself at every Stop until you run {_CLEAR_COMMAND!r} in "
-            "it. That is deliberate (teardown is opt-in), but it is not automatic")
+        # #880 AC-D(iii): assert armedness only where it was actually checked. When the
+        # predecessor's transcript is available, read it (lenient, advisory — never raises);
+        # a retired/absent goal must not be reported "STILL ARMED" (a false alarm sent the
+        # owner to fix a non-problem). Where no transcript exists (the CLI --no-teardown path
+        # passes no predecessor_session), the wording is conditional, never assertive.
+        armed_hint: bool | None = None
+        if predecessor_session is not None:
+            try:
+                pred_text = read_text(
+                    os.path.join(transcript_dir, f"{predecessor_session}.jsonl"))
+                armed_hint = live_owner_goal(pred_text) is not None
+            except (OSError, UnicodeDecodeError, TypeError, ValueError):
+                armed_hint = None
+        if armed_hint is False:
+            out["predecessor_guard"] = (
+                f"the predecessor pane {anchor_pane} is still running; its transcript shows NO "
+                f"live goal (#880), so it will not re-prompt itself — nothing for "
+                f"{_CLEAR_COMMAND!r} to clear. Close the pane whenever you are done with it")
+        elif armed_hint is True:
+            out["predecessor_guard"] = (
+                f"the predecessor pane {anchor_pane} is still running and its /goal is STILL "
+                f"ARMED — it will keep re-prompting itself at every Stop until you run "
+                f"{_CLEAR_COMMAND!r} in it. That is deliberate (teardown is opt-in), but it is "
+                "not automatic")
+        else:
+            out["predecessor_guard"] = (
+                f"the predecessor pane {anchor_pane} is still running and its /goal MAY still "
+                f"be armed (this path has no transcript to check) — if it is, it will keep "
+                f"re-prompting itself at every Stop until you run {_CLEAR_COMMAND!r} in it. "
+                "That is deliberate (teardown is opt-in), but it is not automatic")
     out["ok"] = True
     return out
 
