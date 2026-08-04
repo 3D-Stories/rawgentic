@@ -441,13 +441,18 @@ CLOSING_KEYWORDS: Final[tuple[str, ...]] = (
 #      the trustworthy one;
 #   3. the inverse trap is real — a closing keyword in backticks makes an
 #      INTENDED closure silently NOT fire, so flagging it helps either way.
+# `[ \t]*(?::[ \t]*)?` rather than `[ \t]*:?[ \t]*`: the latter puts two unbounded
+# quantifiers around an optional, so a long horizontal-whitespace run that fails to
+# match afterwards is re-split O(k) ways per start position. Polynomial, not
+# exponential — no nested quantifier over a quantified group, so never a ReDoS —
+# but the ambiguity is free to remove (Step 8a inline finding B).
 _CLOSING_REF_RE = re.compile(
     r"\b(?P<kw>close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b"
-    r"[ \t]*:?[ \t]*"
+    r"[ \t]*(?::[ \t]*)?"
     r"(?:\r?\n[ \t]*)?"
     r"(?:"
-    r"https?://github\.com/[\w.-]+/[\w.-]+/issues/(?P<url>\d+)"
-    r"|(?:[\w.-]+/[\w.-]+)?\#(?P<hash>\d+)"
+    r"https?://github\.com/(?P<urlrepo>[\w.-]+/[\w.-]+)/issues/(?P<url>\d+)"
+    r"|(?:(?P<hashrepo>[\w.-]+/[\w.-]+))?\#(?P<hash>\d+)"
     r"|GH-(?P<gh>\d+)"
     r")",
     re.IGNORECASE,
@@ -461,6 +466,7 @@ class ClosingRef:
     issue: int        # the referenced issue number
     line: int         # 1-indexed line the match starts on
     text: str         # the matched substring, whitespace-normalized
+    repo: str | None = None   # "owner/name" when the ref is REPO-QUALIFIED, else None
 
 
 def find_closing_refs(text: str) -> tuple[ClosingRef, ...]:
@@ -481,11 +487,13 @@ def find_closing_refs(text: str) -> tuple[ClosingRef, ...]:
         num = m.group("hash") or m.group("url") or m.group("gh")
         if num is None:            # pragma: no cover - alternation guarantees one
             continue
+        repo = m.group("hashrepo") or m.group("urlrepo")
         hits.append(ClosingRef(
             keyword=m.group("kw").lower(),
             issue=int(num),
             line=text.count("\n", 0, m.start()) + 1,
             text=" ".join(m.group(0).split()),
+            repo=repo.lower() if repo else None,
         ))
     return tuple(hits)
 
@@ -501,22 +509,52 @@ def assert_pr_body_closing_refs(
     is flagged — the fail-closed default, since a caller that forgets to declare
     its intent gets asked rather than waved through.
 
-    Returns (ok, errors). Each error names the offending issue and the
+    A `--closes N` declaration is UNQUALIFIED and therefore authorizes the CURRENT
+    repository only. A repo-qualified reference (`owner/name#N` or a full issues
+    URL) is never covered by a bare number, so declaring local #901 cannot
+    authorize closing `other/repo#901` — they are different issues that happen to
+    share an integer. Qualified references always flag; a self-referential URL to
+    this same repo therefore flags too, which is a deliberate false positive in the
+    fail-toward-asking direction (a future `--closes owner/name#N` syntax could
+    narrow it).
+
+    Fail-CLOSED on input it cannot evaluate: a non-string or blank `pr_body`, and a
+    non-integer `intended_closes` entry, are caller errors reported as errors — not
+    a vacuous `(True, [])`. The permissive empty-input behaviour lives one level
+    down in `find_closing_refs`, which is a scanner, not a gate.
+
+    Returns (ok, errors). A reference error names the offending issue and the
     replacement phrasing, and never names the intended issues (an error message
     that echoed them would be confusing when only one of several refs is wrong).
     """
-    body = pr_body if isinstance(pr_body, str) else ""
-    intended = {int(i) for i in intended_closes}
     errors: list[str] = []
-    for hit in find_closing_refs(body):
-        if hit.issue in intended:
+    intended: set[int] = set()
+    for raw in intended_closes:
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            errors.append(
+                f"intended_closes entry {raw!r} is not an integer issue number")
             continue
+        intended.add(raw)
+    if not isinstance(pr_body, str) or not pr_body.strip():
+        errors.append(
+            "pr_body is empty or not a string — that is a caller error, not a PR "
+            "body with no closing keywords; refusing rather than passing vacuously")
+        return (False, errors)
+    for hit in find_closing_refs(pr_body):
+        if hit.repo is None and hit.issue in intended:
+            continue
+        where = f"{hit.repo}#{hit.issue}" if hit.repo else f"#{hit.issue}"
+        qualified = (
+            f" It is repo-qualified, so an unqualified --closes declaration cannot "
+            f"authorize it — {hit.repo}#{hit.issue} is a different issue from "
+            f"#{hit.issue} in this repo." if hit.repo else ""
+        )
         errors.append(
             f"line {hit.line}: {hit.text!r} puts the closing keyword "
-            f"{hit.keyword!r} next to #{hit.issue}, which this PR does not "
-            f"declare it closes — GitHub closes #{hit.issue} on merge even when "
-            f"the sentence negates it. Write 'leaves #{hit.issue} open' instead, "
-            f"or declare the closure."
+            f"{hit.keyword!r} next to {where}, which this PR does not "
+            f"declare it closes — GitHub shuts {where} on merge even when "
+            f"the sentence negates it.{qualified} Write 'leaves {where} open' "
+            f"instead, or declare the closure."
         )
     return (len(errors) == 0, errors)
 
@@ -3172,6 +3210,16 @@ def _cmd_check_pr_refs(args) -> int:
     - **Omitting ``--closes`` means "this PR closes nothing"**, so every closing
       ref flags. A caller that forgets to declare its intent gets ASKED, never
       waved through.
+    - **Invalid UTF-8 is rc 2, not a traceback.** ``UnicodeDecodeError`` is a
+      ``ValueError``, NOT an ``OSError``, so catching only ``OSError`` let corrupt
+      input escape as an uncaught traceback whose process rc 1 is indistinguishable
+      from "the gate found something" (Step 8a cross-model finding 4).
+
+    ``--commit-range`` extends the scan to the commit MESSAGES that will enter the
+    PR. GitHub parses closing keywords there too, so a body-only check left a real
+    fail-open: the prose says the rule binds commits, and without this the command
+    returned rc 0 while a commit still closed the issue on merge (Step 8a
+    cross-model finding 1).
     """
     root = os.path.realpath(args.project_root)
     if not _contained(args.pr_body_file, root):
@@ -3181,7 +3229,7 @@ def _cmd_check_pr_refs(args) -> int:
     try:
         with open(args.pr_body_file, encoding="utf-8") as fh:
             body = fh.read()
-    except OSError as e:
+    except (OSError, UnicodeError) as e:
         sys.stderr.write(
             f"check-pr-refs: cannot read --pr-body-file {args.pr_body_file!r}: {e}\n")
         return 2
@@ -3192,13 +3240,42 @@ def _cmd_check_pr_refs(args) -> int:
             "closing keywords; passing here would satisfy the gate vacuously\n")
         return 2
     intended = frozenset(args.closes or ())
-    ok, errors = assert_pr_body_closing_refs(body, intended)
-    if ok:
+    sources: list[tuple[str, str]] = [("PR body", body)]
+    if args.commit_range:
+        if args.commit_range.startswith("-"):
+            sys.stderr.write("check-pr-refs: REFUSED — --commit-range may not start "
+                             "with '-' (it would be read as a git option)\n")
+            return 2
+        try:
+            proc = subprocess.run(
+                ["git", "log", "--format=%H%x1f%B%x1e", args.commit_range],
+                cwd=root, capture_output=True, text=True, timeout=30, check=False)
+        except (OSError, subprocess.SubprocessError) as e:
+            sys.stderr.write(f"check-pr-refs: git log failed for --commit-range "
+                             f"{args.commit_range!r}: {e}\n")
+            return 2
+        if proc.returncode != 0:
+            sys.stderr.write(
+                f"check-pr-refs: REFUSED — git log rejected --commit-range "
+                f"{args.commit_range!r}: {proc.stderr.strip()}\n")
+            return 2
+        for record in proc.stdout.split("\x1e"):
+            if "\x1f" not in record:
+                continue
+            sha, msg = record.split("\x1f", 1)
+            if msg.strip():
+                sources.append((f"commit {sha.strip()[:8]}", msg))
+    errors: list[str] = []
+    for label, text in sources:
+        ok, errs = assert_pr_body_closing_refs(text, intended)
+        if not ok:
+            errors.extend(f"{label}: {e}" for e in errs)
+    if not errors:
         return 0
     declared = ", ".join(f"#{n}" for n in sorted(intended)) or "(none declared)"
     sys.stdout.write(
-        f"check-pr-refs: {len(errors)} unintended closing reference(s); "
-        f"this PR declares it closes {declared}\n")
+        f"check-pr-refs: {len(errors)} unintended closing reference(s) across "
+        f"{len(sources)} source(s); this PR declares it closes {declared}\n")
     for e in errors:
         sys.stdout.write(f"  - {e}\n")
     return 1
@@ -3264,8 +3341,12 @@ def main(argv: list[str] | None = None) -> int:
     k.add_argument("--pr-body-file", required=True, dest="pr_body_file",
                    help="the DRAFTED PR body, checked before `gh pr create`")
     k.add_argument("--closes", type=int, action="append", default=None,
-                   help="an issue this PR legitimately closes; repeatable. "
-                        "Omit for a `Part of` PR that closes nothing")
+                   help="an issue THIS repo's PR legitimately closes; repeatable. "
+                        "Omit for a `Part of` PR that closes nothing. Unqualified: "
+                        "it never authorizes a repo-qualified owner/name#N ref")
+    k.add_argument("--commit-range", dest="commit_range", default=None,
+                   help="also scan commit MESSAGES in this range (e.g. "
+                        "origin/main..HEAD) — GitHub parses closing keywords there too")
     k.add_argument("--project-root", default=".", dest="project_root",
                    help="--pr-body-file must resolve inside this root")
     k.set_defaults(func=_cmd_check_pr_refs)

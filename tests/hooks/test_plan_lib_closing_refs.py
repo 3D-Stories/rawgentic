@@ -222,3 +222,214 @@ def test_cli_rc2_on_non_numeric_closes(tmp_path):
     r = _run(["check-pr-refs", "--pr-body-file", body,
               "--closes", "nine-oh-one", "--project-root", str(tmp_path)])
     assert r.returncode == 2
+
+
+# --- Step 8a fix round: cross-model findings 1-4 + inline findings A/B, and
+#     the tests finding 5 asked for (its claim was refuted, but the pins make
+#     `_contained`'s contract verifiable rather than assumed). ---
+
+def test_qualified_ref_records_its_repo():
+    (hit,) = plan_lib.find_closing_refs("closes owner/other-repo#901")
+    assert hit.repo == "owner/other-repo"
+    assert hit.issue == 901
+
+
+def test_unqualified_ref_has_no_repo():
+    (hit,) = plan_lib.find_closing_refs("closes #901")
+    assert hit.repo is None
+
+
+def test_url_ref_records_its_repo():
+    (hit,) = plan_lib.find_closing_refs(
+        "closes https://github.com/3D-Stories/rawgentic/issues/901")
+    assert hit.repo == "3d-stories/rawgentic"
+
+
+def test_local_declaration_does_not_authorize_a_cross_repo_ref():
+    """Cross-model finding 2: declaring local #901 must NOT authorize
+    other/repo#901 — same integer, different issue."""
+    ok, errors = plan_lib.assert_pr_body_closing_refs(
+        "## Summary\nA fix.\n\nCloses #901\n\nAlso closes other/repo#901\n",
+        frozenset({901}))
+    assert ok is False
+    assert len(errors) == 1
+    assert "other/repo#901" in errors[0]
+    assert "repo-qualified" in errors[0]
+
+
+def test_non_string_body_fails_closed():
+    """Cross-model finding 3: the public function must not pass input it
+    cannot evaluate."""
+    for bad in (None, 123, b"Closes #1", ["Closes #1"]):
+        ok, errors = plan_lib.assert_pr_body_closing_refs(bad, frozenset())
+        assert ok is False, f"{bad!r} must not pass"
+        assert any("caller error" in e for e in errors)
+
+
+def test_blank_body_fails_closed_in_the_pure_function():
+    for blank in ("", "   ", "\n\t\n"):
+        ok, errors = plan_lib.assert_pr_body_closing_refs(blank, frozenset())
+        assert ok is False
+        assert errors
+
+
+def test_scanner_stays_permissive_on_empty_input():
+    """The gate fail-closes; the SCANNER one level down stays permissive."""
+    assert plan_lib.find_closing_refs("") == ()
+    assert plan_lib.find_closing_refs(None) == ()
+
+
+def test_non_integer_intended_closes_is_a_caller_error():
+    """Inline finding A: a bad declaration must be reported, not raise."""
+    ok, errors = plan_lib.assert_pr_body_closing_refs(
+        "Closes #901\n", frozenset({"901"}))
+    assert ok is False
+    assert any("not an integer" in e for e in errors)
+
+
+def test_booleans_are_rejected_as_intended_closes():
+    ok, errors = plan_lib.assert_pr_body_closing_refs(
+        "Closes #1\n", frozenset({True}))
+    assert ok is False
+    assert any("not an integer" in e for e in errors)
+
+
+def test_cli_rc2_on_invalid_utf8_body(tmp_path):
+    """Cross-model finding 4: UnicodeDecodeError is a ValueError, not an
+    OSError, so it escaped as a traceback whose rc 1 was indistinguishable
+    from a real gate finding."""
+    p = tmp_path / "bad-bytes.md"
+    p.write_bytes(b"Closes #1\n\xff\xfe invalid utf-8 \x80\n")
+    r = _run(["check-pr-refs", "--pr-body-file", str(p),
+              "--project-root", str(tmp_path)])
+    assert r.returncode == 2, f"rc={r.returncode} stdout={r.stdout}"
+    assert "Traceback" not in r.stderr
+    assert "cannot read" in r.stderr
+
+
+# --- _contained contract (finding 5 asked for these; the claim itself was
+#     refuted by reading the helper — realpath on BOTH sides plus a
+#     component-aware `root + os.sep` compare). ---
+
+def test_contained_rejects_a_symlink_escaping_the_root(tmp_path):
+    outside = tmp_path / "outside.md"
+    outside.write_text("Closes #1", encoding="utf-8")
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "sneaky.md").symlink_to(outside)
+    assert plan_lib._contained(str(root / "sneaky.md"), str(root)) is False
+
+
+def test_contained_rejects_dotdot_traversal(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    (tmp_path / "outside.md").write_text("x", encoding="utf-8")
+    assert plan_lib._contained(str(root / ".." / "outside.md"), str(root)) is False
+
+
+def test_contained_rejects_a_sibling_with_the_root_as_a_string_prefix(tmp_path):
+    """`/x/root-evil` must not count as inside `/x/root` — the compare is
+    component-aware, not a bare startswith."""
+    root = tmp_path / "root"
+    root.mkdir()
+    evil = tmp_path / "root-evil"
+    evil.mkdir()
+    (evil / "x.md").write_text("x", encoding="utf-8")
+    assert plan_lib._contained(str(evil / "x.md"), str(root)) is False
+
+
+def test_contained_accepts_a_plain_inside_path(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    inside = root / "ok.md"
+    inside.write_text("ok", encoding="utf-8")
+    assert plan_lib._contained(str(inside), str(root)) is True
+
+
+def test_cli_rc2_when_a_symlink_inside_root_escapes(tmp_path):
+    outside = tmp_path / "outside.md"
+    outside.write_text("Closes #1\n", encoding="utf-8")
+    root = tmp_path / "root"
+    root.mkdir()
+    link = root / "sneaky.md"
+    link.symlink_to(outside)
+    r = _run(["check-pr-refs", "--pr-body-file", str(link),
+              "--project-root", str(root)])
+    assert r.returncode == 2
+    assert "REFUSED" in r.stderr
+
+
+# --- --commit-range: GitHub parses closing keywords in commit messages too
+#     (cross-model finding 1: a body-only check was a real fail-open). ---
+
+def _git_repo(tmp_path, messages):
+    """A throwaway repo with one commit per message, returning (root, range)."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    def git(*a):
+        return subprocess.run(["git", *a], cwd=str(root), capture_output=True,
+                              text=True, timeout=30, check=True)
+    git("init", "-q")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "T")
+    git("commit", "-q", "--allow-empty", "-m", "base")
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(root),
+                          capture_output=True, text=True, check=True).stdout.strip()
+    for i, m in enumerate(messages):
+        (root / f"f{i}.txt").write_text(str(i), encoding="utf-8")
+        git("add", f"f{i}.txt")
+        git("commit", "-q", "-m", m)
+    return root, f"{base}..HEAD"
+
+
+def test_commit_range_flags_a_negated_close_in_a_commit_message(tmp_path):
+    """Body is clean; a COMMIT says it does not close #N. Must be rc 1."""
+    root, rng = _git_repo(tmp_path, ["fix: a thing\n\nthis PR does not close #874\n"])
+    body = _body(root, "## Summary\nA change.\n\nPart of #875\n")
+    r = _run(["check-pr-refs", "--pr-body-file", body,
+              "--commit-range", rng, "--project-root", str(root)])
+    assert r.returncode == 1, f"rc={r.returncode} stdout={r.stdout} stderr={r.stderr}"
+    assert "874" in r.stdout
+    assert "commit" in r.stdout
+
+
+def test_commit_range_passes_when_every_message_is_clean(tmp_path):
+    root, rng = _git_repo(tmp_path, ["fix: a thing\n\nPart of #875\n",
+                                     "docs: notes\n\nRefs #875\n"])
+    body = _body(root, "## Summary\nA change.\n\nPart of #875\n")
+    r = _run(["check-pr-refs", "--pr-body-file", body,
+              "--commit-range", rng, "--project-root", str(root)])
+    assert r.returncode == 0, f"stdout={r.stdout} stderr={r.stderr}"
+
+
+def test_commit_range_honours_the_closes_declaration(tmp_path):
+    root, rng = _git_repo(tmp_path, ["fix: a thing (closes #901)\n"])
+    body = _body(root, "## Summary\nA fix.\n\nCloses #901\n")
+    r = _run(["check-pr-refs", "--pr-body-file", body, "--closes", "901",
+              "--commit-range", rng, "--project-root", str(root)])
+    assert r.returncode == 0, f"stdout={r.stdout} stderr={r.stderr}"
+
+
+def test_commit_range_rejects_a_leading_dash(tmp_path):
+    """A range starting with '-' would be read by git as an option.
+
+    The `--opt=value` form is required to reach the in-code guard: given
+    `--commit-range --all`, argparse itself refuses first ("expected one
+    argument") and also exits 2, so that spelling proves nothing about this
+    guard. Both layers refuse; this pins the inner one.
+    """
+    body = _body(tmp_path, "Part of #875\n")
+    r = _run(["check-pr-refs", "--pr-body-file", body,
+              "--commit-range=--all", "--project-root", str(tmp_path)])
+    assert r.returncode == 2
+    assert "REFUSED" in r.stderr
+    assert "git option" in r.stderr
+
+
+def test_commit_range_rc2_on_an_unresolvable_range(tmp_path):
+    root, _ = _git_repo(tmp_path, ["fix: a thing\n"])
+    body = _body(root, "Part of #875\n")
+    r = _run(["check-pr-refs", "--pr-body-file", body,
+              "--commit-range", "deadbeef1234..HEAD", "--project-root", str(root)])
+    assert r.returncode == 2, f"rc={r.returncode} stdout={r.stdout}"
+    assert "REFUSED" in r.stderr
