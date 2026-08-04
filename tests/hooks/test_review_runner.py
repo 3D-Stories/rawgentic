@@ -82,6 +82,10 @@ if [ -n "$CODEX_STUB_FAIL_FIRST" ] && [ "$n" = "1" ]; then
   printf '%s\n' "$CODEX_STUB_FAIL_FIRST_STDERR" >&2
   exit "${CODEX_STUB_FAIL_FIRST_RC:-1}"
 fi
+if [ -n "$CODEX_STUB_FAIL_SECOND" ] && [ "$n" = "2" ]; then
+  printf '%s\n' "$CODEX_STUB_FAIL_SECOND_STDERR" >&2
+  exit "${CODEX_STUB_FAIL_SECOND_RC:-1}"
+fi
 if [ -n "$CODEX_STUB_STDERR" ]; then printf '%s\n' "$CODEX_STUB_STDERR" >&2; fi
 if [ -n "$CODEX_STUB_STDOUT" ]; then printf '%s\n' "$CODEX_STUB_STDOUT"; fi
 rc="${CODEX_STUB_RC:-0}"
@@ -547,6 +551,59 @@ class TestNumericConfidence:
         r = _result(project)
         assert r["confidence_mapped"] is False
         assert r["findings"][0]["confidence_source"] == "native"
+
+    # --- 8a F1 (#902): the confidence re-roll must never lose the held result.
+    # The first valid mapped parse is retained; the retry replaces it ONLY when
+    # it is itself valid, fully native, and non-empty. Any other retry outcome
+    # (empty, invalid, transport-failed) falls back to the held mapped result —
+    # a review already validly in hand never turns into a failure or an
+    # empty pass because its polish re-roll went sideways.
+
+    def test_word_retry_returning_empty_findings_keeps_held_result(self, stub, project):
+        stub.env["CODEX_STUB_BODY_FIRST"] = WORD_BODY
+        stub.env["CODEX_STUB_BODY"] = json.dumps({"summary": "nothing", "findings": []})
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert stub.calls == 2
+        r = _result(project)
+        assert r["status"] == "success"
+        assert r["confidence_mapped"] is True
+        assert len(r["findings"]) == 1  # the held finding survives the empty re-roll
+        assert r["findings"][0]["confidence"] == 0.9
+        assert r["findings"][0]["confidence_source"] == "mapped"
+
+    def test_word_retry_returning_garbage_keeps_held_result(self, stub, project):
+        stub.env["CODEX_STUB_BODY_FIRST"] = WORD_BODY
+        stub.env["CODEX_STUB_BODY"] = '{"summary": "trunca'
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert stub.calls == 2  # no truncation retry spent on the re-roll
+        r = _result(project)
+        assert r["status"] == "success"
+        assert r["confidence_mapped"] is True
+        assert len(r["findings"]) == 1
+
+    def test_word_retry_transport_failure_keeps_held_result(self, stub, project):
+        # Stub counts calls; make the SECOND call fail at transport.
+        stub.env["CODEX_STUB_BODY_FIRST"] = WORD_BODY
+        stub.env["CODEX_STUB_FAIL_SECOND"] = "1"
+        stub.env["CODEX_STUB_FAIL_SECOND_STDERR"] = "connection reset by peer"
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert stub.calls == 2  # no transport retry spent on the re-roll
+        r = _result(project)
+        assert r["status"] == "success"
+        assert r["confidence_mapped"] is True
+        assert len(r["findings"]) == 1
+
+    def test_retry_diagnostic_names_non_native_confidence(self, stub, project):
+        # 8a F3: numeric strings route here too — the diagnostic must not
+        # claim "word-form".
+        stub.env["CODEX_STUB_BODY"] = WORD_BODY
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert "non-native confidence" in result.stderr
+        assert "word-form confidence" not in result.stderr
 
     def test_garbage_confidence_refuses_invalid_output(self, stub, project):
         stub.env["CODEX_STUB_BODY"] = GARBAGE_CONF_BODY
