@@ -98,6 +98,13 @@ def test_bind_append_target_is_absolute():
     Both skills already interpolate the absolute workspace root as a printf argument
     for the JSON `cwd` field, so the target reuses that same literal. A wrong root is
     then visible in the registry line itself instead of misfiling in silence.
+
+    Editing note: `_registry_blocks` reads the skill CORPUS, so a FENCED
+    counter-example anywhere in `references/*.md` would be selected and fail this
+    guard on its own documentation. `why.md` therefore keeps the bad form in prose,
+    unfenced, on purpose. Scope: `>>` only — a truncating single `>` is a different
+    defect and is not an append, so it is deliberately out of this guard's name and
+    remit.
     """
     for skill in BIND_SKILLS:
         for block in _registry_blocks(skill):
