@@ -51,6 +51,8 @@ def _step_section(skill_text: str, step_number: str) -> str:
 # helpers themselves survive until M0d (see _M0D_PENDING_UNREFERENCED below).
 EXPECTED_REFERENCES = {
     "parse_tasks": ["5"],
+    "append_review_log": ["8"],
+    "assert_review_coverage": ["9"],
     "should_promote": ["8"],
     "format_promotion_note": ["8"],
     "scan_prior_commits_for_trigger": ["8"],
@@ -140,7 +142,9 @@ def test_risk_criteria_canonical_strings_appear_in_docs():
 # pointer — this set is a scheduled deletion list, not a parking lot.
 _M0D_PENDING_UNREFERENCED = {
     "compute_risk_ratio", "check_ratio_band", "validate_parallel_groups",
-    "append_review_log", "read_review_log", "assert_review_coverage",
+    # append_review_log / assert_review_coverage re-wired by #880 (Step 8a/9);
+    # read_review_log stays pending: its Step 11 wiring is prose-implicit only.
+    "read_review_log",
     "write_review_state", "read_review_state", "review_state_path",
     "estimate_agents", "parse_feasibility_block", "assert_feasibility_declared",
 }

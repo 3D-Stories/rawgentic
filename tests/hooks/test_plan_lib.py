@@ -573,12 +573,14 @@ class TestReviewLog:
         assert ok is False
 
     def test_assert_coverage_missing_log_file(self, tmp_path):
+        """#880 Defect A(iv): a missing log with a high-risk task RAISES
+        (fail-closed) — the old (False, [...]) return was indistinguishable
+        from an ordinary uncovered task, hiding a wrong path."""
         mod = _reload_plan_lib()
         log = tmp_path / "noexist.jsonl"
         plan_tasks = [_t("1", "high", "x")]
-        ok, missing = mod.assert_review_coverage(str(log), plan_tasks, {"1": "a1"})
-        assert ok is False
-        assert len(missing) == 1
+        with pytest.raises(mod.ReviewLogError):
+            mod.assert_review_coverage(str(log), plan_tasks, {"1": "a1"})
 
 
 class TestDeferrals:
@@ -2367,3 +2369,159 @@ class TestRiskLevelContinuationBound:
         plan = "### Task 1: t\n- riskLevel: high (short)\n  more text)\n"
         tasks = mod.parse_tasks(plan)
         assert tasks[0].risk_level == "high" and tasks[0].reason == "short"
+
+
+# --- #880 Defect A: coverage gate structure (red-first) ---
+
+
+class TestReviewLogStructure:
+    """#880 Defect A: the gate distinguishes no-log / wrong-file / empty-log
+    instead of conflating them all into entries == []. Fail-mode: CLOSED."""
+
+    def _high(self):
+        return _t("1", "high", "sec")
+
+    def _std(self):
+        return _t("1", "standard")
+
+    def test_missing_log_without_high_risk_passes_with_stderr(self, tmp_path, capsys):
+        """AC-A(iv) quiet half: ok=True but NEVER silent — stderr names the path."""
+        mod = _reload_plan_lib()
+        path = str(tmp_path / "absent.jsonl")
+        ok, missing = mod.assert_review_coverage(path, [self._std()], {"1": "abc"})
+        assert ok is True and missing == []
+        assert path in capsys.readouterr().err
+
+    def test_wrong_file_raises_distinct_error(self, tmp_path):
+        """AC-A(iii): >0 non-blank lines, 0 parsed entries -> ReviewLogError —
+        the session_notes.md-as-log_path case measured on the #879 run."""
+        mod = _reload_plan_lib()
+        p = tmp_path / "notes.md"
+        p.write_text("# Session notes\n\n### WF2 Step 8a: DONE\n- prose\n")
+        with pytest.raises(mod.ReviewLogError, match="parsed"):
+            mod.assert_review_coverage(str(p), [self._std()], {"1": "abc"})
+
+    def test_wrong_file_of_unrelated_objects_raises(self, tmp_path):
+        """Gate round 3: {} and foreign dicts are malformed, not entries — a
+        wrong .jsonl (e.g. dispositions.jsonl) cannot dodge the wrong-file
+        error via mere dict-ness."""
+        mod = _reload_plan_lib()
+        p = tmp_path / "foreign.jsonl"
+        p.write_text('{}\n{"foo":"bar"}\n{"finding_key":"x","disposition":"adopted"}\n')
+        with pytest.raises(mod.ReviewLogError):
+            mod.assert_review_coverage(str(p), [self._std()], {"1": "abc"})
+
+    def test_byte_empty_log_is_ordinary_miss_not_wrong_file(self, tmp_path):
+        """An empty file is legitimate state (Step 8a not run yet): a
+        high-risk task is an ordinary coverage miss, never a wrong-file error."""
+        mod = _reload_plan_lib()
+        p = tmp_path / "review_log.jsonl"
+        p.write_text("")
+        ok, missing = mod.assert_review_coverage(str(p), [self._high()], {"1": "abc"})
+        assert ok is False and len(missing) == 1
+
+    def test_blank_lines_only_counts_as_empty(self, tmp_path):
+        """Physical-line semantics pinned: whitespace-only lines are not
+        content, so this is empty (pass for a standard task), not wrong-file."""
+        mod = _reload_plan_lib()
+        p = tmp_path / "review_log.jsonl"
+        p.write_text("\n   \n\n")
+        ok, missing = mod.assert_review_coverage(str(p), [self._std()], {"1": "abc"})
+        assert ok is True and missing == []
+
+    def test_non_dict_json_line_is_malformed_not_crash(self, tmp_path, capsys):
+        """Latent crash found during #880 Step 2: a line `123` is valid JSON
+        but not a dict; the gate died with AttributeError. Now malformed."""
+        mod = _reload_plan_lib()
+        p = tmp_path / "review_log.jsonl"
+        p.write_text('123\n{"task_id":"1","sha":"abc","verdict":"applied"}\n')
+        ok, missing = mod.assert_review_coverage(str(p), [self._high()], {"1": "abc"})
+        assert ok is True and missing == []
+        assert "malformed" in capsys.readouterr().err
+
+    def test_truncated_final_line_is_malformed_not_entry(self, tmp_path, capsys):
+        mod = _reload_plan_lib()
+        p = tmp_path / "review_log.jsonl"
+        p.write_text('{"task_id":"1","sha":"abc","verdict":"applied"}\n{"task_id":"2","sha":"de')
+        ok, _ = mod.assert_review_coverage(str(p), [self._high()], {"1": "abc"})
+        assert ok is True
+        assert "malformed" in capsys.readouterr().err
+
+    def test_dispatch_failed_is_valid_entry_but_never_coverage(self, tmp_path):
+        """Verdict qualification stated: REVIEW_DISPATCH_FAILED parses as an
+        entry (no wrong-file error) yet never covers a task."""
+        mod = _reload_plan_lib()
+        p = tmp_path / "review_log.jsonl"
+        p.write_text('{"task_id":"1","sha":"abc","verdict":"REVIEW_DISPATCH_FAILED"}\n')
+        ok, missing = mod.assert_review_coverage(str(p), [self._high()], {"1": "abc"})
+        assert ok is False and len(missing) == 1
+
+    def test_warnings_capped_with_final_count(self, tmp_path, capsys):
+        """AC-A(v): 50 corrupt {-lines warn at most the cap + one final count."""
+        mod = _reload_plan_lib()
+        p = tmp_path / "review_log.jsonl"
+        p.write_text("".join('{"broken %d\n' % i for i in range(50)))
+        with pytest.raises(mod.ReviewLogError):
+            mod.assert_review_coverage(str(p), [self._std()], {"1": "abc"})
+        err = capsys.readouterr().err
+        assert err.count("skipping malformed") <= mod._REVIEW_LOG_WARN_CAP
+        assert "50" in err
+
+    def test_prose_lines_do_not_warn_per_line(self, tmp_path, capsys):
+        """The 8,878-line flood fix: prose (no leading '{') gets no per-line
+        warning; the final count still reports it."""
+        mod = _reload_plan_lib()
+        p = tmp_path / "notes.md"
+        p.write_text("# heading\n" * 100)
+        with pytest.raises(mod.ReviewLogError):
+            mod.assert_review_coverage(str(p), [self._std()], {"1": "abc"})
+        err = capsys.readouterr().err
+        assert err.count("skipping malformed") == 0
+        assert "100" in err
+
+
+class TestAppendReviewLogCLI:
+    """#880: the sanctioned Step 8a writer — validates, then delegates to
+    append_review_log. Fail-closed at exit 2 with nothing written."""
+
+    PLAN_LIB = HOOKS_DIR / "plan_lib.py"
+
+    def _run(self, *args):
+        return subprocess.run(
+            [sys.executable, str(self.PLAN_LIB), "append-review-log", *args],
+            capture_output=True, text=True)
+
+    def test_appends_valid_entry(self, tmp_path):
+        log = tmp_path / "review_log.jsonl"
+        r = self._run("--log", str(log), "--task-id", "1", "--sha", "abc123",
+                      "--reviewers", "inline-mechanical,runner-security",
+                      "--verdict", "applied", "--findings", "0,1,2,0,1",
+                      "--project-root", str(tmp_path))
+        assert r.returncode == 0, r.stderr
+        entry = json.loads(log.read_text().strip())
+        assert entry["task_id"] == "1" and entry["sha"] == "abc123"
+        assert entry["verdict"] == "applied"
+        assert entry["findings"] == {"crit": 0, "high": 1, "med": 2, "low": 0, "dropped": 1}
+        assert entry["reviewers"] == ["inline-mechanical", "runner-security"]
+        assert "ts" in entry
+
+    def test_bad_verdict_exits_2_writes_nothing(self, tmp_path):
+        log = tmp_path / "review_log.jsonl"
+        r = self._run("--log", str(log), "--task-id", "1", "--sha", "abc",
+                      "--reviewers", "a", "--verdict", "LGTM",
+                      "--findings", "0,0,0,0,0", "--project-root", str(tmp_path))
+        assert r.returncode == 2 and not log.exists()
+
+    def test_bad_findings_arity_exits_2(self, tmp_path):
+        log = tmp_path / "review_log.jsonl"
+        r = self._run("--log", str(log), "--task-id", "1", "--sha", "abc",
+                      "--reviewers", "a", "--verdict", "applied",
+                      "--findings", "0,1,2", "--project-root", str(tmp_path))
+        assert r.returncode == 2 and not log.exists()
+
+    def test_log_outside_project_root_refused(self, tmp_path):
+        inner = tmp_path / "root"; inner.mkdir()
+        r = self._run("--log", str(tmp_path / "escape.jsonl"), "--task-id", "1",
+                      "--sha", "abc", "--reviewers", "a", "--verdict", "applied",
+                      "--findings", "0,0,0,0,0", "--project-root", str(inner))
+        assert r.returncode == 2
