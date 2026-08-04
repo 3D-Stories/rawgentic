@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>doctor-plus context-engineering audit — rawgentic context stack</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-review{background:var(--bg)}
+.tpl-review .wrap{max-width:920px;padding:0 20px 80px}
+.tpl-review header{padding:32px 0 12px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.tpl-review h1{font-size:clamp(24px,3.6vw,33px)}
+.tpl-review h2{font-size:17px;margin:2em 0 .7em}
+
+/* #76 — the reference's reading posture, not its content. An annotated diff runs a fixed mono
+   gutter down the left that the eye tracks line by line; a review is read the same way, one
+   finding at a time. So each finding gets that gutter, with its severity sitting IN it rather
+   than floating inline. This is what keeps `review` from looking like `report`, whose findings
+   have no gutter. Targets `h3` — `review` is sectioned (D70). */
+.tpl-review .rv-sev .blk-finding{display:grid;grid-template-columns:74px 1fr;gap:0 14px;
+align-items:start;padding:11px 0;border-left:2px solid var(--line);padding-left:14px}
+.tpl-review .rv-sev .blk-sev{grid-column:1;text-align:right;font-variant-numeric:tabular-nums}
+.tpl-review .rv-sev .blk-title,
+.tpl-review .rv-sev .blk-text,
+.tpl-review .rv-sev .blk-prov{grid-column:2}
+.tpl-review .rv-sev .is-critical{border-left-color:var(--sev-crit)}
+.tpl-review .rv-sev .is-high{border-left-color:var(--sev-high)}
+.tpl-review .rv-sev .is-medium{border-left-color:var(--sev-med)}
+@media(max-width:640px){.tpl-review .rv-sev .blk-finding{grid-template-columns:1fr}
+.tpl-review .rv-sev .blk-sev{text-align:left}}
+.tpl-review h1{line-height:1.2;max-width:24ch}
+.tpl-review header .eyebrow{font-size:11px;letter-spacing:.13em}
+
+.tpl-review .rv-section{margin-top:26px}
+.tpl-review .rv-hypo .blk-chip{background:none;border:1px solid var(--line);
+padding:4px 10px;font-size:11px}
+/* Finding cards — the reference's `.note`: a panel with a severity-coloured left border. The
+   shared layer draws findings as rows separated by a bottom rule; the card's `border` shorthand
+   is emitted later at equal specificity, so it replaces that separator outright and the
+   last-child case needs no rule of its own. */
+.tpl-review .rv-sev{display:grid;gap:12px;margin:18px 0}
+.tpl-review .rv-sev .blk-finding{background:var(--surface);border:1px solid var(--line);
+border-left:3px solid var(--line);border-radius:10px;padding:12px 16px}
+.tpl-review .rv-sev .is-critical{border-left-color:var(--sev-crit)}
+.tpl-review .rv-sev .is-high{border-left-color:var(--sev-high)}
+.tpl-review .rv-sev .is-medium{border-left-color:var(--sev-med)}
+.tpl-review .rv-sev .is-low{border-left-color:var(--sev-low)}
+.tpl-review .rv-sev .blk-title{font-size:15px}
+.tpl-review .rv-sev .blk-prov{margin-top:2px}
+.tpl-review .rv-weakest>.blk-callout{border-left-color:var(--sev-crit);background:var(--sev-crit-bg)}
+.tpl-review tbody tr:nth-child(even){background:var(--code)}
+.tpl-review blockquote{border-left-color:var(--accent);color:var(--ink-2)}
+/* Risk map — the reference's `.riskmap`: one row per part of the artifact, read before the
+   file-level detail. Same `findings` grammar as the cards above, so the row must be flattened
+   out of the shared two-column grid into a single line, and the four spans reordered from their
+   DOM order (severity, path, reason, counts) to OUR reading order (path, reason, pill, counts),
+   which leads with the path as the reference does. Visual only — see the docstring. The pill
+   needs no colour rule here: the shared base `.blk-sev` plus its three `.is-<level>` overrides
+   already cover it. */
+.tpl-review .rv-riskmap{display:grid;gap:8px;margin:18px 0}
+.tpl-review .rv-riskmap .blk-finding{display:flex;flex-wrap:wrap;align-items:center;
+gap:6px 14px;background:var(--surface);border:1px solid var(--line);border-radius:10px;
+padding:11px 15px}
+.tpl-review .rv-riskmap .blk-title{order:1;flex:1 1 auto;font:550 13.5px/1.5 ui-monospace,Menlo,
+Consolas,monospace;word-break:break-all}
+.tpl-review .rv-riskmap .blk-text{order:2;flex:0 1 auto;grid-column:auto;color:var(--ink-3);
+font-size:12.5px}
+.tpl-review .rv-riskmap .blk-sev{order:3;flex:0 0 auto}
+.tpl-review .rv-riskmap .blk-prov{order:4;flex:0 0 auto;grid-column:auto;margin:0}
+
+:root{--accent:#f2a65e;}
+:root[data-theme=dark]{--accent:#f2a65e;}
+:root[data-theme=light]{--accent:#a26211;}
+@media print{:root,:root[data-theme=dark]{--accent:#a26211;}}
+</style>
+</head>
+<body class="tpl-review">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-04 10:47 MDT</div>
+<h1>doctor-plus context-engineering audit — rawgentic context stack</h1>
+
+</header>
+<main>
+<p><strong>Date:</strong> 2026-08-04 · <strong>Auditor:</strong> Claude (Fable 5), following the doctor-plus skill (<a href="https://github.com/robonuggets/doctor-plus">robonuggets/doctor-plus</a>, single-commit clone, report-only) · <strong>Scope:</strong> the context a rawgentic-bound Claude Code session actually loads</p>
+<blockquote>doctor-plus audits a workspace against the 6 &quot;then &amp; now&quot; context-engineering shifts</blockquote>
+<blockquote>Anthropic published for the Claude 5 models (source: an X article by @trq212, Jul 2026 —</blockquote>
+<blockquote><strong>inferred, not fetched</strong>; the 6 principles were judged on their own merits). Part 1 runs the</blockquote>
+<blockquote>built-in <code>claude doctor</code>; Part 2 audits the principles; Part 3 reports before changing anything.</blockquote>
+<blockquote>This document is that report. <strong>Nothing has been changed.</strong></blockquote>
+<section class="rv-section"><h3>Verdict table</h3><table>
+<thead><tr><th>#</th><th>Shift (then → now)</th><th>Verdict</th><th>Worst offender</th><th>Suggested fix</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Rules → judgement</td><td><strong>FLAG (mild)</strong></td><td>ponytail session hook&#x27;s Output/Boundaries text contradicts the user tier&#x27;s voice-ownership section (incl. a stale &quot;pair with Caveman&quot; line — Caveman is disabled)</td><td>Trim the hook&#x27;s injected text to build-discipline only (C3)</td></tr>
+<tr><td>2</td><td>Examples → interfaces</td><td><strong>PASS</strong></td><td>—</td><td>—</td></tr>
+<tr><td>3</td><td>Upfront → progressive disclosure</td><td><strong>FLAG (biggest)</strong></td><td>~75.5 KB (~19k tokens) of guidance loads every session; project manual §5 (~90 lines) duplicates the quality-bar skill created 2026-07-27 <em>specifically</em> to take that content out of every-session load</td><td>Trim §5 to a pointer (C1); tier de-dup (C2); description diet (C5)</td></tr>
+<tr><td>4</td><td>Repetition → one home</td><td><strong>FLAG</strong></td><td>&quot;git reset --hard under auto-mode&quot; verbatim in two tiers; &quot;timeout ≠ failure&quot; in three; &quot;never blanket git add&quot; in four places</td><td>Delete the narrower copies that add nothing (C2)</td></tr>
+<tr><td>5</td><td>CLAUDE.md memory → auto-memory</td><td><strong>PASS</strong> (deliberate architecture)</td><td>—</td><td>minor: move decision-archaeology prose out of always-loaded tiers (noted, low priority)</td></tr>
+<tr><td>6</td><td>Simple specs → rich references</td><td><strong>PASS</strong> (best-in-class)</td><td>two skill-count strings still hand-pinned</td><td>finish the computed-guard conversion (C6)</td></tr>
+</tbody>
+</table>
+<p><strong>Part 1 (<code>claude doctor</code>):</strong> clean — native 2.1.221, no installation issues found, exit 0 (confirmed, ran 2026-08-04).</p></section>
+<section class="rv-section"><h3>Scope and method</h3><p>Audited what a rawgentic-bound session actually loads (confirmed by measurement, <code>wc</code>):</p>
+<table>
+<thead><tr><th>Layer</th><th>What</th><th>Size</th><th>Loads</th></tr></thead>
+<tbody>
+<tr><td>user tier</td><td><code>~/.claude/CLAUDE.md</code></td><td>12.5 KB / 198 lines</td><td>every session</td></tr>
+<tr><td>universal tier</td><td><code>~/.claude/operating-instructions.md</code></td><td>10.0 KB / 141 lines</td><td>every session</td></tr>
+<tr><td>tool note</td><td><code>~/.claude/RTK.md</code></td><td>1.0 KB / 29 lines</td><td>every session</td></tr>
+<tr><td>workspace tier</td><td><code>~/rawgentic/CLAUDE.md</code></td><td>23.4 KB / 317 lines</td><td>every session under the workspace</td></tr>
+<tr><td>project tier</td><td><code>projects/rawgentic/CLAUDE.md</code></td><td>27.5 KB / 393 lines</td><td>when rawgentic is bound</td></tr>
+<tr><td>memory index</td><td>auto-memory <code>MEMORY.md</code> (frozen)</td><td>1.2 KB / 15 lines</td><td>every session</td></tr>
+<tr><td><strong>total guidance</strong></td><td></td><td><strong>75.5 KB ≈ 19k tokens</strong></td><td><strong>before any work starts</strong></td></tr>
+<tr><td>skill descriptions</td><td>30 plugin-skill frontmatter descriptions</td><td>13.3 KB</td><td>every session (availability listing), plus workspace/user skill descriptions on top</td></tr>
+<tr><td>session-start hooks</td><td>ponytail full prompt, claude-reflect notice, WAL note, project list, cross-project links</td><td>~8 KB observed</td><td>every session</td></tr>
+</tbody>
+</table>
+<p>On-demand context (SKILL.md bodies, <code>references/</code>, <code>docs/*.md</code>) was sampled, not exhaustively read. Excluded per the skill: VCS internals, caches, generated output.</p>
+<p>Audit stance per the skill: judge principles, not keyword patterns; never flag safety/approval/ destructive-action rules; every finding cites the file and passage.</p>
+<hr></section>
+<section class="rv-section"><h3>Findings per shift</h3><h3>Shift 1 — judgement over rules: FLAG (mild)</h3>
+<p><strong>The one real defect is a contradiction between two always-loaded voices</strong> (the skill&#x27;s own smell: &quot;two directives that pull against each other&quot;):</p>
+<ul>
+<li>The ponytail plugin&#x27;s SessionStart hook injects its full prompt every session, including an</li>
+</ul>
+<p>  Output section (&quot;at most three short lines… if the explanation is longer than the code, delete   the explanation&quot;) and a Boundaries section saying &quot;pair with Caveman for terse prose.&quot;</p>
+<ul>
+<li>The universal tier&#x27;s voice-ownership section (owner decision 2026-07-27) says the opposite:</li>
+</ul>
+<p>  <strong>Caveman is disabled</strong>, no plugin owns voice, and &quot;Ponytail is retained for BUILD DISCIPLINE   only — it does not speak.&quot;</p>
+<ul>
+<li>The universal tier also requires substantive turns to close with fuller honest-state reporting,</li>
+</ul>
+<p>  and the user tier&#x27;s register rule requires explanatory owner-facing prose — both pull against   the hook&#x27;s compression text.</p>
+<p>Confirmed: the contradiction is visible in this session&#x27;s own startup injection vs. <code>operating-instructions.md</code> (&quot;Voice ownership&quot; section). The user tier already adjudicated this conflict — the hook text just never got trimmed to match.</p>
+<p><strong>Deliberately NOT flagged:</strong> the five-year-old register rule, AskUserQuestion-always, and the auto-mode classifier protocol. These are absolute rules about communication style — textbook &quot;then&quot; column — but each is a dated owner decision fixing a measured defect (owner confusion, missed questions, silently dropped steps), which is exactly the skill&#x27;s carve-out: constrain where a wrong call is genuinely costly. Recommend keeping them.</p>
+<h3>Shift 2 — interfaces over examples: PASS</h3>
+<p>The repo&#x27;s core pattern IS interface design: skills shell out to typed CLI subcommands (<code>python3 hooks/capabilities_lib.py derive</code>, <code>adversarial_review_lib.py is-enabled</code>, <code>work_summary.py summarize</code>) instead of teaching by worked example; constants live in one Python source of truth with drift-guard mirrors (project manual §4.21). The embedded exact commands in the switch skill (expansion-free <code>printf</code>, no <code>$(...)</code>) look like worked examples but are correctness-under-concurrency constraints — costly-wrong-call territory, not flagged.</p>
+<h3>Shift 3 — progressive disclosure: FLAG — the biggest finding</h3>
+<p><strong>~19k tokens of guidance load before any work starts.</strong> Three concrete offenders, best first:</p>
+<ol>
+<li><strong>Project manual §5 re-inlines what the workspace already split out.</strong> The workspace</li>
+</ol>
+<p>   quality-bar skill&#x27;s own header says it was &quot;split out of the workspace CLAUDE.md §5 on    2026-07-27 (harness audit F2 / doctor check 4) so it loads when a deliverable is being    finished rather than in every session&quot; (confirmed, <code>.claude/skills/quality-bar/SKILL.md</code>).    Yet <code>projects/rawgentic/CLAUDE.md</code> §5 still carries ~90 lines of the same per-deliverable    checklists (merged-ready PR, hook, skill, drift-guard test, bug fix, investigation, diagram    REV) in every rawgentic-bound session. The split was done at one tier and not the other.</p>
+<ol start="2">
+<li><strong>Closing-step detail rides in every session.</strong> The exact changelog entry shape, the diagram</li>
+</ol>
+<p>   REV recipe, and the run-record schema quirks (§2 and §4.15 of the project manual) are needed    only at the end of a WF run — and each already has an on-demand home (<code>pr-preflight</code>,    <code>rev-diagram</code>, <code>docs/run-records.md</code>).</p>
+<ol start="3">
+<li><strong>Six of the ten largest plugin skills are monoliths with zero <code>references/</code>:</strong> incident</li>
+</ol>
+<p>   (25.4 KB), adversarial-review (23.9 KB), create-issue (23.7 KB), peer-consult (17.9 KB),    pane-handoff (17.2 KB), epic-run (16.5 KB) — measured 2026-08-04. implement-feature proves    the house pattern works (43.9 KB body + 23 reference files). Caveat: this costs per    <em>invocation</em>, not per session, so it ranks below items 1–2.</p>
+<h3>Shift 4 — one home over repetition: FLAG</h3>
+<p>The tier map (&quot;Where a rule belongs&quot;, workspace manual) is an explicit, owner-adjudicated implementation of this principle — and it names the failure mode precisely: &quot;restating it in a narrower tier is how the copies drift apart and the staler one wins.&quot; Live violations of its own rule (all confirmed by grep, 2026-08-04):</p>
+<table>
+<thead><tr><th>Rule</th><th>Homes</th><th>Note</th></tr></thead>
+<tbody>
+<tr><td><code>git reset --hard</code> under auto-mode</td><td>workspace mistake #7 (<code>CLAUDE.md:258</code>) + project mistake #20 (<code>CLAUDE.md:278</code>)</td><td>near-verbatim; the workspace copy even explains it is kept at workspace level <em>because</em> the project manual may not load — making the project copy the redundant one by its own argument</td></tr>
+<tr><td>Timeout ≠ failure for mutating calls</td><td>universal (inside &quot;Know the undo&quot;) + workspace §3:234 + project §3:195</td><td>three homes, no additions in the narrowest</td></tr>
+<tr><td>Never blanket <code>git add</code></td><td>universal:54 + workspace:112 <strong>and</strong> :243 + project:88</td><td>four statements incl. twice in one file</td></tr>
+<tr><td>A finding is a hypothesis</td><td>universal:21 + workspace:207 + project mistake #9</td><td>project copy adds the vacuous-result signature — keep that half only</td></tr>
+<tr><td>Vercel design-doc mandate</td><td>user:171 + workspace:132</td><td>same decision, same date, restated; workspace copy adds the command (legitimate), user copy carries workspace mechanics</td></tr>
+<tr><td>Ponytail &quot;pair with Caveman&quot;</td><td>hook injection vs. universal voice-ownership</td><td>the drifted-copy case: one home says the other is disabled</td></tr>
+</tbody>
+</table>
+<p>Also under this shift&#x27;s &quot;simple tool descriptions&quot; half: <strong>13.3 KB of frontmatter descriptions across the 30 plugin skills</strong> load into every session. Top offenders: pane-handoff (1,323 chars), revalidate-children (1,076), adversarial-review (1,026). The repo&#x27;s own bar (§5: &quot;description = triggering symptoms not workflow summary&quot;) is not met by several — adversarial-review&#x27;s description carries backend <code>pip install</code> instructions, which is body material. (pane-handoff&#x27;s ~20 dictated trigger variants look deliberate — owner decision referenced in the description itself — keep those, cut the summary prose around them.)</p>
+<h3>Shift 5 — auto-memory over guidance-file memory: PASS (deliberate)</h3>
+<p>Memory has one authoritative home (the mempalace server; owner decision 2026-07-08, #304), and the auto-memory <code>MEMORY.md</code> is deliberately frozen as a thin pointer index (15 lines, confirmed). That is the &quot;now&quot; column implemented with a different memory system — working as designed; do not fight it. Minor note, low priority: the guidance tiers carry long decision-archaeology narratives (forensics adjudication trails, superseded-decision histories told in multiple places). The <em>rules</em> must stay in guidance; the archaeology could live in memory or reference docs.</p>
+<h3>Shift 6 — rich references over simple specs: PASS (best-in-class)</h3>
+<p>Drift-guard tests pin exact doc sentences; skill counts are computed from the tree (#271); the workflow diagram is versioned with REV entries and snapshot tests; shared prose is single-sourced in <code>shared/blocks/</code> with a sync script and a CI drift check; skills carry evals JSON. This is the strongest shift-6 posture the auditor has seen. Residual: two count strings are still hand-pinned — &quot;All 7 config-driven skills&quot; and &quot;6 workspace management&quot; (named as hand-pinned in the project manual&#x27;s own mistake #2, confirmed).</p>
+<hr></section>
+<section class="rv-section"><h3>What the changes would look like in rawgentic</h3><p>Six changes, priority order. Blast radius verified where stated.</p>
+<h3>C1 — Trim project manual §5 to a pointer (HIGH value, LOW risk)</h3>
+<p>Replace <code>projects/rawgentic/CLAUDE.md</code> §5&#x27;s ~90 inline checklist lines with the pointer the workspace tier already uses (&quot;criteria live in the quality-bar skill; pr-preflight is the runner&quot;). <strong>Pre-step:</strong> diff §5 against the quality-bar skill first — anything §5 has that the skill lacks (e.g. repo-specific hook/diagram-REV checklists) moves INTO the skill in the same change, so nothing is lost. Confirmed cheap: no test pins the manuals&#x27; prose (grep of <code>tests/</code> finds only comments and config-path uses). Ships as one <code>docs:</code> PR (precedent: <code>docs(reviews):</code> PRs carry no version bump — c2fdca33, c3baac56).</p>
+<h3>C2 — Delete the narrower duplicate copies across tiers (HIGH value, LOW risk)</h3>
+<p>Per the tier map&#x27;s own rule. Project manual: delete mistake #20 (workspace #7 owns it, by its own argument), delete the §3 timeout bullet (universal + workspace own it), thin mistake #9 to only the vacuous-result signature, thin §3 &quot;one helper&quot; to just the repo&#x27;s helper list. Workspace manual: collapse the two <code>git add</code> statements into one. User tier: cut the workspace mechanics from the Vercel block (the pointer to the tool already exists there). Note the split mechanics: the project-manual half is a PR; the user/workspace tiers are not git repos — those are direct file edits, so record them in the PR description for provenance.</p>
+<h3>C3 — Trim the ponytail hook&#x27;s injected text (MEDIUM value, owner-config change)</h3>
+<p>Remove the Output, Intensity, and Boundaries sections (including the stale Caveman line) from the injected prompt, keeping the ladder / rules / when-not-to-be-lazy build-discipline core — which is exactly the scope the 2026-07-27 voice-ownership decision already assigned it. This lives in the ponytail plugin at the user level, not in the rawgentic repo — an owner-approved config/plugin edit, not a PR here. Kills the one live contradiction found.</p>
+<h3>C4 — References/-split the six monolith skills (MEDIUM value, MEDIUM effort, later)</h3>
+<p>Move procedure detail out of the six zero-<code>references/</code> SKILL.md bodies, keep trigger + step spine inline (implement-feature is the proven pattern). Three real constraints, all from the project manual: (1) <code>${CLAUDE_PLUGIN_ROOT}</code> is NOT substituted in <code>references/*.md</code> — any command using it must stay in the SKILL.md body (#807); (2) content pins read the corpus (SKILL.md + sorted references), so content-pinned prose survives the move, but location pins break — check per skill; (3) synced shared blocks must stay in SKILL.md or the sync MANIFEST updated. One WF2-shaped PR per skill (version bump each). Payoff is per-invocation, not per-session — do the tier trims first.</p>
+<h3>C5 — Description diet (MEDIUM value, ONE PR)</h3>
+<p>Rewrite the over-limit frontmatter descriptions to triggering-symptoms-only per the repo&#x27;s own §5 bar; body absorbs the workflow summaries and install notes. Keep pane-handoff&#x27;s dictated variants. Risk: descriptions drive skill triggering — run each touched skill&#x27;s evals (<code>skills/&lt;name&gt;-workspace/evals/evals.json</code>) as the gate. One <code>chore(skills):</code> PR with a version bump (behavioral surface).</p>
+<h3>C6 — Finish the computed count guards (LOW effort, tidy)</h3>
+<p>Extend the #271 computed-guard approach to the two hand-pinned strings (&quot;All 7 config-driven skills&quot;, &quot;6 workspace management&quot;). Small <code>chore(tests):</code> PR.</p>
+<p><strong>Suggested sequence:</strong> C1+C2 together (one docs PR + two direct tier edits; removes ~150–200 always-loaded lines), then C3 (owner config), then C5, C6, and C4 last.</p></section>
+<section class="rv-section"><h3>What was NOT checked</h3><p>Other projects&#x27; manuals (chorestory, 3dstories-studio, saystory); mempalace content quality; the full bodies of all 30 plugin skills (structure + sizes measured, ~6 read); user-level and workspace-level skill description weight (listed, not measured); other session-start hooks&#x27; exact byte cost (observed qualitatively); and the source X article behind the 6 shifts (link not fetched — principles evaluated on their own merits).</p></section>
+<section class="rv-section"><h3>Provenance</h3><p>doctor-plus: github.com/robonuggets/doctor-plus, cloned 2026-08-04 (single commit <code>856d60c</code>), one SKILL.md, no code — vetted before running. Audit executed inline from the cloned skill&#x27;s instructions; nothing was installed. Report-only: no context file was modified.</p></section>
+
+</main>
+<footer>Last updated: 2026-08-04 10:47 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
