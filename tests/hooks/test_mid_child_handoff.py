@@ -451,7 +451,10 @@ class FakeWorld:
                  confirm_clear=True, confirm_rearm=True, pane_get_rc=0,
                  fetch_rc=0, observed_head_rc=0):
         self.tmp = tmp_path
-        self.repo = str(tmp_path / "repo")
+        # #800 Step-11: the repo the registry's `./projects/rawgentic` actually names.
+        # It used to be `<tmp>/repo`, unrelated to `project_path` — a world no real run
+        # produces, and the retire gate now cross-checks exactly that relationship.
+        self.repo = str(tmp_path / "projects" / "rawgentic")
         # #840 — the freshness probe travels through this same runner.
         self.fetch_rc = fetch_rc
         self.observed_head_rc = observed_head_rc
@@ -551,7 +554,9 @@ def _world(tmp_path, *, marker_gen=GEN, succ_goal_rows=None, registry_project="r
     (tmp_path / "transcripts" / f"{SUCC}.jsonl").write_text("\n".join(rows) + "\n",
                                                            encoding="utf-8")
     world.pred_transcript.write_text(_goal_row(COND, met=False) + "\n", encoding="utf-8")
-    (tmp_path / "reg.jsonl").write_text(json.dumps(
+    reg = tmp_path / "claude_docs" / "session_registry.jsonl"
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    reg.write_text(json.dumps(
         {"session_id": SUCC, "project": registry_project,
          "project_path": registry_path_value, "started": "2026-07-28T00:00:00Z",
          "cwd": "/home/x/rawgentic"}) + "\n", encoding="utf-8")
@@ -592,7 +597,7 @@ def _write_state(tmp_path, world, *, pend_over=None, position_over=None, claim=N
 def _retire(state_path, world, tmp_path, **over):
     kw = {"driver_state_path": str(state_path), "session_id": SUCC, "anchor_pane": ANCHOR,
           "transcript_dir": str(tmp_path / "transcripts"),
-          "registry_path": str(tmp_path / "reg.jsonl"),
+          "registry_path": str(tmp_path / "claude_docs" / "session_registry.jsonl"),
           "runner": world, "sleeper": lambda _s: None, "now_ts": 1000}
     kw.update(over)
     return ll.retire_predecessor(**kw)
@@ -2232,21 +2237,14 @@ class TestWorkspaceRootOfRegistry:
 
 
 def _production_shaped_world(tmp_path):
-    """A world whose paths relate the way production's do: the workspace root is `tmp_path`, the
-    project repo is `<ws>/projects/rawgentic`, and `position["project_path"]` is its
-    workspace-relative spelling.
-
-    The shared `_world`/`_position` defaults leave `repo_root` at `<tmp>/repo` while
-    `project_path` says `./projects/rawgentic` — two unrelated directories, which no real run
-    produces. That is fine for the checks those fixtures exercise, but #800's retire-site fix
-    cross-checks the derived base AGAINST `repo_root`, so a test of it has to model a world where
-    the two agree. (An unrealistic fixture is part of how the original defect stayed hidden: every
-    pre-#800 registry test wrote the SAME representation on both sides.)
-    """
+    """The shared fixtures now model production directly (see `FakeWorld.repo` and `_world`), so
+    this is a thin alias kept for the tests that name the property they depend on: the workspace
+    root is `tmp_path`, the project repo is `<ws>/projects/rawgentic`, and `position["project_path"]`
+    is its workspace-relative spelling."""
     proj = tmp_path / "projects" / "rawgentic"
-    proj.mkdir(parents=True, exist_ok=True)
-    world = _world(tmp_path, toplevel=str(proj))
-    state = _write_state(tmp_path, world, position_over={"repo_root": str(proj)})
+    world = _world(tmp_path)
+    state = _write_state(tmp_path, world)
+    assert world.repo == str(proj), "the shared fixture must already be production-shaped"
     return world, state, proj
 
 
@@ -2365,6 +2363,42 @@ class TestRetireBaseIsCrossCheckedAgainstValidatedState:
     resolving `position["project_path"]` against it lands on that same repo root.
     """
 
+    def test_a_foreign_registry_with_a_RELATIVE_row_cannot_authorise_teardown(self, tmp_path):
+        """The bypass BOTH cross-model passes raised independently, and the one the sibling test
+        below misses: when the foreign row spells `project_path` the same RELATIVE way the
+        expectation does, the two keys compare equal before any base is consulted — so dropping an
+        untrusted base changed nothing and the gate passed. Verified on a symlinked fixture that the
+        PRE-#800 exact comparison accepted this too, so the fix closes a hole older than #800.
+
+        The gate must now REFUSE a registry it cannot tie to its own workspace, not merely decline
+        to resolve against it."""
+        world, state, _proj = _production_shaped_world(tmp_path)
+        foreign = tmp_path / "foreign-ws"
+        reg = _registry_row_at(foreign / "claude_docs" / "session_registry.jsonl",
+                               "./projects/rawgentic")
+        out = _retire(state, world, tmp_path, registry_path=reg)
+        assert out["results"]["project_switched"] is False, out
+        assert "pane_close" not in world.kinds(), world.kinds()
+        notes = " ".join(s.get("note") or "" for s in out["steps"]
+                         if s.get("kind") == "project_switched")
+        assert "refusing the registry" in notes, notes
+
+    def test_a_symlinked_registry_cannot_authorise_teardown(self, tmp_path):
+        """The same bypass by its other route: the path LOOKS local, `claude_docs` is a symlink, and
+        the bytes come from elsewhere. Reproduced live before the fix."""
+        world, state, _proj = _production_shaped_world(tmp_path)
+        foreign = tmp_path / "foreign-ws"
+        (foreign / "claude_docs").mkdir(parents=True)
+        _registry_row_at(foreign / "claude_docs" / "session_registry.jsonl",
+                         "./projects/rawgentic")
+        link_ws = tmp_path / "linked-ws"
+        link_ws.mkdir()
+        os.symlink(str(foreign / "claude_docs"), str(link_ws / "claude_docs"))
+        out = _retire(state, world, tmp_path,
+                      registry_path=str(link_ws / "claude_docs" / "session_registry.jsonl"))
+        assert out["results"]["project_switched"] is False, out
+        assert "pane_close" not in world.kinds(), world.kinds()
+
     def test_a_foreign_workspace_registry_cannot_authorise_teardown(self, tmp_path):
         """The registry sits at a contract-shaped path in a DIFFERENT tree, and its row names that
         tree's project directory. Before the cross-check the relative expectation resolved against
@@ -2402,3 +2436,44 @@ class TestRetireBaseIsCrossCheckedAgainstValidatedState:
         assert ll._trusted_registry_base(
             str(tmp_path / "claude_docs" / "session_registry.jsonl"),
             "./projects/rawgentic", None) is None
+
+
+class TestStep11Hardening:
+    """#800 Step-11 review findings, each reproduced by execution before being fixed."""
+
+    def test_a_symlinked_claude_docs_no_longer_vouches_for_the_local_workspace(self, tmp_path):
+        """High/security (cross-model): the derivation used `abspath`, so a registry reached through
+        a SYMLINKED `claude_docs` reported the workspace it merely LOOKED like it sat in while the
+        bytes came from elsewhere. Reproduced live: with `<ws>/claude_docs` → `/foreign/claude_docs`
+        it returned `<ws>`. It must now report the root of the file it will actually read."""
+        ws = tmp_path / "ws"
+        foreign = tmp_path / "foreign"
+        (ws).mkdir()
+        (foreign / "claude_docs").mkdir(parents=True)
+        os.symlink(str(foreign / "claude_docs"), str(ws / "claude_docs"))
+        reg = str(ws / "claude_docs" / "session_registry.jsonl")
+        assert ll._workspace_root_of_registry(reg) == str(foreign), \
+            "the derived root must follow the symlink to where the registry really lives"
+        assert ll._workspace_root_of_registry(reg) != str(ws)
+
+    def test_a_dotdot_in_the_registry_path_is_refused(self):
+        """The other spelling of the same bypass: `symlink/../claude_docs/...` normalizes to a local
+        path lexically while the OS resolves the symlink first."""
+        assert ll._workspace_root_of_registry(
+            "/ws/link/../claude_docs/session_registry.jsonl") is None
+
+    def test_an_ordinary_registry_path_still_derives_its_root(self, tmp_path):
+        """The hardening must not break the ordinary case it exists to serve."""
+        reg = tmp_path / "claude_docs" / "session_registry.jsonl"
+        reg.parent.mkdir(parents=True)
+        reg.write_text("", encoding="utf-8")
+        assert ll._workspace_root_of_registry(str(reg)) == str(tmp_path)
+
+    def test_a_non_object_json_line_is_counted_as_malformed(self):
+        """Inline finding IF-2: a line that parses but is not an object was skipped silently and
+        then reported as a missing bind."""
+        for line in ("[]", '"a string"', "42", "null"):
+            msg = ll.registry_match_diagnosis(
+                line, "succ-1", expected_project="rawgentic", expected_project_path=REL)
+            assert "malformed" in msg.lower(), (line, msg)
+            assert "never wrote its bind" not in msg, (line, msg)

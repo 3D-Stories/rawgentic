@@ -752,7 +752,7 @@ For major changes, please open an issue first to discuss the approach.
   label disagreed, or the path was not equivalent (naming the base), recorded over the same
   post-baseline tail the gate polls: previously a comparison that could never match was
   byte-identical in its output to a 120 s poll timeout, and this campaign published a wrong
-  diagnosis off that ambiguity. Tests: 60 new — helper/gate/diagnosis units including both
+  diagnosis off that ambiguity. Tests: 68 new — helper/gate/diagnosis units including both
   probe-derived false-accept counter-examples, the workspace-root derivation guard, and behavioural
   call-site tests at BOTH gates; the primary red reproduced the reported symptom through the
   reporter's own entry path. **The Step-8a cross-model review then found three more, all reproduced
@@ -765,7 +765,19 @@ For major changes, please open an issue first to discuss the approach.
   wrong-diagnosis class this change exists to remove — so corruption is now named as corruption.
   Fixing the first of those also exposed that every pre-#800 registry fixture wrote the SAME
   representation on both sides and left `repo_root` unrelated to `project_path`, which is part of how
-  the defect stayed hidden; the retire-site tests now model production's shape. No workflow-spine
+  the defect stayed hidden; the shared retire fixtures now model production's shape. **Step 11 then
+  had BOTH cross-model passes independently raise the same High**, and it closes a hole OLDER than
+  #800: `retire_predecessor` used the derived workspace base when it was available and fell back to
+  the exact comparison when it was not — but that fallback refuses nothing, because a row from a
+  FOREIGN registry that spells `project_path` relatively (`./projects/rawgentic`) compares equal to
+  the expectation before any base is consulted, so the gate passed and could authorize closing the
+  predecessor pane. Verified by execution on a symlinked fixture, including that the pre-#800 exact
+  comparison accepted it too. A trusted base is now REQUIRED at that gate: the registry must resolve
+  to the recorded `project_path` inside the workspace holding the validated `repo_root`, the
+  derivation follows `realpath` instead of `abspath` (so a symlinked `claude_docs` cannot vouch for
+  the workspace it merely looks like it is in), and a `..` component in the registry path is refused.
+  `--registry` is passed through unvalidated at all four CLI call sites, so provenance had to be
+  established at the gate. No workflow-spine
   change (a launcher gate's comparison, not a station, gate, loop-back or lane) → no diagram REV.
   Suite 4812→4872.
 

@@ -1403,3 +1403,54 @@ class TestProjectSwitchedAcceptsEitherPathRepresentation:
                           if s.get("kind") == "project_switched")
         assert "sess-new-123" in joined, joined
         assert "no registry row" in joined.lower(), joined
+
+
+class TestTheDiagnosisDoesNotReReadTheRegistry:
+    """#800 Step-11 inline finding IF-1: the failure branch used to call `read_text` a SECOND time
+    to build its diagnosis. `perform_handoff`'s default reader is a bare `open()` with no error
+    handling, so an unreadable registry would have raised from the exact branch whose job is to
+    report the failure. The diagnosis is now built from the tail the poll already judged."""
+
+    class CountingArtifacts(Artifacts):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.registry_reads = 0
+
+        def __call__(self, path):
+            if path == REGISTRY_PATH:
+                self.registry_reads += 1
+            return super().__call__(path)
+
+    def test_the_failure_branch_adds_no_extra_registry_read(self) -> None:
+        foreign = json.dumps({"session_id": "sess-new-123", "project": PROJECT,
+                              "project_path": str(REPO_ROOT / "projects" / "rawgentic-next")})
+        r = Runner(_responses())
+        arts = self.CountingArtifacts(r, registry_row=foreign)
+        out = ll.perform_handoff(**_handoff(r, read_text=arts))
+        assert out["failed_step"] == "project_switched"
+        # 1 baseline + SWITCH_POLL_ATTEMPTS polls, and nothing after them.
+        assert arts.registry_reads == 1 + ll.SWITCH_POLL_ATTEMPTS, arts.registry_reads
+        notes = " ".join(s.get("note") or "" for s in out["steps"]
+                         if s.get("kind") == "project_switched")
+        assert "rawgentic-next" in notes, notes
+
+    def test_a_reader_that_raises_after_the_poll_cannot_break_the_report(self) -> None:
+        """The property IF-1 is really about: the failure report must survive a registry that
+        becomes unreadable, because that is when a diagnosis matters most."""
+        calls = {"n": 0}
+
+        def read_text(path):
+            if path != REGISTRY_PATH:
+                return GOAL_ROW + "\n"
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return ""                       # the pre-launch baseline
+            if calls["n"] > 1 + ll.SWITCH_POLL_ATTEMPTS:
+                raise OSError("registry vanished")   # only reachable via an extra read
+            return json.dumps({"session_id": "sess-new-123", "project": PROJECT,
+                               "project_path": "./projects/somewhere-else"}) + "\n"
+
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(r, read_text=read_text))
+        assert out["ok"] is False
+        assert out["failed_step"] == "project_switched"

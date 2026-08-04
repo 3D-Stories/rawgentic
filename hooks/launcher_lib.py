@@ -870,10 +870,28 @@ def _workspace_root_of_registry(registry_path: str) -> str | None:
     `/x/registry.jsonl` into the base `/`, and a row claiming `/projects/rawgentic` would then
     compare equal to an expectation of `./projects/rawgentic` — a false ACCEPT manufactured by a
     wrong base. Off-contract → None → the path comparison stays exact, which is fail-closed.
+
+    **Resolved, not lexical (Step-11 cross-model review, High).** An earlier revision derived the
+    root from `abspath`, so a registry reached through a SYMLINKED `claude_docs` — or via
+    `symlink/../claude_docs/...` — vouched for the workspace it merely LOOKED like it was in, while
+    the bytes came from somewhere else entirely. Reproduced live before fixing: with
+    `<ws>/claude_docs` symlinked to `/foreign/claude_docs`, the derivation returned `<ws>`. It now
+    refuses a `..` component outright and derives from `os.path.realpath`, so the root it reports is
+    the root of the file it will actually read. `--registry` is passed through unvalidated at all
+    four CLI call sites (verified), so this helper cannot assume a caller confined it.
+
+    **What this does NOT fix, stated because a narrowed hole is not a closed one:** a foreign
+    registry whose row spells `project_path` RELATIVELY still satisfies the exact comparison, which
+    is the pre-#800 code path — verified by execution on the same fixture (the exact comparison
+    matched it too). Closing that needs the gate to REFUSE a registry resolving outside the
+    predecessor's own workspace, which in turn needs the retire-site fixtures rebuilt to model the
+    real repo_root/project_path relationship. Out of #800's scope, filed as a follow-up.
     """
     if not isinstance(registry_path, str) or not registry_path.strip():
         return None
-    parts = os.path.normpath(os.path.abspath(registry_path)).split(os.sep)
+    if os.pardir in registry_path.split(os.sep):
+        return None
+    parts = os.path.realpath(registry_path).split(os.sep)
     if tuple(parts[-2:]) != _REGISTRY_CONTRACT_TAIL:
         return None
     root = os.sep.join(parts[:-2])
@@ -952,7 +970,13 @@ def registry_match_diagnosis(registry_text: str, session_id: str, *,
         except ValueError:
             malformed += 1
             continue
-        if isinstance(rec, dict) and rec.get("session_id") == session_id:
+        if not isinstance(rec, dict):
+            # Step-11 inline finding IF-2: a line that PARSES but is not an object was skipped
+            # without being counted, so it too was reported as "the successor never wrote its
+            # bind" — the narrower form of the same misdirection.
+            malformed += 1
+            continue
+        if rec.get("session_id") == session_id:
             found = rec
     if found is None:
         # Step-8a cross-model review, Medium: skipping malformed lines and then reporting "the
@@ -2024,8 +2048,17 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         # immediately after a prompt was submitted, `done` while a turn was still running, and
         # `working` on a session sitting at an empty input line. The registry row is a durable
         # artifact the successor itself writes, which is why it is the gate.
+        # #800 — the tail the gate last JUDGED, kept so the failure branch can explain itself
+        # without reading the registry again. Step-11 inline finding IF-1: this function's default
+        # `read_text` is a bare `open()` with no error handling (unlike `retire_predecessor`'s
+        # `read_or_empty`), so a second read would have added a new exception surface to the exact
+        # branch whose job is to report a failure legibly. It also makes the diagnosis provably
+        # about the same bytes that were rejected, rather than a fresh read that may differ.
+        judged_tail: list[str | None] = [None]
+
         def _project_switched() -> bool:
             tail = _tail(read_text(registry_path), registry_baseline)
+            judged_tail[0] = tail
             # #800 — `project_root` IS the workspace root those relative `./projects/<name>` paths
             # are relative to (the pane-handoff skill passes `--project-root <workspace root>`),
             # so the comparison accepts either spelling the successor may have written.
@@ -2040,10 +2073,10 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             # #800 — say WHICH field disagreed. Without this, a comparison that could never match
             # looked exactly like a slow successor, and the #875 campaign published a wrong
             # diagnosis off that ambiguity. Diagnosed over the SAME post-baseline tail the gate
-            # polls: a row that predates the launch must not satisfy — or explain — this check
-            # (#611 Step-11 Medium 4). A void baseline means the registry stopped being an
-            # append-only extension of what we measured, which is its own distinct explanation.
-            tail = _tail(read_text(registry_path), registry_baseline)
+            # judged — not a fresh read — so a row that predates the launch can neither satisfy nor
+            # explain this check (#611 Step-11 Medium 4). A void baseline means the registry stopped
+            # being an append-only extension of what we measured, which is its own explanation.
+            tail = judged_tail[0]
             record("project_switched", ["<registry poll>"],
                    note=(registry_match_diagnosis(
                        tail, session_id, expected_project=expected_project,
@@ -3081,12 +3114,29 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             own_text, expected_condition=armed)
         marker = driver_lib.mid_child_marker(position["issue"], generation)
         out["results"]["prompt_landed"] = transcript_has_marker(own_text, marker)
-        out["results"]["project_switched"] = registry_has_session(
+        # #800 Step-11 review (High, raised INDEPENDENTLY by both cross-model passes): a trusted
+        # base is REQUIRED here, not merely used when available. Dropping an untrusted base and
+        # falling back to the exact comparison does not refuse a foreign registry at all — a row
+        # from another workspace that spells `project_path` RELATIVELY (`./projects/rawgentic`)
+        # compares equal to the expectation before any base is consulted, so the gate passed and
+        # could authorize closing the predecessor pane. Verified by execution on a symlinked
+        # fixture, including that the PRE-#800 exact comparison accepted it too — so this closes a
+        # hole older than #800, deliberately, because this is the gate that guards a teardown.
+        # `--registry` is passed through unvalidated at all four CLI call sites (verified), so the
+        # registry's provenance has to be established HERE.
+        trusted_base = _trusted_registry_base(
+            registry_path, position["project_path"], position.get("repo_root"))
+        out["results"]["project_switched"] = trusted_base is not None and registry_has_session(
             read_or_empty(registry_path), session_id,
             expected_project=position["project"],
             expected_project_path=position["project_path"],
-            project_root=_trusted_registry_base(
-                registry_path, position["project_path"], position.get("repo_root")))
+            project_root=trusted_base)
+        if trusted_base is None:
+            record("project_switched", ["<registry provenance>"],
+                   note=(f"refusing the registry {registry_path!r}: it does not resolve to "
+                         f"{position['project_path']!r} inside the workspace holding the recorded "
+                         f"repo_root {position.get('repo_root')!r}, so a row in it proves nothing "
+                         f"about THIS workspace's successor"))
         # #840 — the same launcher-owned producer as `perform_handoff`, recomputed here rather
         # than trusted from the predecessor's run. This is the LAST gate before an irreversible
         # teardown, and the predecessor may have merged another child since it reported. Both
