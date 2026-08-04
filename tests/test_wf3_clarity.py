@@ -562,6 +562,26 @@ class TestClosingKeywordGuardWF3:
         assert "--commit-range origin/<default>..HEAD --project-root ." in sec
         assert "[--commit-range" not in sec
 
+    def test_body_is_written_before_it_is_checked(self):
+        """Step-11 adversarial finding 1 (High): the gate originally sat in item
+        3b while item 4 wrote the body. On a clean run the check hit a missing
+        file and returned rc 2; with a stale file it checked content that item 4
+        then overwrote, publishing a body the gate never saw. Either way the gate
+        was defeated, so the write must precede the check IN THE SAME ITEM."""
+        sec = self._gate_section()
+        write = sec.index("cat > ./.rawgentic/wf3-pr-body.md")
+        check = sec.index("python3 hooks/plan_lib.py check-pr-refs")
+        assert write < check, (
+            "the PR-body write must come BEFORE the check-pr-refs call in item 3b")
+
+    def test_pr_step_does_not_rewrite_the_gated_body(self):
+        """A body regenerated after the check is a body the gate never saw."""
+        text = self.STEPS.read_text()
+        pr_step = _section(text, "4. Create PR:", "### Output")
+        assert "cat > ./.rawgentic/wf3-pr-body.md" not in pr_step, (
+            "item 4 must publish the already-gated file, never rewrite it (#901)")
+        assert "--body-file ./.rawgentic/wf3-pr-body.md" in pr_step
+
     def test_gate_command_declares_this_runs_issue(self):
         sec = self._gate_section()
         assert "python3 hooks/plan_lib.py check-pr-refs" in sec

@@ -611,27 +611,13 @@ are failures: never treat either as the fallback.
 
    **The body file must live INSIDE the project root** — the gate refuses any `--pr-body-file`
    outside `--project-root` before opening it, so a `/tmp/...` draft returns rc 2 every time.
-   Draft the body at `./.rawgentic/wf3-pr-body.md` (`mkdir -p .rawgentic` first; git-ignored) and
-   pass that SAME file to `gh pr create --body-file` in item 4, so the gate and the published PR
-   cannot diverge. `--commit-range` is REQUIRED: GitHub parses commit messages too, and Step 10
-   commits one, so a body-only run would leave that surface unchecked.
-   ```bash
-   python3 hooks/plan_lib.py check-pr-refs \
-     --pr-body-file ./.rawgentic/wf3-pr-body.md \
-     --closes <this run's issue> \
-     --commit-range origin/<default>..HEAD --project-root .
-   ```
-   `0` no unintended closing reference · `1` FLAGGED — findings on stdout; rewrite the sentence,
-   or add `--closes <n>` when that closure is genuinely intended · `2` caller error (an empty
-   body file, or invalid UTF-8, is rc 2 by design, never a pass). Omitting `--closes` entirely
-   means "this PR closes nothing", so every closing reference flags — the gate fails toward
-   asking, never silently.
 
-4. Create PR:
-
-   Write the body to the SAME project-contained file item 3b gated, then publish THAT file
-   (#901 — publishing a different body than the one the closing-keyword gate read would defeat
-   the gate):
+   **WRITE the body here, then check it, then publish that same file in item 4 — in that order.**
+   Checking before the body exists returns rc 2 on every clean run, and checking a stale file
+   that item 4 then overwrites publishes content the gate never saw. Either way the gate is
+   defeated, so the write belongs in this item, not the next one. `--commit-range` is REQUIRED:
+   GitHub parses commit messages too, and Step 10 commits one, so a body-only run would leave
+   that surface unchecked.
    ```bash
    mkdir -p .rawgentic
    cat > ./.rawgentic/wf3-pr-body.md <<'EOF'
@@ -648,6 +634,22 @@ are failures: never treat either as the fallback.
 
    Generated with [Claude Code](https://claude.com/claude-code) using WF3
    EOF
+   python3 hooks/plan_lib.py check-pr-refs \
+     --pr-body-file ./.rawgentic/wf3-pr-body.md \
+     --closes <this run's issue> \
+     --commit-range origin/<default>..HEAD --project-root .
+   ```
+   `0` no unintended closing reference · `1` FLAGGED — findings on stdout; rewrite the sentence,
+   or add `--closes <n>` when that closure is genuinely intended · `2` caller error (an empty
+   body file, or invalid UTF-8, is rc 2 by design, never a pass). Omitting `--closes` entirely
+   means "this PR closes nothing", so every closing reference flags — the gate fails toward
+   asking, never silently.
+
+4. Create PR:
+
+   Publish the file item 3b already wrote and gated. Do NOT rewrite it here (#901): a body
+   regenerated after the check is a body the gate never saw.
+   ```bash
    gh pr create --repo capabilities.repo \
      --title "fix(scope): description" \
      --body-file ./.rawgentic/wf3-pr-body.md \

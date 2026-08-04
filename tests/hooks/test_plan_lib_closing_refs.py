@@ -120,8 +120,10 @@ def test_keyword_inside_backticks_is_still_flagged_by_design():
     """GitHub IGNORES a closing keyword inside a code span (verified live
     2026-07-28: a `Closes #4` span was inert and #4 stayed open). We flag it
     anyway — fail toward asking (#901 AC2), and a keyword in backticks is a
-    trap in the other direction too (an INTENDED closure silently does not
-    fire). Pinned so nobody 'optimizes' the false positive away unknowingly."""
+    trap in the other direction too: an UNDECLARED one that was meant to close
+    silently does not fire. Pinned so nobody 'optimizes' the false positive away
+    unknowingly. The DECLARED case is a known gap —
+    see test_a_declared_backticked_closure_is_not_caught."""
     assert [h.issue for h in plan_lib.find_closing_refs("`Closes #4`")] == [4]
 
 
@@ -517,3 +519,33 @@ def test_a_tmp_body_path_is_refused_which_is_why_the_prose_moved(tmp_path):
               "--closes", "901", "--project-root", str(root)])
     assert r.returncode == 2
     assert "REFUSED" in r.stderr
+
+
+def test_a_declared_backticked_closure_is_not_caught():
+    """KNOWN LIMIT, pinned deliberately (Step 11 adversarial finding 2).
+
+    A ref whose issue is DECLARED via `--closes` is skipped without regard to
+    markdown context, so a declared `` `Closes #N` `` passes this gate and then
+    silently fails to close on merge, because GitHub ignores the backticks.
+
+    This is characterization, not an endorsement: it fails loudly if someone
+    closes the gap, which is the signal to update the docstring claim and the
+    PR-body follow-up at the same time. The gap is out of #901's scope — an issue
+    wrongly staying OPEN is visible, whereas an issue wrongly CLOSED is not, and
+    catching it needs the markdown-context parser the design deliberately rejected.
+    """
+    ok, errors = plan_lib.assert_pr_body_closing_refs(
+        "## Summary\nA fix.\n\n`Closes #901`\n", frozenset({901}))
+    assert ok is True, (
+        "if this now fails, the declared-backticked-closure gap has been closed — "
+        "update the KNOWN LIMIT comment in plan_lib and the PR follow-up")
+    assert errors == []
+
+
+def test_an_undeclared_backticked_closure_is_still_caught():
+    """The half that DOES work, and the reason the flagging is worth keeping."""
+    ok, errors = plan_lib.assert_pr_body_closing_refs(
+        "## Summary\nA change.\n\n`Closes #874`\n\nPart of #875\n", frozenset())
+    assert ok is False
+    assert len(errors) == 1
+    assert "874" in errors[0]

@@ -440,7 +440,17 @@ CLOSING_KEYWORDS: Final[tuple[str, ...]] = (
 #      multi-backtick spans) is a new bug surface inside the guard that must be
 #      the trustworthy one;
 #   3. the inverse trap is real — a closing keyword in backticks makes an
-#      INTENDED closure silently NOT fire, so flagging it helps either way.
+#      INTENDED closure silently NOT fire, so flagging an UNDECLARED one helps in
+#      that direction too.
+# KNOWN LIMIT, stated precisely because the looser version of reason 3 over-claimed
+# (Step 11 adversarial finding 2): a ref whose issue IS declared via `--closes` is
+# skipped without regard to markdown context, so a declared `` `Closes #N` `` passes
+# the gate and then silently fails to close on merge. Detecting that needs the
+# markdown-context tracking reason 2 rejects, and it is the opposite defect from the
+# one #901 exists to stop (an issue staying open is visible; an issue wrongly closed
+# is not), so it is a follow-up rather than scope creep. Write an intended closure as
+# PLAIN TEXT. `test_a_declared_backticked_closure_is_not_caught` pins this gap so it
+# stays visible and cannot be silently "fixed" without updating this claim.
 # `[ \t]*(?::[ \t]*)?` rather than `[ \t]*:?[ \t]*`: the latter puts two unbounded
 # quantifiers around an optional, so a long horizontal-whitespace run that fails to
 # match afterwards is re-split O(k) ways per start position. Polynomial, not
