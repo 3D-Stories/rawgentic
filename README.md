@@ -745,7 +745,7 @@ For major changes, please open an issue first to discuss the approach.
   golden prompt fixture was re-captured (and renamed to drop its stale `pre393` label). Tests: the
   full coerce/validate/normalize matrix, schema pins, runner retry/provenance CLI black-box, and a
   consumer test applying the banded filter mechanically to a mapped result. No workflow-spine
-  change → no diagram REV. Suite 4959→5023.
+  change → no diagram REV. Suite 4959→5027.
 
 ### v3.125.8 (2026-08-04)
 - **A closing keyword next to an issue number is now caught before the PR is opened (#901, epic
