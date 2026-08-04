@@ -192,6 +192,24 @@ class TestStep11DiffReview:
     def test_should_run_diff_review_referenced(self):
         assert "plan_lib.should_run_diff_review" in _step11()
 
+    def test_diff_review_mode_resolved_and_passed_to_the_gate(self):
+        """#879: the 1a gate resolves `diffReviewMode` and feeds it to the decision.
+
+        Without the `mode=` argument the prose would resolve the mode and then
+        silently ignore it — the config would look wired while changing nothing.
+        """
+        s11 = _step11()
+        assert "diff-review-mode" in s11, \
+            "Step 11 1a must resolve the mode via the diff-review-mode verb"
+        assert "mode=<resolved mode>" in s11, \
+            "the resolved mode must be PASSED to should_run_diff_review"
+
+    def test_invalid_diff_review_mode_aborts_never_defaults(self):
+        """#879 AC3: the refusal is a loud `failed (...)` marker, not a fallback."""
+        s11 = _step11()
+        assert "failed (invalid diffReviewMode config)" in s11
+        assert "never default to `auto`" in s11
+
     def test_dispatch_command_shape(self):
         # M0b (#866): the diff review dispatches the runner, tokenless (report-only).
         s11 = _step11()
