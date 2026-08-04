@@ -593,6 +593,34 @@ are failures: never treat either as the fallback.
    ```bash
    git push -u origin fix/<issue-number>-<short-desc>
    ```
+3b. **Closing-keyword check (#901) — runs BEFORE `gh pr create`, never after.**
+   GitHub's closing-keyword parser does not understand negation. A body sentence reading
+   "this PR does not close #N" matches `close #N` and **shuts #N on merge anyway**. This has
+   fired twice for real: issue #568 on the #573 merge (2026-07-21) and issue #874 on the #898
+   merge (2026-08-04) — both on PRs that were deliberately `Part of`.
+
+   **The rule: never place a closing keyword — `close`, `closes`, `closed`, `fix`, `fixes`,
+   `fixed`, `resolve`, `resolves`, `resolved` — adjacent to an issue number unless closure is
+   intended.** When an issue must stay open, write **"leaves #N open"**; `Part of #N` and
+   `Refs #N` are always safe.
+
+   This does NOT change the intended linkage: a WF3 run fixes exactly one bug, so this PR's own
+   issue is a genuine closure — Step 10's `(closes #<issue>)` commit and the body's
+   `Fixes #<issue-number>` stay exactly as they are, and Step 14 still relies on that linkage to
+   close the issue on the owner's merge. The rule binds every OTHER issue the body mentions.
+
+   Run the mechanical gate on the drafted body (write it to a file first, then pass that file to
+   both this gate and `gh pr create --body-file`):
+   ```bash
+   python3 hooks/plan_lib.py check-pr-refs \
+     --pr-body-file /tmp/wf3-pr-body.md \
+     --closes <this run's issue> --project-root .
+   ```
+   `0` no unintended closing reference · `1` FLAGGED — findings on stdout; rewrite the sentence,
+   or add `--closes <n>` when that closure is genuinely intended · `2` caller error (an empty
+   body file is rc 2 by design, never a pass). Omitting `--closes` entirely means "this PR closes
+   nothing", so every closing reference flags — the gate fails toward asking, never silently.
+
 4. Create PR:
 
    ```bash
