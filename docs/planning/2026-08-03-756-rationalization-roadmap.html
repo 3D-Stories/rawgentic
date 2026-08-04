@@ -283,7 +283,7 @@ color:var(--ink-3);background:var(--code)}
 <body class="tpl-roadmap">
 <div class="wrap">
 <header>
-<div class="eyebrow">design artifact · updated 2026-08-03 13:19 MDT</div>
+<div class="eyebrow">design artifact · updated 2026-08-03 20:42 MDT</div>
 <h1>Rawgentic rationalization roadmap — get unbroken, then get simple</h1>
 
 </header>
@@ -476,9 +476,69 @@ measured instruction-compliance cliff. Milestone 0 fixes all three at once, most
 </ul>
 <p>  closures; 3 new combined-work issues + the epic-run rework issue + M0 umbrella issue; epic #756   gets a final honest summary comment and closes in favor of this roadmap&#x27;s milestone tracking.</p></section>
 <section class="mstone rm-epic"><h3>9. Review provenance <span class="chip c-plan">—</span></h3><p>gpt-5.6-sol consulted on the draft (7 sections, repo-verified) and then adversarially reviewed the finished plan (9 findings: 6 High, 3 Medium — all applied above; the two reports are in this session&#x27;s records and the local <code>docs/reviews/</code> sink). Notable applied corrections: M0b now carries the run-record relaxation and prose-pin rewrites it invalidates; M0c keeps capability shims until M0d; the runner gained the reopen-token choke point (#855) and pinned reviewer identity; the consult verb + WF5/WF13 cutover moved into M0; #769 was un-closed and folded into the epic-run rework; #795/#797 residual claims were made honest.</p></section>
+<section class="mstone rm-epic"><h3>10. M0 retrospective (written 2026-08-04, after the M0d merge — owner-requested) <span class="chip c-conf">SHIPPED</span></h3><p>M0 shipped whole: four PRs (<strong>#867</strong> runner → <strong>#868</strong> cutover → <strong>#870</strong> config → <strong>#872</strong> deletion) plus the telemetry-persist PR <strong>#869</strong>, all merged, all with green test+lint CI and a cross-model adversarial verdict recorded. Wall clock <strong>19:42Z → 02:39Z (~6h57m)</strong> across four sessions; total session cost <strong>≈ $390</strong> (session-cumulative: $94.26 + $96.17 + $128.78 + $71.11 at m0d PR-open). Suite: <strong>7031/24 → 4659/0</strong> — 2,385 executor-era tests left with their subjects; 33 guard/rewrite tests arrived across the four PRs. The five run-records are in <code>docs/measurements/run_records.jsonl</code> (<code>workflow: &quot;plain-session&quot;</code>).</p>
+<h3>What went to plan</h3>
+<ul>
+<li>The four-PR decomposition held exactly as written — no scope moved between PRs, and each</li>
+</ul>
+<p>  merge left main releasable (WF2 was runnable again the day M0b merged, as promised).</p>
+<ul>
+<li>The runner dogfood worked: M0b/M0c/M0d reviews all went through <code>review_runner.py</code>,</li>
+</ul>
+<p>  one dispatch each, no retries. Its own path containment refused two /tmp dispatches   live in M0c — the M0a hardening catching the M0c orchestrator.</p>
+<ul>
+<li>D183 (merge-as-created) held the whole run without a single CI red on merge.</li>
+</ul>
+<h3>Discoveries that were NOT planned for</h3>
+<ol>
+<li><strong>The adversarial reviewer caught a self-inflicted 606-line README duplication.</strong> M0d&#x27;s</li>
+</ol>
+<p>   docs-contraction commit pasted a whole re-rendered README span (Quick-Start-steps →    Testing → a second marketplace section) instead of just the retirement note. The next    session&#x27;s editor MISREAD the doubled sections as pre-existing (&quot;patterns found 2x&quot;) and    worked around them. Only the cross-model review named it. Lesson: a 618-insertion diff    for a &quot;10-line note&quot; commit should have failed a size sanity check at commit time.</p>
+<ol start="2">
+<li><strong>The handoff log drifted from the code.</strong> Entry 1 said <code>assert_review_coverage</code> DIES in</li>
+</ol>
+<p>   M0b; the actual M0b implementation kept it (correctly — Step 8a/9 prose still route    coverage through it). The M0d diagram deltas were written from the current prose,    re-verified per station, not from the notes. Lesson: handoff entries are plans, not    records — re-verify before acting (the workspace rule existed; it earned its keep).</p>
+<ol start="3">
+<li><strong>gitleaks range-scanning bites retirement prose.</strong> A phrase in the retirement</li>
+</ol>
+<p>   notes — a gate-related keyword followed by a slash-joined protocol name — matched    the generic-api-key rule — and because the    pre-PR scan covers <code>origin/main..HEAD</code> (every commit), rewording the current tree could    not clear it, and the <code>.gitleaksignore</code> comment that quoted the phrase then flagged    itself. Three fingerprint pins with justification. Lesson: retirement notes are    adversarial inputs to secret scanners; scan early, not at PR time.</p>
+<ol start="4">
+<li><strong><code>review-artifact</code> has no trusted-brief channel.</strong> The M0d diff (3.1MB) exceeded any</li>
+</ol>
+<p>   model context, so the review ran on a composed <code>git diff -D</code> artifact — and the brief had    to ride inside the untrusted artifact because only <code>review-code</code> takes <code>--brief</code>. The    reviewer itself flagged that as an injection-shaped hole. Candidate runner follow-up    (not filed — D179, owner decides).</p>
+<ol start="5">
+<li><strong>The smoke test passed for the wrong reason.</strong> Hooks import siblings bare</li>
+</ol>
+<p>   (<code>from atomic_write_lib import …</code>), and the new import-smoke subprocess only passed    because pytest&#x27;s environment leaked a suitable path. Confirmed by running it under    <code>env -i</code>: ModuleNotFoundError. Fixed to be self-sufficient and to run under a clean env.</p>
+<h3>Out-of-plan work that had to happen</h3>
+<ul>
+<li><strong>D184 (owner ruling, mid-M0d):</strong> <code>RAWGENTIC_HEADLESS</code> survives as a bare</li>
+</ul>
+<p>  unattended-session signal in exactly three reads; epic <strong>#871</strong> (away mode) was filed from   the owner&#x27;s five ACs. The retirement tripwire deliberately excludes the bare token and now   pins the exact surviving read set in both directions.</p>
+<ul>
+<li><strong>Keep-decisions the roadmap didn&#x27;t enumerate:</strong> <code>model_routing_lib.py</code> (dead-ish, not on</li>
+</ul>
+<p>  the deletion list — M1/backlog) and the plan_lib ceremony helpers + unit tests (the M0b   allowlist said &quot;M0d-pending&quot;, the roadmap&#x27;s deletion list never named them; kept under the   owner&#x27;s &quot;don&#x27;t delete anything good&quot; directive — backlog decides).</p>
+<ul>
+<li><strong>telemetryAlerts</strong> was removed in M0c though the kickoff&#x27;s trap-list named only 2i/2k —</li>
+</ul>
+<p>  roadmap §4 M0c named it explicitly; the kickoff list was traps, not scope.</p>
+<h3>Gotchas for M1</h3>
+<ul>
+<li>The plain-session cost accounting is <strong>session-cumulative snapshots</strong> (#363), not per-PR</li>
+</ul>
+<p>  deltas — compare at effort level (M0 ≈ $390 for 5 merged PRs) against the executor   cohort&#x27;s per-issue records (32 records since 2026-07-28: median $191.23, mean $241.10 per   issue), not line-by-line.</p>
+<ul>
+<li>The post-merge <strong>plugin reinstall is still owner-owned</strong> (CLAUDE.md §7): sessions keep</li>
+</ul>
+<p>  loading the cached 3.122.0 until it happens; the switch-bind staleness nudge about model   routing is expected until then.</p>
+<ul>
+<li><code>docs/reviews/</code> is gitignored by design — the M0 review verdicts live in the PR bodies;</li>
+</ul>
+<p>  the raw result JSONs exist only on this host.</p></section>
 
 </main>
-<footer>Last updated: 2026-08-03 13:19 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-08-03 20:42 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
