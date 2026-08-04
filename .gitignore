@@ -27,6 +27,9 @@ claude_docs/
 
 # WF2 Step 11 diff-review temp files (crash-recovery backstop; normally cleaned on exit)
 .rawgentic-diff-review-*.patch
+# WF2/WF3 draft PR bodies: the closing-keyword gate (#901) requires a
+# project-contained --pr-body-file, and the draft is never committed.
+/.rawgentic/*-pr-body.md
 .rawgentic-diff-findings-*.json
 
 # WF2 per-branch review-state pointers (#231 AC2): local, git-excluded bookkeeping —

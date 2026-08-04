@@ -725,6 +725,50 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.125.8 (2026-08-04)
+- **A closing keyword next to an issue number is now caught before the PR is opened (#901, epic
+  #875).** GitHub's closing-keyword parser does not understand negation: a PR body reading "this PR
+  does not close #N" matches `close #N` and shuts the issue on merge anyway. It has fired twice for
+  real — #568 on the #573 merge (2026-07-21) and #874 on the #898 merge (2026-08-04) — both times on
+  a PR that was deliberately `Part of`, with no closing keyword in any commit; the body prose alone
+  did it. `hooks/plan_lib.py` gains `find_closing_refs` (a deliberately NAIVE scanner mirroring
+  GitHub: keyword, optional colon, at most one line break, then `#N` / `owner/repo#N` / an issues URL
+  / `GH-N`), `assert_pr_body_closing_refs`, and a `check-pr-refs` CLI wired into WF2 Step 12 item 4b
+  and WF3's PR step 3b — both placed BEFORE `gh pr create`, since a check that runs after the PR
+  exists cannot prevent the closure. Two fail-closed choices are load-bearing and pinned: omitting
+  `--closes` means the PR closes nothing, so every closing reference flags (fail toward asking), and
+  an empty `--pr-body-file` is rc 2 rather than a vacuous rc 0 — the same class as the #796 finding
+  on `assert-pr-body`. Code spans are deliberately NOT exempted even though GitHub ignores a keyword
+  inside backticks (verified live 2026-07-28), because a markdown span parser would be a new bug
+  surface inside the guard that has to be the trustworthy one, and a keyword in backticks is a trap
+  in the other direction too — an INTENDED closure silently does not fire. WF3's prose explicitly
+  preserves its own `(closes #<issue>)` linkage, which Step 14 relies on, and a pin asserts that
+  carve-out so the rule cannot drift into contradicting it. Both incident sentences are pinned
+  verbatim; the prose pins anchor to `step-12.md`, never a `references/steps.md` path that #874
+  deleted. The Step-8a cross-model pass then closed two fail-open gaps in the guard itself:
+  commit MESSAGES were unscanned while the prose claimed the rule bound them (now `--commit-range`),
+  and a bare `--closes 901` authorized `other/repo#901` because only the integer was kept (refs now
+  carry their `owner/name`, and an unqualified declaration authorizes this repo only). Two further
+  fail-closed fixes: a `None`/blank body no longer returns a vacuous pass, and invalid UTF-8 is
+  rc 2 rather than a traceback whose rc 1 was indistinguishable from a real finding
+  (`UnicodeDecodeError` is a `ValueError`, not an `OSError`). Step 11 then caught a **Critical**
+  that made the whole thing inert: both workflows prescribed a `/tmp/...` body file, which the
+  gate's own containment check refuses before opening, so the documented command returned rc 2
+  every time — reproduced, then fixed by drafting to `./.rawgentic/<wf>-pr-body.md` and publishing
+  that same file, since WF2 pointed `gh pr create` at the /tmp path and WF3 rebuilt its body from
+  an inline heredoc (either way the gate could read one body while another was published).
+  `--commit-range` also became required rather than bracketed — documented-optional is a
+  documented opt-out of the fail-open — and the `\x1e`-delimited commit reader, which silently
+  skipped segments a crafted message could hide a reference in, became a two-stage read where an
+  unparseable commit id is rc 2 rather than skipped. The adversarial layer then caught the WF3
+  ordering bug introduced by that very fix (item 3b checked a body item 4 had not written yet) and
+  an over-claim in the code comment: a DECLARED reference inside backticks is skipped regardless of
+  markdown context, so an intended closure silently does not fire — now named as a known gap and
+  pinned by a characterization test rather than only in prose. `references/step-12.md`'s prose
+  ceiling rises 13,287→14,999 bytes (actual + the 5% allowed headroom, per the #874 AC7
+  convention) because item 4b is new prose; no other row moved. WF2 diagram REV 3.125.8 (station 12
+  delta). Suite 4887→4959.
+
 ### v3.125.7 (2026-08-04)
 - **A `gates[]` row for step 11.5 is now rejected at write time (#904, epic #875).** The run-record
   schema forbids it — Step 11.5's result lives in the `security_scan` section, and

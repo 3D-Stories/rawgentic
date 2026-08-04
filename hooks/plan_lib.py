@@ -410,6 +410,168 @@ def assert_pr_body_has_deferred_section(
     return (True, [])
 
 
+# --- Closing-keyword guard (#901) ---
+# GitHub's closing-keyword parser does not understand negation: it matches
+# `close #N` inside "this PR does not close #N" and closes the issue on merge.
+# Observed live TWICE in this repo: #568 closed by the #573 merge (2026-07-21)
+# and #874 closed by the #898 merge (2026-08-04). Both PRs were deliberately
+# `Part of`, and no commit carried a closing keyword — the body text alone did it.
+CLOSING_KEYWORDS: Final[tuple[str, ...]] = (
+    "close", "closes", "closed",
+    "fix", "fixes", "fixed",
+    "resolve", "resolves", "resolved",
+)
+
+# Deliberately NAIVE, mirroring GitHub: keyword, optional colon/spaces, at most
+# ONE line break, then an issue reference. Negation-blind on purpose.
+#
+# Reference forms: `#N`, `owner/repo#N`, a full issues URL, and `GH-N`. `GH-N` is
+# included DEFENSIVELY: GitHub autolinks that form, but whether a closing keyword
+# fires on it is NOT verified here and this comment does not claim it does. A
+# false positive costs one question; a miss costs a wrongly-closed issue (#901 AC2
+# — "fail toward asking, never silent"), so the cheap direction wins.
+#
+# Code spans and fenced blocks are NOT exempted, though GitHub DOES ignore a
+# closing keyword inside backticks (verified live 2026-07-28: a `Closes #4` code
+# span was inert and #4 stayed open). Three reasons, recorded so this is not
+# "optimized" away as a mere false positive:
+#   1. fail-toward-asking, per above;
+#   2. a correct markdown code-span/fence parser (nested fences, tilde fences,
+#      multi-backtick spans) is a new bug surface inside the guard that must be
+#      the trustworthy one;
+#   3. the inverse trap is real — a closing keyword in backticks makes an
+#      INTENDED closure silently NOT fire, so flagging an UNDECLARED one helps in
+#      that direction too.
+# KNOWN LIMIT, stated precisely because the looser version of reason 3 over-claimed
+# (Step 11 adversarial finding 2): a ref whose issue IS declared via `--closes` is
+# skipped without regard to markdown context, so a declared `` `Closes #N` `` passes
+# the gate and then silently fails to close on merge. Detecting that needs the
+# markdown-context tracking reason 2 rejects, and it is the opposite defect from the
+# one #901 exists to stop (an issue staying open is visible; an issue wrongly closed
+# is not), so it is a follow-up rather than scope creep. Write an intended closure as
+# PLAIN TEXT. `test_a_declared_backticked_closure_is_not_caught` pins this gap so it
+# stays visible and cannot be silently "fixed" without updating this claim.
+# `[ \t]*(?::[ \t]*)?` rather than `[ \t]*:?[ \t]*`: the latter puts two unbounded
+# quantifiers around an optional, so a long horizontal-whitespace run that fails to
+# match afterwards is re-split O(k) ways per start position. Polynomial, not
+# exponential — no nested quantifier over a quantified group, so never a ReDoS —
+# but the ambiguity is free to remove (Step 8a inline finding B).
+_CLOSING_REF_RE = re.compile(
+    r"\b(?P<kw>close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b"
+    r"[ \t]*(?::[ \t]*)?"
+    r"(?:\r?\n[ \t]*)?"
+    r"(?:"
+    r"https?://github\.com/(?P<urlrepo>[\w.-]+/[\w.-]+)/issues/(?P<url>\d+)"
+    r"|(?:(?P<hashrepo>[\w.-]+/[\w.-]+))?\#(?P<hash>\d+)"
+    r"|GH-(?P<gh>\d+)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+_SHA_RE = re.compile(r"[0-9a-fA-F]{7,64}")
+
+
+@dataclass(frozen=True)
+class ClosingRef:
+    """One closing-keyword-adjacent issue reference found in a text."""
+    keyword: str      # the matched keyword, lowercased
+    issue: int        # the referenced issue number
+    line: int         # 1-indexed line the match starts on
+    text: str         # the matched substring, whitespace-normalized
+    repo: str | None = None   # "owner/name" when the ref is REPO-QUALIFIED, else None
+
+
+def find_closing_refs(text: str) -> tuple[ClosingRef, ...]:
+    """Scan `text` for closing-keyword-adjacent issue references (#901).
+
+    Replicates GitHub's naive match, so a NEGATED sentence still yields a hit —
+    that is the whole point: the guard must predict what GitHub will do, not what
+    the sentence means.
+
+    Deliberately TEXT-agnostic (Step-4 finding #3): the caller decides what it is
+    scanning, so a commit message can be passed unchanged by a future caller
+    without touching this function.
+    """
+    if not isinstance(text, str) or not text:
+        return ()
+    hits: list[ClosingRef] = []
+    for m in _CLOSING_REF_RE.finditer(text):
+        num = m.group("hash") or m.group("url") or m.group("gh")
+        if num is None:            # pragma: no cover - alternation guarantees one
+            continue
+        repo = m.group("hashrepo") or m.group("urlrepo")
+        hits.append(ClosingRef(
+            keyword=m.group("kw").lower(),
+            issue=int(num),
+            line=text.count("\n", 0, m.start()) + 1,
+            text=" ".join(m.group(0).split()),
+            repo=repo.lower() if repo else None,
+        ))
+    return tuple(hits)
+
+
+def assert_pr_body_closing_refs(
+    pr_body: str,
+    intended_closes=frozenset(),
+) -> tuple[bool, list[str]]:
+    """Flag every closing-keyword ref the PR does NOT intend to close (#901).
+
+    `intended_closes` is the set of issue numbers this PR legitimately closes.
+    An EMPTY set means a `Part of` PR that closes nothing, so every closing ref
+    is flagged — the fail-closed default, since a caller that forgets to declare
+    its intent gets asked rather than waved through.
+
+    A `--closes N` declaration is UNQUALIFIED and therefore authorizes the CURRENT
+    repository only. A repo-qualified reference (`owner/name#N` or a full issues
+    URL) is never covered by a bare number, so declaring local #901 cannot
+    authorize closing `other/repo#901` — they are different issues that happen to
+    share an integer. Qualified references always flag; a self-referential URL to
+    this same repo therefore flags too, which is a deliberate false positive in the
+    fail-toward-asking direction (a future `--closes owner/name#N` syntax could
+    narrow it).
+
+    Fail-CLOSED on input it cannot evaluate: a non-string or blank `pr_body`, and a
+    non-integer `intended_closes` entry, are caller errors reported as errors — not
+    a vacuous `(True, [])`. The permissive empty-input behaviour lives one level
+    down in `find_closing_refs`, which is a scanner, not a gate.
+
+    Returns (ok, errors). A reference error names the offending issue and the
+    replacement phrasing, and never names the intended issues (an error message
+    that echoed them would be confusing when only one of several refs is wrong).
+    """
+    errors: list[str] = []
+    intended: set[int] = set()
+    for raw in intended_closes:
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            errors.append(
+                f"intended_closes entry {raw!r} is not an integer issue number")
+            continue
+        intended.add(raw)
+    if not isinstance(pr_body, str) or not pr_body.strip():
+        errors.append(
+            "pr_body is empty or not a string — that is a caller error, not a PR "
+            "body with no closing keywords; refusing rather than passing vacuously")
+        return (False, errors)
+    for hit in find_closing_refs(pr_body):
+        if hit.repo is None and hit.issue in intended:
+            continue
+        where = f"{hit.repo}#{hit.issue}" if hit.repo else f"#{hit.issue}"
+        qualified = (
+            f" It is repo-qualified, so an unqualified --closes declaration cannot "
+            f"authorize it — {hit.repo}#{hit.issue} is a different issue from "
+            f"#{hit.issue} in this repo." if hit.repo else ""
+        )
+        errors.append(
+            f"line {hit.line}: {hit.text!r} puts the closing keyword "
+            f"{hit.keyword!r} next to {where}, which this PR does not "
+            f"declare it closes — GitHub shuts {where} on merge even when "
+            f"the sentence negates it.{qualified} Write 'leaves {where} open' "
+            f"instead, or declare the closure."
+        )
+    return (len(errors) == 0, errors)
+
+
 def _is_nonempty_str(v) -> bool:
     return isinstance(v, str) and bool(v.strip())
 
@@ -3040,6 +3202,123 @@ def _cmd_append_review_log(args) -> int:
     return 0
 
 
+def _cmd_check_pr_refs(args) -> int:
+    """#901 — the Step-12 closing-keyword gate, run BEFORE `gh pr create`.
+
+    A negated "this PR does not close #N" in a PR body closes #N on merge, because
+    GitHub's parser ignores the negation. This ran twice for real (#568 via #573,
+    #874 via #898), so the check is mechanical rather than a prose reminder.
+
+    Exit codes, three-valued so a caller mistake can never read as a gate pass:
+    ``0`` the gate holds · ``1`` the gate FAILS (findings on stdout) · ``2``
+    caller/usage error.
+
+    Fail-CLOSED throughout, mirroring `_cmd_assert_pr_body`:
+
+    - **An empty or whitespace-only body is rc 2, never rc 0.** It has no closing
+      refs, so the pure function would return ``(True, [])`` — but an empty body
+      is far more likely a wrong ``--pr-body-file`` path or a failed draft write
+      than a real PR. This is the same vacuous-pass class as the #796 finding on
+      `assert-pr-body` ("absence of TASKS is a caller error, not a clean gate").
+    - **Omitting ``--closes`` means "this PR closes nothing"**, so every closing
+      ref flags. A caller that forgets to declare its intent gets ASKED, never
+      waved through.
+    - **Invalid UTF-8 is rc 2, not a traceback.** ``UnicodeDecodeError`` is a
+      ``ValueError``, NOT an ``OSError``, so catching only ``OSError`` let corrupt
+      input escape as an uncaught traceback whose process rc 1 is indistinguishable
+      from "the gate found something" (Step 8a cross-model finding 4).
+
+    ``--commit-range`` extends the scan to the commit MESSAGES that will enter the
+    PR. GitHub parses closing keywords there too, so a body-only check left a real
+    fail-open: the prose says the rule binds commits, and without this the command
+    returned rc 0 while a commit still closed the issue on merge (Step 8a
+    cross-model finding 1).
+    """
+    root = os.path.realpath(args.project_root)
+    if not _contained(args.pr_body_file, root):
+        sys.stderr.write(f"check-pr-refs: REFUSED — --pr-body-file resolves outside "
+                         f"--project-root ({root})\n")
+        return 2
+    try:
+        with open(args.pr_body_file, encoding="utf-8") as fh:
+            body = fh.read()
+    except (OSError, UnicodeError) as e:
+        sys.stderr.write(
+            f"check-pr-refs: cannot read --pr-body-file {args.pr_body_file!r}: {e}\n")
+        return 2
+    if not body.strip():
+        sys.stderr.write(
+            f"check-pr-refs: REFUSED — --pr-body-file {args.pr_body_file!r} is empty. "
+            "That is a wrong path or a failed draft write, not a PR body with no "
+            "closing keywords; passing here would satisfy the gate vacuously\n")
+        return 2
+    intended = frozenset(args.closes or ())
+    sources: list[tuple[str, str]] = [("PR body", body)]
+    if args.commit_range:
+        if args.commit_range.startswith("-"):
+            sys.stderr.write("check-pr-refs: REFUSED — --commit-range may not start "
+                             "with '-' (it would be read as a git option)\n")
+            return 2
+        # TWO-STAGE on purpose: hashes first, then one message per hash. A single
+        # sentinel-delimited `git log` pass looked cheaper, but a commit message
+        # containing the record delimiter split the hazardous text into a segment
+        # the parser skipped — a fail-open in the guard itself, and a commit
+        # message is attacker-influenced text (Step 11 cross-model finding 3).
+        # Nothing is skipped here: an unparseable hash is rc 2, never `continue`.
+        try:
+            listing = subprocess.run(
+                ["git", "log", "--format=%H", args.commit_range, "--"],
+                cwd=root, capture_output=True, text=True, timeout=30, check=False)
+        except (OSError, subprocess.SubprocessError, UnicodeError) as e:
+            sys.stderr.write(f"check-pr-refs: git log failed for --commit-range "
+                             f"{args.commit_range!r}: {e}\n")
+            return 2
+        if listing.returncode != 0:
+            sys.stderr.write(
+                f"check-pr-refs: REFUSED — git log rejected --commit-range "
+                f"{args.commit_range!r}: {listing.stderr.strip()}\n")
+            return 2
+        for raw in listing.stdout.splitlines():
+            sha = raw.strip()
+            if not sha:
+                continue
+            if not _SHA_RE.fullmatch(sha):
+                sys.stderr.write(
+                    f"check-pr-refs: REFUSED — git log returned an unparseable "
+                    f"commit id {sha!r}; refusing rather than skipping it\n")
+                return 2
+            try:
+                one = subprocess.run(
+                    ["git", "log", "-1", "--format=%B", sha, "--"],
+                    cwd=root, capture_output=True, text=True, timeout=30,
+                    check=False)
+            except (OSError, subprocess.SubprocessError, UnicodeError) as e:
+                sys.stderr.write(
+                    f"check-pr-refs: cannot read commit message for {sha[:8]}: {e}\n")
+                return 2
+            if one.returncode != 0:
+                sys.stderr.write(
+                    f"check-pr-refs: REFUSED — cannot read commit message for "
+                    f"{sha[:8]}: {one.stderr.strip()}\n")
+                return 2
+            if one.stdout.strip():
+                sources.append((f"commit {sha[:8]}", one.stdout))
+    errors: list[str] = []
+    for label, text in sources:
+        ok, errs = assert_pr_body_closing_refs(text, intended)
+        if not ok:
+            errors.extend(f"{label}: {e}" for e in errs)
+    if not errors:
+        return 0
+    declared = ", ".join(f"#{n}" for n in sorted(intended)) or "(none declared)"
+    sys.stdout.write(
+        f"check-pr-refs: {len(errors)} unintended closing reference(s) across "
+        f"{len(sources)} source(s); this PR declares it closes {declared}\n")
+    for e in errors:
+        sys.stdout.write(f"  - {e}\n")
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
     parser = argparse.ArgumentParser(prog="plan_lib")
@@ -3095,6 +3374,20 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--project-root", default=".", dest="project_root",
                    help="--log must resolve inside this root")
     w.set_defaults(func=_cmd_append_review_log)
+    k = sub.add_parser("check-pr-refs",
+                       help="flag closing-keyword-adjacent issue refs in a PR body (#901)")
+    k.add_argument("--pr-body-file", required=True, dest="pr_body_file",
+                   help="the DRAFTED PR body, checked before `gh pr create`")
+    k.add_argument("--closes", type=int, action="append", default=None,
+                   help="an issue THIS repo's PR legitimately closes; repeatable. "
+                        "Omit for a `Part of` PR that closes nothing. Unqualified: "
+                        "it never authorizes a repo-qualified owner/name#N ref")
+    k.add_argument("--commit-range", dest="commit_range", default=None,
+                   help="also scan commit MESSAGES in this range (e.g. "
+                        "origin/main..HEAD) — GitHub parses closing keywords there too")
+    k.add_argument("--project-root", default=".", dest="project_root",
+                   help="--pr-body-file must resolve inside this root")
+    k.set_defaults(func=_cmd_check_pr_refs)
     args = parser.parse_args(argv)
     return args.func(args)
 

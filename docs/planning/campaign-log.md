@@ -14,6 +14,50 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #875 M1 — #901: a negated "does not close #N" no longer closes #N · v3.125.8
+
+Round-7 session, small-standard lane (`simple_change`, 5 impl files ≤ 7), plugin 3.125.7 cache.
+GitHub's closing-keyword parser does not understand negation: "this PR does not close #N" matches
+`close #N` and shuts that issue on merge. **It had already fired twice** — #568 on the #573 merge
+(2026-07-21) and #874 on the #898 merge (2026-08-04) — both on PRs deliberately marked `Part of`,
+with no closing keyword in any commit. The body prose alone did it, and both issues were reopened
+by hand. Memory recall surfaced the first incident, which the issue body did not mention; that
+turned a one-off into a repeat and gave the tests a second verbatim case.
+
+Fix: `find_closing_refs` (a deliberately NAIVE scanner mirroring GitHub — negation-blind on
+purpose, because the guard's job is to predict the parser, not read the sentence),
+`assert_pr_body_closing_refs`, and a `check-pr-refs` CLI wired into WF2 Step 12 item 4b and WF3's
+PR step, both BEFORE `gh pr create`. Two decisions are load-bearing. **Code spans are NOT
+exempted** even though GitHub ignores backticked keywords (verified live 2026-07-28): a false
+positive costs one question, a miss costs a wrongly-closed issue, and a markdown parser would be a
+new bug surface inside the guard that has to be the trustworthy one. **A declaration is
+unqualified** — `--closes 901` authorizes this repo only, so a qualified `other/repo#901` never
+matches a bare integer.
+
+The guard earned itself on its own PR body: run against the draft, it flagged **four** live
+closures, two of them pointing at **#874 — the very issue the original defect wrongly shut** — which
+merging the unfixed body would have shut a second time. Two of the four sat inside a fenced block,
+so exempting fences would have hidden them.
+
+**Telemetry (run-record `wf2-901-66ccc052`):** gates — Design Critique 3/3 pass (rubric-only, lane;
+1 High adopted before Step 5), Plan Drift skipped (lane), Per-task Review 8/8 pass (T1 high-risk;
+2 High fail-opens fixed — unscanned commit messages, and a cross-repo identity collision where a
+bare `--closes` authorized another repo's same-numbered issue), Implementation Drift 0/0 pass after
+the full-suite gate caught 2 real drift-guard regressions on its first run, Code Review 8/8 pass
+(**1 Critical**: both workflows prescribed a `/tmp/...` body file that the gate's own containment
+check refuses, so the documented command returned rc 2 every time — the mandatory gate was
+unsatisfiable as written, reproduced before fixing; the adversarial `always`-mode layer then caught
+the WF3 ordering bug introduced *by that fix*, plus an over-claim about backticks); security scan
+PASS (0 blocking, 0 advisory, skipped: iac). Tests 72 added, suite **4887→4959/0**. Loop-backs 2/3,
+both mints spent on authorized in-place fix rounds, neither on a redesign. Six terminal dispositions
+persisted (5 adopted, 1 refuted-and-declined with measured evidence). Diagram REV 3.125.8 marks
+station 12.
+
+Two review rounds found what tests could not: both Criticals-in-effect were prose-versus-code
+drift, in a guard whose entire value is being trustworthy.
+
+---
+
 ## Epic #875 M1 — #904: a gates[] row for step 11.5 is rejected at write time · v3.125.7
 
 Round-6 session, small-standard lane (`simple_change`, 3 impl files ≤ 7), plugin 3.125.6 cache.

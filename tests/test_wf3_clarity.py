@@ -482,3 +482,109 @@ class TestTimingAssemblyWF3:
                 "--issue <issue>") in sec, (
             "WF3 Step 14 assembly must compute timing via the step_state CLI (#506)")
         assert "hand-estimate durations into `timing`" in sec
+
+
+class TestClosingKeywordGuardWF3:
+    """#901 (WF3 surface): the same closing-keyword rule on WF3's PR step.
+
+    WF3 is the delicate case. A WF3 run fixes exactly ONE bug, so its own issue is
+    a GENUINE closure — Step 10's `(closes #<issue>)` commit and the body's
+    `Fixes #<issue-number>` are correct and must survive. `test_step14_*` already
+    pins that Step 14 relies on that linkage. So this guard asserts the new rule
+    is present AND that it explicitly preserves the intended linkage, rather than
+    forbidding closing keywords outright and contradicting the sibling pin.
+    """
+
+    STEPS = REPO_ROOT / "skills" / "fix-bug" / "references" / "steps.md"
+
+    def _gate_section(self) -> str:
+        text = self.STEPS.read_text()
+        return " ".join(_section(
+            text, "3b. **Closing-keyword check", "4. Create PR:").split())
+
+    def test_wf3_pr_step_carries_the_rule(self):
+        sec = self._gate_section()
+        assert "never place a closing keyword" in sec, (
+            "WF3's PR step must state the never-place-a-closing-keyword rule (#901)")
+        assert '"leaves #N open"' in sec
+
+    def test_all_nine_closing_keywords_are_named(self):
+        sec = self._gate_section()
+        for kw in ("close", "closes", "closed",
+                   "fix", "fixes", "fixed",
+                   "resolve", "resolves", "resolved"):
+            assert f"`{kw}`" in sec, f"keyword {kw!r} must be named in WF3's rule"
+
+    def test_intended_linkage_is_explicitly_preserved(self):
+        """Guards against the rule being read as 'strip every closing keyword',
+        which would break Step 14's documented reliance on the linkage."""
+        sec = self._gate_section()
+        assert "(closes #<issue>)" in sec, (
+            "WF3's rule must explicitly preserve Step 10's intended "
+            "`(closes #<issue>)` commit linkage")
+        assert "Fixes #<issue-number>" in sec
+        assert "binds every OTHER issue the body mentions" in sec, (
+            "the rule's scope must be stated as 'every other issue', or it "
+            "contradicts test_step14's reliance on the linkage")
+
+    def test_gate_command_runs_before_pr_creation(self):
+        """Anchored to the COMMAND invocations, not prose: the rule's own sentence
+        says "runs BEFORE `gh pr create`", so a bare index() match on that string
+        finds the mention and the assertion goes vacuous (it did, first run)."""
+        text = self.STEPS.read_text()
+        gate = re.search(r"^\s*python3 hooks/plan_lib\.py check-pr-refs",
+                         text, re.MULTILINE)
+        create = re.search(r"^\s*gh pr create", text, re.MULTILINE)
+        assert gate, "the check-pr-refs command invocation is missing from WF3 steps.md"
+        assert create, "the gh pr create command invocation is missing from WF3 steps.md"
+        assert gate.start() < create.start(), (
+            "the check-pr-refs gate must be invoked BEFORE `gh pr create` in WF3's "
+            "steps.md (#901 AC2)")
+
+    def test_gated_body_path_is_project_contained(self):
+        """Step-11 cross-model finding 1 (Critical), WF3 surface."""
+        sec = self._gate_section()
+        assert "/tmp/wf3-pr-body.md" not in sec
+        assert "./.rawgentic/wf3-pr-body.md" in sec
+
+    def test_pr_creation_publishes_the_same_file_the_gate_read(self):
+        """WF3 published its body via an inline heredoc, so the gated file was
+        not the published one at all. It now writes and publishes one file."""
+        text = self.STEPS.read_text()
+        assert "--body-file ./.rawgentic/wf3-pr-body.md" in text, (
+            "WF3's gh pr create must publish the same project-contained body "
+            "file item 3b gated (#901)")
+
+    def test_commit_range_is_required(self):
+        """Step-11 cross-model finding 2 (High): WF3's command omitted commit
+        scanning entirely, while Step 10 commits `(closes #<issue>)`."""
+        sec = self._gate_section()
+        assert "--commit-range origin/<default>..HEAD --project-root ." in sec
+        assert "[--commit-range" not in sec
+
+    def test_body_is_written_before_it_is_checked(self):
+        """Step-11 adversarial finding 1 (High): the gate originally sat in item
+        3b while item 4 wrote the body. On a clean run the check hit a missing
+        file and returned rc 2; with a stale file it checked content that item 4
+        then overwrote, publishing a body the gate never saw. Either way the gate
+        was defeated, so the write must precede the check IN THE SAME ITEM."""
+        sec = self._gate_section()
+        write = sec.index("cat > ./.rawgentic/wf3-pr-body.md")
+        check = sec.index("python3 hooks/plan_lib.py check-pr-refs")
+        assert write < check, (
+            "the PR-body write must come BEFORE the check-pr-refs call in item 3b")
+
+    def test_pr_step_does_not_rewrite_the_gated_body(self):
+        """A body regenerated after the check is a body the gate never saw."""
+        text = self.STEPS.read_text()
+        pr_step = _section(text, "4. Create PR:", "### Output")
+        assert "cat > ./.rawgentic/wf3-pr-body.md" not in pr_step, (
+            "item 4 must publish the already-gated file, never rewrite it (#901)")
+        assert "--body-file ./.rawgentic/wf3-pr-body.md" in pr_step
+
+    def test_gate_command_declares_this_runs_issue(self):
+        sec = self._gate_section()
+        assert "python3 hooks/plan_lib.py check-pr-refs" in sec
+        assert "--closes <this run's issue>" in sec, (
+            "WF3 closes its own issue, so its gate invocation must declare it — "
+            "otherwise the documented command flags the legitimate closure")
