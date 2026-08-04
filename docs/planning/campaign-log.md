@@ -14,6 +14,31 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #875 M1 slot 1 — #856: CI byte ceilings for the WF2 prose corpus · v3.123.1
+
+First post-retreat WF2 run (small-standard lane, manual handoff, first M1 child on plugin
+3.123.0). Rescope 2026-08-04 governed the slot: the 302-row obligation inventory and the
+digest instrument were dropped as sunk cost; what shipped is the measurement + the
+ceiling guard, with the steps.md split moved to #874 — which runs AFTER this so its byte
+redistribution is forced through the guard.
+
+- **Measured post-retreat corpus** (tree 050cbe8e): **237,717 B / 3,079 lines across 6
+  files** (pre-retreat 301,635 B / 7 files); ≈59.4k tokens as a labelled bytes/4
+  approximation, never asserted.
+- **Guard** `tests/test_wf2_prose_budget.py`: recursive-glob, glob-exact accounting with
+  four violation classes (unbudgeted new file / stale budget entry / per-file over /
+  total over); ceilings at actual + 2.4–19% per file, total 245,000 B (~3.1%);
+  file-specific failures name the path, over-failures carry the byte delta.
+- **Review** (lane: single inline reviewer on the security seat + cross-model
+  gpt-5.6-sol diff review per D180): 5 findings, 0 Critical/High — 1 adopted
+  (wording-honesty fix, f6e03595), 1 declined with reason, 1 band-dropped Medium noted
+  as a follow-up candidate (ceiling-ratchet: in-place shrinkage accumulates allowance),
+  2 others band-dropped.
+- **Gates:** suite 4659→4666/0 (rc 0); both pylint lanes 10.00/10; security scan PASS
+  (0 blocking, 0 advisory; iac skipped — not applicable). No workflow-spine change → no
+  diagram REV.
+- PR / CI / merge: filled by the next slot's pass.
+
 ## Epic #756 — silent failures: the executor instruction layer (#735 → #733 → #732 → #758 → #767 → #765 → #762 → #847) · v3.118.2
 
 Eighth slot (#847, session ea47e4bc, v3.118.2, WF3): the run that turned the epic's own thesis on

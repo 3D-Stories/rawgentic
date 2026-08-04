@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
 <title>Rawgentic modernization — campaign log</title>
 <style>
 :root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
@@ -153,11 +154,11 @@ letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
 .c-defer{color:var(--defer);background:var(--defer-bg)}
 .c-plan{color:var(--ink-2);background:var(--code)}
 
-body.tpl-roadmap{background:var(--bg)}
-.tpl-roadmap .wrap{max-width:900px;padding:0 20px 72px}
-.tpl-roadmap header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
-.tpl-roadmap h1{font-size:clamp(22px,4vw,30px)}
-.tpl-roadmap h2{font-size:19px;margin:1.4em 0 .4em}
+body.tpl-roadmap{background:radial-gradient(1000px 520px at 70% -8%,#17202c 0%,var(--bg) 58%)}
+.tpl-roadmap .wrap{max-width:1120px;padding:0 22px 72px}
+.tpl-roadmap header{padding:36px 0 14px;border-bottom:none;margin-bottom:20px}
+.tpl-roadmap h1{font-size:clamp(26px,3.6vw,36px)}
+.tpl-roadmap h2{font-size:20px;margin:2em 0 .6em}
 
 .tpl-roadmap .rm-epic{border-left-width:4px}
 .tpl-roadmap .rm-meter{margin:10px 0 4px}
@@ -272,24 +273,39 @@ color:var(--ink-3);background:var(--code)}
 .tpl-roadmap .blk-ph-chip.is-warn{color:var(--sev-med);background:var(--sev-med-bg)}
 .tpl-roadmap .blk-ph-chip.is-ok{color:var(--chip-c);background:var(--sev-low-bg)}
 .tpl-roadmap .blk-ph-text{flex:1 1 240px;color:var(--ink-2);font-size:14px}
-
-:root{--accent:#f2a65e;}
-:root[data-theme=dark]{--accent:#f2a65e;}
-:root[data-theme=light]{--accent:#a26211;}
-@media print{:root,:root[data-theme=dark]{--accent:#a26211;}}
 </style>
 </head>
 <body class="tpl-roadmap">
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-08-02 20:29 MDT</div>
+<div class="eyebrow">design artifact · updated 2026-08-03 21:49 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
-<p class="sub">Epic #756 — silent failures: the executor instruction layer</p>
+
 </header>
 <main>
 <p>Rolling design-artifact log for the autonomous workflow-modernization campaign (dogfood: rawgentic builds rawgentic). One section per implemented slot, updated in that slot&#x27;s PR (shared-doc mode). The hand-curated program dashboard lives separately at <code>docs/planning/2026-07-04-workflow-modernization-review.html</code>; this log is the per-slot artifact the WF2 Step-12 lifecycle renders with embedded run-record telemetry.</p>
 <p>Milestones: <strong>M1</strong> instrument+guard (done) · <strong>M2</strong> enable+restructure (done) · <strong>M3</strong> multi-issue autonomy + v3.0.0 (done) · <strong>M4</strong> headless (done — pilot shipped; live run owner-gated). M1–M4 <strong>COMPLETE</strong>; the <strong>epic #188 fast-follow</strong> (WF2 hardening + epic-native workflows + OAuth Action reviews) is now in progress.</p>
 <hr>
+<section class="mstone rm-epic"><h3>Epic #875 M1 slot 1 — #856: CI byte ceilings for the WF2 prose corpus · v3.123.1 <span class="chip c-conf">SHIPPED</span></h3><p>First post-retreat WF2 run (small-standard lane, manual handoff, first M1 child on plugin 3.123.0). Rescope 2026-08-04 governed the slot: the 302-row obligation inventory and the digest instrument were dropped as sunk cost; what shipped is the measurement + the ceiling guard, with the steps.md split moved to #874 — which runs AFTER this so its byte redistribution is forced through the guard.</p>
+<ul>
+<li><strong>Measured post-retreat corpus</strong> (tree 050cbe8e): **237,717 B / 3,079 lines across 6</li>
+</ul>
+<p>  files** (pre-retreat 301,635 B / 7 files); ≈59.4k tokens as a labelled bytes/4   approximation, never asserted.</p>
+<ul>
+<li><strong>Guard</strong> <code>tests/test_wf2_prose_budget.py</code>: recursive-glob, glob-exact accounting with</li>
+</ul>
+<p>  four violation classes (unbudgeted new file / stale budget entry / per-file over /   total over); ceilings at actual + 2.4–19% per file, total 245,000 B (~3.1%);   file-specific failures name the path, over-failures carry the byte delta.</p>
+<ul>
+<li><strong>Review</strong> (lane: single inline reviewer on the security seat + cross-model</li>
+</ul>
+<p>  gpt-5.6-sol diff review per D180): 5 findings, 0 Critical/High — 1 adopted   (wording-honesty fix, f6e03595), 1 declined with reason, 1 band-dropped Medium noted   as a follow-up candidate (ceiling-ratchet: in-place shrinkage accumulates allowance),   2 others band-dropped.</p>
+<ul>
+<li><strong>Gates:</strong> suite 4659→4666/0 (rc 0); both pylint lanes 10.00/10; security scan PASS</li>
+</ul>
+<p>  (0 blocking, 0 advisory; iac skipped — not applicable). No workflow-spine change → no   diagram REV.</p>
+<ul>
+<li>PR / CI / merge: filled by the next slot&#x27;s pass.</li>
+</ul></section>
 <section class="mstone rm-epic"><h3>Epic #756 — silent failures: the executor instruction layer (#735 → #733 → #732 → #758 → #767 → #765 → #762 → #847) · v3.118.2 <span class="chip c-conf">SHIPPED</span></h3><p>Eighth slot (#847, session ea47e4bc, v3.118.2, WF3): the run that turned the epic&#x27;s own thesis on the epic&#x27;s own records. <code>hooks/notes-size-handler.py</code> had been deleting everything outside the last 200 lines of every <code>session_notes/*.md</code> with <strong>no archive</strong>, and its only preservation path — a POST to <code>localhost:9077/ingest</code> — had never served, swallowed every exception, and had its result assigned at <code>:105</code> and never read. Six epic decision logs were destroyed, <code>epic-46</code> (960 lines) and <code>epic-756</code> (848) on the day the issue was filed. Reproduced first by the reporter&#x27;s entry path: an 852-line fixture holding 140 decision entries came back <strong>0 of 140 surviving</strong>, <code>&quot;ingested&quot;: false</code> and <code>&quot;trimmed&quot;: true</code> in the same result object. Three compounding defects, each separately sufficient: destruction as the primary action; fail-OPEN on an unobservable preservation call; and a line metric inverted 833× against context cost (a 100-line 2.0 MB file spared, an 801-line 2.4 KB file cut). Shipped: archive-first to a <code>.notes-archive/</code> dot-directory outside the glob, created <code>O_CREAT|O_EXCL</code> so a same-second trim cannot clobber the prior archive; fail-CLOSED (archive does not land → no trim, byte-identical, loud on stderr); a 64,000-CHARACTER threshold with a 200-line / 16,000-char tail; the dead ingest deleted with its three tests; decision logs never trimmed at all, matched by NAME rather than by the accident that had been sparing them (a dot in the stem failed <code>PROJECT_NAME_RE</code> — the only reason <code>sysop.handoff.md</code> survived at 1,670 lines); and a new <code>hooks/decision_log.py</code> append-only store at <code>claude_docs/decisions/&lt;project&gt;.jsonl</code>, injected 15 records deep at session start. <strong>Sabotage did real work twice.</strong> The first run showed the fail-closed test passing with the guard REMOVED — a read-only parent had been blocking the notes write too, so the OS was doing the test&#x27;s job; that is why the archive got its own directory. The second proved the <code>flock</code>+<code>O_APPEND</code> deviation from AC8 load-bearing: swapping in <code>atomic_write_text</code>&#x27;s read-modify-write lost <strong>31 of 40</strong> concurrent records. Gate economics: the Step-4 adversarial layer returned 6 findings (1 High) and rewrote the plan&#x27;s constants before a line was written; two review rounds, both <code>gpt-5.6-sol</code> seats against <code>anthropic</code> authorship, returned 0 Critical / 3 High / 8 Medium / 4 Low and then 2 High / 3 Medium / 2 Low — and materially changed the fix each time (ignored <code>os.write</code> short returns; universal-newline translation eating every <code>\r</code> so the archive did not byte-preserve what it archived; a truncated final JSONL record POISONING the next append; a 40-digit env value making bash&#x27;s own <code>[ -gt ]</code> fail so the round-1 clamp silently did not clamp; a no-progress guard that measured the tail but not the header it was about to prepend, so the file stayed oversized and churned a fresh archive every session). <strong>Eight of the reviewers&#x27; findings were false-greens in this change&#x27;s OWN tests</strong> — including <code>test_invalid_project_name_rejected</code>, whose fixture stem <code>passwd</code> is a perfectly valid project name and which asserted only <code>rc == 0</code>. Owner decisions: the two-round review cap held (round-2 fixes therefore ship unreviewed, stated on the PR); the decision WRITERS were redirected in-PR rather than deferred (D-847-1) — there was no programmatic writer to change, only <code>skills/epic-run/SKILL.md</code> prose telling the orchestrator to hand-append markdown, now <code>decision_log.py append</code> with a drift guard; ONE High deferred with acknowledgement (D-847-2) — the pre-existing <code>flock</code> + <code>os.replace</code> inode race, unchanged by this fix and already modelled by <code>plan_lib.file_lock()</code>&#x27;s sidecar lock. Suite 6886→6938/21/exit 0, both pylint lanes 10.00/10, scan clean (iac skip visible). No workflow-spine change → no diagram REV.</p>
 <p>Seventh slot (#762, sessions ff40b6d5 → 89f42f76 → 3fecd708 → f0517473 across three clean-seam pane-handoffs, v3.112.0, full spine): the wiring child — the executor build seat becomes the PRIMARY WF2/WF3 implementation path, proven by dogfood (Tasks 3–6 and the WF3 drill each ran the real mint-gate → dispatch → exact-path collect → audited landing cycle — the first real build-seat receipts the #762 census demanded; run B&#x27;s final reconcile closes CLEAN, 8 calls, zero anomalies). Shipped: audited landing (<code>landed_work_product</code> bound to the landing identity, scoped dirty check, expected-feature-ref persisted at collect and REQUIRED at land — same-base-sha replay refuses, R5-B), reconcile arms (<code>unlanded_work_product</code>/<code>orphan_landing</code>/<code>landing_mismatch</code>/ <code>landing_conflict</code> ok-flipping + the NAMED report-only <code>pre_cutover_unverifiable</code> bucket, R5-D), the owner&#x27;s verbatim 8-seat matrix retune (analysis budget 2.0→10.0; <code>INCUMBENT_MODEL</code> → claude-fable-5 — the R4-E owner-veto item presented at the merge gate), WF2 §8 prose truth + delegation-fence flip citing follow-up #779 (filed), WF3 build adoption (R4-D complexity mapping, mint-gate plan grammar, executor-primary Step 7, subprocess e2e), docs truth flips + the R4-G AC1 atomic recipe — executed LIVE: all 24 active workspace projects now carry declarative <code>executorRouting</code> (owner D30, backup retained), and WF2+WF3 diagram REV 3.112.0. Owner decisions: D30 (AC1/AC4/AC2-WF3 ratified in-session), D31 (Task 2 orchestrator-inline — an honest task-scoped gate refuses a bakeoff-gated HIGH task on single dispatch and no build bake-off caller exists; the live refusal evidence rides the PR, the gap is #779&#x27;s). Two-run chain by design (#474): T3&#x27;s digest change ended run A&#x27;s epoch; run A closed honestly non-reconciled (2 documented dead Step-2 attempts + the probe row in pre_cutover), run B reconciled clean. Gate economics: design 3 passes (24 unique findings, 17 dispositions, budget-exhausted close per five owner precedents — itself the second owner-veto item); plan gate 7 findings; Step-8a wave 3 findings (the reconcile land-time-binding High) + 4 pre-existing stale pins; Step 9 caught 9 MORE stale-pin regressions outside T3/T5 allowlists (driver-bench fixtures + the WF3 regex pin — the process finding: a retune task&#x27;s allowlist must carry every pin-guard surface of the constant it changes), suite 6447→6514/21/0 exit 0; Step-11 wave 2 executor reviewers → 5 unique (1 High, three layers independently converging on the item-4 baseline-destroying restore — now landing-state-aware; + landing/reconcile conflict-identity parity, run_id one-to-one validation, retune prose now guard-tied to <code>DESIGN_MODELS</code> + the routing table, seat-derived WF3 DISPATCH type), all fixed red-first; adversarial diff layer failed (truncated) — recorded loudly, leads source-adjudicated. Scan clean (iac skip visible). All red-before-green; loop-backs design 2/2, global 2/3.</p></section>
 <section class="mstone rm-epic"><h3>Epic #756 — earlier slots · v3.111.0 and prior <span class="chip c-conf">SHIPPED</span></h3><p>Sixth slot (#765, session 4ac8c4b0 → b9a74758 → c2710ce0 across two clean-seam pane-handoffs, v3.111.0, full spine after an honest lane re-run): the bake-off decision child — the WIRE-vs-RETIRE fork the #735 gate filed. Owner D26 chose WIRE (the RETIRE recommendation presented and declined, two-way /ask-owner RG-761044); owner D27 mid-run scoped it DISABLEABLE-first (<code>designBakeoff.enabled</code> opt-in, default OFF, fail-open-to-off; hardening follow-up filed as #775, owner-joined to the epic at the queue tail, D28). Shipped: run-identity plumbing through <code>run_competitive</code> (additive; legacy callers keep their exact record shape — the <code>correlation_id</code> key is OMITTED, not null), the workflow-callable <code>design-round</code> CLI (identity REQUIRED + grammar-validated, <code>--winner-out</code> delivering the winner&#x27;s exact bytes as the design draft, whitelist-only sanitized <code>--evidence-out</code> with rubric-bound score keys + <code>judge_model</code>, raw sinks refusing ANY committable path in ANY git work tree, in-path gate enforcement exit 4, empty-brief and output-collision refusals), a LIVE glm-judged sol-vs-opus proving round committed as fail-closed AC2 evidence (regenerated under the final hardened code, run <code>wf2-765-c2710ce0</code>), the Step-3 prose/diagram wired-opt-in truth with <code>_WIRED/_GATE</code> drift pins and the stale-#472 sweep, and diagram REV 3.111.0 (station 3 delta, snapshots regenerated with the draw-in-animation wait fix — the shipped pair had been clipped). Gate economics: design 3 passes (10 findings, D25 budget-exhausted close per owner precedent); plan gate 6 adversarial findings; Step-8a wave 2 reviewers over the two high-risk commits (the winner-bytes-discard High caught there); Step-11 wave 2 executor reviewers + adversarial diff — 13 unique findings, the winner-DELIVERY contract gap raised independently by ALL THREE layers (fixed: the operative command now names <code>--winner-out</code>), 12 adopted + 1 declined with disposition (tri-state gate vs the owner-ratified D27 fail-open-to-off; #775 owns the diagnostics). No loop-back consumed at Steps 9/11 (design 2/2 spent at the gate, global 2/3). All red-before-green (10 red Step-11 tests). Suite 6414→6447. PR #776; merge/CI: filled by the next slot&#x27;s pass.</p>
@@ -869,7 +885,7 @@ color:var(--ink-3);background:var(--code)}
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established convention). Telemetry for this slot is embedded below.</p></section>
 
 </main>
-<footer>Last updated: 2026-08-02 20:29 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-08-03 21:49 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
