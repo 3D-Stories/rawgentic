@@ -2316,7 +2316,19 @@ def classify_branch_protection(status_code: int, body) -> tuple[str, dict]:
       or the contradiction check would be skipped).
     - 403/401/other -> 'unknown'.
     `details` always carries `required_checks: list[str]`.
+
+    #880 Defect B: `body` may be the probe's raw JSON TEXT (`str`) — the
+    natural reading of WF2 Step 1 item 9. A str is parsed first; only a
+    genuinely unparseable string (or one decoding to a non-dict) classifies
+    'unknown'. Dict-input behavior is byte-identical. Before this, a string
+    body silently returned 'unknown' — the LESS-safe answer — with no error
+    (hit live by the #856 run).
     """
+    if isinstance(body, str):
+        try:
+            body = _json.loads(body)
+        except _json.JSONDecodeError:
+            return ("unknown", {"required_checks": []})
     if status_code == 200:
         if not isinstance(body, dict) or not (_PROTECTION_KEYS & set(body)):
             return ("unknown", {"required_checks": []})

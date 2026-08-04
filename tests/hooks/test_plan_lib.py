@@ -2525,3 +2525,40 @@ class TestAppendReviewLogCLI:
                       "--sha", "abc", "--reviewers", "a", "--verdict", "applied",
                       "--findings", "0,0,0,0,0", "--project-root", str(inner))
         assert r.returncode == 2
+
+
+class TestBranchProtectionStringBody:
+    """#880 Defect B: the probe's raw JSON TEXT — the natural reading of WF2
+    Step 1 item 9 — silently classified `unknown` (the less-safe answer)
+    instead of `unprotected`. Hit live by the #856 run; reproduced on the real
+    GitHub 404 body during this run's own Step 1."""
+
+    REAL_404_BODY = ('{"message":"Branch not protected","documentation_url":'
+                     '"https://docs.github.com/rest/branches/branch-protection'
+                     '#get-branch-protection","status":"404"}')
+
+    def test_real_404_body_as_string_is_unprotected(self):
+        mod = _reload_plan_lib()
+        state, details = mod.classify_branch_protection(404, self.REAL_404_BODY)
+        assert state == "unprotected"
+        assert details["required_checks"] == []
+
+    def test_protection_object_as_string_is_protected(self):
+        mod = _reload_plan_lib()
+        body = '{"required_status_checks": {"contexts": ["ci/build"]}}'
+        state, details = mod.classify_branch_protection(200, body)
+        assert state == "protected"
+        assert details["required_checks"] == ["ci/build"]
+
+    def test_unparseable_string_stays_unknown(self):
+        mod = _reload_plan_lib()
+        assert mod.classify_branch_protection(404, "Not Found")[0] == "unknown"
+        assert mod.classify_branch_protection(200, "surprise")[0] == "unknown"
+
+    @pytest.mark.parametrize("decodes_to_non_dict", ['[1,2]', '123', 'null', '"str"'])
+    def test_string_decoding_to_non_dict_stays_unknown(self, decodes_to_non_dict):
+        """Gate finding: JSON truthiness must not widen the classifier —
+        only an object body is evidence."""
+        mod = _reload_plan_lib()
+        assert mod.classify_branch_protection(404, decodes_to_non_dict)[0] == "unknown"
+        assert mod.classify_branch_protection(200, decodes_to_non_dict)[0] == "unknown"
