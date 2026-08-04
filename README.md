@@ -752,11 +752,22 @@ For major changes, please open an issue first to discuss the approach.
   label disagreed, or the path was not equivalent (naming the base), recorded over the same
   post-baseline tail the gate polls: previously a comparison that could never match was
   byte-identical in its output to a 120 s poll timeout, and this campaign published a wrong
-  diagnosis off that ambiguity. Tests: 51 new — helper/gate/diagnosis units including both
+  diagnosis off that ambiguity. Tests: 60 new — helper/gate/diagnosis units including both
   probe-derived false-accept counter-examples, the workspace-root derivation guard, and behavioural
   call-site tests at BOTH gates; the primary red reproduced the reported symptom through the
-  reporter's own entry path. No workflow-spine change (a launcher gate's comparison, not a station,
-  gate, loop-back or lane) → no diagram REV. Suite 4812→4863.
+  reporter's own entry path. **The Step-8a cross-model review then found three more, all reproduced
+  by execution before being fixed:** lexical normalization equated different directories when `..`
+  follows a symlink (a `..` component is now refused outright, and a relative or `..`-bearing base is
+  not used); the derived workspace root trusted ANY contract-shaped registry path, so a foreign
+  workspace's registry could have authorized a teardown (the base is now cross-checked against the
+  already-validated `position["repo_root"]` and dropped when they disagree); and a malformed registry
+  line was silently skipped and then reported as "the successor never wrote its bind" — the very
+  wrong-diagnosis class this change exists to remove — so corruption is now named as corruption.
+  Fixing the first of those also exposed that every pre-#800 registry fixture wrote the SAME
+  representation on both sides and left `repo_root` unrelated to `project_path`, which is part of how
+  the defect stayed hidden; the retire-site tests now model production's shape. No workflow-spine
+  change (a launcher gate's comparison, not a station, gate, loop-back or lane) → no diagram REV.
+  Suite 4812→4872.
 
 ### v3.125.5 (2026-08-04)
 - **driver_lib.py refuses CLI invocation loudly (#905, epic #875).** A bare

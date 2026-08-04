@@ -744,10 +744,22 @@ def _path_key(value, base: str | None) -> tuple[bool, tuple[str, ...]] | None:
     comparison made `/projects/rawgentic` equal to `./projects/rawgentic` — two different
     directories, matched with no base in sight. Keeping absoluteness in the key forces that pair
     through the base-resolution branch, where it correctly fails.
+
+    **A `..` component is REFUSED outright** (Step-8a cross-model review, High): lexical
+    normalization and the filesystem disagree the moment `..` follows a symlink — with `/ws/link`
+    → `/other/dir`, `link/../project` normalizes to `/ws/project` while traversal reaches
+    `/other/project`, so the gate could accept a wrong directory and authorize a teardown. No real
+    producer writes `..` here (the switch skill writes `./projects/<name>` or its absolute form),
+    so refusing removes the entire class instead of reasoning about which symlink layouts are safe.
+    A **relative or `..`-bearing base is not used** for the same reason: it cannot establish which
+    directory either side names.
     """
-    if not isinstance(value, str) or isinstance(value, bool) or not value.strip():
+    if not isinstance(value, str) or not value.strip():
         return None
-    if not os.path.isabs(value) and isinstance(base, str) and base.strip():
+    if os.pardir in value.split(os.sep):
+        return None
+    if not os.path.isabs(value) and isinstance(base, str) and base.strip() \
+            and os.path.isabs(base) and os.pardir not in base.split(os.sep):
         value = os.path.join(base, value)
     norm = os.path.normpath(value)
     return (os.path.isabs(norm),
@@ -868,6 +880,42 @@ def _workspace_root_of_registry(registry_path: str) -> str | None:
     return root or os.sep
 
 
+def _trusted_registry_base(registry_path: str, project_path, repo_root) -> str | None:
+    """The registry's implied workspace root, but ONLY when already-validated state agrees.
+
+    Step-8a cross-model review, High/security: `_workspace_root_of_registry` treats ANY path ending
+    in the contract tail as proof of its workspace root, so a registry handed in from a DIFFERENT
+    workspace — carrying a row for the same session id and the same project label — would have its
+    foreign root used to resolve a relative expectation, and could then match its own absolute row
+    and authorize an irreversible teardown.
+
+    `retire_predecessor` already holds independently validated evidence of where it is:
+    `position["repo_root"]` was confined below `--project-root` by `resolve_cwd` before anything was
+    written. So the derived base is trusted only when resolving `position["project_path"]` against
+    it lands on that same repo root. A foreign registry fails that, the base is dropped, and the
+    path comparison falls back to exact equality — fail-closed.
+
+    The realpath fallback exists because `resolve_cwd` canonicalises: on a symlinked workspace the
+    lexical comparison can disagree with a perfectly valid layout. This site already touches the
+    filesystem, so resolving here costs nothing that is not already paid.
+    """
+    base = _workspace_root_of_registry(registry_path)
+    if base is None or not isinstance(repo_root, str) or not repo_root.strip():
+        return None
+    if project_paths_equivalent(project_path, repo_root, base):
+        return base
+    if not isinstance(project_path, str) or not project_path.strip():
+        return None
+    candidate = project_path if os.path.isabs(project_path) \
+        else os.path.join(base, project_path)
+    try:
+        if os.path.realpath(candidate) == os.path.realpath(repo_root):
+            return base
+    except OSError:
+        return None
+    return None
+
+
 def registry_match_diagnosis(registry_text: str, session_id: str, *,
                              expected_project: str | None = None,
                              expected_project_path: str | None = None,
@@ -881,24 +929,40 @@ def registry_match_diagnosis(registry_text: str, session_id: str, *,
 
     Reports on the LAST row carrying the session id: on a poll the newest row is the successor's
     own. Never raises — a diagnosis that throws while explaining a failure is worse than no
-    diagnosis, so unparseable lines are skipped exactly as the matcher skips them.
+    diagnosis, so unparseable lines are skipped exactly as the matcher skips them, a missing
+    registry text is treated as empty, and an empty session id is named rather than reported as a
+    row that could not be found.
     """
+    text = registry_text or ""
+    if not session_id:
+        return ("no session id was supplied to look up, so the registry could not be checked at "
+                "all — this is a caller defect, not a successor that failed to bind")
     if registry_has_session(
-            registry_text, session_id, expected_project=expected_project,
+            text, session_id, expected_project=expected_project,
             expected_project_path=expected_project_path, project_root=project_root):
         return "matched"
     found = None
-    for line in (registry_text or "").splitlines():
+    malformed = 0
+    for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
         try:
             rec = json.loads(line)
         except ValueError:
+            malformed += 1
             continue
         if isinstance(rec, dict) and rec.get("session_id") == session_id:
             found = rec
     if found is None:
+        # Step-8a cross-model review, Medium: skipping malformed lines and then reporting "the
+        # successor never wrote its bind" sends the operator to permission prompts when the real
+        # story is a truncated row — the same wrong-diagnosis class this function exists to remove.
+        if malformed:
+            return (f"no parseable registry row carries session {session_id!r}, and {malformed} "
+                    f"malformed line(s) were skipped — the registry may be corrupt (a torn or "
+                    f"interleaved write), which is a different failure from a successor that "
+                    f"never bound")
         return (f"no registry row carries session {session_id!r} — the successor never wrote its "
                 f"bind (it may have been blocked at a permission prompt, or never ran the switch)")
     if expected_project is not None and found.get("project") != expected_project:
@@ -3021,7 +3085,8 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
             read_or_empty(registry_path), session_id,
             expected_project=position["project"],
             expected_project_path=position["project_path"],
-            project_root=_workspace_root_of_registry(registry_path))
+            project_root=_trusted_registry_base(
+                registry_path, position["project_path"], position.get("repo_root")))
         # #840 — the same launcher-owned producer as `perform_handoff`, recomputed here rather
         # than trusted from the predecessor's run. This is the LAST gate before an irreversible
         # teardown, and the predecessor may have merged another child since it reported. Both
