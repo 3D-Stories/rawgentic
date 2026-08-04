@@ -725,6 +725,39 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.125.6 (2026-08-04)
+- **The `project_switched` handoff gate compares `project_path` path-equivalently, and says which
+  field disagreed when it refuses (#800, epic #875).** `registry_has_session` matched the registry
+  row's `project_path` against the caller's expectation with a bare `!=`, but that value is written
+  by a MODEL following the switch skill and it does not reliably pick one representation. Two
+  consecutive `ad-hoc-handoff` runs with identical inputs (2026-08-01, both passing
+  `--project-path ./projects/claude-skills`) had one successor write the relative form and pass
+  while the next wrote the absolute form and FAILED — despite its own transcript saying "Bound to:
+  claude-skills" — so a correct bind was torn down. No caller-side value fixes it: the variance is
+  on the producer's side, which is why the fix is in the consumer. `project_paths_equivalent`
+  compares `(is_absolute, normalized components)` and then resolves relative sides against a
+  caller-supplied base, mirroring the convention two siblings already use for this exact value
+  (`context_meter.bound_project`, `wal-lib.sh`); with no base the comparison stays exact, so the fix
+  is opt-in per caller and fail-closed. A component-suffix rule — the obvious base-free alternative
+  — was **refuted by probe** and is deliberately not used: `projects/rawgentic` is a suffix of
+  `/other/ws/projects/rawgentic`, and `rawgentic` of `/home/x/rawgentic/projects/rawgentic`, both
+  false ACCEPTS on a gate whose job is refusing the wrong project. The project LABEL comparison is
+  untouched and stays exact, so #665's wrong-project protection is unchanged, and an equivalent
+  false accept found mid-implementation (bare component tuples made `/projects/rawgentic` equal
+  `./projects/rawgentic`) is pinned by its own test. Both call sites are fixed: `perform_handoff`
+  passes its own `project_root`, and `retire_predecessor` — which holds none — derives one from the
+  registry path, but ONLY when that path ends in `claude_docs/session_registry.jsonl`, because
+  deriving unconditionally would turn `/x/registry.jsonl` into the base `/` and manufacture exactly
+  that false accept. `registry_match_diagnosis` reports whether no row carried the session id, the
+  label disagreed, or the path was not equivalent (naming the base), recorded over the same
+  post-baseline tail the gate polls: previously a comparison that could never match was
+  byte-identical in its output to a 120 s poll timeout, and this campaign published a wrong
+  diagnosis off that ambiguity. Tests: 51 new — helper/gate/diagnosis units including both
+  probe-derived false-accept counter-examples, the workspace-root derivation guard, and behavioural
+  call-site tests at BOTH gates; the primary red reproduced the reported symptom through the
+  reporter's own entry path. No workflow-spine change (a launcher gate's comparison, not a station,
+  gate, loop-back or lane) → no diagram REV. Suite 4812→4863.
+
 ### v3.125.5 (2026-08-04)
 - **driver_lib.py refuses CLI invocation loudly (#905, epic #875).** A bare
   `python3 hooks/driver_lib.py <anything>` imported and exited 0 with no output — a
