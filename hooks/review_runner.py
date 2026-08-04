@@ -500,6 +500,9 @@ def run_review(*, verb: str, artifact=None, artifact_type: str = "generic",
         "error_class": None, "error_detail": "",
         "stripped_paths": [], "secrets_detected": [],
         "attempts": 0, "backend_switched": False, "reopen": None,
+        # #902: True when any finding's confidence arrived as a word/numeric
+        # string and was mapped (never silently treated as native).
+        "confidence_mapped": False,
     }
     resolved_out = None
 
@@ -659,6 +662,7 @@ def run_review(*, verb: str, artifact=None, artifact_type: str = "generic",
     cur_backend, cur_model = backend, model
     transport_retries = 0
     truncation_retries = 0
+    word_confidence_retries = 0
     switch_note = ""
 
     def _switchable():
@@ -735,6 +739,19 @@ def run_review(*, verb: str, artifact=None, artifact_type: str = "generic",
         if parsed is None:
             return _finish("failure", error_class="invalid_output",
                            error_detail=perr)
+        # #902 AC1: a non-native confidence (word / numeric string, mapped by
+        # normalize_findings) gets ONE bounded retry so the backend can produce
+        # the schema's native number; the retry's (or exhausted budget's)
+        # result is accepted with per-finding `confidence_source` flags and
+        # the top-level `confidence_mapped` bit — never silently native.
+        any_mapped = any(f.get("confidence_source") == "mapped"
+                         for f in parsed["findings"])
+        if any_mapped and word_confidence_retries < 1:
+            word_confidence_retries += 1
+            print("review_runner: word-form confidence — one bounded retry "
+                  "before mapping (#902)", file=sys.stderr)
+            continue
+        result["confidence_mapped"] = any_mapped
         result["findings"] = list(parsed["findings"])
         result["summary"] = parsed["summary"]
         result["proposal"] = parsed["proposal"]

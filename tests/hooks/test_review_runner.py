@@ -39,7 +39,7 @@ VALID_FINDING = {
     "evidence": "the guard returns True on error",
     "severity": "High",
     "category": "correctness",
-    "confidence": "high",
+    "confidence": 0.85,
     "description": "fail-open guard",
     "recommendation": "return False on error",
     "ambiguity_flag": None,
@@ -48,6 +48,11 @@ VALID_FINDING = {
     "loopback_class": "design-flaw",
 }
 VALID_BODY = json.dumps({"summary": "one real defect", "findings": [VALID_FINDING]})
+# #902: legacy word-confidence body — exercises the retry-then-map fallback.
+WORD_BODY = json.dumps({"summary": "one real defect",
+                        "findings": [dict(VALID_FINDING, confidence="high")]})
+GARBAGE_CONF_BODY = json.dumps({"summary": "s",
+                                "findings": [dict(VALID_FINDING, confidence="certain")]})
 # Hoisted so the keyword and quoted value never share a line: gitleaks'
 # generic-api-key rule false-positives on `consumed_at="<iso timestamp>"`.
 SPENT_AT = "2026-08-03T20:30:00Z"
@@ -86,6 +91,10 @@ while [ $# -gt 0 ]; do
   if [ "$1" = "-o" ]; then out="$2"; fi
   shift
 done
+if [ -n "$CODEX_STUB_BODY_FIRST" ] && [ "$n" = "1" ]; then
+  if [ -n "$out" ]; then printf '%s' "$CODEX_STUB_BODY_FIRST" > "$out"; fi
+  exit 0
+fi
 if [ -n "$out" ] && [ -n "$CODEX_STUB_BODY" ]; then
   printf '%s' "$CODEX_STUB_BODY" > "$out"
 fi
@@ -501,6 +510,90 @@ class TestErrorClassesCli:
                       stub.env, timeout=120)
         assert result.returncode == 3
         assert _result(project)["error_class"] == "transport"
+
+
+class TestNumericConfidence:
+    """#902: native numeric passes through; word forms get one bounded retry
+    then map through ADV_CONFIDENCE_TO_FLOAT with a provenance flag; garbage
+    refuses (whole-review invalid_output — never a silent pass)."""
+
+    def test_native_confidence_single_call_not_mapped(self, stub, project):
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert stub.calls == 1  # native numbers never trigger the word retry
+        r = _result(project)
+        assert r["confidence_mapped"] is False
+        f = r["findings"][0]
+        assert f["confidence"] == 0.85
+        assert f["confidence_source"] == "native"
+
+    def test_word_confidence_one_retry_then_mapped(self, stub, project):
+        stub.env["CODEX_STUB_BODY"] = WORD_BODY
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert stub.calls == 2  # one bounded word-confidence retry, then accept
+        r = _result(project)
+        assert r["status"] == "success"
+        assert r["confidence_mapped"] is True
+        f = r["findings"][0]
+        assert f["confidence"] == 0.9  # ADV_CONFIDENCE_TO_FLOAT — the one map
+        assert f["confidence_source"] == "mapped"
+
+    def test_word_then_native_retry_recovers_unmapped(self, stub, project):
+        stub.env["CODEX_STUB_BODY_FIRST"] = WORD_BODY
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert stub.calls == 2
+        r = _result(project)
+        assert r["confidence_mapped"] is False
+        assert r["findings"][0]["confidence_source"] == "native"
+
+    def test_garbage_confidence_refuses_invalid_output(self, stub, project):
+        stub.env["CODEX_STUB_BODY"] = GARBAGE_CONF_BODY
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 4
+        assert stub.calls == 1  # schema-invalid is terminal, never a blind retry
+        r = _result(project)
+        assert r["error_class"] == "invalid_output"
+        assert "confidence" in r["error_detail"]
+
+    def test_glm_word_confidence_maps_with_flag(self, project):
+        calls = []
+
+        def fake_glm(prompt, *, model, effort, timeout):
+            calls.append(1)
+            return WORD_BODY, ""
+
+        res = rr.run_review(
+            verb="review-artifact",
+            artifact=str(project / "artifact.md"), artifact_type="design",
+            author_model="claude-fable-5", reviewer=None, backend="glm",
+            project_root=str(project), out_path=str(project / "r.json"),
+            glm_fn=fake_glm,
+        )
+        assert res["status"] == "success"
+        assert len(calls) == 2  # one bounded retry before accepting the map
+        assert res["confidence_mapped"] is True
+        assert res["findings"][0]["confidence"] == 0.9
+
+    def test_banded_filter_runs_mechanically_on_mapped_result(self, stub, project):
+        # The consumer operation AC2 exists for: apply
+        # plan_lib.SEVERITY_BANDED_CONFIDENCE to a result's findings with no
+        # per-finding human judgement in between (the Step-11 filter).
+        import plan_lib
+        stub.env["CODEX_STUB_BODY"] = json.dumps({"summary": "s", "findings": [
+            dict(VALID_FINDING, confidence="low", description="worded low"),
+            dict(VALID_FINDING, confidence=0.95, description="native high"),
+        ]})
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        r = _result(project)
+        kept = [f["description"] for f in r["findings"]
+                if f["confidence"] >= plan_lib.SEVERITY_BANDED_CONFIDENCE[f["severity"]]]
+        dropped = [f["description"] for f in r["findings"]
+                   if f["confidence"] < plan_lib.SEVERITY_BANDED_CONFIDENCE[f["severity"]]]
+        assert kept == ["native high"]      # 0.95 >= High band 0.65
+        assert dropped == ["worded low"]    # low -> 0.4 < High band 0.65
 
 
 # ===========================================================================
