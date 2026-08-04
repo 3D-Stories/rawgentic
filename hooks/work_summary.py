@@ -511,6 +511,17 @@ def validate_record(record, *, strict=False) -> list:
                     continue
                 if not _is_str(g.get("step")):
                     errs.append(f"gates[{i}].step must be a string")
+                # #904: step 11.5 is NOT a gate row — its result lives in the
+                # `security_scan` section (CANONICAL_GATE_NAMES above deliberately
+                # carries no 11.5 key). That rule was documented but unenforced, so
+                # assembly kept re-adding the row: 28 of the committed store's records
+                # carry one and each renders a DUPLICATE Security-Scan line. Write-time
+                # only, exactly like the SCANNER_KINDS vocabulary check below, so those
+                # historical records still load (forward-only legacy read).
+                elif strict and g["step"] == "11.5":
+                    errs.append(
+                        f"gates[{i}].step must not be '11.5' — Step 11.5 is captured in "
+                        f"the security_scan section, not as a gates[] row (#904)")
                 if not _is_str(g.get("name")):
                     errs.append(f"gates[{i}].name must be a string")
                 fnd, rsv = g.get("findings"), g.get("resolved")
