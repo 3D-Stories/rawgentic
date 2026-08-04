@@ -175,7 +175,7 @@ Read `.rawgentic_workspace.json`, then:
 - **If `<path>` is outside the workspace root** (e.g., linked via Step 2b to `/home/user/repos/my-app`): store as an absolute path. External projects are inherently location-specific, so portability does not apply.
 
 2. Write the updated workspace file back (full read-modify-write -- never patch in place).
-3. **Register in session registry:** Create `claude_docs/session_notes/` directory if it doesn't exist. Append a line to `claude_docs/session_registry.jsonl`:
+3. **Register in session registry:** Create `<WORKSPACE_ROOT>/claude_docs/session_notes/` directory if it doesn't exist. Append a line to `<WORKSPACE_ROOT>/claude_docs/session_registry.jsonl`. **In this step `<WORKSPACE_ROOT>` is a placeholder you SUBSTITUTE — every occurrence, in the prose and in the commands below, is replaced with the absolute path stored in Step 1. Never write it literally.** **Both targets are absolute** because cwd drifts between Bash calls: a relative `>>` silently CREATES a registry in whatever tree cwd has reached, exits 0, and echoes the line back.
    ```json
    {"session_id":"<your session_id>","project":"<name>","project_path":"<path>","started":"<current ISO 8601 timestamp>","cwd":"<WORKSPACE_ROOT>"}
    ```
@@ -187,7 +187,7 @@ Read `.rawgentic_workspace.json`, then:
    ```
    **Call 2 — append the registry line, inlining those two values as literals** (starts with `printf`, no `$(...)` — matches `Bash(printf:*)`):
    ```bash
-   printf '{"session_id":"%s","project":"%s","project_path":"%s","started":"%s","cwd":"%s"}\n' "<SESSION_ID from call 1>" "<name>" "<path>" "<TIMESTAMP from call 1>" "<WORKSPACE_ROOT>" >> claude_docs/session_registry.jsonl
+   printf '{"session_id":"%s","project":"%s","project_path":"%s","started":"%s","cwd":"%s"}\n' "<SESSION_ID from call 1>" "<name>" "<path>" "<TIMESTAMP from call 1>" "<WORKSPACE_ROOT>" >> "<WORKSPACE_ROOT>/claude_docs/session_registry.jsonl"
    ```
    `$CLAUDE_CODE_SESSION_ID` is per-process, so reading it in call 1 and writing in call 2 stays race-free.
 

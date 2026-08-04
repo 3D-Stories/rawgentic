@@ -37,16 +37,19 @@ no longer exists. Run `/rawgentic:new-project <name>` to re-create, or
 Read-modify-write `.rawgentic_workspace.json`: target `active: true`, `lastUsed` = now.
 **Never set another project's `active` to `false`.**
 
-Append one line to `claude_docs/session_registry.jsonl` (create it and
-`claude_docs/session_notes/` if absent), id from **`$CLAUDE_CODE_SESSION_ID`** — per-process,
-so it is correct under **concurrent** sessions. Two expansion-free calls, no `$(...)`:
+Append one line to `<root>/claude_docs/session_registry.jsonl` (create it and
+`<root>/claude_docs/session_notes/` if absent), id from **`$CLAUDE_CODE_SESSION_ID`** — per-process,
+so it is correct under **concurrent** sessions. **`<root>` is the ABSOLUTE path of the directory
+holding `.rawgentic_workspace.json`** — the same value you write into `cwd`. Never a relative
+target: cwd drifts between calls, and a relative `>>` silently CREATES a registry in the wrong
+tree, exits 0, and echoes the line back (`references/why.md`). Two expansion-free calls, no `$(...)`:
 
 ```bash
 printenv CLAUDE_CODE_SESSION_ID; date -u +%Y-%m-%dT%H:%M:%SZ
 ```
 
 ```bash
-printf '{"session_id":"%s","project":"%s","project_path":"%s","started":"%s","cwd":"%s"}\n' "<ID>" "<name>" "<path>" "<TS>" "<root>" >> claude_docs/session_registry.jsonl
+printf '{"session_id":"%s","project":"%s","project_path":"%s","started":"%s","cwd":"%s"}\n' "<ID>" "<name>" "<path>" "<TS>" "<root>" >> "<root>/claude_docs/session_registry.jsonl"
 ```
 
 Never take the id from `claude_docs/.current_session_id`. If `printenv` prints nothing, STOP

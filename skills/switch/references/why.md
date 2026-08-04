@@ -44,6 +44,79 @@ Guarded by `tests/test_bind_command_expansion_free.py`, which scans fenced block
 `session_registry.jsonl` in the skill **corpus** (`SKILL.md` + `references/*.md`), so this
 prose move keeps the guard live.
 
+### Why the append target must be absolute, and why `<root>` is defined in the step
+
+The failure mode this prevents is a **silent wrong-file write, not an error** (#885, observed
+live 2026-08-04 by a sibling session on 3.119.1).
+
+The step reads `.rawgentic_workspace.json` from the primary working directory, so it is tempting
+to treat cwd as the workspace root for the write too. Nothing enforces that at the write, and
+the Bash tool's cwd **persists across calls within a session** — it drifts with whatever work
+happened in between. A session whose cwd had been left at `projects/sysop` ran the bind and
+`>>` **created** `projects/sysop/claude_docs/session_registry.jsonl`, wrote the line into it,
+and exited 0; `tail -1` echoed the line straight back. Only an adjacent *relative read* failing
+loudly (`.rawgentic_workspace.json` → No such file or directory) exposed it.
+
+**The precondition, because it explains why this survived and must not be mistaken for
+"unreachable" (measured 2026-08-04).** `>>` creates a missing *file* but never a missing *parent
+directory*, so the relative append only misfiles silently when the drifted cwd **already has a
+`claude_docs/` directory**; anywhere else it fails loudly with `No such file or directory`. That
+is not reassuring — in the real workspace **18 of 49 project directories have one**, including the
+`projects/sysop` the live report drifted into. So a reader who probes the old form in a tree
+without `claude_docs/`, sees it error, and concludes the fix is unnecessary has tested the wrong
+half of the defect.
+
+Three reasons it outranks an ordinary path bug:
+
+1. `>>` **creates** the file, and the step explicitly says to create the registry if absent — so
+   a wrong-tree creation is indistinguishable from the documented first-bind case.
+2. **Reads fail loudly; this write did not.** Every relative read errors visibly. The one
+   relative write just landed elsewhere and reported success.
+3. **Binding is the input to everything downstream** — WFn resume, wal-guard, driver state. A
+   registry line in the wrong tree makes the bind invisible to anything grepping the real
+   registry, while the session believes it is bound.
+
+The fix reuses a value the command **already carried**: both bind templates pass the absolute
+workspace root as a printf argument for the JSON `cwd` field, so the redirect target interpolates
+that same literal.
+
+Be precise about how much that buys, because it is easy to overstate. A **nonexistent** root, or
+one with no `claude_docs/` directory, now fails **loudly** — `>>` cannot create a missing parent.
+But an **existing yet wrong** absolute root that happens to contain `claude_docs/` still misfiles
+**silently**, and the wrong root recorded in that misplaced line is *not* independent detection: it
+is the same wrong value written twice. So the absolute target removes the *cwd-drift* failure mode
+and nothing more. Correctness still depends on substituting the resolved directory that holds
+`.rawgentic_workspace.json` — which is exactly why Step 5 **defines** `<root>` rather than hinting
+at it.
+
+Rejected alternatives, so a rewrite does not reintroduce any of them:
+
+- **`cd <root> && printf …`** — the auto-mode permission classifier blocks cd-prefixed compound
+  commands, so a cd-based bind becomes a permission prompt on *every* bind.
+- **A prose reminder** ("make sure you are in the workspace root") — that is precisely the
+  assumption that already failed silently.
+- **A new root-resolving CLI call.** The repo already carries seven walk-up implementations
+  (`context_meter.find_workspace`, `session_index.resolve_workspace_root`,
+  `session_mining_lib.resolve_workspace_root`, `step_state_post._find_workspace_root`,
+  `security-guard.find_workspace_root`, …) and none is exposed as a command. Adding an eighth,
+  and a subprocess, to a step whose entire constraint is staying expansion-free would cost more
+  than reusing the literal already in hand.
+
+**Already-misfiled records are NOT migrated** — the fix is prospective only. If you find a stray
+`claude_docs/session_registry.jsonl` under a project directory, the sessions recorded in it were
+never visible to anything reading the workspace registry; the remedy is to re-run the bind for any
+session that still matters and delete the stray file. There is deliberately no automatic migration:
+moving session records between trees on upgrade is a riskier operation than re-binding, and the one
+observed occurrence was remediated by hand at report time.
+
+**`<root>` is therefore DEFINED in Step 5 itself**, not left implicit: an undefined placeholder
+is worse than a reminder, because a reader who substitutes the cwd produces
+`>> "./claude_docs/session_registry.jsonl"` — byte-for-byte as broken as the original while
+looking fixed. Guarded by `test_bind_append_target_is_absolute`, which pins that neither bind
+skill carries a bare `>> claude_docs/` append. Note its limit honestly: the guard pins the
+template's **shape**: no mechanical check can prove the value substituted at runtime is
+absolute, which is why the definition is operative prose in the step.
+
 ## Step 5b item 2 — why the universal-field check uses Bash and MUST NOT use `Read`
 
 Item 2 reads the same `.rawgentic.json` that item 3b reads. If it used the `Read` tool, the
