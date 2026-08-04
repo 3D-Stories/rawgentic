@@ -983,7 +983,9 @@ class TestCliRefusalStub:
         proc = self._run("next-child", "--driver-state", "nope.json")
         assert proc.returncode == 2, f"expected loud refusal rc 2, got {proc.returncode}"
         assert "pure library" in proc.stderr
-        assert "launcher_lib.py" in proc.stderr
+        # Pin the FULL remediation string, not just the filename — a regression that
+        # dropped the `hooks/` path component must fail here (runner review finding).
+        assert "python3 hooks/launcher_lib.py <subcommand>" in proc.stderr
         assert proc.stdout == ""  # nothing success-shaped on stdout for a gate to misread
 
     def test_bare_cli_invocation_refuses_the_same_way(self):

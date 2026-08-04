@@ -31,8 +31,9 @@ mutation) that design #134 follow-up #2 deferred is intentionally NOT here — i
 stays evidence-gated. Extend this module with that layer only when campaign
 experience shows hand-maintained state transitions are error-prone.
 
-Pure, stdlib-only, no I/O and no side effects — safe to import from the driver
-pattern, the test suite, or a ``python3 -c`` one-liner in the docs.
+Pure, stdlib-only, no I/O and no side effects when imported — safe to import
+from the driver pattern, the test suite, or a ``python3 -c`` one-liner in the
+docs.
 
 Not a CLI: direct invocation (``python3 hooks/driver_lib.py …``) refuses loudly
 with exit 2 (#905) — the runnable commands live in ``hooks/launcher_lib.py``. A
