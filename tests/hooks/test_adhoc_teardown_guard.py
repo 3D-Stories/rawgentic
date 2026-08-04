@@ -488,3 +488,18 @@ class TestStillArmedAccuracy:
         assert guard and "MAY still" in guard
         assert "is STILL ARMED" not in guard
         assert "/goal clear" in guard
+
+    def test_torn_tail_after_retirement_is_indeterminate_not_no_goal(self) -> None:
+        """#880 Step 8a wave finding (adopted): the armedness advisory must
+        read STRICTLY — leniently, a torn re-arm line after a retirement is
+        skipped and the branch prints a definitive 'NO live goal' for a pane
+        whose state is actually indeterminate. Strict raises -> conditional
+        wording."""
+        torn = '{"attachment": {"type": "goal_status", "met": fal'
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, teardown=False, predecessor_session=PRED_SESSION,
+            read_text=PredState(r, history=[ARMED_ROW, SATISFIED_ROW, torn])))
+        guard = out["predecessor_guard"]
+        assert guard and "NO live goal" not in guard
+        assert "MAY still" in guard

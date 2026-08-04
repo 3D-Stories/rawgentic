@@ -2160,8 +2160,13 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             try:
                 pred_text = read_text(
                     os.path.join(transcript_dir, f"{predecessor_session}.jsonl"))
-                armed_hint = live_owner_goal(pred_text) is not None
-            except (OSError, UnicodeDecodeError, TypeError, ValueError):
+                # STRICT read (#880 Step 8a wave finding): leniently, a torn
+                # tail is skipped and a retired-then-torn transcript would
+                # print a definitive "NO live goal" for an indeterminate pane.
+                # Strict raises LauncherError there -> armed_hint stays None ->
+                # the conditional wording below.
+                armed_hint = live_owner_goal(pred_text, strict=True) is not None
+            except (LauncherError, OSError, UnicodeDecodeError, TypeError, ValueError):
                 armed_hint = None
         if armed_hint is False:
             out["predecessor_guard"] = (
