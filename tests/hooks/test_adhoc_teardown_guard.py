@@ -503,3 +503,17 @@ class TestStillArmedAccuracy:
         guard = out["predecessor_guard"]
         assert guard and "NO live goal" not in guard
         assert "MAY still" in guard
+
+    def test_malformed_predecessor_session_id_is_indeterminate(self) -> None:
+        """#880 Step 11 R2 finding (adopted cheap, defense-in-depth): a
+        predecessor_session that fails the canonical session-id grammar is
+        never joined into a transcript path on the advisory branch — a
+        traversal-shaped id must yield the conditional wording, not a read
+        outside transcript_dir."""
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, teardown=False, predecessor_session="../escape",
+            read_text=PredState(r, history=[ARMED_ROW])))
+        guard = out["predecessor_guard"]
+        assert guard and "MAY still" in guard
+        assert "NO live goal" not in guard and "is STILL ARMED" not in guard

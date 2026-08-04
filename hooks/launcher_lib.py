@@ -2156,7 +2156,11 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         # owner to fix a non-problem). Where no transcript exists (the CLI --no-teardown path
         # passes no predecessor_session), the wording is conditional, never assertive.
         armed_hint: bool | None = None
-        if predecessor_session is not None:
+        # Defense-in-depth (#880 Step 11): only a grammar-valid session id is
+        # ever joined into a transcript path here — a traversal-shaped id
+        # stays indeterminate (conditional wording) instead of reading outside
+        # transcript_dir. Mirrors the CLI's _SESSION_ID_RE gate at build time.
+        if predecessor_session is not None and _SESSION_ID_RE.fullmatch(predecessor_session):
             try:
                 pred_text = read_text(
                     os.path.join(transcript_dir, f"{predecessor_session}.jsonl"))
