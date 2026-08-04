@@ -197,29 +197,27 @@ are failures: never treat either as the fallback.
 4a. **Review-completeness check:** before opening the PR, confirm Step 11's exit gate passed (item 8 — no unresolved Critical/High deferral) and every Step 8a covered task's verdict is `applied` or a persisted deferral. A suspend that never resolved must not reach PR creation.
 
 4b. **Closing-keyword check (#901) — runs BEFORE `gh pr create`, never after.**
-   GitHub's closing-keyword parser does not understand negation. A body sentence reading
-   "this PR does not close #N" matches `close #N` and **shuts #N on merge anyway**. This has
-   fired twice for real: issue #568 on the #573 merge (2026-07-21) and issue #874 on the #898
-   merge (2026-08-04) — both on PRs that were deliberately `Part of`, with no closing keyword
-   in any commit. The body prose alone did it.
+   GitHub's parser ignores negation: "this PR does not close #N" matches `close #N` and **shuts
+   #N on merge anyway**. It fired twice for real — #568 on the #573 merge, #874 on the #898
+   merge — both on `Part of` PRs whose commits carried no keyword. The body prose alone did it.
 
    **The rule: never place a closing keyword — `close`, `closes`, `closed`, `fix`, `fixes`,
    `fixed`, `resolve`, `resolves`, `resolved` — adjacent to an issue number unless closure is
    intended.** When the issue must stay open, write **"leaves #N open"**. `Part of #N` and
-   `Refs #N` are always safe. This binds the PR body AND the commit messages GitHub parses.
-
-   Run the mechanical gate on the drafted body:
+   `Refs #N` are always safe. GitHub parses commit messages too, so `--commit-range` covers them.
    ```bash
    python3 hooks/plan_lib.py check-pr-refs \
      --pr-body-file /tmp/wf2-pr-body.md \
-     [--closes <issue this PR genuinely closes>]... --project-root .
+     [--closes <issue this PR genuinely closes>]... \
+     [--commit-range origin/<default>..HEAD] --project-root .
    ```
-   `0` no unintended closing reference · `1` FLAGGED — findings on stdout; rewrite the sentence,
-   or add `--closes <n>` when the closure is genuinely intended · `2` caller error. **Omitting
-   `--closes` means "this PR closes nothing", so every closing reference flags** — the gate
-   fails toward asking, never silently. An empty `--pr-body-file` is rc 2 by design, never a
-   pass. On a multi-PR issue only the LAST PR declares `--closes`; the earlier ones are
-   `Part of #N` and must declare nothing.
+   Executes `find_closing_refs` + `assert_pr_body_closing_refs`. `0` clean · `1` FLAGGED —
+   findings on stdout; rewrite the sentence, or add `--closes <n>` when the closure is genuinely
+   intended · `2` caller error (an empty `--pr-body-file`, or invalid UTF-8, is rc 2 by design,
+   never a pass). **Omitting `--closes` means "this PR closes nothing", so every closing reference
+   flags** — the gate fails toward asking, never silently. A declaration is unqualified and
+   authorizes THIS repo only: a qualified `owner/name#N` never matches a bare number. On a
+   multi-PR issue only the LAST PR declares `--closes`; earlier ones declare nothing.
 
 5. **Create PR:**
    ```bash

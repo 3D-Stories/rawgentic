@@ -745,7 +745,16 @@ For major changes, please open an issue first to discuss the approach.
   preserves its own `(closes #<issue>)` linkage, which Step 14 relies on, and a pin asserts that
   carve-out so the rule cannot drift into contradicting it. Both incident sentences are pinned
   verbatim; the prose pins anchor to `step-12.md`, never a `references/steps.md` path that #874
-  deleted. WF2 diagram REV 3.125.8 (station 12 delta). Suite 4887→4924.
+  deleted. The Step-8a cross-model pass then closed two fail-open gaps in the guard itself:
+  commit MESSAGES were unscanned while the prose claimed the rule bound them (now `--commit-range`),
+  and a bare `--closes 901` authorized `other/repo#901` because only the integer was kept (refs now
+  carry their `owner/name`, and an unqualified declaration authorizes this repo only). Two further
+  fail-closed fixes: a `None`/blank body no longer returns a vacuous pass, and invalid UTF-8 is
+  rc 2 rather than a traceback whose rc 1 was indistinguishable from a real finding
+  (`UnicodeDecodeError` is a `ValueError`, not an `OSError`). `references/step-12.md`'s prose
+  ceiling rises 13,287→14,999 bytes (actual 14,284 + the 5% allowed headroom, per the #874 AC7
+  convention) because item 4b is new prose; no other row moved. WF2 diagram REV 3.125.8 (station 12
+  delta). Suite 4887→4944.
 
 ### v3.125.7 (2026-08-04)
 - **A `gates[]` row for step 11.5 is now rejected at write time (#904, epic #875).** The run-record

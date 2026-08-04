@@ -67,7 +67,7 @@ PER_FILE_CEILING_BYTES = {
     "references/step-10.md": 1_201,
     "references/step-11.md": 15_023,
     "references/step-11_5.md": 4_543,
-    "references/step-12.md": 13_287,
+    "references/step-12.md": 14_999,
     "references/step-13.md": 3_621,
     "references/step-14.md": 3_614,
     "references/step-15.md": 1_520,
