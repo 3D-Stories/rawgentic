@@ -269,7 +269,7 @@ to any project repo — and are set by `/rawgentic:setup`.
 | Field | Type | Description |
 |-------|------|-------------|
 | `critiqueMethod` | `string` | **Deprecated / ignored (#205).** Formerly selected the critique tool; the external reflexion dependency was removed and quality gates now use the in-repo quality-bar rubric. A leftover value in a workspace file is inert. |
-| `adversarialReview` | `object` \| `bool` | Opt-in cross-model adversarial review (WF5) at workflow quality gates. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"], "backend"?: "gpt" \| "glm" \| "both" }`. Default disabled; `backend` absent → `gpt`. A present-but-INVALID `backend` value refuses at run time (exit 2, no egress) rather than silently defaulting (#403). Bool shorthand `true` enables the standalone skill mindset but lists no workflows (embedded gates stay off). Fail-closed: missing/malformed → disabled. See [Adversarial Review Data Handling](#adversarial-review-data-handling). |
+| `adversarialReview` | `object` \| `bool` | Opt-in cross-model adversarial review (WF5) at workflow quality gates. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"], "backend"?: "gpt" \| "glm" \| "both", "diffReviewMode"?: "auto" \| "always" }`. Default disabled; `backend` absent → `gpt`; `diffReviewMode` absent → `auto`. A present-but-INVALID `backend` value refuses at run time (exit 2, no egress) rather than silently defaulting (#403), and a present-but-INVALID `diffReviewMode` refuses the same way (#879) — see [`diffReviewMode`](#diffreviewmode). Bool shorthand `true` enables the standalone skill mindset but lists no workflows (embedded gates stay off). Fail-closed: missing/malformed → disabled. See [Adversarial Review Data Handling](#adversarial-review-data-handling). |
 | `peerConsult` | `object` \| `bool` | Opt-in cross-model peer design consult (WF13) at the WF2 design step. Shape: `{ "enabled": bool, "workflows": ["implement-feature"], "backend"?: "gpt" \| "glm" \| "both" }` — mirrors `adversarialReview` incl. the #403 backend field. Default disabled. Fail-closed: missing/malformed → disabled. See [`peerConsult`](#peerconsult). |
 | `runFeedback` | `object` \| `bool` | Opt-in embedded post-run self-assessment (WF14, `/rawgentic:run-feedback`) at workflow completion. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"] }` — same loader and fail-closed semantics as `peerConsult` (`load_adversarial_review_config(..., key="runFeedback")`). Default disabled. Wired at WF2 Step 16 / WF3 Step 14 (rawgentic #338); the standalone skill always works regardless. |
 | `wholeIssueDelegation` | `object` \| `bool` | Opt-in whole-issue delegated build mode (WF2 Step 8): one build-subagent implements all plan tasks and returns a receipt the orchestrator validates before re-running every gate against the real tree. Shape: `{ "enabled": bool, "workflows": ["implement-feature"] }` — mirrors `adversarialReview`. Default disabled. Fail-closed: missing/malformed → disabled. See [`wholeIssueDelegation`](#wholeissuedelegation). |
@@ -320,6 +320,34 @@ into `gpt`, because that would reroute the artifact to a different provider than
 the operator chose. An explicit `--backend` on an invocation overrides the config. `/rawgentic:setup`
 collects `backend` at Step 2d (and Step 2g for `peerConsult`) since #405 — the
 sanctioned config path; the per-invocation `--backend` argument remains available.
+
+<a id="diffreviewmode"></a>
+**`diffReviewMode` (optional, #879):** controls whether WF2's Step-11 cross-model
+**diff** review is elected by heuristic or on every diff.
+
+- `auto` (**the default, and what an absent field resolves to**) — the historical
+  `plan_lib.should_run_diff_review` heuristic: the review runs only when a changed
+  path matches the security-relevant allowlist, or a plan task is `riskLevel: high`.
+- `always` — the review runs for **every non-empty diff**. An empty diff still skips;
+  there is nothing to review.
+
+**When to set `always`:** when the project's *product* is prose rather than code. The
+heuristic equates "risky" with "security-flavored code path", so a markdown-only diff
+scores `no security surface` and the author model ends up being the only Step-11
+reviewer of its own work — the exact gap the #856 run hit on this repo (epic #875
+D180). App repos should keep `auto`; the heuristic is doing its job there.
+
+**Fail behavior — loud, never a fallback.** A present-but-invalid value (a typo
+`"alwyas"`, a `null`, a bool, wrong case like `"Always"`) makes the Step-11 1a
+sub-step **abort** with the marker `failed (invalid diffReviewMode config)`. It is
+never silently coerced to `auto`, because a silent coercion would restore the very
+heuristic the operator opted out of — reintroducing the silent skip this field exists
+to close. Resolve it with
+`python3 hooks/adversarial_review_lib.py diff-review-mode --workspace <ws> --project <name>`
+(exit 0 + mode on stdout; exit 2 + the rejected value on stderr).
+
+Setting the field is currently a hand edit of the per-project entry in
+`.rawgentic_workspace.json` — `/rawgentic:setup` does not yet offer it.
 
 `workflows` uses bare skill names (`implement-feature`, `fix-bug`, `create-issue`;
 a removed name like `refactor` is accepted but inert — see `docs/upgrade-3.0.md`).

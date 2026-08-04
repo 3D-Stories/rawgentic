@@ -1511,6 +1511,116 @@ class TestShouldRunDiffReview:
         assert mod.should_run_diff_review(True, ["", ""], False) == (False, "empty diff")
 
 
+# --- diffReviewMode: "always" forces election on every non-empty diff (#879) ---
+
+class TestShouldRunDiffReviewMode:
+    """The `mode` parameter (#879, epic #875 D180).
+
+    "auto" is the historical heuristic; "always" elects the review for every
+    NON-EMPTY diff. The motivating case: this repo's product is markdown, so a
+    real prose diff matches no security-relevant path and scores "no security
+    surface" — leaving the author model as the only Step-11 reviewer (#856).
+    """
+
+    HRP = "src/auth/login.py"
+    CLEAN = ["src/widgets.ts", "docs/README.md"]
+
+    # --- AC1: the default is byte-identical to the pre-#879 behavior ---
+
+    def test_default_mode_is_auto(self):
+        """Omitting `mode` must behave exactly as "auto" — every existing caller."""
+        mod = _reload_plan_lib()
+        assert (mod.should_run_diff_review(True, self.CLEAN, False)
+                == mod.should_run_diff_review(True, self.CLEAN, False, mode="auto"))
+
+    def test_auto_plain_diff_still_skips_unchanged(self):
+        """The historical answer for a no-security-surface diff is preserved."""
+        mod = _reload_plan_lib()
+        assert mod.should_run_diff_review(True, self.CLEAN, False, mode="auto") == (
+            False, "no security surface"
+        )
+
+    def test_auto_preserves_every_positive_branch(self):
+        mod = _reload_plan_lib()
+        assert mod.should_run_diff_review(True, [self.HRP], False, mode="auto") == (
+            True, f"high-risk path: {self.HRP}")
+        assert mod.should_run_diff_review(True, self.CLEAN, True, mode="auto") == (
+            True, "high-risk task in plan")
+
+    # --- AC2: "always" elects on every non-empty diff ---
+
+    def test_always_plain_diff_runs_and_reason_names_the_mode(self):
+        mod = _reload_plan_lib()
+        run, reason = mod.should_run_diff_review(
+            True, self.CLEAN, False, mode="always")
+        assert run is True
+        assert "always" in reason
+        assert reason != "no security surface"
+
+    def test_always_empty_diff_still_skips(self):
+        """Nothing to review is still nothing to review — "always" is not "vacuous"."""
+        mod = _reload_plan_lib()
+        assert mod.should_run_diff_review(True, [], False, mode="always") == (
+            False, "empty diff")
+
+    def test_always_all_blank_entries_still_skips(self):
+        mod = _reload_plan_lib()
+        assert mod.should_run_diff_review(True, ["", ""], False, mode="always") == (
+            False, "empty diff")
+
+    def test_always_does_not_override_disabled(self):
+        """`enabled` is the opt-in for the whole layer; the mode cannot resurrect it."""
+        mod = _reload_plan_lib()
+        assert mod.should_run_diff_review(False, self.CLEAN, False, mode="always") == (
+            False, "disabled")
+
+    def test_always_wins_over_the_heuristic_reasons(self):
+        """With a high-risk path AND "always", the reason names the mode — so the
+        session-note marker says WHY the review ran without ambiguity."""
+        mod = _reload_plan_lib()
+        run, reason = mod.should_run_diff_review(
+            True, [self.HRP], True, mode="always")
+        assert run is True
+        assert "always" in reason
+
+    def test_always_ignores_extra_patterns_but_accepts_them(self):
+        mod = _reload_plan_lib()
+        run, _ = mod.should_run_diff_review(
+            True, self.CLEAN, False, extra_patterns=("billing",), mode="always")
+        assert run is True
+
+    # --- AC3's spirit inside the pure function: never a silent fallback ---
+
+    def test_unknown_mode_raises_rather_than_falling_back_to_auto(self):
+        """A silent fallback would re-create the silent-skip class #879 closes."""
+        mod = _reload_plan_lib()
+        with pytest.raises(ValueError):
+            mod.should_run_diff_review(True, self.CLEAN, False, mode="alwyas")
+
+    def test_invalid_sentinel_mode_raises(self):
+        """The config layer's "invalid" sentinel must never reach a decision."""
+        mod = _reload_plan_lib()
+        with pytest.raises(ValueError):
+            mod.should_run_diff_review(True, self.CLEAN, False, mode="invalid")
+
+    @pytest.mark.parametrize("bad", [None, True, 1, ["always"]])
+    def test_non_str_mode_raises(self, bad):
+        mod = _reload_plan_lib()
+        with pytest.raises(ValueError):
+            mod.should_run_diff_review(True, self.CLEAN, False, mode=bad)
+
+    def test_mode_vocabulary_matches_the_config_layer(self):
+        """The gate and `adversarial_review_lib.DIFF_REVIEW_MODES` must not drift."""
+        import importlib.util
+        mod = _reload_plan_lib()
+        hooks_dir = Path(__file__).resolve().parent.parent.parent / "hooks"
+        spec = importlib.util.spec_from_file_location(
+            "arl_vocab", str(hooks_dir / "adversarial_review_lib.py"))
+        arl = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(arl)
+        assert mod.DIFF_REVIEW_MODES == arl.DIFF_REVIEW_MODES
+
+
 # --- validate_build_receipt (#133 whole-issue delegation trust boundary) ---
 
 def _default_branch(repo):

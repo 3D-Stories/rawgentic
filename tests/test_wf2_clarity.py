@@ -192,6 +192,39 @@ class TestStep11DiffReview:
     def test_should_run_diff_review_referenced(self):
         assert "plan_lib.should_run_diff_review" in _step11()
 
+    def test_diff_review_mode_resolved_and_passed_to_the_gate(self):
+        """#879: the 1a gate resolves `diffReviewMode` and feeds it to the decision.
+
+        Without the `mode=` argument the prose would resolve the mode and then
+        silently ignore it — the config would look wired while changing nothing.
+        """
+        s11 = _step11()
+        assert "diff-review-mode" in s11, \
+            "Step 11 1a must resolve the mode via the diff-review-mode verb"
+        assert "mode=<resolved mode>" in s11, \
+            "the resolved mode must be PASSED to should_run_diff_review"
+
+    def test_invalid_diff_review_mode_aborts_never_defaults(self):
+        """#879 AC3: the refusal is a loud `failed (...)` marker, not a fallback."""
+        s11 = _step11()
+        assert "failed (invalid diffReviewMode config)" in s11
+        assert "never default to `auto`" in s11
+
+    def test_every_other_nonzero_mode_exit_has_a_defined_marker(self):
+        """#879 review (Medium, the finding that fired the ambiguity breaker):
+        defining only exit 0 and exit 2 left an unreadable workspace or a loader
+        crash with no prescribed marker, so each run would improvise at a
+        security gate."""
+        s11 = _step11()
+        assert "failed (diffReviewMode resolution error:" in s11
+
+    def test_always_with_unavailable_base_ref_is_surfaced_in_the_pr_body(self):
+        """#879 review (High x2): under `always` a base-ref failure still skips the
+        review and its `failed` marker satisfies the completion gate — so the unmet
+        every-diff promise must reach the PR body, not only session notes."""
+        s11 = _step11()
+        assert "the mandated every-diff review did NOT run" in s11
+
     def test_dispatch_command_shape(self):
         # M0b (#866): the diff review dispatches the runner, tokenless (report-only).
         s11 = _step11()

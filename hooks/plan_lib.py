@@ -808,6 +808,14 @@ _HIGH_RISK_PATH_RE = re.compile(
 # LOC threshold above which a task is considered large enough to merit promotion.
 _LOC_PROMOTE_THRESHOLD = 200
 
+# WF2 Step-11 diff-review election modes (#879). MIRRORED from
+# `adversarial_review_lib.DIFF_REVIEW_MODES`, which owns the config-parsing side;
+# the mirror exists so this module stays import-free of its sibling hook (each is
+# loaded standalone via importlib), and
+# `test_plan_lib.py::test_mode_vocabulary_matches_the_config_layer` fails if the
+# two ever drift.
+DIFF_REVIEW_MODES: Final[tuple[str, ...]] = ("auto", "always")
+
 
 def _path_matches_high_risk(path: str, extra_patterns: tuple[str, ...] = ()) -> str | None:
     """Return the first matching pattern (or None). Case-insensitive."""
@@ -842,17 +850,34 @@ def should_run_diff_review(
     changed_paths: list[str],
     has_high_risk_task: bool,
     extra_patterns: tuple[str, ...] = (),
+    mode: str = "auto",
 ) -> tuple[bool, str]:
-    """WF2 Step 11's adversarial-diff-review dispatch gate (#131).
+    """WF2 Step 11's adversarial-diff-review dispatch gate (#131, #879).
 
-    Pure (no I/O) so the 9-cell decision matrix is unit-testable. Paths are
+    Pure (no I/O) so the decision matrix is unit-testable. Paths are
     expected POSIX-separated (git output form); backslash-separated paths
     will not match. Evaluated in order:
     - not enabled              -> (False, "disabled")
     - not changed_paths        -> (False, "empty diff")
+    - mode == "always"         -> (True, "diffReviewMode: always ...")
     - a high-risk path matches -> (True, f"high-risk path: {matched_path}")
     - has_high_risk_task       -> (True, "high-risk task in plan")
     - else                     -> (False, "no security surface")
+
+    `mode` is the project's `adversarialReview.diffReviewMode` (#879), resolved
+    by `adversarial_review_lib`; the vocabulary is mirrored here as
+    DIFF_REVIEW_MODES with a drift-guard test. It defaults to "auto" — the
+    historical heuristic — so every pre-#879 caller behaves byte-identically.
+
+    "always" sits AFTER the empty-diff guard (an empty diff has nothing to
+    review, so "always" is not "vacuous") and BEFORE the path/task heuristic, so
+    the returned reason names the MODE: the session-note marker then says why the
+    review ran without ambiguity. Nothing is lost by not reporting the matched
+    path here — Step 11 1a re-partitions high-risk paths itself for the brief.
+
+    An unrecognized `mode` raises ValueError rather than falling back to "auto".
+    A silent fallback would re-create the exact silent-skip class #879 closes:
+    a typo'd mode would quietly restore the heuristic the operator opted out of.
     """
     if isinstance(extra_patterns, str):
         raise TypeError("extra_patterns must be a tuple of patterns, not str")
@@ -860,11 +885,19 @@ def should_run_diff_review(
         raise TypeError(
             "changed_paths must be a list of paths (got %s)" % type(changed_paths).__name__
         )
+    if not isinstance(mode, str) or mode not in DIFF_REVIEW_MODES:
+        raise ValueError(
+            "mode must be one of %s (got %r) — refusing to fall back to 'auto', "
+            "which would silently restore the heuristic the config opted out of"
+            % (list(DIFF_REVIEW_MODES), mode)
+        )
     changed_paths = [p for p in changed_paths if p]
     if not enabled:
         return False, "disabled"
     if not changed_paths:
         return False, "empty diff"
+    if mode == "always":
+        return True, "diffReviewMode: always (every non-empty diff)"
     matched = any_high_risk_path(changed_paths, extra_patterns)
     if matched:
         return True, f"high-risk path: {matched}"
