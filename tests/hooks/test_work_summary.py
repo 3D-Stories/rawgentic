@@ -1982,6 +1982,92 @@ class TestWritePathIsStrict:
         assert store.exists() and store.read_text().strip()
 
 
+class TestGateRowForStep11_5Forbidden:
+    """#904: `gates[]` must never carry a row for step 11.5 — that result lives in
+    the `security_scan` section (the contract stated at work_summary.py:76-77, and
+    CANONICAL_GATE_NAMES deliberately has no 11.5 key). The rule was documented but
+    UNENFORCED, so assembly kept re-adding the row: 28 of the 205 records in the
+    committed store carry one, each rendering a DUPLICATE Security-Scan line.
+
+    Enforced at WRITE time only — exactly like the SCANNER_KINDS vocabulary check —
+    so those 28 historical records still LOAD under the store's forward-only
+    legacy-read rule. Rescoped ACs 1/2 of #904 (owner decision D187)."""
+
+    # The exact row shape observed in all 28 committed store records.
+    HISTORICAL_ROW = {"step": "11.5", "name": "Security Scan", "findings": 0,
+                      "resolved": 0, "status": "pass"}
+
+    def _rec_with_11_5(self, position=None):
+        rec = _valid_record()
+        gates = list(rec["gates"])
+        row = dict(self.HISTORICAL_ROW)
+        gates.append(row) if position is None else gates.insert(position, row)
+        rec["gates"] = gates
+        return rec
+
+    def test_strict_rejects_11_5_gate_row(self):
+        from work_summary import validate_record
+        errs = validate_record(self._rec_with_11_5(), strict=True)
+        assert any("11.5" in e for e in errs), errs
+
+    def test_error_names_the_offending_row_index(self):
+        """AC1 'naming the offending row' — assembly has to be able to locate it."""
+        from work_summary import validate_record
+        errs = validate_record(self._rec_with_11_5(position=1), strict=True)
+        assert any("gates[1]" in e and "11.5" in e for e in errs), errs
+
+    def test_error_points_at_security_scan(self):
+        """Actionable message: say WHERE the value belongs, not just that it's wrong."""
+        from work_summary import validate_record
+        errs = validate_record(self._rec_with_11_5(), strict=True)
+        assert any("security_scan" in e for e in errs), errs
+
+    def test_strict_accepts_the_same_record_without_the_row(self):
+        """AC2's second half: the guard rejects the ROW, not the record around it."""
+        from work_summary import validate_record
+        rec = self._rec_with_11_5()
+        rec["gates"] = [g for g in rec["gates"] if g.get("step") != "11.5"]
+        assert validate_record(rec, strict=True) == []
+
+    def test_lenient_default_still_accepts_historical_11_5_row(self):
+        """THE regression pin. The 28 committed records must keep loading: load_store
+        validates leniently, so moving this guard out of `strict` would evict all of
+        them — silent telemetry data loss, which is what the legacy-read rule exists
+        to prevent."""
+        from work_summary import validate_record
+        assert validate_record(self._rec_with_11_5()) == []
+
+    def test_load_store_keeps_a_historical_11_5_row(self, tmp_path):
+        """Pin the REAL consumer, not just the function it calls. `load_store` is what
+        reads the committed store and it validates leniently, so a record carrying the
+        forbidden row must survive it with an EMPTY excluded list. Live equivalent at
+        the time of this change: the committed store loaded 205 records, 0 excluded,
+        with all 28 `11.5` rows still readable. (Added from the Step-11 cross-model
+        review, which correctly noted the lenient pin above exercises `validate_record`
+        rather than the read path that actually consumes the store.)"""
+        from work_summary import load_store
+        rec = _store_rec(gates=list(_valid_record()["gates"])
+                         + [dict(self.HISTORICAL_ROW)])
+        p = _write_store(tmp_path / "s.jsonl", [rec])
+        records, excluded = load_store(p)
+        assert excluded == [], excluded
+        assert len(records) == 1
+        assert any(g["step"] == "11.5" for g in records[0]["gates"])
+
+    def test_cli_write_rejects_11_5_row_and_does_not_persist(self, tmp_path):
+        import subprocess
+        rf = tmp_path / "rec.json"
+        rf.write_text(json.dumps(self._rec_with_11_5()), encoding="utf-8")
+        store = tmp_path / "store.jsonl"
+        r = subprocess.run(
+            [sys.executable, str(SUMMARY_CLI), "summarize", "--record-file", str(rf),
+             "--project-root", str(tmp_path), "--store", str(store)],
+            capture_output=True, text=True)
+        assert r.returncode == 1, r.stderr
+        assert "11.5" in r.stderr
+        assert not store.exists() or store.read_text().strip() == ""  # not persisted
+
+
 # --- #115: multi-store / workspace fleet aggregation ---
 # Reuses the module's existing `_store_rec()` (valid record + generated_at) and
 # `_write_store(path, records)` (writes JSONL, returns str(path)) helpers.

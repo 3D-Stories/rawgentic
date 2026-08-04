@@ -14,6 +14,43 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #875 M1 — #904: a gates[] row for step 11.5 is rejected at write time · v3.125.7
+
+Round-6 session, small-standard lane (`simple_change`, 3 impl files ≤ 7), plugin 3.125.6 cache.
+**The filed issue was refuted before any code was written.** Its symptom — `work_summary` rendering
+"Security Scan: not run" for a record carrying a valid passing block — did not reproduce; owner
+decision **D187** rescoped the issue rather than closing it. The real defect in the same area:
+**28 of the 205 stored records carry a `gates[]` row for step `"11.5"`**, which the schema forbids
+(that result lives in `security_scan`, and `CANONICAL_GATE_NAMES` has no `11.5` key), so each of
+those summaries renders a duplicate Security-Scan line — the plausible cause of the original
+misreading. Counts re-verified independently at head 69e751ba rather than taken from the comment;
+the rescope's "204 records" was stale by one, the 28 was not.
+
+Fix: `validate_record` rejects such a row in **strict (write-time) mode only**, naming the offending
+index and pointing at `security_scan`, mirroring the `SCANNER_KINDS` vocabulary precedent.
+Strict-only is the load-bearing choice — `load_store` validates leniently, so a non-strict guard
+would have evicted all 28 historical records. Verified against the real store: 205 loaded, 0
+excluded, 28 rows still readable. Renderer deliberately untouched (AC3), `references/run-record.md`
+untouched (AC4), history not rewritten (AC5) — so those 28 summaries keep their duplicate line as a
+**stated** consequence, not a silent one.
+
+**Telemetry (run-record `wf2-904-475415bb`):** gates — Design Critique 4/4 pass (rubric-only, lane;
+2 findings were verified-not-defects, 2 folded into the plan and PR body), Plan Drift skipped (lane),
+Per-task Review skipped (0 high-risk tasks), Implementation Drift 0/0 pass, Code Review 3/3 pass
+(inline pass clean after its own suspected pylint finding was refuted by running the real lanes;
+runner gpt-5.6-sol + the `always`-mode adversarial diff pass raised 3 unique findings — one adopted
+as a `load_store` pin, one declined with cited evidence, one a genuine changelog miscount);
+security scan PASS (0 blocking, 0 advisory, skipped: iac). Tests 7 added, suite **4880→4887/0**
+(twice-run discipline held, plus one evidence-driven pre-PR re-run after the review-fix commit).
+Loop-backs 1/3 — the reopen token was minted before dispatch and never spent on a redesign round.
+No `11.5` gate row in this record: the run dogfoods its own guard.
+
+**Notable:** both cross-model passes independently recommended moving validation into
+`persist_record`. Declined (D904-11-1b, decision **D193**) — refuted by inspection a diff-scoped
+reviewer cannot perform: one caller, reachable only past the strict check that returns 1 before
+persisting. Filed as a follow-up rather than expanded into this slot, which is what M1 "STAY SMALL"
+asks for.
+
 ## Epic #875 M1 — #905: driver_lib.py refuses CLI invocation loudly · v3.125.5
 
 Post-mortem child (round-5 session, small-standard lane, plugin 3.125.4 cache). A bare
