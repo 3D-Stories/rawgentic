@@ -142,6 +142,14 @@ GLM_MODEL: Final[str] = _model_env("RAWGENTIC_ADV_REVIEW_GLM_MODEL") or "glm-5.2
 # glm = Zhipu GLM via the zhipuai SDK, both = run each independently.
 BACKENDS: Final[tuple[str, ...]] = ("gpt", "glm", "both")
 
+# WF2 Step-11 diff-review election mode (#879). "auto" = the historical
+# `plan_lib.should_run_diff_review` heuristic (security-relevant path OR a
+# high-risk plan task); "always" = elect the review for every non-empty diff.
+# A prose-product repo (this one: the product is markdown) scores "no security
+# surface" on its own real diffs, leaving the author model as the only Step-11
+# reviewer — "always" is the opt-out from that heuristic.
+DIFF_REVIEW_MODES: Final[tuple[str, ...]] = ("auto", "always")
+
 SEVERITIES: Final[tuple[str, ...]] = ("Critical", "High", "Medium", "Low")
 _SEVERITY_RANK = {s: i for i, s in enumerate(SEVERITIES)}
 CATEGORIES: Final[tuple[str, ...]] = (
@@ -210,6 +218,14 @@ class AdversarialReviewConfig:
     # repr() of the rejected raw value (str keeps the frozen dataclass hashable —
     # a live dict/list here would make hash() raise on the invalid path only).
     backend_error_value: str | None = None
+    # WF2 Step-11 diff-review election mode (#879). "auto" (default, absent field)
+    # or "always" — or the sentinel "invalid" when a PRESENT value failed coercion,
+    # with the rejected raw value preserved in diff_review_mode_error_value. Same
+    # refusal contract as `backend`: the resolving entry point must refuse on the
+    # sentinel rather than fall through to "auto", because a silent fall-through
+    # would restore the very silent-skip this field exists to close.
+    diff_review_mode: str = "auto"
+    diff_review_mode_error_value: str | None = None
 
 
 _DISABLED = AdversarialReviewConfig(enabled=False, workflows=())
@@ -241,15 +257,49 @@ def _coerce_backend(raw: object) -> tuple[str, str | None]:
 
 
 _BACKEND_ABSENT: Final[object] = object()  # sentinel: field truly absent (#403)
+_DIFF_REVIEW_MODE_ABSENT: Final[object] = object()  # sentinel: field absent (#879)
+
+
+def _coerce_diff_review_mode(raw: object) -> tuple[str, str | None]:
+    """Coerce a raw `diffReviewMode` value. Returns (mode, error_value_repr).
+
+    Mirrors `_coerce_backend` deliberately — same sentinel, same "invalid" result,
+    same repr-preservation — so there is one shape to learn for both optional
+    vocabulary fields on this block.
+
+    Absent (the _DIFF_REVIEW_MODE_ABSENT sentinel) -> ("auto", None) silently, so
+    every pre-#879 config resolves byte-identically (AC1). An explicit JSON null is
+    PRESENT and therefore invalid.
+    Valid member of DIFF_REVIEW_MODES -> (value, None).
+    Anything else (wrong type — incl. bool, which is never a str — unknown string,
+    stray whitespace/case) -> ("invalid", repr(raw)) with a stderr warning.
+    FAIL-CLOSED at the entry point, never a silent fallback to "auto": a typo'd
+    "alwyas" must not quietly restore the heuristic the operator opted out of (#879
+    AC3). repr (not the live object) keeps the frozen dataclass hashable when the
+    rejected value is a dict/list.
+    """
+    if raw is _DIFF_REVIEW_MODE_ABSENT:
+        return "auto", None
+    if isinstance(raw, str) and raw in DIFF_REVIEW_MODES:
+        return raw, None
+    print(
+        f"adversarial_review_lib: invalid diffReviewMode {raw!r} (expected one of "
+        f"{list(DIFF_REVIEW_MODES)}); refusing to resolve a mode from it — fix the "
+        "config's `diffReviewMode` field",
+        file=sys.stderr,
+    )
+    return "invalid", repr(raw)
 
 
 def _coerce_config(raw: object) -> AdversarialReviewConfig:
     """Coerce a raw adversarialReview value into config. FAIL-CLOSED.
 
     Accepts: bool shorthand (True/False), or {enabled: bool, workflows: [str],
-    backend: "gpt"|"glm"|"both"}. Anything else -> disabled. `enabled` must be a
-    real bool to count as enabled. A present-but-invalid `backend` coerces to the
-    "invalid" sentinel (see _coerce_backend) rather than silently becoming "gpt".
+    backend: "gpt"|"glm"|"both", diffReviewMode: "auto"|"always"}. Anything else ->
+    disabled. `enabled` must be a real bool to count as enabled. A
+    present-but-invalid `backend` or `diffReviewMode` coerces to the "invalid"
+    sentinel (see _coerce_backend / _coerce_diff_review_mode) rather than silently
+    becoming "gpt" / "auto".
     """
     if isinstance(raw, bool):
         return AdversarialReviewConfig(enabled=raw, workflows=())
@@ -266,9 +316,15 @@ def _coerce_config(raw: object) -> AdversarialReviewConfig:
         # (present, outside the vocabulary) refuses instead of aliasing to
         # absent (Step 11 diff review, #403).
         backend, err = _coerce_backend(raw.get("backend", _BACKEND_ABSENT))
+        # Same sentinel-default reasoning as `backend` above: an EXPLICIT
+        # `"diffReviewMode": null` is present-and-outside-the-vocabulary, so it
+        # refuses instead of aliasing to absent (#879).
+        mode, mode_err = _coerce_diff_review_mode(
+            raw.get("diffReviewMode", _DIFF_REVIEW_MODE_ABSENT))
         return AdversarialReviewConfig(
             enabled=enabled, workflows=workflows,
             backend=backend, backend_error_value=err,
+            diff_review_mode=mode, diff_review_mode_error_value=mode_err,
         )
     return _DISABLED
 
