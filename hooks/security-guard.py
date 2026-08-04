@@ -111,100 +111,6 @@ def _warn(message):
     print(json.dumps({"systemMessage": message}), file=sys.stdout)
 
 
-def _log_headless_guard_block(findings, rel_path, workspace_root, session_id=None):
-    """Log security guard blocks to WAL when in headless mode.
-
-    In bypassPermissions mode, guards are the last defense. Blocks MUST
-    be auditable via the WAL so the orchestrator can detect them.
-
-    ``session_id`` should be the authoritative id from the hook's stdin payload.
-    """
-    try:
-        from datetime import datetime, timezone
-
-        # Find the WAL file for the current project
-        # Try workspace_root first, then cwd (headless mode sets cwd to workspace root)
-        ws_root = workspace_root
-        if not ws_root or not os.path.isfile(os.path.join(ws_root, ".rawgentic_workspace.json")):
-            cwd = os.getcwd()
-            if os.path.isfile(os.path.join(cwd, ".rawgentic_workspace.json")):
-                ws_root = cwd
-            else:
-                return  # Cannot find workspace — skip audit logging
-        # Resolve claude_docs path from workspace config
-        claude_docs = os.path.join(ws_root, "claude_docs")
-        ws_config_path = os.path.join(ws_root, ".rawgentic_workspace.json")
-        if os.path.isfile(ws_config_path):
-            try:
-                with open(ws_config_path) as f:
-                    ws_config = json.load(f)
-                cdp = ws_config.get("claudeDocsPath", "")
-                if cdp:
-                    # Containment guard (#262): mirror wal-lib.sh's shared
-                    # semantic — every claudeDocsPath must resolve under $HOME,
-                    # else keep the workspace-relative fallback so the audit
-                    # log lands where the WAL readers look.
-                    home = os.path.realpath(os.path.expanduser("~"))
-                    resolved = os.path.realpath(os.path.expanduser(cdp))
-                    if resolved == home or resolved.startswith(home + os.sep):
-                        claude_docs = resolved
-                    else:
-                        _warn(f"claudeDocsPath outside $HOME rejected: {cdp}")
-            except (json.JSONDecodeError, OSError):
-                pass
-
-        # Read session registry to find the project.
-        # Session-id source precedence (most → least authoritative):
-        #   1. explicit stdin session_id (passed by main from the hook payload)
-        #   2. $CLAUDE_CODE_SESSION_ID — per-process env var, concurrency-safe
-        #   3. .current_session_id file — SHARED across sessions; last resort only.
-        #      That file is overwritten by every session on every prompt, so under
-        #      concurrent sessions it can name the wrong session.
-        registry_path = os.path.join(claude_docs, "session_registry.jsonl")
-
-        sid = (session_id or "").strip()
-        if not sid:
-            sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
-        if not sid:
-            session_id_path = os.path.join(claude_docs, ".current_session_id")
-            if os.path.isfile(session_id_path):
-                with open(session_id_path) as f:
-                    sid = f.read().strip()
-        session_id = sid or "unknown"
-
-        project = "unknown"
-        if os.path.isfile(registry_path):
-            with open(registry_path) as f:
-                for line in f:
-                    if session_id in line:
-                        entry = json.loads(line)
-                        project = entry.get("project", "unknown")
-        # Containment (#265): mirror wal-lib.sh's wal_validate_project_name —
-        # a registry name with a path separator or leading ".." would escape
-        # the wal/ dir when interpolated into the file path below.
-        if "/" in project or "\\" in project or project.startswith(".."):
-            project = "unknown"
-
-        wal_dir = os.path.join(claude_docs, "wal")
-        os.makedirs(wal_dir, exist_ok=True)
-        wal_file = os.path.join(wal_dir, f"{project}.jsonl")
-
-        patterns_blocked = [f.get("name", "unknown") for f in findings]
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        entry = {
-            "ts": ts,
-            "phase": "GUARD_BLOCK",
-            "session": session_id,
-            "guard": "security-guard",
-            "file": rel_path,
-            "patterns": patterns_blocked,
-        }
-        with open(wal_file, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-    except Exception:
-        pass  # Fail-open: logging failure must not block the deny response
-
-
 def main():
     try:
         raw = sys.stdin.read()
@@ -274,10 +180,6 @@ def main():
 
     # Headless mode audit: log guard blocks to WAL for visibility
     # In bypassPermissions mode, guards are the last defense — blocks MUST be auditable
-    if os.environ.get("RAWGENTIC_HEADLESS") == "1":
-        _log_headless_guard_block(
-            remaining, rel_path, workspace_root, input_data.get("session_id")
-        )
 
     deny_output = format_deny(remaining, rel_path)
     print(json.dumps(deny_output), file=sys.stdout)

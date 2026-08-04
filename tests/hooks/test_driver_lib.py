@@ -386,21 +386,6 @@ def test_validate_driver_state_single_active_ok():
     assert ok, errors
 
 
-def test_validate_campaign_start_headless_requires_epic():
-    # #163 AC5: headless refuses to start without an epic (Codex diff-review F3).
-    base = {"schema_version": 2, "campaign": "c", "issues": [
-        {"number": 1, "status": "queued"}]}
-    ok, errors = driver_lib.validate_campaign_start(base, headless=True)
-    assert not ok
-    assert any("epic" in e for e in errors)
-    # with an epic, headless start is fine
-    ok2, _ = driver_lib.validate_campaign_start({**base, "epic": 200}, headless=True)
-    assert ok2
-    # non-headless start does not require an epic
-    ok3, _ = driver_lib.validate_campaign_start(base, headless=False)
-    assert ok3
-
-
 def test_validate_driver_state_bool_number_rejected():
     # True is an int in Python; the validator must not accept it as a number.
     ok, errors = driver_lib.validate_driver_state(

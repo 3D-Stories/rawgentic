@@ -47,9 +47,10 @@ prose move keeps the guard live.
 ## Step 5b item 2 — why the universal-field check uses Bash and MUST NOT use `Read`
 
 Item 2 reads the same `.rawgentic.json` that item 3b reads. If it used the `Read` tool, the
-harness's `CLAUDE.md` auto-load would fire **at item 2** — which sits *before* the
-fail-closed Headless Access Check — letting a project's own prose reach the session ahead of
-the check that authorizes this session to operate on that project.
+harness's `CLAUDE.md` auto-load would fire **at item 2** — before the registry append is
+verified and before the bind is reported — letting a project's own prose reach the session
+ahead of the deliberate, positioned load at item 3b (and making the two reads collapse into
+one, which loses the position guarantees below).
 
 Every other guard in `tests/test_switch_loads_project_manual.py` would still pass in that
 unsafe ordering, which is exactly why that file pins the Bash mandate separately. It was
@@ -85,21 +86,6 @@ once-per-version gate**. It respects the workspace-level `"setupPrompt": false` 
 it is **fail-open**: a non-zero exit or empty output means "nothing to nudge", never a
 blocked bind. A staleness advisory that can block a bind is worse than no advisory (#234).
 
-## Step 5b item 3 — the headless verdict
-
-`headlessEnabled` accepts a bool (legacy) or an object
-`{"enabled": bool, "triggers": [...], "auth": "..."}` (#165). The skill must apply the **same**
-verdict the session-start gate computes — two gates disagreeing about whether a headless run
-is permitted is worse than either verdict alone.
-
-It **fails CLOSED** on a non-member trigger, an unset `$RAWGENTIC_HEADLESS_TRIGGER`, or a
-malformed `triggers` value. Fail-open here would let an unauthorized trigger drive an
-unattended run against a project that never opted in.
-
-Known gap carried from #721: this check sits inside Step 5b, which is skipped wholesale when
-`configured: false`, so a headless bind to an unconfigured project never reaches the verdict
-at all. 0 of 24 active projects are affected today. Recorded, not fixed here.
-
 ## Step 5b item 3b — the bind-time load, which is the whole point of #721
 
 ### Why the tool class is load-bearing
@@ -122,16 +108,13 @@ requirement.
 
 - **After the registry append.** The append *is* the bind. Before it the session is unbound
   and `hooks/wal-bind-guard` Gate 1 **denies** a `Read` of any active project's files.
-- **After the headless verdict.** Loading a project's own rules before its fail-closed
-  authorization check lets project-controlled text influence whether this session may operate
-  on that project.
 - **Before Confirm Ready.** "Ready" must not be reported while the rules are absent.
 
 ### Why item 2's shell read is not duplication
 
 Item 2 reads the file via Bash for field presence; item 3b reads it via the `Read` tool for
 the side effect of the injection. Collapsing them either loses the injection (if Bash wins) or
-moves the load before the headless verdict (if `Read` wins). Both reads are deliberate.
+moves the load ahead of the verified bind (if `Read` wins). Both reads are deliberate.
 
 ### Why a missing manual is silent
 
@@ -167,7 +150,5 @@ not its severity. A real fix needs a harness unload primitive or an explicit pre
   registry-append block.
 - `tests/hooks/test_session_binding.py` — `SKILL.md` must name `$CLAUDE_CODE_SESSION_ID` and
   explain the concurrency reason.
-- `tests/hooks/test_headless.py` — `SKILL.md` must carry the object shape, the trigger env
-  name and the fail-closed wording.
 - `tests/hooks/test_post_update_reconcile.py` — `SKILL.md` must reference
   `--staleness-project`.

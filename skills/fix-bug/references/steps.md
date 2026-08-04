@@ -112,7 +112,7 @@ This is an optional guard, not a gate — it never blocks the workflow.
 
 1. **Why.** A skill cannot set a session goal itself; `/goal` is a session command
    (see code.claude.com/docs/en/goal.md), not something a skill body can invoke. So
-   this step CONSTRUCTS the goal text and the user (or the headless driver) is the
+   this step CONSTRUCTS the goal text and the user (or the epic driver) is the
    one who runs it, giving the session's Stop-hook a concrete condition so the
    workflow can't be silently abandoned before the fix lands.
 
@@ -162,7 +162,7 @@ This is an optional guard, not a gate — it never blocks the workflow.
 5. **Related issues check:** `gh issue list --repo capabilities.repo --search "<keywords>" --limit 10`
 6. **Trivial-work check (may surface to user):** Apply `<trivial-work-check>`. If the fix
    is `trivial_work == true`, present the "do it directly vs. continue the full workflow"
-   suggestion and WAIT for the user's choice before proceeding to Step 3 (headless:
+   suggestion and WAIT for the user's choice before proceeding to Step 3 (unattended:
    auto-continue).
 
 ### Output
@@ -247,7 +247,7 @@ python3 hooks/adversarial_review_lib.py is-enabled \
   --workspace .rawgentic_workspace.json --project <name> --skill fix-bug
 ```
 - The command exits `0` when enabled (`fix-bug` listed in the project's `adversarialReview.workflows`) and non-zero otherwise. If **disabled** (the default), **skip silently**. The fast path is preserved exactly; this adds zero overhead to a normal bug fix.
-- If **enabled** (the user knowingly accepts the latency tradeoff — an external review adds ~1-3 min on top of the 2-3 min reflect, the very cost this step was designed to avoid), write the RCA + fix approach to a temp file under the project and invoke `/rawgentic:adversarial-review <rca-path> plan`. It is report-only; merge its findings (tagged `source: adversarial`) with the reflect findings and apply the circuit breaker over the **merged** list. If a Critical/High indicates the root cause itself is wrong, loop back to Step 3 **once** (max 1 per loop-back budget, same as the reflect loop-back — it does NOT add a second budget). **Codex failure is non-blocking** (additive review): on ANY non-success — including headless unmet-prerequisite — skip the adversarial layer, log loudly (headless: STATUS comment), and continue with the reflect result. Do NOT trigger the ERROR protocol and do NOT block WF3 (only the standalone `/rawgentic:adversarial-review` skill ERRORs on an unmet prerequisite). Log: `### WF3 Step 4 — Adversarial Review (#<issue>, invoked|skipped): <report path or skip reason>`.
+- If **enabled** (the user knowingly accepts the latency tradeoff — an external review adds ~1-3 min on top of the 2-3 min reflect, the very cost this step was designed to avoid), write the RCA + fix approach to a temp file under the project and invoke `/rawgentic:adversarial-review <rca-path> plan`. It is report-only; merge its findings (tagged `source: adversarial`) with the reflect findings and apply the circuit breaker over the **merged** list. If a Critical/High indicates the root cause itself is wrong, loop back to Step 3 **once** (max 1 per loop-back budget, same as the reflect loop-back — it does NOT add a second budget). **Codex failure is non-blocking** (additive review): on ANY non-success — including an unmet prerequisite — skip the adversarial layer, log loudly, and continue with the reflect result. Do NOT trigger the ERROR protocol and do NOT block WF3 (only the standalone `/rawgentic:adversarial-review` skill ERRORs on an unmet prerequisite). Log: `### WF3 Step 4 — Adversarial Review (#<issue>, invoked|skipped): <report path or skip reason>`.
 
 Note: the `is-enabled` check reads `.rawgentic_workspace.json`; if that file is missing or corrupt the engine returns disabled (fail-safe), so WF3 continues unchanged.
 
@@ -839,7 +839,7 @@ read once.
    `--record` fail-closed path yields a degraded/unscored assessment. The
    assessment is report-only for the plugin SOURCE (never edits skills/hooks/docs
    mid-assessment) and PR-terminal-safe (never touches the just-created PR), so it
-   runs in headless mode too — but its outward writes are WF14's own Step 4
+   runs in unattended runs too — but its outward writes are WF14's own Step 4
    actions and run autonomously there: the report pair + session-note marker (the
    only FILE writes), up to 3 filed issues against `3D-Stories/rawgentic`, and one
    mempalace memory.

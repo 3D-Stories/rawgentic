@@ -85,22 +85,7 @@ python3 hooks/post_update_reconcile.py --staleness-project <name> \
 ```
 
 Surface any output verbatim. Advisory, never blocking — a non-zero exit **or** empty output
-both mean "nothing to nudge": continue to item 3.
-
-### 3. Headless Access Check
-
-Only when `RAWGENTIC_HEADLESS=1`. Read the project's `headlessEnabled` — bool or
-`{"enabled":…,"triggers":[…]}` — and apply the SAME verdict the session-start gate computes:
-
-- `true` → silent pass.
-- `{"enabled": true}` → allowed only if `triggers` is absent OR
-  `$RAWGENTIC_HEADLESS_TRIGGER` is in it. Non-member, unset env or malformed `triggers`
-  **fails CLOSED** → STOP: "Headless mode for **[project-name]** does not allow this trigger
-  (RAWGENTIC_HEADLESS_TRIGGER is not in the headlessEnabled.triggers allowlist)."
-- anything else → STOP: "Headless mode is not enabled for **[project-name]**. Set
-  `headlessEnabled: true` in the project's `.rawgentic_workspace.json` entry to enable it."
-  (Setup no longer stages this key — M0c #866 removed its config surface; the manual
-  workspace edit is the only path until the headless machinery itself retires in M0d.)
+both mean "nothing to nudge": continue to item 3b.
 
 ### 3b. Load the project's operating rules
 

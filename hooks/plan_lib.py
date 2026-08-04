@@ -2425,7 +2425,6 @@ def build_goal_text(
     issue_number: int,
     ac_lines: list[str],
     variant: str = "wf2",
-    headless: bool = False,
     child_issues: list[int] | None = None,
 ) -> str:
     """Build the goal-guard clear-condition text posted at workflow start.
@@ -2435,12 +2434,9 @@ def build_goal_text(
     primary condition is met, or when a blocker has been posted to the
     issue via the ERROR protocol.
 
-    `headless` currently produces identical wording in both modes — both
-    wf2 and wf3 always say "PR open with green CI", never "merged" — because
-    the goal must clear at workflow *termination*; merge is owner-gated and
-    happens post-terminal. The param is kept so wording could diverge later
-    (e.g. a headless run that also confirms merge) without changing the
-    call signature.
+    Both wf2 and wf3 always say "PR open with green CI", never "merged" —
+    because the goal must clear at workflow *termination*; merge is
+    owner-gated and happens post-terminal.
 
     ac_lines are compressed by stripping leading numbering/bullets and
     joining with "; ". If the resulting wf2 text would exceed 4000 chars

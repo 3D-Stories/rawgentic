@@ -215,7 +215,7 @@ atomic_write_text(sys.argv[2],
     fi
 
     # --- Move other top-level files (target wins if exists) ---
-    for f in .current_session_id headless_suspend.json; do
+    for f in .current_session_id; do
         if [ -f "$source/$f" ] && [ ! -f "$target/$f" ]; then
             cp "$source/$f" "$target/$f" 2>/dev/null || true
         fi
@@ -647,7 +647,7 @@ _do_security_staleness_check 2>/dev/null || true
 # install is visible instead of looking like "all clean". Re-checking each
 # session also means a scanner added by a plugin update is installed on the next
 # session with no version bookkeeping. Opt-outs (RAWGENTIC_SKIP_SCANNER_INSTALL=1
-# / "installScanners": false) and headless are honored inside the helper. Runs on
+# / "installScanners": false) and the unattended-session skip are honored inside the helper. Runs on
 # startup|resume — NOT clear/compact — because a resume-heavy workflow would
 # otherwise rarely hit a fresh startup (the original startup-only gate).
 _do_scanner_bootstrap() {
@@ -670,7 +670,7 @@ _do_scanner_bootstrap 2>/dev/null || true
 # SECTION 2f: Post-Update Feature Reconcile (startup|resume)
 # =========================================================================
 # When the plugin version changes, turn on new opt-OUT features by default
-# (honoring recorded opt-outs), leave headless opt-in, and nudge the user to run
+# (honoring recorded opt-outs) and nudge the user to run
 # /rawgentic:setup for answer-required features (WF5/adversarialReview). Delegates
 # to hooks/post_update_reconcile.py, which records the reconciled version
 # per-workspace (in claude_docs) so it runs ONCE per version.
@@ -771,127 +771,6 @@ else:
             CONTEXT_PARTS+=("Multiple projects active: ${NAMES}. Use /rawgentic:switch <name> to bind this session to a project.")
             ;;
     esac
-fi
-
-# =========================================================================
-# SECTION 3b: Headless mode detection
-# =========================================================================
-if [ "${RAWGENTIC_HEADLESS:-}" = "1" ]; then
-    # Check if the active project allows headless mode
-    # Default to false (deny) — must be explicitly set to true by the jq check below
-    HEADLESS_ALLOWED=false
-    if [ -n "${WORKSPACE_FILE:-}" ] && command -v "$JQ" &>/dev/null; then
-        # Resolve the active project name (from registry or single-active)
-        _HEADLESS_PROJECT=""
-        if [ -n "${SESSION_ID:-}" ] && [ -f "${CLAUDE_DOCS:-${WS_ROOT:-$CWD}/claude_docs}/session_registry.jsonl" ]; then
-            _REG_LINE=$(grep "$SESSION_ID" "${CLAUDE_DOCS:-${WS_ROOT:-$CWD}/claude_docs}/session_registry.jsonl" 2>/dev/null | tail -1 || true)
-            if [ -n "$_REG_LINE" ]; then
-                _HEADLESS_PROJECT=$(printf '%s' "$_REG_LINE" | "$JQ" -r '.project // ""' 2>/dev/null || true)
-            fi
-        fi
-        if [ -z "$_HEADLESS_PROJECT" ]; then
-            _HEADLESS_PROJECT=$("$JQ" -r '[.projects[] | select(.active == true) | .name] | first // ""' "$WORKSPACE_FILE" 2>/dev/null || true)
-        fi
-
-        if [ -n "$_HEADLESS_PROJECT" ]; then
-            # headlessEnabled accepts two shapes (#165 AC5):
-            #   bool  — legacy: true allows any trigger
-            #   object— {"enabled": bool, "triggers": [..], "auth": ".."}
-            #           absent `triggers` = any trigger; a present list requires
-            #           $RAWGENTIC_HEADLESS_TRIGGER membership (fail closed on
-            #           unset env or malformed list)
-            # Verdict is one of: allowed | trigger | disabled
-            _HEADLESS_VERDICT=$("$JQ" -r --arg name "$_HEADLESS_PROJECT" \
-                --arg trigger "${RAWGENTIC_HEADLESS_TRIGGER:-}" '
-                [.projects[] | select(.name == $name)][0].headlessEnabled as $h
-                | if $h == true then "allowed"
-                  elif ($h | type) == "object" then
-                      if ($h.enabled // false) != true then "disabled"
-                      elif ($h | has("triggers") | not) then "allowed"
-                      elif (($h.triggers | type) == "array"
-                            and $trigger != ""
-                            and ($h.triggers | index($trigger)) != null)
-                          then "allowed"
-                      else "trigger"
-                      end
-                  else "disabled"
-                  end' \
-                "$WORKSPACE_FILE" 2>/dev/null || echo "disabled")
-            case "$_HEADLESS_VERDICT" in
-                allowed)
-                    HEADLESS_ALLOWED=true
-                    ;;
-                trigger)
-                    # Deliberately do NOT echo the trigger env value: it is
-                    # attacker-shaped input (on an Actions runner it may derive
-                    # from event data) and this message lands in
-                    # additionalContext — the model's instruction channel. Any
-                    # echo, even charset-stripped, hands the deny path a
-                    # rider for injected text (8a F1).
-                    CONTEXT_PARTS+=("HEADLESS MODE BLOCKED: Project '${_HEADLESS_PROJECT}' allows headless mode, but the current RAWGENTIC_HEADLESS_TRIGGER value is not in the headlessEnabled.triggers allowlist (or is unset). Refusing to execute workflow skills — exit immediately.")
-                    ;;
-                *)
-                    CONTEXT_PARTS+=("HEADLESS MODE BLOCKED: Project '${_HEADLESS_PROJECT}' does not have headless mode enabled. Set headlessEnabled: true in .rawgentic_workspace.json for this project (via /rawgentic:setup) to allow autonomous agent execution. Refusing to execute workflow skills — exit immediately.")
-                    ;;
-            esac
-        fi
-    fi
-
-    # If jq was absent and we couldn't check headlessEnabled, add a BLOCKED message
-    if [ "$HEADLESS_ALLOWED" = false ] && [ ${#CONTEXT_PARTS[@]} -gt 0 ]; then
-        # Check if a BLOCKED message was already added by the jq-present path
-        _HAS_BLOCKED=false
-        for _part in "${CONTEXT_PARTS[@]}"; do
-            if printf '%s' "$_part" | grep -q "HEADLESS MODE BLOCKED"; then
-                _HAS_BLOCKED=true
-                break
-            fi
-        done
-        if [ "$_HAS_BLOCKED" = false ]; then
-            CONTEXT_PARTS+=("HEADLESS MODE BLOCKED: Cannot verify headlessEnabled for this project (jq not available or project not found). Refusing to execute workflow skills in headless mode — exit immediately.")
-        fi
-    fi
-
-    if [ "$HEADLESS_ALLOWED" = true ]; then
-        CONTEXT_PARTS+=("HEADLESS MODE active. User interaction points must use the <headless-interaction> protocol: post structured comment to GitHub issue, add rawgentic:ai-waiting label, write suspend state, and exit cleanly.")
-    fi
-
-    # Stale suspend file check — only when headless is allowed
-    SUSPEND_FILE="${CLAUDE_DOCS:-${WS_ROOT:-$CWD}/claude_docs}/headless_suspend.json"
-    if [ "$HEADLESS_ALLOWED" = true ] && [ -f "$SUSPEND_FILE" ] && command -v "$JQ" &>/dev/null; then
-        SUSPEND_SESSION=$("$JQ" -r '.session_id // ""' "$SUSPEND_FILE" 2>/dev/null || true)
-        SUSPEND_AT=$("$JQ" -r '.suspended_at // ""' "$SUSPEND_FILE" 2>/dev/null || true)
-
-        # TTL check: auto-delete suspend files older than 24 hours
-        STALE_BY_TTL=false
-        if [ -n "$SUSPEND_AT" ]; then
-            SUSPEND_EPOCH=$(date -d "$SUSPEND_AT" +%s 2>/dev/null || echo 0)
-            NOW_EPOCH=$(date +%s)
-            AGE_HOURS=$(( (NOW_EPOCH - SUSPEND_EPOCH) / 3600 ))
-            if [ "$AGE_HOURS" -ge 24 ]; then
-                STALE_BY_TTL=true
-            fi
-        fi
-
-        if [ "$STALE_BY_TTL" = true ]; then
-            # Auto-delete: TTL expired (>24h)
-            rm -f "$SUSPEND_FILE" 2>/dev/null || true
-            CONTEXT_PARTS+=("Cleaned up stale headless suspend file (>24h old). Previous headless session is assumed abandoned.")
-        elif [ -n "$SUSPEND_SESSION" ] && [ "$SUSPEND_SESSION" != "$SESSION_ID" ]; then
-            # Warn: different session but not TTL-expired
-            SUSPEND_STEP=$("$JQ" -r '.step // "unknown"' "$SUSPEND_FILE" 2>/dev/null || true)
-            SUSPEND_ISSUE=$("$JQ" -r '.issue // "unknown"' "$SUSPEND_FILE" 2>/dev/null || true)
-            CONTEXT_PARTS+=("WARNING: Stale headless suspend file found from a previous session (issue #${SUSPEND_ISSUE}, step ${SUSPEND_STEP}). This file may need cleanup. Delete ${SUSPEND_FILE} if the previous session is no longer active.")
-        fi
-    fi
-fi
-
-# Check for SUSPEND WAL entries and adjust recovery messaging (only when headless allowed)
-if [ "${RAWGENTIC_HEADLESS:-}" = "1" ] && [ "${HEADLESS_ALLOWED:-true}" = true ] && [ -n "${WAL_FILE:-}" ] && [ -f "${WAL_FILE:-}" ] && command -v "$JQ" &>/dev/null; then
-    HAS_SUSPEND=$("$JQ" -r 'select(.phase == "SUSPEND")' "$WAL_FILE" 2>/dev/null | tail -1 || true)
-    if [ -n "$HAS_SUSPEND" ]; then
-        CONTEXT_PARTS+=("Previous session was SUSPENDED awaiting user input (not crashed). Resume normally — conversation context is preserved via --resume.")
-    fi
 fi
 
 # =========================================================================
