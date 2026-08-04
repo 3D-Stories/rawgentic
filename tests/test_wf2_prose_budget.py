@@ -148,6 +148,18 @@ def budget_violations(sizes: dict, budgets: dict, total_ceiling: int) -> list:
                     f"ceiling to actual + allowed in the same commit as the "
                     f"shrink (#874 AC7)."
                 )
+    if not sizes:
+        # Review F4: `elif sizes:` previously SKIPPED the aggregate check on an
+        # empty mapping, and the live-corpus test filters for "STALE" messages —
+        # so an absent, renamed, unreadable or mis-resolved directory measured as
+        # zero files and passed as "no stale ceilings". Empty measurement is a
+        # broken measurement, not a clean corpus.
+        violations.append(
+            "EMPTY CORPUS: no markdown files were discovered under the skill "
+            "directory — the glob resolved to nothing, which is a broken "
+            "measurement and never a clean result. Check the path."
+        )
+        return violations
     total = sum(sizes.values())
     if total > total_ceiling:
         violations.append(
@@ -155,7 +167,7 @@ def budget_violations(sizes: dict, budgets: dict, total_ceiling: int) -> list:
             f"over the {total_ceiling}-byte total ceiling. Trim prose, or raise the "
             f"ceiling in the same commit and say why in the PR."
         )
-    elif sizes:
+    else:
         allowed = allowed_headroom(total, STALE_TOTAL_PCT, STALE_TOTAL_MIN_BYTES)
         excess = total_ceiling - total - allowed
         if excess > 0:
@@ -299,11 +311,21 @@ def test_over_and_stale_are_mutually_exclusive_per_file():
     assert not any("STALE CEILING" in m for m in v)
 
 
+def test_empty_corpus_is_a_violation_not_a_pass():
+    """Review F4: zero discovered files must fail loudly."""
+    v = budget_violations({}, {}, 100)
+    assert any("EMPTY CORPUS" in m for m in v), v
+
+
 def test_live_corpus_has_no_stale_ceilings():
     """The real budgets must satisfy the margin — this is what forces the #874
     split's shrunken files to carry recalibrated ceilings rather than the
     monolith's old slack."""
-    v = [m for m in budget_violations(measured_sizes(), PER_FILE_CEILING_BYTES,
+    sizes = measured_sizes()
+    # Review F4: assert the measurement is real before filtering it, so an empty
+    # glob cannot read as "no stale ceilings".
+    assert len(sizes) >= 20, f"corpus measurement looks broken: {sorted(sizes)}"
+    v = [m for m in budget_violations(sizes, PER_FILE_CEILING_BYTES,
                                       TOTAL_CEILING_BYTES)
          if "STALE" in m]
     assert v == [], "stale ceilings in the live budget:\n" + "\n".join(v)

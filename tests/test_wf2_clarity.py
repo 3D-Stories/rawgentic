@@ -1256,6 +1256,23 @@ class TestProbeBeforeDesign:
     def _probe_block(self) -> str:
         return " ".join(_block(_text(), "probe-before-design").split())
 
+    def test_exact_invocation_rule_is_pinned(self):
+        """RESTORED after review F2: I deleted this as 'wording' during the AC3
+        sweep and that was a misclassification. It pins a RULE — probe the exact
+        shipped invocation, never a proxy — and the surviving cross-reference
+        test only proves the marker appears, so without this a proxy probe could
+        be presented as feasibility evidence with every guard green."""
+        assert (
+            "run a SHORT live probe of the EXACT invocation the design will "
+            "ship — never a proxy composition — and cite the probe's real "
+            "result in the `platform_apis:` feasibility block"
+        ) in self._probe_block()
+
+    def test_spike_must_reference_the_shipped_invocation(self):
+        """RESTORED after review F2 — same misclassification."""
+        assert ("a `verified via spike` claim must reference the actual "
+                "shipped invocation") in self._probe_block()
+
     def test_feasibility_sites_point_at_canonical_block(self):
         # AC2: the Step 3 platform_apis rules and the Step 4 feasibility gate
         # cross-reference the block — multi-site presence, so >=, never ==.
@@ -1335,6 +1352,17 @@ class TestEarlySmokeInstall:
 
     def _smoke_block(self) -> str:
         return " ".join(_block(_text(), "early-smoke-install").split())
+
+    def test_the_check_is_actually_prescribed(self):
+        """RESTORED after review F3: deleting this left only the deploy-GATING
+        sentence, so the instruction to actually run the check could vanish
+        while the remaining guard passed. Gating without the instruction gates
+        nothing."""
+        assert (
+            "after the first runnable commit boots something, run a cheap "
+            "live smoke-install/boot check (install / start / health) before "
+            "continuing implementation"
+        ) in self._smoke_block()
 
     def test_has_deploy_gated_sentence(self):
         # AC2: the gate lives inside the block itself — code-only projects
@@ -1630,16 +1658,16 @@ class TestSixContractAreasStillGuarded:
     """#874 AC3: the sweep removes WORDING pins, so something must prove it did
     not also remove a CONTRACT.
 
-    AC3 names six areas that must stay enforceable. Two review passes on the
-    #874 design warned that a per-test-function deletion silently drops any
-    structural assertion sharing that function, and that the
-    executor-vocabulary area is a NEGATIVE invariant over a scope rather than
-    ownership of one canonical sentence — so it is asserted separately here and
-    is deliberately NOT counted as a prose pin.
+    Review F1/F5 rewrote this. The first version checked for `class X:` SOURCE
+    TEXT and for sibling files EXISTING — so a class emptied of its assertions,
+    or a sibling file emptied of its contents, both passed while the contract
+    became unenforced. It was theatre for exactly the regression it claimed to
+    detect. It now parses the AST and counts real assert statements, and reads
+    the siblings' content rather than their existence.
 
-    This checks each area still has at least one live guard. It is a
-    completeness floor, not a wording pin: it names guard classes, so rewording
-    any pinned sentence cannot break it.
+    The executor-vocabulary area is a NEGATIVE invariant over a scope, not
+    ownership of one canonical sentence, so it is asserted separately and is
+    deliberately NOT counted as a prose pin.
     """
 
     AREA_GUARDS = {
@@ -1648,26 +1676,65 @@ class TestSixContractAreasStillGuarded:
         "loop-back debit": ("TestTieredLoopback", "TestStep4BudgetExhaustedClose"),
         "deferral honesty": ("TestDeferredVerification", "TestDispositionLedger"),
     }
+    MIN_ASSERTS = 2
 
-    def test_each_contract_area_retains_a_guard(self):
-        src = Path(__file__).read_text()
-        missing = [f"{area}: none of {names} present"
-                   for area, names in self.AREA_GUARDS.items()
-                   if not any(f"class {n}:" in src for n in names)]
-        assert not missing, "AC3 deleted a CONTRACT, not just wording:\n" + "\n".join(missing)
+    @staticmethod
+    def _assert_counts() -> dict:
+        """Class name -> number of executable assert statements, via AST.
 
-    def test_reviewer_not_author_is_guarded_outside_this_file(self):
-        """The reviewer≠author area is enforced by the runner itself and pinned
-        in tests/hooks/test_wf_review_sites.py — named here so the area is not
-        assumed covered just because this file says nothing about it."""
+        AST, not grep: a commented-out or string-literal `assert` must not count,
+        and a renamed-away class must not be found by a substring match.
+        """
+        import ast
+        tree = ast.parse(Path(__file__).read_text())
+        out = {}
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef):
+                out[node.name] = sum(1 for n in ast.walk(node)
+                                     if isinstance(n, ast.Assert))
+        return out
+
+    def test_each_contract_area_retains_a_guard_with_real_assertions(self):
+        counts = self._assert_counts()
+        missing = []
+        for area, names in self.AREA_GUARDS.items():
+            best = max((counts.get(n, 0) for n in names), default=0)
+            if best < self.MIN_ASSERTS:
+                missing.append(
+                    f"{area}: none of {names} carries >= {self.MIN_ASSERTS} "
+                    f"assertions (best was {best})")
+        assert not missing, (
+            "AC3 deleted a CONTRACT, not just wording:\n" + "\n".join(missing))
+
+    def test_this_meta_check_cannot_pass_on_an_empty_parse(self):
+        """Review F1: the floor must fail loudly if it can no longer see the
+        classes it grades, rather than grading an empty mapping as clean."""
+        counts = self._assert_counts()
+        assert len(counts) >= 20, f"AST parse looks broken: {sorted(counts)}"
+        assert sum(counts.values()) >= 100, "assertion count implausibly low"
+
+    def test_reviewer_not_author_guard_has_content_not_just_a_file(self):
+        """Review F5: previously asserted the sibling file EXISTED, so emptying
+        it passed. The reviewer!=author separation is enforced by the runner and
+        pinned in that file — check the pin, not the inode."""
         sibling = Path(__file__).resolve().parent / "hooks" / "test_wf_review_sites.py"
-        assert sibling.exists(), "the reviewer≠author guard file is missing"
+        assert sibling.exists(), "the reviewer!=author guard file is missing"
+        body = sibling.read_text()
+        assert body.count("assert ") >= 3, (
+            "test_wf_review_sites.py has lost its assertions — reviewer!=author "
+            "would be unenforced while this floor stayed green")
+        assert "review_runner" in body
 
-    def test_executor_vocabulary_is_a_negative_scan_counted_separately(self):
-        """Sixth area. A negative invariant over a scope — never reduced to a
-        positive sentence pin, and excluded from any prose-pin tally."""
-        assert "class TestDispatchRegexIsLegacyOnly:" in Path(__file__).read_text()
+    def test_executor_vocabulary_negative_scan_has_content(self):
+        """Sixth area, counted separately from prose pins. Review F5: content,
+        not existence."""
+        src = Path(__file__).read_text()
+        assert "class TestDispatchRegexIsLegacyOnly:" in src
         repo_wide = Path(__file__).resolve().parent / "test_no_executor_prose.py"
         assert repo_wide.exists(), (
             "the repo-wide executor-vocabulary negative scan must exist "
             "(tests/test_no_executor_prose.py)")
+        body = repo_wide.read_text()
+        assert body.count("assert ") >= 2, (
+            "test_no_executor_prose.py has lost its assertions — the "
+            "executor-vocabulary prohibition would be unenforced")
