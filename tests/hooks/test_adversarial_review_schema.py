@@ -1,5 +1,4 @@
 """Tests for adversarial_review_lib findings schema + normalization (issue #77, Task 3)."""
-import json
 import sys
 from pathlib import Path
 
@@ -151,12 +150,12 @@ def test_normalize_ranks_same_severity_by_category():
 
 # --- schema ---
 
-def test_schema_is_draft07_and_writable(tmp_path):
+def test_schema_is_draft07_with_severity_enum():
+    # write_schema was deleted with the old engine (#866 M0d) — the runner
+    # serializes FINDINGS_SCHEMA itself; pin the schema content directly.
     assert arl.FINDINGS_SCHEMA["$schema"].endswith("draft-07/schema#")
-    p = tmp_path / "schema.json"
-    arl.write_schema(str(p))
-    loaded = json.loads(p.read_text())
-    assert loaded["properties"]["findings"]["items"]["properties"]["severity"]["enum"] == list(arl.SEVERITIES)
+    sev = arl.FINDINGS_SCHEMA["properties"]["findings"]["items"]["properties"]["severity"]
+    assert sev["enum"] == list(arl.SEVERITIES)
 
 
 def test_schema_validates_with_jsonschema(tmp_path):

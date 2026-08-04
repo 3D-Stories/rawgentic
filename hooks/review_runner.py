@@ -381,10 +381,10 @@ def invoke_codex(prompt: str, schema: dict, model: str, effort: str,
 def _default_glm_fn(prompt: str, *, model: str, effort: str, timeout: int):
     """(payload | None, error) — ONE provider attempt, no internal retry.
 
-    Deliberately NOT arl.glm_complete (round-1 H3): that transport
-    blanket-retries every exception internally (adversarial_review_lib.py:1521),
-    including quota errors, which would multiply provider attempts underneath
-    the runner's classification. The runner must see the FIRST provider error
+    Deliberately not the old arl.glm_complete transport (deleted in M0d,
+    round-1 H3): it blanket-retried every exception internally, including
+    quota errors, which would multiply provider attempts underneath the
+    runner's classification. The runner must see the FIRST provider error
     and alone decide retry / switch / terminal (#857).
     """
     try:

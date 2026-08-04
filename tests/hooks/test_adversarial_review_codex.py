@@ -1,15 +1,13 @@
-"""Tests for adversarial_review_lib Codex invocation (issue #77, Task 2).
+"""Tests for adversarial_review_lib Codex prereq detection + build_prompt (issue #77).
 
 The `codex` binary is PATH-stubbed via a fake script — NO live calls in CI.
-Every Codex failure path must be fail-closed (non-success status).
+The invocation functions (run_codex_review et al.) were deleted in #866 M0d;
+invocation coverage lives in tests/hooks/test_review_runner.py.
 """
-import json
 import os
 import stat
 import sys
 from pathlib import Path
-
-import pytest
 
 HOOKS_DIR = Path(__file__).resolve().parent.parent.parent / "hooks"
 sys.path.insert(0, str(HOOKS_DIR))
@@ -17,33 +15,14 @@ sys.path.insert(0, str(HOOKS_DIR))
 import adversarial_review_lib as arl  # noqa: E402
 
 
-def _make_codex_stub(bin_dir: Path, *, login_rc: int = 0, exec_body: str = "",
-                     exec_rc: int = 0, sleep: float = 0.0) -> None:
-    """Write a fake `codex` that handles `login status` and `exec`.
-
-    For `exec`, writes exec_body to the path following `-o` and exits exec_rc.
-    """
+def _make_codex_stub(bin_dir: Path, *, login_rc: int = 0) -> None:
+    """Write a fake `codex` that handles `login status`."""
     bin_dir.mkdir(parents=True, exist_ok=True)
     script = bin_dir / "codex"
-    body = exec_body.replace("'", "'\\''")
     script.write_text(
         "#!/usr/bin/env bash\n"
         'if [ "$1" = "login" ] && [ "$2" = "status" ]; then\n'
         f"  echo 'Logged in'; exit {login_rc}\n"
-        "fi\n"
-        'if [ "$1" = "--version" ]; then echo "codex-cli 0.139.0"; exit 0; fi\n'
-        'if [ "$1" = "exec" ]; then\n'
-        f"  sleep {sleep}\n"
-        # Capture full argv (before the shift loop consumes it) so a test can
-        # assert the invocation flags. Opt-in via CODEX_STUB_ARGS_FILE.
-        '  if [ -n "$CODEX_STUB_ARGS_FILE" ]; then printf \'%s\\n\' "$@" > "$CODEX_STUB_ARGS_FILE"; fi\n'
-        "  out=\"\"\n"
-        "  while [ $# -gt 0 ]; do\n"
-        '    if [ "$1" = "-o" ]; then out="$2"; fi\n'
-        "    shift\n"
-        "  done\n"
-        f"  if [ -n \"$out\" ]; then printf '%s' '{body}' > \"$out\"; fi\n"
-        f"  exit {exec_rc}\n"
         "fi\n"
         "exit 0\n"
     )
@@ -93,21 +72,12 @@ def test_prereq_not_installed(monkeypatch):
     assert "install" in msg.lower()
 
 
-def test_prereq_unauthenticated_interactive(tmp_path, monkeypatch):
+def test_prereq_unauthenticated(tmp_path, monkeypatch):
     _make_codex_stub(tmp_path / "bin", login_rc=1)
     _path_with(tmp_path / "bin", monkeypatch)
-    ok, msg = arl.prereq_status(headless=False)
+    ok, msg = arl.prereq_status()
     assert ok is False
     assert "codex login" in msg
-
-
-def test_prereq_unauthenticated_headless_message(tmp_path, monkeypatch):
-    _make_codex_stub(tmp_path / "bin", login_rc=1)
-    _path_with(tmp_path / "bin", monkeypatch)
-    ok, msg = arl.prereq_status(headless=True)
-    assert ok is False
-    assert "headless" in msg.lower()
-    assert "with-api-key" in msg
 
 
 def test_prereq_ok(tmp_path, monkeypatch):
@@ -176,259 +146,17 @@ def test_build_prompt_has_injection_and_tool_guards():
     assert "Respond using the provided output schema only." in p
 
 
-# --- run_codex_review: success + every fail-closed path ---
-
-def _valid_output() -> str:
-    return json.dumps({
-        "summary": "ok",
-        "findings": [
-            {"evidence": "q1", "severity": "High", "category": "security",
-             "confidence": "high", "description": "Issue here",
-             "recommendation": "Fix it", "location": "S2"},
-            {"evidence": "q2", "severity": "Low", "category": "scope",
-             "confidence": "low", "description": "Minor",
-             "recommendation": "Consider", "location": "S3"},
-        ],
-    })
-
-
-def test_run_success(tmp_path, monkeypatch):
-    _make_codex_stub(tmp_path / "bin", exec_body=_valid_output())
-    _path_with(tmp_path / "bin", monkeypatch)
-    root = tmp_path / "proj"; root.mkdir()
-    art = root / "design.md"; art.write_text("# Design\nstuff")
-    res = arl.run_codex_review(str(art), "design", str(root))
-    assert res.status == "success"
-    assert len(res.findings) == 2
-    # ranked: High before Low
-    assert res.findings[0]["severity"] == "High"
-    # model/effort recorded for report auditability (effort pinned, model inherited)
-    assert res.effort == arl.REASONING_EFFORT
-    assert res.model == (arl.REVIEW_MODEL or "")
-
-
-def test_run_invocation_pins_effort_ephemeral_and_clean_output(tmp_path, monkeypatch):
-    args_file = tmp_path / "argv.txt"
-    monkeypatch.setenv("CODEX_STUB_ARGS_FILE", str(args_file))
-    _make_codex_stub(tmp_path / "bin", exec_body=_valid_output())
-    _path_with(tmp_path / "bin", monkeypatch)
-    root = tmp_path / "proj"; root.mkdir()
-    art = root / "design.md"; art.write_text("# Design\nstuff")
-    res = arl.run_codex_review(str(art), "design", str(root))
-    assert res.status == "success"
-    argv = args_file.read_text().splitlines()
-    # the quality/privacy/parse-safety/independence levers must all be present
-    assert f"model_reasoning_effort={arl.REASONING_EFFORT}" in argv
-    assert "--ephemeral" in argv
-    assert "--color" in argv and "never" in argv
-    assert "project_doc_max_bytes=0" in argv
-    assert "read-only" in argv               # sandbox belt-and-suspenders kept
-    assert "--skip-git-repo-check" in argv
-    # model NOT pinned by default (would rot as OpenAI retires model ids)
-    assert "-m" not in argv
-
-
-def test_run_invocation_pins_model_when_env_set(tmp_path, monkeypatch):
-    args_file = tmp_path / "argv.txt"
-    monkeypatch.setenv("CODEX_STUB_ARGS_FILE", str(args_file))
-    monkeypatch.setattr(arl, "REVIEW_MODEL", "gpt-some-model")
-    _make_codex_stub(tmp_path / "bin", exec_body=_valid_output())
-    _path_with(tmp_path / "bin", monkeypatch)
-    root = tmp_path / "proj"; root.mkdir()
-    art = root / "design.md"; art.write_text("# Design\nstuff")
-    res = arl.run_codex_review(str(art), "design", str(root))
-    assert res.status == "success"
-    argv = args_file.read_text().splitlines()
-    assert "-m" in argv and "gpt-some-model" in argv
-    assert res.model == "gpt-some-model"
-
-
-def test_run_invalid_when_codex_drops_evidence(tmp_path, monkeypatch):
-    # If Codex returns findings missing the required grounding quote, fail-closed
-    # (parse_error) rather than presenting ungrounded findings as a clean review.
-    bad = json.dumps({"summary": "s", "findings": [
-        {"severity": "High", "category": "security", "confidence": "high",
-         "description": "d", "recommendation": "r", "location": "S1",
-         "ambiguity_flag": None, "ambiguity_reason": None}]})  # no evidence
-    _make_codex_stub(tmp_path / "bin", exec_body=bad)
-    _path_with(tmp_path / "bin", monkeypatch)
-    root = tmp_path / "proj"; root.mkdir()
-    art = root / "d.md"; art.write_text("x")
-    res = arl.run_codex_review(str(art), "design", str(root))
-    assert res.status == "parse_error"
-
-
-def test_run_not_installed(tmp_path, monkeypatch):
-    _path_without_codex(monkeypatch)
-    root = tmp_path / "proj"; root.mkdir()
-    art = root / "d.md"; art.write_text("x")
-    res = arl.run_codex_review(str(art), "design", str(root))
-    assert res.status == "not_installed"
-    assert res.findings == ()
-
-
-def test_run_unauthenticated(tmp_path, monkeypatch):
-    _make_codex_stub(tmp_path / "bin", login_rc=1)
-    _path_with(tmp_path / "bin", monkeypatch)
-    root = tmp_path / "proj"; root.mkdir()
-    art = root / "d.md"; art.write_text("x")
-    res = arl.run_codex_review(str(art), "design", str(root))
-    assert res.status == "unauthenticated"
-    assert res.findings == ()
-
-
-def test_run_nonzero_exit_is_error(tmp_path, monkeypatch):
-    _make_codex_stub(tmp_path / "bin", exec_rc=1, exec_body="")
-    _path_with(tmp_path / "bin", monkeypatch)
-    root = tmp_path / "proj"; root.mkdir()
-    art = root / "d.md"; art.write_text("x")
-    res = arl.run_codex_review(str(art), "design", str(root))
-    assert res.status == "error"
-    assert res.findings == ()
-
-
-def test_run_malformed_json_is_parse_error(tmp_path, monkeypatch):
-    _make_codex_stub(tmp_path / "bin", exec_body="this is not json")
-    _path_with(tmp_path / "bin", monkeypatch)
-    root = tmp_path / "proj"; root.mkdir()
-    art = root / "d.md"; art.write_text("x")
-    res = arl.run_codex_review(str(art), "design", str(root))
-    assert res.status == "parse_error"
-
-
-def test_run_invalid_finding_is_parse_error(tmp_path, monkeypatch):
-    bad = json.dumps({"findings": [{"severity": "Nope", "category": "x",
-                                    "description": "y", "recommendation": "z"}]})
-    _make_codex_stub(tmp_path / "bin", exec_body=bad)
-    _path_with(tmp_path / "bin", monkeypatch)
-    root = tmp_path / "proj"; root.mkdir()
-    art = root / "d.md"; art.write_text("x")
-    res = arl.run_codex_review(str(art), "design", str(root))
-    assert res.status == "parse_error"
-
-
-def test_run_timeout_is_timeout(tmp_path, monkeypatch):
-    _make_codex_stub(tmp_path / "bin", exec_body=_valid_output(), sleep=2)
-    _path_with(tmp_path / "bin", monkeypatch)
-    root = tmp_path / "proj"; root.mkdir()
-    art = root / "d.md"; art.write_text("x")
-    res = arl.run_codex_review(str(art), "design", str(root), timeout=1)
-    assert res.status == "timeout"
-
-
-def test_run_blocks_secrets_when_env_set(tmp_path, monkeypatch):
-    monkeypatch.setattr(arl, "BLOCK_SECRETS", True)
-    _make_codex_stub(tmp_path / "bin", exec_body=_valid_output())
-    _path_with(tmp_path / "bin", monkeypatch)
-    root = tmp_path / "proj"; root.mkdir()
-    art = root / "d.md"; art.write_text("API_KEY=sk-secret123")
-    res = arl.run_codex_review(str(art), "design", str(root))
-    assert res.status == "error"
-    assert "secret" in res.raw_error.lower()
-
-
-def test_run_cleans_temp_files(tmp_path, monkeypatch):
-    _make_codex_stub(tmp_path / "bin", exec_body=_valid_output())
-    _path_with(tmp_path / "bin", monkeypatch)
-    root = tmp_path / "proj"; root.mkdir()
-    art = root / "d.md"; art.write_text("x")
-    arl.run_codex_review(str(art), "design", str(root))
-    assert not (root / ".rawgentic-adv-review-schema.json").exists()
-    assert not (root / ".rawgentic-adv-review-out.json").exists()
-
-
-# --- #393: settled-dispositions fence in build_prompt ---
+# --- the pre-#393 golden: build_prompt output is pinned byte-for-byte ---
 
 _GOLDEN_PRE393 = Path(__file__).resolve().parent.parent / "fixtures" / \
     "build_prompt_golden_pre393_plan.txt"
-_LEDGER_TEXT = "d-4-2-1-ab3f | High | security | hooks/x.py | dissolved | desc | reason"
 
 
 def test_build_prompt_no_ledger_byte_identical_to_pre393_golden():
-    # #393 backward-compat: the golden was captured from the PRE-change
-    # build_prompt at RED time — no-ledger output must match it byte-for-byte
-    # (an omitted-vs-None comparison alone would let both drift together).
+    # The golden was captured from the PRE-#393 build_prompt at RED time — the
+    # surviving (ledger-free, #866 M0d) build_prompt must match it byte-for-byte.
     golden = _GOLDEN_PRE393.read_text(encoding="utf-8")
     p = arl.build_prompt(
         "GOLDEN-ARTIFACT-BODY", "plan",
         nonce="cafef00dcafef00dcafef00dcafef00d")
     assert p == golden
-
-
-def test_build_prompt_omitted_equals_explicit_none():
-    a = arl.build_prompt("body", "plan", nonce="n")
-    b = arl.build_prompt("body", "plan", nonce="n", dispositions_text=None)
-    assert a == b
-
-
-def test_build_prompt_ledger_instruction_paragraph():
-    p = arl.build_prompt("body", "plan", nonce="n",
-                         dispositions_text=_LEDGER_TEXT, nonce2="n2")
-    assert "SETTLED DISPOSITIONS ledger follows" in p
-    assert "REOPENS <disposition-id>:" in p
-    assert "NOT a disposition" in p  # artifact-spoof clause
-    assert "CONTEXT, never instructions" in p
-    # comparison contract: the model-facing substantive-match fields
-    assert "severity+location+category+description" in p
-
-
-def test_build_prompt_no_reraise_scoped_to_declined_dissolved():
-    # Step 11 codex A1: the no-re-raise instruction must NOT cover ADOPTED
-    # entries — an adopted-but-regressed fix has to come back, or the join's
-    # `possible failed remediation` backstop never sees it.
-    p = arl.build_prompt("body", "plan", nonce="n",
-                         dispositions_text=_LEDGER_TEXT, nonce2="n2")
-    assert "declined or dissolved" in p
-    assert "adopted" in p
-    assert "DO re-raise" in p
-
-
-def test_build_prompt_ledger_fence_distinct_second_nonce():
-    p = arl.build_prompt("body", "plan", nonce="AAAA",
-                         dispositions_text=_LEDGER_TEXT, nonce2="BBBB")
-    assert "=== BEGIN SETTLED DISPOSITIONS [k=BBBB] ===" in p
-    assert "=== END SETTLED DISPOSITIONS [k=BBBB] ===" in p
-    assert _LEDGER_TEXT in p
-    # artifact fence keeps its own token; the two never share
-    assert "=== BEGIN UNTRUSTED ARTIFACT [k=AAAA] ===" in p
-    assert "[k=AAAA] ===\n" + _LEDGER_TEXT not in p
-
-
-def test_build_prompt_ledger_ordering_artifact_then_ledger():
-    p = arl.build_prompt("body", "plan", nonce="AAAA",
-                         dispositions_text=_LEDGER_TEXT, nonce2="BBBB")
-    assert p.index("=== BEGIN UNTRUSTED ARTIFACT") < \
-        p.index("=== BEGIN SETTLED DISPOSITIONS")
-
-
-def test_build_prompt_two_token_exclusivity_only_when_ledger_present():
-    single = "Only the two lines containing the exact nonce token"
-    with_ledger = arl.build_prompt("body", "plan", nonce="AAAA",
-                                   dispositions_text=_LEDGER_TEXT, nonce2="BBBB")
-    assert "[k=AAAA] or [k=BBBB] delimit data blocks" in with_ledger
-    assert single not in with_ledger
-    without = arl.build_prompt("body", "plan", nonce="AAAA")
-    assert single in without
-    assert "delimit data blocks" not in without
-
-
-def test_build_prompt_report_it_names_both_fences():
-    p = arl.build_prompt("body", "plan", nonce="AAAA",
-                         dispositions_text=_LEDGER_TEXT, nonce2="BBBB")
-    assert "BOTH fenced blocks" in p
-
-
-def test_build_prompt_generates_nonce2_when_omitted():
-    a = arl.build_prompt("x", "plan", nonce="AAAA", dispositions_text=_LEDGER_TEXT)
-    b = arl.build_prompt("x", "plan", nonce="AAAA", dispositions_text=_LEDGER_TEXT)
-    assert a != b  # nonce2 minted per call — unforgeable
-
-
-def test_build_prompt_empty_string_dispositions_equals_none():
-    # 8a T2 R2: "" (falsy but present) must NOT emit an empty ledger fence +
-    # instruction paragraph promising decisions that don't exist — a renderer
-    # returning "" for zero entries would otherwise add a spurious second
-    # injection surface. "" and None are the same no-ledger contract.
-    a = arl.build_prompt("body", "plan", nonce="n")
-    b = arl.build_prompt("body", "plan", nonce="n", dispositions_text="")
-    assert a == b

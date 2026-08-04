@@ -450,16 +450,17 @@ Exit 0 → enabled; non-zero → skip silently (default; no temp file, no subpro
      --workspace .rawgentic_workspace.json --project <name> --key peerConsult
    ```
    Exit 0 → stdout is the backend (`gpt`|`glm`|`both`; absent config → `gpt`). **Exit 2 → the config carries an invalid backend value: abort THIS consult sub-step loudly (log the stderr message; the sub-step is skipped, never defaulted to gpt)** — non-blocking for Step 3, which proceeds with your own design alone. Never default an empty stdout capture to gpt; branch on the exit code.
-1b. Write the issue body + the Step 2 codebase-analysis summary to a problem file UNDER the project root (e.g. `<root>/.rawgentic-peer-problem-<n>.md` — `resolve_artifact_path` rejects any `--artifact` outside `project_root`, so a `/tmp` path fails closed silently as an empty proposal). Launch the consult as a BACKGROUND process writing structured output to a temp out-file (the out-file may live anywhere; the step gates on exit code, not its location):
+1b. Write the issue body + the Step 2 codebase-analysis summary to a problem file UNDER the project root (e.g. `<root>/.rawgentic-peer-problem-<n>.md` — the runner's path containment rejects any `--artifact` or `--out` outside `project_root`, refusing before egress). Launch the consult through the runner as a BACKGROUND process (or a read-only dispatch subagent), one invocation per resolved backend — under `both`, TWO independent invocations with distinct `--out` paths (`--backend gpt` with `--reviewer gpt-5.6-sol`; `--backend glm` omitting `--reviewer`):
    ```bash
-   python3 hooks/adversarial_review_lib.py consult \
-     --artifact <problem-file> --project-root <root> --out <out-file> \
-     --backend <resolved backend> --date "$(date -u +%Y-%m-%d)" &
+   python3 hooks/review_runner.py consult \
+     --artifact <problem-file> --author-model <your model id, verbatim> \
+     --backend <resolved backend> [--reviewer <peer>] \
+     --out <root>/.rawgentic-peer-result-<n>[-<backend>].json --project-root <root> &
    ```
-2. **Blindness rule:** draft your OWN design first and write it to the design doc. You MUST NOT read `<out-file>` (or its `-glm` sibling) before your own draft is on disk.
-3. After your draft is written, read the proposal(s). Under `gpt`/`glm`: read `<out-file>`. Under `both`: select the proposal files from the consult's per-backend stdout status lines (`gpt: <path>` / `glm: FAILED (<status>)`) — the authoritative manifest of THIS invocation; read `<out-file>` AND its `-glm` sibling for the backends the manifest marks successful (each failed backend's file holds the explicit empty-proposal marker). On timeout/failure a file holds the empty-proposal marker (never partial content) — proceed with your design alone. Otherwise synthesize best-of-all and record each peer's contributions (provenance, backend named) in the design doc. Delete the problem file now that the consult has completed.
-4. **Gate on the background process's EXIT CODE, not just file content** — the empty-proposal write is best-effort, so on an unwritable out-path a non-zero exit can leave the file missing or unreadable entirely. Exit `0` = all selected backends succeeded; **exit `5` = both-mode PARTIAL — use the successful backend's proposal and log the failed backend (success-with-warning, not a failure)**; any other non-zero OR a missing/unreadable file → treat as an empty proposal and proceed.
-5. Backend failure is non-blocking: log and proceed. This sub-step never gates Step 3.
+   Consults are always `diagnostic: true` — a proposal never authorizes a fix round, so no reopen token is minted here.
+2. **Blindness rule:** draft your OWN design first and write it to the design doc. You MUST NOT read any consult result file before your own draft is on disk.
+3. After your draft is written, collect each invocation **by its EXIT CODE — never by whether the out file exists**: `0` = the result JSON's `proposal` is valid; `2`/`3`/`4` = refused / terminal backend failure / empty-invalid output — that backend produced NO proposal (never partial content), and the runner already applied its own transport policy, so add no retry loop. Under `both`, one success + one failure is a PARTIAL: use the successful backend's proposal and log the failed backend (success-with-warning, not a failure). Synthesize best-of-all successful proposals and record each peer's contributions (provenance, backend named) in the design doc. Delete the problem file now that the consult has completed.
+4. Backend failure is non-blocking: log and proceed with your own design alone. This sub-step never gates Step 3.
 
 1. **Design approach:** For complex features, use the Agent tool with a brainstorming prompt to generate 2-3 implementation approaches. For standard features, design inline with 1-2 approaches.
 

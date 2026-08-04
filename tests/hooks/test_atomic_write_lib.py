@@ -100,7 +100,7 @@ class TestAllSitesRouted:
 
     SITES = ["notes-size-handler.py", "registry_prune.py",
              "post_update_reconcile.py", "scanner_bootstrap.py",
-             "plan_lib.py", "adversarial_review_lib.py"]
+             "plan_lib.py"]
 
     def test_session_start_snippet_routed(self):
         """#269: the bash hook's inline python must route through the helper
