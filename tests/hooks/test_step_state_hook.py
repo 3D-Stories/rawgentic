@@ -427,3 +427,23 @@ class TestInlineMarkerAppend:
         rec = json.loads(
             (ws / "claude_docs" / "wal" / "rawgentic.state.json").read_text())
         assert rec["workflow"] == "wf3" and rec["step"] == "7" and rec["issue"] == 533
+
+
+class TestFeatPrefixRebind:
+    """#880 Defect G: BRANCH_PREFIX_FEATURE became `feat` (the conventional-
+    commit type; `feature` never was one), so the issue-rebind regex must
+    match the NEW prefix — otherwise the rename silently breaks the
+    cross-issue statusline rebind for every future WF2 run. `feature` is
+    retained for old and sibling-project branches."""
+
+    def test_feat_branch_rebinds_the_issue(self):
+        import step_state_post as ssp
+        assert ssp._branch_issue("git checkout -b feat/880-friction-fixes origin/main") == 880
+
+    def test_legacy_feature_branch_still_rebinds(self):
+        import step_state_post as ssp
+        assert ssp._branch_issue("git checkout -b feature/502-entry-sigs origin/main") == 502
+
+    def test_fix_branch_still_rebinds(self):
+        import step_state_post as ssp
+        assert ssp._branch_issue("git checkout -b fix/77-null-deref origin/main") == 77

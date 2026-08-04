@@ -1602,3 +1602,28 @@ class TestReviewLogWiring:
         assert "claude_docs/.wf2-state/<issue>/review_log.jsonl" in s9
         assert "assert_review_coverage" in s9
         assert "NEVER the session notes" in s9
+
+
+class TestBranchPrefixDrift:
+    """#880 Defect G (AC-G i/ii): the constant and the Step 5 prose are pinned
+    TOGETHER so they cannot separate again — the old pair (`feature` constant
+    vs the repo manual's feat/|fix/ rule) was unsatisfiable as written and
+    produced mixed branches across projects."""
+
+    SKILL = Path(__file__).resolve().parent.parent / \
+        "skills" / "implement-feature" / "SKILL.md"
+    STEPS = Path(__file__).resolve().parent.parent / \
+        "skills" / "implement-feature" / "references" / "steps.md"
+
+    def test_constant_and_prose_agree_on_feat(self):
+        assert 'BRANCH_PREFIX_FEATURE = "feat"' in self.SKILL.read_text(encoding="utf-8")
+        step5 = _section(self.STEPS.read_text(encoding="utf-8"), "## Step 5:", "## Step 6:")
+        assert "`feat/<issue-number>-<kebab-case-summary>`" in step5
+
+    def test_no_active_wf2_prose_prescribes_a_feature_branch(self):
+        """AC-G(ii): neither the SKILL body nor steps.md tells the reader to
+        CREATE a feature/ branch. (`(?:feat|feature|fix)` in hooks and
+        historical diagram revs/changelog entries are records, not
+        instructions.)"""
+        for path in (self.SKILL, self.STEPS):
+            assert "feature/<issue" not in path.read_text(encoding="utf-8"), path

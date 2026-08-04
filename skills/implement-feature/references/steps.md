@@ -754,7 +754,7 @@ the full task decomposition, drift-ready fields, and multi-PR machinery below ar
 form (run them when not in the lane).
 
 1. **Branch naming:**
-   - Features: `feature/<issue-number>-<kebab-case-summary>`
+   - Features: `feat/<issue-number>-<kebab-case-summary>` (`feat` — the conventional-commit type; `feature` is not one, #880)
    - Bug fixes: `fix/<issue-number>-<kebab-case-summary>`
 
 2. **Task decomposition:** Break the design into ordered tasks, each appropriately sized (aim for 2-10 minutes each). Adapt the task style to the project:
