@@ -164,6 +164,38 @@ def test_changelog_tail_regexes_match_the_live_corpus():
             )
 
 
+def test_legacy_tail_token_exceptions_stay_frozen():
+    """The legacy exception sets must not grow — they cover HISTORY, which is fixed.
+
+    Without this, the corpus guard above has an easy escape: a NEW entry whose token
+    the regex does not match could be waved through by adding its version to an
+    exception set instead of fixing the entry or the regex. That cannot be legitimate.
+    Changelog history is append-at-the-top and immutable below, so the set of OLD
+    entries wording a token unconventionally is closed. Every new entry must satisfy
+    the regexes outright.
+
+    If this fails, the fix is almost never to raise the number: it is to correct the
+    new entry's tail token, or to widen the regex and prove the widening against the
+    live corpus.
+    """
+    assert LEGACY_SUITE_EXCEPTIONS == frozenset({"v3.31.1"}), (
+        f"LEGACY_SUITE_EXCEPTIONS changed to {sorted(LEGACY_SUITE_EXCEPTIONS)}. These "
+        "cover immutable history; a new member means a NEW entry dodged the guard."
+    )
+    assert LEGACY_DIAGRAM_EXCEPTIONS == frozenset({"v3.121.0"}), (
+        f"LEGACY_DIAGRAM_EXCEPTIONS changed to {sorted(LEGACY_DIAGRAM_EXCEPTIONS)}. "
+        "These cover immutable history; a new member means a NEW entry dodged the guard."
+    )
+    # Non-vacuity: the excepted versions must still EXIST in the changelog, so a
+    # rename or deletion cannot leave a dead exception quietly widening nothing.
+    versions = {v for v, _ in _changelog_entries()}
+    for excepted in LEGACY_SUITE_EXCEPTIONS | LEGACY_DIAGRAM_EXCEPTIONS:
+        assert excepted in versions, (
+            f"{excepted} is excepted but no longer present in the changelog — drop the "
+            "dead exception rather than leaving it to mask a future entry"
+        )
+
+
 def test_tail_token_regexes_accept_a_trailing_period():
     """AC3's named trap, pinned explicitly: a terminating period must still match.
 
