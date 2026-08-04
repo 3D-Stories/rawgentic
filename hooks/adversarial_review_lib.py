@@ -21,6 +21,7 @@ Design invariants (issue #77):
 """
 import argparse
 import json
+import math
 import os
 import re
 import secrets
@@ -194,11 +195,47 @@ _TYPE_LENS: Final[dict[str, str]] = {
     ),
 }
 
-# Maps the findings-schema `confidence` enum (high/medium/low) onto the numeric
+# Maps legacy word-form confidence (high/medium/low) onto the numeric
 # SEVERITY_BANDED_CONFIDENCE scale consumed by WF2 Step 11 (issue #131).
+# Since #902 the schema demands a native number and this map is the runner-side
+# fallback applied in normalize_findings via coerce_confidence — the ONE
+# word→float map in this repo (AC1's 0.8/0.6/0.3 triple was deliberately not
+# added; see the #902 authority comment).
 ADV_CONFIDENCE_TO_FLOAT: Final[dict[str, float]] = {
     "high": 0.9, "medium": 0.7, "low": 0.4,
 }
+
+
+def coerce_confidence(value: object):
+    """Coerce a reviewer-supplied confidence to ``(float_in_[0,1], source)``.
+
+    source is "native" (a JSON number already in range) or "mapped" (a legacy
+    word from ADV_CONFIDENCE_TO_FLOAT, case/whitespace-tolerant, or a numeric
+    string — the classic GLM slip). Mapped values are flagged so a consumer can
+    never mistake a fallback for schema-enforced output (#902 AC1/AC2).
+    Returns None for anything else — bool (an int subclass, never a
+    confidence), out-of-range, non-finite, unmappable garbage — and the caller
+    fail-closes (whole-review refusal, the existing validate_findings gate).
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        v = float(value)
+        if math.isfinite(v) and 0.0 <= v <= 1.0:
+            return v, "native"
+        return None
+    if isinstance(value, str):
+        word = value.strip().lower()
+        if word in ADV_CONFIDENCE_TO_FLOAT:
+            return ADV_CONFIDENCE_TO_FLOAT[word], "mapped"
+        try:
+            v = float(word)
+        except ValueError:
+            return None
+        if math.isfinite(v) and 0.0 <= v <= 1.0:
+            return v, "mapped"
+        return None
+    return None
 
 
 # ============================================================================
@@ -982,9 +1019,11 @@ def validate_finding(d: object) -> tuple[bool, list[str]]:
     cat = d.get("category")
     if isinstance(cat, str) and cat.strip() and cat not in CATEGORIES:
         errors.append(f"invalid category: {cat!r}")
-    # confidence is a required enum (triage key + the severity cap in the prompt).
+    # confidence: a number in [0,1] (native, the #902 schema contract) or a
+    # mappable word / numeric string (tolerant GLM path — flagged "mapped" in
+    # normalize_findings, never silently native). Anything else fail-closes.
     conf = d.get("confidence")
-    if conf not in ("high", "medium", "low"):
+    if coerce_confidence(conf) is None:
         errors.append(f"invalid/missing confidence: {conf!r}")
     # Optional fields are required-but-nullable in the strict-mode schema (#80):
     # they may be null, but a non-null value must match the declared type.
@@ -1027,6 +1066,8 @@ def normalize_findings(raw: object) -> list[dict]:
       dropped (fail-closed), keeping the schema honest.
     - Dedupe key: (severity, location, full description) — the FULL description,
       so findings that share an opening clause are not silently collapsed.
+    - Confidence leaves numeric with a `confidence_source` provenance flag
+      ("native"/"mapped", #902) — the one place the word→float fallback runs.
     - Sort by severity rank (Critical first) then category.
     """
     if not isinstance(raw, list):
@@ -1045,6 +1086,9 @@ def normalize_findings(raw: object) -> list[dict]:
         if key in seen:
             continue
         seen.add(key)
+        # Copy before annotating — callers' raw findings stay untouched (#902).
+        f = dict(f)
+        f["confidence"], f["confidence_source"] = coerce_confidence(f["confidence"])
         out.append(f)
     out.sort(key=lambda x: (_SEVERITY_RANK[x["severity"]], x["category"]))
     return out
