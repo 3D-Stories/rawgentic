@@ -21,7 +21,8 @@ SHIPPED_SITES = (
     "create-issue/SKILL.md",
     "run-feedback/SKILL.md",
     "session-mining/SKILL.md",
-    "implement-feature/references/steps.md",
+    # #874: WF2's render-addon call site lives in Step 12's section, which is now its own file.
+    "implement-feature/references/step-12.md",
     "fix-bug/references/steps.md",
 )
 

@@ -67,7 +67,9 @@ MANIFEST = {
     "render-addon": {
         "render-addon.md": [
             "create-issue", "run-feedback", "session-mining",
-            "implement-feature/references/steps.md",
+            # #874: WF2's steps.md was split into step-local files; the render-addon
+            # call site lives in Step 12's section, so the target followed it.
+            "implement-feature/references/step-12.md",
             "fix-bug/references/steps.md",
         ],
     },

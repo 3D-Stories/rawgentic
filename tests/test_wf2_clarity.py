@@ -20,6 +20,37 @@ from tests.corpus import skill_corpus
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "skills" / "implement-feature" / "SKILL.md"
 REFERENCES = REPO_ROOT / "skills" / "implement-feature" / "references"
+# #874 §4b: the EXACT ordered split-file set. Pinned as a literal (not derived from
+# the glob it validates) so a renamed, stale or extra `step-*.md` cannot redefine
+# what "all the step files" means — Step-11 review findings F2/F3.
+EXPECTED_STEP_FILES = (
+    "step-00-preamble.md",
+    "step-01.md", "step-01b.md", "step-02.md", "step-03.md", "step-04.md",
+    "step-05.md", "step-06.md", "step-07.md", "step-08.md", "step-09.md",
+    "step-10.md", "step-11.md", "step-11_5.md", "step-12.md", "step-13.md",
+    "step-14.md", "step-15.md", "step-16.md",
+)
+
+
+def _step_files(refs):
+    """The split files, order- and membership-checked against EXPECTED_STEP_FILES."""
+    found = tuple(p.name for p in sorted(refs.glob("step-*.md")))
+    assert found == EXPECTED_STEP_FILES, (
+        f"split-file set drifted: expected {EXPECTED_STEP_FILES}, found {found}")
+    return [refs / n for n in found]
+
+
+def _steps_text() -> str:
+    """WF2's per-step detail, concatenated in step order.
+
+    #874 split `references/steps.md` into `step-*.md`. This LOCAL concatenation
+    keeps existing pins byte-for-byte equivalent for the mechanical commit;
+    #874's AC3 sweep re-anchors each surviving pin to the one step file it owns
+    and deletes this helper. Deliberately not shared via tests/corpus.py — a
+    shared concatenator would outlive the sweep and re-monolith the pins.
+    """
+    return "".join(p.read_text() for p in _step_files(REFERENCES))
+
 
 
 def _text() -> str:
@@ -805,7 +836,7 @@ class TestDispatchesAssembly:
     must OMIT the key. Location pin (reads steps.md directly, not the corpus)."""
 
     def _step16(self) -> str:
-        text = (REFERENCES / "steps.md").read_text()
+        text = _steps_text()
         assert "## Step 16:" in text, "Step 16 not found"
         return text[text.index("## Step 16:"):]
 
@@ -980,7 +1011,7 @@ class TestIssueKeyedMarkers:
     def test_step4_discard_and_step6_adversarial_markers_keyed(self):
         """8a hardening (#341): the Step 4 discard variant and the Step 6
         adversarial sibling must carry the key like their Step 4 sibling."""
-        steps = (REPO_ROOT / "skills" / "implement-feature" / "references" / "steps.md").read_text()
+        steps = _steps_text()
         assert "### WF2 Step 4 — Adversarial Review (#<issue>, discarded: superseded by volume loop-back)" in steps
         assert "### WF2 Step 6 — Adversarial Review (#<issue>, invoked|skipped): <report path or skip reason>" in steps
 
@@ -1087,12 +1118,14 @@ class TestStep8InlineLoop:
     (references/steps.md Step 8 section), whitespace-normalized."""
 
     def _step8(self) -> str:
+        # #874: Step 8's detail IS step-08.md, so the section runs to end-of-file
+        # rather than to a "## Step 9:" lookahead that no longer appears in it.
         text = (
             Path(__file__).resolve().parent.parent
-            / "skills" / "implement-feature" / "references" / "steps.md"
+            / "skills" / "implement-feature" / "references" / "step-08.md"
         ).read_text()
-        m = re.search(r"## Step 8:.*?(?=\n## Step 9:)", text, re.DOTALL)
-        assert m, "Step 8 section not found in steps.md"
+        m = re.search(r"## Step 8:.*", text, re.DOTALL)
+        assert m, "Step 8 section not found in step-08.md"
         return m.group(0)
 
     def test_inline_loop_sentence_present(self):
@@ -1216,7 +1249,7 @@ class TestReviewPipelining:
     def test_wave_sites_point_at_canonical_block(self):
         # All three wave sites (Step 4/8a/11) point at the canonical block —
         # multi-site presence is the point, so >=, never ==.
-        steps = (REFERENCES / "steps.md").read_text()
+        steps = _steps_text()
         assert steps.count("<review-pipelining>") >= 3, (
             "Step 4 item 7, Step 8a item 2, and Step 11 item 2 must each point "
             "at the canonical <review-pipelining> block in SKILL.md")
@@ -1262,7 +1295,7 @@ class TestTestRunDiscipline:
     def test_step_sites_point_at_canonical_block(self):
         # Step 2 baseline, Step 8 iteration, Step 9 final, Step 12 evidence
         # consumption — multi-site presence is the point, so >=, never ==.
-        steps = (REFERENCES / "steps.md").read_text()
+        steps = _steps_text()
         assert steps.count("<test-run-discipline>") >= 3, (
             "the Step 2/8/9 (and 12) sites must point at the canonical "
             "<test-run-discipline> block in SKILL.md")
@@ -1295,7 +1328,7 @@ class TestProbeBeforeDesign:
     def test_feasibility_sites_point_at_canonical_block(self):
         # AC2: the Step 3 platform_apis rules and the Step 4 feasibility gate
         # cross-reference the block — multi-site presence, so >=, never ==.
-        steps = (REFERENCES / "steps.md").read_text()
+        steps = _steps_text()
         assert steps.count("<probe-before-design>") >= 2, (
             "the Step 3 platform_apis rules and the Step 4 feasibility bullet "
             "must point at the canonical <probe-before-design> block")
@@ -1326,7 +1359,7 @@ class TestReviewLensRouting:
     def test_dispatch_sites_point_at_canonical_block(self):
         # Step 4 dispatch, Step 8a item 2, Step 11 item 2 — multi-site presence,
         # so >=, never ==.
-        steps = (REFERENCES / "steps.md").read_text()
+        steps = _steps_text()
         assert steps.count("<review-lens-routing>") >= 3, (
             "the Step 4/8a/11 dispatch sites must point at the canonical "
             "<review-lens-routing> block in SKILL.md")
@@ -1358,7 +1391,7 @@ class TestTighterReviewWaves:
         assert f"Full {n}-agent review" in skill, (
             "the mandatory-steps Step 11 row must state the SAME reviewer count "
             "as plan_lib.STEP11_REVIEW_AGENT_COUNT_FULL")
-        assert f"Run the {n}-agent parallel review" in (REFERENCES / "steps.md").read_text()
+        assert f"Run the {n}-agent parallel review" in _steps_text()
 
 
 # --- #494: early smoke-install after the first runnable commit (deploy-bearing) ---
@@ -1400,7 +1433,7 @@ class TestEarlySmokeInstall:
             "post-deploy smoketest"
         ) in block
         assert "never weakened or replaced" in block
-        steps = (REFERENCES / "steps.md").read_text()
+        steps = _steps_text()
         assert steps.count("<early-smoke-install>") >= 2, (
             "the Step 8 first-runnable-commit site and the Step 15 note must "
             "point at the canonical <early-smoke-install> block")
@@ -1424,14 +1457,14 @@ class TestSessionUniqueRunRecordPath:
             "corpus (#511)")
 
     def test_step12_telemetry_uses_session_unique_path(self):
-        steps = (REFERENCES / "steps.md").read_text()
+        steps = _steps_text()
         sec = _section(steps, "## Step 12: Create PR and Push",
                        "## Step 13: CI Verification")
         assert self.PLACEHOLDER in sec, (
             "§12 2b --telemetry must use the session-unique record path")
 
     def test_step16_assembly_uses_session_unique_path(self):
-        steps = (REFERENCES / "steps.md").read_text()
+        steps = _steps_text()
         sec = steps[steps.index("## Step 16: Workflow Completion Summary"):]
         assert self.PLACEHOLDER in sec, (
             "§16 assembly must use the session-unique record path")
@@ -1447,7 +1480,7 @@ class TestSourceOfTruthTelemetryFields:
     truth, and summarize cross-checks the counters via --loopback-counters."""
 
     def _step16(self) -> str:
-        steps = (REFERENCES / "steps.md").read_text()
+        steps = _steps_text()
         return " ".join(steps[steps.index("## Step 16: Workflow Completion Summary"):].split())
 
     def test_step16_directs_counters_file_read(self):
@@ -1481,7 +1514,7 @@ class TestTimingAssembly:
     `timing` key."""
 
     def _step16(self) -> str:
-        steps = (REFERENCES / "steps.md").read_text()
+        steps = _steps_text()
         return " ".join(steps[steps.index("## Step 16: Workflow Completion Summary"):].split())
 
     def test_step16_runs_timing_subcommand(self):
@@ -1585,11 +1618,15 @@ class TestReviewLogWiring:
     explicit log path in Step 9's body, where the executing orchestrator reads
     them."""
 
-    STEPS = Path(__file__).resolve().parent.parent / \
-        "skills" / "implement-feature" / "references" / "steps.md"
+    # #874: each pin now reads the ONE step file that owns it — 8a is a level-3
+    # heading inside Step 8, so it lives in step-08.md; Step 9 owns step-09.md.
+    STEP08 = Path(__file__).resolve().parent.parent / \
+        "skills" / "implement-feature" / "references" / "step-08.md"
+    STEP09 = Path(__file__).resolve().parent.parent / \
+        "skills" / "implement-feature" / "references" / "step-09.md"
 
     def test_step8a_prescribes_the_append_with_entry_shape(self):
-        text = self.STEPS.read_text(encoding="utf-8")
+        text = self.STEP08.read_text(encoding="utf-8")
         s8a = text[text.index("### Step 8a sub-step"):text.index("### Step 8a Failure Modes")]
         assert "append-review-log" in s8a
         assert 'claude_docs/.wf2-state/<issue>/review_log.jsonl' in s8a
@@ -1597,8 +1634,9 @@ class TestReviewLogWiring:
         assert "{task_id, sha, reviewers, verdict, findings:{crit,high,med,low,dropped}, ts}" in norm
 
     def test_step9_names_the_log_path_and_helper(self):
-        text = self.STEPS.read_text(encoding="utf-8")
-        s9 = text[text.index("## Step 9:"):text.index("## Step 10:")]
+        # step-09.md IS Step 9, so the slice runs to end-of-file.
+        text = self.STEP09.read_text(encoding="utf-8")
+        s9 = text[text.index("## Step 9:"):]
         assert "claude_docs/.wf2-state/<issue>/review_log.jsonl" in s9
         assert "assert_review_coverage" in s9
         assert "NEVER the session notes" in s9
@@ -1612,12 +1650,16 @@ class TestBranchPrefixDrift:
 
     SKILL = Path(__file__).resolve().parent.parent / \
         "skills" / "implement-feature" / "SKILL.md"
+    # #874: Step 5's detail IS step-05.md
     STEPS = Path(__file__).resolve().parent.parent / \
-        "skills" / "implement-feature" / "references" / "steps.md"
+        "skills" / "implement-feature" / "references" / "step-05.md"
 
     def test_constant_and_prose_agree_on_feat(self):
         assert 'BRANCH_PREFIX_FEATURE = "feat"' in self.SKILL.read_text(encoding="utf-8")
-        step5 = _section(self.STEPS.read_text(encoding="utf-8"), "## Step 5:", "## Step 6:")
+        # step-05.md IS Step 5 (#874), so the section runs to end-of-file. Sliced
+        # directly rather than widening _section's (text, header, next_header) contract.
+        _t = self.STEPS.read_text(encoding="utf-8")
+        step5 = _t[_t.index("## Step 5:"):]
         assert "`feat/<issue-number>-<kebab-case-summary>`" in step5
 
     def test_no_active_wf2_prose_prescribes_a_feature_branch(self):
@@ -1625,5 +1667,43 @@ class TestBranchPrefixDrift:
         CREATE a feature/ branch. (`(?:feat|feature|fix)` in hooks and
         historical diagram revs/changelog entries are records, not
         instructions.)"""
-        for path in (self.SKILL, self.STEPS):
+        # #874: the negative scan now covers the SKILL plus EVERY step file, so a
+        # forbidden instruction cannot hide in a step the old single-file read missed.
+        # Exact membership, not a >= count (Step-11 F3): a split file renamed
+        # outside the glob would otherwise let this guard skip an ACTIVE reference.
+        for path in (self.SKILL, *_step_files(self.STEPS.parent)):
             assert "feature/<issue" not in path.read_text(encoding="utf-8"), path
+
+
+class TestSplitFileOrdering:
+    """#874 §4b: the split must occupy exactly the corpus slot `steps.md` held.
+
+    `tests/corpus.py` concatenates `sorted(refs.glob("*.md"))`, so corpus SLICE
+    pins (`text.index("## Step 4:")…`) only keep resolving while the step files
+    stay contiguous and in step order. Asserted over the FULL unfiltered glob —
+    a `step-*`-filtered check would still pass with a non-step markdown file
+    sorted between two step files, which is the exact residual that would
+    contaminate a slice.
+    """
+
+    def test_split_files_are_exactly_the_expected_ordered_set(self):
+        found = tuple(p.name for p in sorted(REFERENCES.glob("step-*.md")))
+        assert found == EXPECTED_STEP_FILES
+
+    def test_split_files_form_one_contiguous_interval_in_the_full_glob(self):
+        names = [p.name for p in sorted(REFERENCES.glob("*.md"))]
+        idx = [names.index(n) for n in EXPECTED_STEP_FILES]
+        assert idx == list(range(idx[0], idx[0] + len(EXPECTED_STEP_FILES))), (
+            f"split files are not contiguous in the corpus glob: {names}")
+
+    def test_each_step_file_carries_exactly_one_top_level_step_heading(self):
+        for path in _step_files(REFERENCES):
+            headings = [ln for ln in path.read_text().splitlines()
+                        if ln.startswith("## Step ")]
+            if path.name == "step-00-preamble.md":
+                assert not headings, "the preamble must carry no ## Step heading"
+            else:
+                assert len(headings) == 1, f"{path.name}: {headings}"
+
+    def test_monolith_is_gone(self):
+        assert not (REFERENCES / "steps.md").exists()  # tripwire-exempt: negative guard

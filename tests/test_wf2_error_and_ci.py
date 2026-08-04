@@ -35,8 +35,11 @@ def test_interactive_error_protocol_defined():
 def test_step13_ci_unavailable_is_visible_nongate():
     # AC3: Step 13 must treat "no CI run spawned / Actions unavailable" as a
     # visible non-gate (like the quarantine path), not force the ERROR protocol.
-    steps = (SKILLS / "references" / "steps.md").read_text()
-    s13 = _section(steps, "## Step 13:", "## Step 14:")
+    # #874: steps.md split into step-*.md, so Step 13's detail IS its own file —
+    # the slice therefore runs to end-of-file (nxt=None) instead of to "## Step 14:",
+    # which no longer appears in this file. Same bytes as the old slice.
+    steps = (SKILLS / "references" / "step-13.md").read_text()
+    s13 = _section(steps, "## Step 13:", None)
     low = s13.lower()
     assert "#232" in s13, "Step 13 missing the #232 CI-unavailable non-gate"
     assert "no run" in low and ("spawn" in low or "unavailable" in low)
