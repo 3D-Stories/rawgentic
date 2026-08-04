@@ -8,6 +8,7 @@ Imports run in one subprocess with __name__ != "__main__", so ``main()``
 guards never fire; stdin is /dev/null so a hook that reads stdin cannot hang.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +17,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 HOOKS = sorted((REPO_ROOT / "hooks").glob("*.py"))
 
 _IMPORT_PROG = r"""
-import importlib.util, sys, traceback
+import importlib.util, os.path, sys, traceback
+# Hooks import siblings bare (`from atomic_write_lib import ...`,
+# plan_lib.py:28), so the hooks dir itself must be importable — exactly what
+# the plugin runtime provides. Without this the loop only passes when pytest's
+# environment happens to leak a suitable PYTHONPATH (review finding, #866).
+sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[1])))
 failures = []
 for i, path in enumerate(sys.argv[1:]):
     name = f"_smoke_{i}"
@@ -37,10 +43,12 @@ def test_hooks_present():
 
 
 def test_every_surviving_hook_imports():
+    # Deliberately CLEAN environment (no inherited PYTHONPATH): the subprocess
+    # must succeed on _IMPORT_PROG's own sys.path setup alone.
     result = subprocess.run(
         [sys.executable, "-c", _IMPORT_PROG, *map(str, HOOKS)],
         capture_output=True, text=True, stdin=subprocess.DEVNULL,
-        timeout=120, cwd=REPO_ROOT,
+        timeout=120, cwd=REPO_ROOT, env={"PATH": os.environ.get("PATH", "")},
     )
     assert result.returncode == 0, (
         f"hook import failures:\n{result.stdout}\n{result.stderr}"

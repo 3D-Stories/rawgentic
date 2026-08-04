@@ -67,8 +67,19 @@ EXEMPT_FILES = {
 # A line carrying this marker is a deliberate, visible exception — used ONLY
 # for executable negative assertions whose subject IS the retired token
 # (e.g. `assert "phaseExecutorTable" not in text`). Prose never gets a pragma;
-# it gets reworded.
+# it gets reworded. Hardened per the M0d adversarial review: the pragma is
+# honored ONLY inside tests/ and ONLY with a stated reason ("tripwire-exempt:
+# <why>") — on a production surface it is inert and the line still counts.
 PRAGMA = "tripwire-exempt"
+
+
+def _hits(rel_path: str, text: str) -> list[str]:
+    """Retired-vocabulary terms present in this file's ACTIVE lines."""
+    lines = text.splitlines()
+    if rel_path.startswith("tests/"):
+        lines = [ln for ln in lines if (PRAGMA + ":") not in ln]
+    body = "\n".join(lines)
+    return [term for term in RETIRED_VOCABULARY if term in body]
 
 README = "README.md"
 CHANGELOG_HEADING = "## Changelog"
@@ -119,9 +130,7 @@ def test_no_retired_vocabulary_on_active_surfaces():
         text = _scannable_text(rel_path)
         if text is None:
             continue
-        lines = [ln for ln in text.splitlines() if PRAGMA not in ln]
-        body = "\n".join(lines)
-        found = [term for term in RETIRED_VOCABULARY if term in body]
+        found = _hits(rel_path, text)
         if found:
             hits[rel_path] = found
     assert not hits, (
@@ -136,3 +145,46 @@ def test_tests_dir_is_not_archival():
     assert not any(p == "tests/" or p == "tests" for p in EXEMPT_PREFIXES)
     assert not any(p.startswith("tests/") and p != "tests/fixtures/"
                    for p in EXEMPT_PREFIXES)
+
+
+def test_pragma_is_inert_outside_tests_and_without_a_reason():
+    """The pragma cannot hide a resurrection on a production surface (M0d
+    adversarial-review finding), and a bare marker with no reason is inert
+    even inside tests/."""
+    line = "import executor_routing_lib  # " + PRAGMA + ": negative guard"
+    assert _hits("hooks/foo.py", line) == ["executor_routing_lib"]
+    assert _hits("skills/x/SKILL.md", line) == ["executor_routing_lib"]
+    assert _hits("tests/test_x.py", line) == []
+    bare = "import executor_routing_lib  # " + PRAGMA
+    assert _hits("tests/test_x.py", bare) == ["executor_routing_lib"]
+
+
+# D184 (owner decision, #866/#871): bare RAWGENTIC_HEADLESS survives as the
+# unattended-session signal in EXACTLY these active-surface files — the three
+# code/prose reads plus the two documents that describe them. Both directions
+# guarded: a NEW mention is a resurrection; a MISSING one means a D184
+# survivor was deleted.
+D184_SIGNAL = "RAWGENTIC" + "_HEADLESS"  # split so this file self-exempts
+D184_ALLOWED_FILES = {
+    "hooks/context_meter.py",       # context-pressure handoff routing
+    "hooks/scanner_bootstrap.py",   # no-unattended-installs skip
+    "skills/setup/SKILL.md",        # Step 2e install guard
+    "README.md",                    # the Headless Mode (retired) note
+    "docs/context-meter.md",        # documents the handoff routing
+}
+
+
+def test_d184_unattended_signal_reads_are_exactly_the_allowed_set():
+    carriers = set()
+    for rel_path in _tracked_files():
+        if _is_exempt(rel_path) or rel_path.startswith("tests/"):
+            continue
+        text = _scannable_text(rel_path)
+        if text is None:
+            continue
+        if D184_SIGNAL in text.replace(D184_SIGNAL + "_TRIGGER", ""):
+            carriers.add(rel_path)
+    assert carriers == D184_ALLOWED_FILES, (
+        f"D184 drift — new: {sorted(carriers - D184_ALLOWED_FILES)}, "
+        f"missing: {sorted(D184_ALLOWED_FILES - carriers)}"
+    )
