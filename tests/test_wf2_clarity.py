@@ -20,6 +20,25 @@ from tests.corpus import skill_corpus
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "skills" / "implement-feature" / "SKILL.md"
 REFERENCES = REPO_ROOT / "skills" / "implement-feature" / "references"
+# #874 §4b: the EXACT ordered split-file set. Pinned as a literal (not derived from
+# the glob it validates) so a renamed, stale or extra `step-*.md` cannot redefine
+# what "all the step files" means — Step-11 review findings F2/F3.
+EXPECTED_STEP_FILES = (
+    "step-00-preamble.md",
+    "step-01.md", "step-01b.md", "step-02.md", "step-03.md", "step-04.md",
+    "step-05.md", "step-06.md", "step-07.md", "step-08.md", "step-09.md",
+    "step-10.md", "step-11.md", "step-11_5.md", "step-12.md", "step-13.md",
+    "step-14.md", "step-15.md", "step-16.md",
+)
+
+
+def _step_files(refs):
+    """The split files, order- and membership-checked against EXPECTED_STEP_FILES."""
+    found = tuple(p.name for p in sorted(refs.glob("step-*.md")))
+    assert found == EXPECTED_STEP_FILES, (
+        f"split-file set drifted: expected {EXPECTED_STEP_FILES}, found {found}")
+    return [refs / n for n in found]
+
 
 def _steps_text() -> str:
     """WF2's per-step detail, concatenated in step order.
@@ -30,7 +49,7 @@ def _steps_text() -> str:
     and deletes this helper. Deliberately not shared via tests/corpus.py — a
     shared concatenator would outlive the sweep and re-monolith the pins.
     """
-    return "".join(p.read_text() for p in sorted(REFERENCES.glob("step-*.md")))
+    return "".join(p.read_text() for p in _step_files(REFERENCES))
 
 
 
@@ -1650,11 +1669,41 @@ class TestBranchPrefixDrift:
         instructions.)"""
         # #874: the negative scan now covers the SKILL plus EVERY step file, so a
         # forbidden instruction cannot hide in a step the old single-file read missed.
-        refs = self.STEPS.parent
-        step_files = sorted(refs.glob("step-*.md"))
-        # Self-review catch: without this the loop would still check self.SKILL and
-        # PASS while covering zero step files — an empty glob must fail loudly, not
-        # quietly reduce the guard's scope.
-        assert len(step_files) >= 18, f"expected the split step files, found {step_files}"
-        for path in (self.SKILL, *step_files):
+        # Exact membership, not a >= count (Step-11 F3): a split file renamed
+        # outside the glob would otherwise let this guard skip an ACTIVE reference.
+        for path in (self.SKILL, *_step_files(self.STEPS.parent)):
             assert "feature/<issue" not in path.read_text(encoding="utf-8"), path
+
+
+class TestSplitFileOrdering:
+    """#874 §4b: the split must occupy exactly the corpus slot `steps.md` held.
+
+    `tests/corpus.py` concatenates `sorted(refs.glob("*.md"))`, so corpus SLICE
+    pins (`text.index("## Step 4:")…`) only keep resolving while the step files
+    stay contiguous and in step order. Asserted over the FULL unfiltered glob —
+    a `step-*`-filtered check would still pass with a non-step markdown file
+    sorted between two step files, which is the exact residual that would
+    contaminate a slice.
+    """
+
+    def test_split_files_are_exactly_the_expected_ordered_set(self):
+        found = tuple(p.name for p in sorted(REFERENCES.glob("step-*.md")))
+        assert found == EXPECTED_STEP_FILES
+
+    def test_split_files_form_one_contiguous_interval_in_the_full_glob(self):
+        names = [p.name for p in sorted(REFERENCES.glob("*.md"))]
+        idx = [names.index(n) for n in EXPECTED_STEP_FILES]
+        assert idx == list(range(idx[0], idx[0] + len(EXPECTED_STEP_FILES))), (
+            f"split files are not contiguous in the corpus glob: {names}")
+
+    def test_each_step_file_carries_exactly_one_top_level_step_heading(self):
+        for path in _step_files(REFERENCES):
+            headings = [ln for ln in path.read_text().splitlines()
+                        if ln.startswith("## Step ")]
+            if path.name == "step-00-preamble.md":
+                assert not headings, "the preamble must carry no ## Step heading"
+            else:
+                assert len(headings) == 1, f"{path.name}: {headings}"
+
+    def test_monolith_is_gone(self):
+        assert not (REFERENCES / "steps.md").exists()  # tripwire-exempt: negative guard

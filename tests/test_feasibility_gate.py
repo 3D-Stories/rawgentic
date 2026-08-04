@@ -271,7 +271,12 @@ def _wf2_steps_text() -> str:
     a shared concatenator would outlive the sweep and re-monolith the pins.
     """
     refs = SKILLS / "implement-feature" / "references"
-    return "".join(p.read_text() for p in sorted(refs.glob("step-*.md")))
+    found = tuple(p.name for p in sorted(refs.glob("step-*.md")))
+    # Exact membership (Step-11 F2): a stale/extra/renamed step file could
+    # otherwise alter a slice or let a pin match from the wrong step.
+    assert len(found) == 19 and found[0] == "step-00-preamble.md" and found[-1] == "step-16.md", \
+        f"split-file set drifted: {found}"
+    return "".join((refs / n).read_text() for n in found)
 
 
 WF2_STEPS = _wf2_steps_text()
