@@ -145,7 +145,17 @@ def test_bind_append_target_is_absolute():
     """
     for skill in BIND_SKILLS:
         expected = EXPECTED_APPEND_TOKEN[skill]
-        for block in _registry_blocks(skill):
+        # Self-contained non-vacuity. `test_registry_block_exists_for_each_bind_skill`
+        # already fails if a skill loses its block, but without this assert THIS test
+        # would pass by iterating zero times if the template were removed or
+        # mis-fenced — a guard that stops looking looks exactly like a guard that
+        # passes, so it does not lean on a sibling test.
+        blocks = list(_registry_blocks(skill))
+        assert blocks, (
+            f"{skill} corpus has no fenced registry-append block, so this guard "
+            "would pass without checking anything (#885)"
+        )
+        for block in blocks:
             tokens = APPEND_TARGET_RE.findall(block)
             assert tokens, (
                 f"{skill} registry-append block has a `>>` redirect the guard could "
