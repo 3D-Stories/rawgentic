@@ -156,3 +156,94 @@ class TestDiffReviewModeCoercion:
         assert cfg.backend == "both"
         assert cfg.backend_error_value is None
         assert cfg.diff_review_mode == "auto"
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — the `diff-review-mode` CLI subcommand exit contract
+# ---------------------------------------------------------------------------
+
+def _run_mode_cmd(ws: Path, project: str, key: str | None = None):
+    cmd = [sys.executable, CLI, "diff-review-mode",
+           "--workspace", str(ws), "--project", project]
+    if key:
+        cmd += ["--key", key]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+
+class TestDiffReviewModeSubcommand:
+    def test_valid_mode_exit0_prints_it(self, tmp_path):
+        ws = _write_ws(tmp_path, [_proj(adversarialReview={
+            "enabled": True, "workflows": ["x"], "diffReviewMode": "always"})])
+        r = _run_mode_cmd(ws, "p")
+        assert r.returncode == 0
+        assert r.stdout.strip() == "always"
+
+    def test_absent_mode_exit0_auto(self, tmp_path):
+        ws = _write_ws(tmp_path, [_proj(adversarialReview={
+            "enabled": True, "workflows": ["x"]})])
+        r = _run_mode_cmd(ws, "p")
+        assert r.returncode == 0
+        assert r.stdout.strip() == "auto"
+
+    def test_missing_config_exit0_auto(self, tmp_path):
+        ws = _write_ws(tmp_path, [{"name": "p", "path": "./projects/p"}])
+        r = _run_mode_cmd(ws, "p")
+        assert r.returncode == 0
+        assert r.stdout.strip() == "auto"
+
+    def test_missing_project_exit0_auto(self, tmp_path):
+        ws = _write_ws(tmp_path, [{"name": "other", "path": "./projects/other"}])
+        r = _run_mode_cmd(ws, "p")
+        assert r.returncode == 0
+        assert r.stdout.strip() == "auto"
+
+    def test_disabled_block_exit0_prints_mode(self, tmp_path):
+        ws = _write_ws(tmp_path, [_proj(adversarialReview={
+            "enabled": False, "workflows": [], "diffReviewMode": "always"})])
+        r = _run_mode_cmd(ws, "p")
+        assert r.returncode == 0
+        assert r.stdout.strip() == "always"
+
+    def test_invalid_mode_exit2_names_value_never_auto(self, tmp_path):
+        """AC3: the refusal is loud and never launders the value into "auto"."""
+        ws = _write_ws(tmp_path, [_proj(adversarialReview={
+            "enabled": True, "workflows": ["x"], "diffReviewMode": "alwyas"})])
+        r = _run_mode_cmd(ws, "p")
+        assert r.returncode == 2
+        assert "alwyas" in r.stderr
+        assert r.stdout.strip() != "auto"
+        assert r.stdout.strip() == ""
+
+    def test_invalid_mode_stderr_names_the_project_and_vocabulary(self, tmp_path):
+        ws = _write_ws(tmp_path, [_proj(adversarialReview={
+            "enabled": True, "workflows": ["x"], "diffReviewMode": 5})])
+        r = _run_mode_cmd(ws, "p")
+        assert r.returncode == 2
+        assert "'p'" in r.stderr
+        assert "always" in r.stderr  # the accepted vocabulary is shown
+
+    def test_peer_consult_key_selector(self, tmp_path):
+        ws = _write_ws(tmp_path, [{
+            "name": "p", "path": "./projects/p",
+            "peerConsult": {"enabled": True, "workflows": ["x"],
+                            "diffReviewMode": "always"},
+        }])
+        r = _run_mode_cmd(ws, "p", key="peerConsult")
+        assert r.returncode == 0
+        assert r.stdout.strip() == "always"
+
+    def test_invalid_backend_does_not_fail_the_mode_verb(self, tmp_path):
+        """The two verbs refuse independently — a bad backend must not make the
+        mode unreadable (or the 1a gate could not report which field is broken)."""
+        ws = _write_ws(tmp_path, [_proj(adversarialReview={
+            "enabled": True, "workflows": ["x"],
+            "backend": "glm5", "diffReviewMode": "always"})])
+        r = _run_mode_cmd(ws, "p")
+        assert r.returncode == 0
+        assert r.stdout.strip() == "always"
+
+    def test_help_lists_the_new_verb(self):
+        r = subprocess.run([sys.executable, CLI, "--help"],
+                           capture_output=True, text=True, timeout=30)
+        assert r.returncode == 0
+        assert "diff-review-mode" in r.stdout

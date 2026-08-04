@@ -1521,12 +1521,14 @@ def _parse_codex_proposal(text: str) -> dict | None:
 # ============================================================================
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI: prereq | is-enabled | backend. (Review/consult run via review_runner.py.)
+    """CLI: prereq | is-enabled | backend | diff-review-mode.
+    (Review/consult run via review_runner.py.)
 
     Exit codes:
-      prereq:     0 ok, 2 prerequisite failure (per --backend; both = degrade-and-warn)
-      is-enabled: 0 enabled, 1 disabled
-      backend:    0 + resolved backend on stdout, 2 present-but-invalid config value
+      prereq:           0 ok, 2 prerequisite failure (per --backend; both = degrade-and-warn)
+      is-enabled:       0 enabled, 1 disabled
+      backend:          0 + resolved backend on stdout, 2 present-but-invalid config value
+      diff-review-mode: 0 + resolved mode on stdout, 2 present-but-invalid config value
     """
     parser = argparse.ArgumentParser(prog="adversarial_review_lib")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1550,6 +1552,18 @@ def main(argv: list[str] | None = None) -> int:
     p_backend.add_argument("--workspace", required=True)
     p_backend.add_argument("--project", required=True)
     p_backend.add_argument("--key", default="adversarialReview")
+
+    # #879: print the config-resolved WF2 Step-11 diff-review mode. Same exit
+    # contract as `backend`: 0 + mode on stdout for a VALID, ABSENT, or disabled
+    # config (absent/missing -> "auto"); 2 + the rejected value on stderr for a
+    # PRESENT-BUT-INVALID mode. It must never launder an invalid value into
+    # "auto" — that would silently restore the heuristic the config opted out of,
+    # which is the whole defect #879 closes.
+    p_mode = sub.add_parser("diff-review-mode",
+                            help="print the config-resolved diff-review mode")
+    p_mode.add_argument("--workspace", required=True)
+    p_mode.add_argument("--project", required=True)
+    p_mode.add_argument("--key", default="adversarialReview")
 
     args = parser.parse_args(argv)
 
@@ -1576,6 +1590,22 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
         print(cfg.backend)
+        return 0
+
+    if args.cmd == "diff-review-mode":
+        cfg = load_adversarial_review_config(args.workspace, args.project, key=args.key)
+        if cfg.diff_review_mode == "invalid":
+            # _coerce_diff_review_mode already printed the naming warning at load
+            # time; repeat the rejected value so THIS invocation's stderr carries it.
+            print(
+                f"invalid `diffReviewMode` value {cfg.diff_review_mode_error_value!r} "
+                f"in the {args.key} config for project {args.project!r}; expected one "
+                f"of {list(DIFF_REVIEW_MODES)} — refusing (the diff review gate cannot "
+                "resolve a mode)",
+                file=sys.stderr,
+            )
+            return 2
+        print(cfg.diff_review_mode)
         return 0
 
     return 2
