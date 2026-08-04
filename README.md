@@ -751,10 +751,23 @@ For major changes, please open an issue first to discuss the approach.
   carry their `owner/name`, and an unqualified declaration authorizes this repo only). Two further
   fail-closed fixes: a `None`/blank body no longer returns a vacuous pass, and invalid UTF-8 is
   rc 2 rather than a traceback whose rc 1 was indistinguishable from a real finding
-  (`UnicodeDecodeError` is a `ValueError`, not an `OSError`). `references/step-12.md`'s prose
-  ceiling rises 13,287→14,999 bytes (actual 14,284 + the 5% allowed headroom, per the #874 AC7
+  (`UnicodeDecodeError` is a `ValueError`, not an `OSError`). Step 11 then caught a **Critical**
+  that made the whole thing inert: both workflows prescribed a `/tmp/...` body file, which the
+  gate's own containment check refuses before opening, so the documented command returned rc 2
+  every time — reproduced, then fixed by drafting to `./.rawgentic/<wf>-pr-body.md` and publishing
+  that same file, since WF2 pointed `gh pr create` at the /tmp path and WF3 rebuilt its body from
+  an inline heredoc (either way the gate could read one body while another was published).
+  `--commit-range` also became required rather than bracketed — documented-optional is a
+  documented opt-out of the fail-open — and the `\x1e`-delimited commit reader, which silently
+  skipped segments a crafted message could hide a reference in, became a two-stage read where an
+  unparseable commit id is rc 2 rather than skipped. The adversarial layer then caught the WF3
+  ordering bug introduced by that very fix (item 3b checked a body item 4 had not written yet) and
+  an over-claim in the code comment: a DECLARED reference inside backticks is skipped regardless of
+  markdown context, so an intended closure silently does not fire — now named as a known gap and
+  pinned by a characterization test rather than only in prose. `references/step-12.md`'s prose
+  ceiling rises 13,287→14,999 bytes (actual + the 5% allowed headroom, per the #874 AC7
   convention) because item 4b is new prose; no other row moved. WF2 diagram REV 3.125.8 (station 12
-  delta). Suite 4887→4944.
+  delta). Suite 4887→4959.
 
 ### v3.125.7 (2026-08-04)
 - **A `gates[]` row for step 11.5 is now rejected at write time (#904, epic #875).** The run-record
