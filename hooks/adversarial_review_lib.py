@@ -924,11 +924,16 @@ FINDINGS_SCHEMA: Final[dict] = {
                         "enum": list(CATEGORIES),
                         "description": "One of the fixed review categories.",
                     },
+                    # #902: native numeric contract, live-probed on the exact
+                    # codex --output-schema invocation. Range [0,1] enforced in
+                    # validate_finding — minimum/maximum are strict-mode-rejected
+                    # keywords (see the header comment above).
                     "confidence": {
-                        "enum": ["high", "medium", "low"],
-                        "description": "Honest probability the problem is real. A "
-                                       "low-confidence finding may not exceed Medium "
-                                       "severity. For triage/sorting only.",
+                        "type": "number",
+                        "description": "Honest probability in [0.0, 1.0] that the "
+                                       "problem is real. A finding with confidence "
+                                       "below 0.5 may not exceed Medium severity. "
+                                       "For triage/sorting only.",
                     },
                     "description": {
                         "type": "string",
@@ -1109,9 +1114,10 @@ def build_prompt(
     Callers may pass a nonce (tests pin it); when omitted — the runner's normal
     path — one is minted here. The nonce is interpolated into BOTH the fence AND
     the instruction from a single variable, so the data-vs-instruction contract
-    cannot silently drift apart. Output is byte-identical to the historical
-    no-ledger prompt (golden-tested); the #393 dispositions-ledger second fence
-    was deleted with the old engine (#866 M0d).
+    cannot silently drift apart. Output is byte-pinned by a golden test
+    (re-captured at #902 when the confidence instruction went numeric); the
+    #393 dispositions-ledger second fence was deleted with the old engine
+    (#866 M0d) and the byte pin keeps it from coming back.
     """
     if nonce is None:
         nonce = secrets.token_hex(16)
@@ -1189,9 +1195,10 @@ def build_prompt(
         "any duplicate. Do NOT praise the artifact and do NOT soften findings.\n\n"
 
         "CLASSIFY each finding: severity in "
-        f"[{sevs}]; category in [{cats}]; confidence in [high, medium, low] (your "
-        "honest probability the problem is real — a low-confidence finding may NOT "
-        "exceed Medium severity). Provide a concrete recommendation (name the "
+        f"[{sevs}]; category in [{cats}]; confidence as a number between 0.0 and "
+        "1.0 (your honest probability the problem is real — a finding with "
+        "confidence below 0.5 may NOT exceed Medium severity). Provide a concrete "
+        "recommendation (name the "
         "section/field to change and what to change it to) and a location (section "
         "or line) for each. The `summary` field is the ONE place a neutral "
         "orientation line is allowed (1-3 sentences) — no flattery.\n\n"

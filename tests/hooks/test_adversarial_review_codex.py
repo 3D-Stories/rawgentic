@@ -146,16 +146,28 @@ def test_build_prompt_has_injection_and_tool_guards():
     assert "Respond using the provided output schema only." in p
 
 
-# --- the pre-#393 golden: build_prompt output is pinned byte-for-byte ---
+def test_build_prompt_confidence_instruction_is_numeric():
+    # #902: the prompt asks for a number 0.0-1.0, never the word enum — ten
+    # consecutive live rounds returned words because the old contract asked
+    # for them.
+    p = arl.build_prompt("payload", "design", nonce="n")
+    assert "confidence as a number between 0.0 and 1.0" in p
+    assert "confidence in [high, medium, low]" not in p
+    assert "below 0.5 may NOT exceed Medium severity" in p
 
-_GOLDEN_PRE393 = Path(__file__).resolve().parent.parent / "fixtures" / \
-    "build_prompt_golden_pre393_plan.txt"
+
+# --- the golden: build_prompt output is pinned byte-for-byte ---
+
+_GOLDEN = Path(__file__).resolve().parent.parent / "fixtures" / \
+    "build_prompt_golden_plan.txt"
 
 
-def test_build_prompt_no_ledger_byte_identical_to_pre393_golden():
-    # The golden was captured from the PRE-#393 build_prompt at RED time — the
-    # surviving (ledger-free, #866 M0d) build_prompt must match it byte-for-byte.
-    golden = _GOLDEN_PRE393.read_text(encoding="utf-8")
+def test_build_prompt_byte_identical_to_golden():
+    # Byte-identity guards against silent prompt drift (and against the #393
+    # dispositions-ledger fence ever coming back — #866 M0d deleted it).
+    # Provenance: originally captured from the pre-#393 build_prompt at RED
+    # time; re-captured at #902 when the confidence instruction went numeric.
+    golden = _GOLDEN.read_text(encoding="utf-8")
     p = arl.build_prompt(
         "GOLDEN-ARTIFACT-BODY", "plan",
         nonce="cafef00dcafef00dcafef00dcafef00d")

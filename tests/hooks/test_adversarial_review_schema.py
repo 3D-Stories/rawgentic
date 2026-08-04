@@ -18,7 +18,7 @@ def _finding(**over):
     # schema the strict jsonschema test enforces. evidence (grounding quote) and
     # confidence are required + non-nullable.
     base = {"evidence": "a quoted span", "severity": "High", "category": "security",
-            "confidence": "high",
+            "confidence": 0.9,
             "description": "d", "recommendation": "r", "location": "S1",
             "ambiguity_flag": False, "ambiguity_reason": None,
             "loopback_class": None}
@@ -299,16 +299,31 @@ def test_category_is_enum_sharing_one_source_of_truth():
     assert item["properties"]["category"]["enum"] == list(arl.CATEGORIES)
 
 
-def test_confidence_is_enum_in_schema():
+def test_confidence_is_number_in_schema():
+    # #902: the schema demands a native number so codex strict mode enforces it
+    # server-side; the word map is fallback-only (normalize_findings), not schema.
     item = arl.FINDINGS_SCHEMA["properties"]["findings"]["items"]
-    assert item["properties"]["confidence"]["enum"] == ["high", "medium", "low"]
+    prop = item["properties"]["confidence"]
+    assert prop["type"] == "number"
+    assert "enum" not in prop
+    assert "0.0" in prop["description"] and "1.0" in prop["description"]
+
+
+def test_schema_rejects_word_confidence_with_jsonschema():
+    # The words remain valid at validate_finding (tolerant GLM fallback) but the
+    # SCHEMA — what codex enforces server-side — refuses them.
+    jsonschema = pytest.importorskip("jsonschema")
+    doc = {"summary": "s", "findings": [_finding(confidence="high")]}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(doc, arl.FINDINGS_SCHEMA)
 
 
 def test_evidence_and_confidence_required_non_nullable():
     item = arl.FINDINGS_SCHEMA["properties"]["findings"]["items"]
     assert "evidence" in item["required"] and "confidence" in item["required"]
-    # non-nullable: a plain string type, not ["string","null"]
+    # non-nullable: plain types, not ["string","null"] / ["number","null"]
     assert item["properties"]["evidence"]["type"] == "string"
+    assert item["properties"]["confidence"]["type"] == "number"
 
 
 def test_evidence_is_first_property_for_cot_grounding():
@@ -370,7 +385,7 @@ def test_strict_schema_validates_full_findings_with_jsonschema():
     jsonschema = pytest.importorskip("jsonschema")
     doc = {"summary": "s", "findings": [
         {"evidence": "q", "severity": "High", "category": "security",
-         "confidence": "high", "description": "d", "recommendation": "r",
+         "confidence": 0.9, "description": "d", "recommendation": "r",
          "ambiguity_flag": None, "ambiguity_reason": None, "location": None,
          "loopback_class": None},
     ]}
