@@ -410,6 +410,117 @@ def assert_pr_body_has_deferred_section(
     return (True, [])
 
 
+# --- Closing-keyword guard (#901) ---
+# GitHub's closing-keyword parser does not understand negation: it matches
+# `close #N` inside "this PR does not close #N" and closes the issue on merge.
+# Observed live TWICE in this repo: #568 closed by the #573 merge (2026-07-21)
+# and #874 closed by the #898 merge (2026-08-04). Both PRs were deliberately
+# `Part of`, and no commit carried a closing keyword — the body text alone did it.
+CLOSING_KEYWORDS: Final[tuple[str, ...]] = (
+    "close", "closes", "closed",
+    "fix", "fixes", "fixed",
+    "resolve", "resolves", "resolved",
+)
+
+# Deliberately NAIVE, mirroring GitHub: keyword, optional colon/spaces, at most
+# ONE line break, then an issue reference. Negation-blind on purpose.
+#
+# Reference forms: `#N`, `owner/repo#N`, a full issues URL, and `GH-N`. `GH-N` is
+# included DEFENSIVELY: GitHub autolinks that form, but whether a closing keyword
+# fires on it is NOT verified here and this comment does not claim it does. A
+# false positive costs one question; a miss costs a wrongly-closed issue (#901 AC2
+# — "fail toward asking, never silent"), so the cheap direction wins.
+#
+# Code spans and fenced blocks are NOT exempted, though GitHub DOES ignore a
+# closing keyword inside backticks (verified live 2026-07-28: a `Closes #4` code
+# span was inert and #4 stayed open). Three reasons, recorded so this is not
+# "optimized" away as a mere false positive:
+#   1. fail-toward-asking, per above;
+#   2. a correct markdown code-span/fence parser (nested fences, tilde fences,
+#      multi-backtick spans) is a new bug surface inside the guard that must be
+#      the trustworthy one;
+#   3. the inverse trap is real — a closing keyword in backticks makes an
+#      INTENDED closure silently NOT fire, so flagging it helps either way.
+_CLOSING_REF_RE = re.compile(
+    r"\b(?P<kw>close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b"
+    r"[ \t]*:?[ \t]*"
+    r"(?:\r?\n[ \t]*)?"
+    r"(?:"
+    r"https?://github\.com/[\w.-]+/[\w.-]+/issues/(?P<url>\d+)"
+    r"|(?:[\w.-]+/[\w.-]+)?\#(?P<hash>\d+)"
+    r"|GH-(?P<gh>\d+)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class ClosingRef:
+    """One closing-keyword-adjacent issue reference found in a text."""
+    keyword: str      # the matched keyword, lowercased
+    issue: int        # the referenced issue number
+    line: int         # 1-indexed line the match starts on
+    text: str         # the matched substring, whitespace-normalized
+
+
+def find_closing_refs(text: str) -> tuple[ClosingRef, ...]:
+    """Scan `text` for closing-keyword-adjacent issue references (#901).
+
+    Replicates GitHub's naive match, so a NEGATED sentence still yields a hit —
+    that is the whole point: the guard must predict what GitHub will do, not what
+    the sentence means.
+
+    Deliberately TEXT-agnostic (Step-4 finding #3): the caller decides what it is
+    scanning, so a commit message can be passed unchanged by a future caller
+    without touching this function.
+    """
+    if not isinstance(text, str) or not text:
+        return ()
+    hits: list[ClosingRef] = []
+    for m in _CLOSING_REF_RE.finditer(text):
+        num = m.group("hash") or m.group("url") or m.group("gh")
+        if num is None:            # pragma: no cover - alternation guarantees one
+            continue
+        hits.append(ClosingRef(
+            keyword=m.group("kw").lower(),
+            issue=int(num),
+            line=text.count("\n", 0, m.start()) + 1,
+            text=" ".join(m.group(0).split()),
+        ))
+    return tuple(hits)
+
+
+def assert_pr_body_closing_refs(
+    pr_body: str,
+    intended_closes=frozenset(),
+) -> tuple[bool, list[str]]:
+    """Flag every closing-keyword ref the PR does NOT intend to close (#901).
+
+    `intended_closes` is the set of issue numbers this PR legitimately closes.
+    An EMPTY set means a `Part of` PR that closes nothing, so every closing ref
+    is flagged — the fail-closed default, since a caller that forgets to declare
+    its intent gets asked rather than waved through.
+
+    Returns (ok, errors). Each error names the offending issue and the
+    replacement phrasing, and never names the intended issues (an error message
+    that echoed them would be confusing when only one of several refs is wrong).
+    """
+    body = pr_body if isinstance(pr_body, str) else ""
+    intended = {int(i) for i in intended_closes}
+    errors: list[str] = []
+    for hit in find_closing_refs(body):
+        if hit.issue in intended:
+            continue
+        errors.append(
+            f"line {hit.line}: {hit.text!r} puts the closing keyword "
+            f"{hit.keyword!r} next to #{hit.issue}, which this PR does not "
+            f"declare it closes — GitHub closes #{hit.issue} on merge even when "
+            f"the sentence negates it. Write 'leaves #{hit.issue} open' instead, "
+            f"or declare the closure."
+        )
+    return (len(errors) == 0, errors)
+
+
 def _is_nonempty_str(v) -> bool:
     return isinstance(v, str) and bool(v.strip())
 
@@ -3040,6 +3151,59 @@ def _cmd_append_review_log(args) -> int:
     return 0
 
 
+def _cmd_check_pr_refs(args) -> int:
+    """#901 — the Step-12 closing-keyword gate, run BEFORE `gh pr create`.
+
+    A negated "this PR does not close #N" in a PR body closes #N on merge, because
+    GitHub's parser ignores the negation. This ran twice for real (#568 via #573,
+    #874 via #898), so the check is mechanical rather than a prose reminder.
+
+    Exit codes, three-valued so a caller mistake can never read as a gate pass:
+    ``0`` the gate holds · ``1`` the gate FAILS (findings on stdout) · ``2``
+    caller/usage error.
+
+    Fail-CLOSED throughout, mirroring `_cmd_assert_pr_body`:
+
+    - **An empty or whitespace-only body is rc 2, never rc 0.** It has no closing
+      refs, so the pure function would return ``(True, [])`` — but an empty body
+      is far more likely a wrong ``--pr-body-file`` path or a failed draft write
+      than a real PR. This is the same vacuous-pass class as the #796 finding on
+      `assert-pr-body` ("absence of TASKS is a caller error, not a clean gate").
+    - **Omitting ``--closes`` means "this PR closes nothing"**, so every closing
+      ref flags. A caller that forgets to declare its intent gets ASKED, never
+      waved through.
+    """
+    root = os.path.realpath(args.project_root)
+    if not _contained(args.pr_body_file, root):
+        sys.stderr.write(f"check-pr-refs: REFUSED — --pr-body-file resolves outside "
+                         f"--project-root ({root})\n")
+        return 2
+    try:
+        with open(args.pr_body_file, encoding="utf-8") as fh:
+            body = fh.read()
+    except OSError as e:
+        sys.stderr.write(
+            f"check-pr-refs: cannot read --pr-body-file {args.pr_body_file!r}: {e}\n")
+        return 2
+    if not body.strip():
+        sys.stderr.write(
+            f"check-pr-refs: REFUSED — --pr-body-file {args.pr_body_file!r} is empty. "
+            "That is a wrong path or a failed draft write, not a PR body with no "
+            "closing keywords; passing here would satisfy the gate vacuously\n")
+        return 2
+    intended = frozenset(args.closes or ())
+    ok, errors = assert_pr_body_closing_refs(body, intended)
+    if ok:
+        return 0
+    declared = ", ".join(f"#{n}" for n in sorted(intended)) or "(none declared)"
+    sys.stdout.write(
+        f"check-pr-refs: {len(errors)} unintended closing reference(s); "
+        f"this PR declares it closes {declared}\n")
+    for e in errors:
+        sys.stdout.write(f"  - {e}\n")
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
     parser = argparse.ArgumentParser(prog="plan_lib")
@@ -3095,6 +3259,16 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--project-root", default=".", dest="project_root",
                    help="--log must resolve inside this root")
     w.set_defaults(func=_cmd_append_review_log)
+    k = sub.add_parser("check-pr-refs",
+                       help="flag closing-keyword-adjacent issue refs in a PR body (#901)")
+    k.add_argument("--pr-body-file", required=True, dest="pr_body_file",
+                   help="the DRAFTED PR body, checked before `gh pr create`")
+    k.add_argument("--closes", type=int, action="append", default=None,
+                   help="an issue this PR legitimately closes; repeatable. "
+                        "Omit for a `Part of` PR that closes nothing")
+    k.add_argument("--project-root", default=".", dest="project_root",
+                   help="--pr-body-file must resolve inside this root")
+    k.set_defaults(func=_cmd_check_pr_refs)
     args = parser.parse_args(argv)
     return args.func(args)
 
