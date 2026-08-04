@@ -80,7 +80,7 @@ your config (existing values will be preserved)." Else print nothing.
 ### 2b. Feature-gap staleness nudge
 
 ```bash
-python3 hooks/post_update_reconcile.py --staleness-project <name> \
+python3 "${CLAUDE_PLUGIN_ROOT}/hooks/post_update_reconcile.py" --staleness-project <name> \
   --workspace .rawgentic_workspace.json --state-dir claude_docs
 ```
 
