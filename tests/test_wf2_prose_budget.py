@@ -42,39 +42,55 @@ SKILL_DIR = REPO_ROOT / "skills" / "implement-feature"
 
 # Actual + modest headroom (2.4%–19% per file, ~3.1% total). Sized so a small
 # operative edit fits but a paste-class regression (~30 KB) fails loudly.
-# #874: references/steps.md was SPLIT into per-step files. These 19 rows are
-# PROVISIONAL — sized at actual + max(1 KiB, 10%) — because the follow-up content
-# commit moves blocks between SKILL.md and step-03/08/16, which changes their
-# actual sizes. They are recalibrated there, and #874's AC7 stale-ceiling check
-# lands only after those sizes are final (so it never runs against rows it would
-# itself condemn).
-TOTAL_CEILING_BYTES = 245_000
+# #874: references/steps.md was SPLIT into per-step files, and these ceilings are
+# now RECALIBRATED to actual + allowed_headroom() — no longer the provisional
+# actual + max(1 KiB, 10%) that shipped with the split. AC7's STALE CEILING check
+# is what forced the recalibration: it condemned all 22 provisional rows, which is
+# the guard doing its job rather than a regression.
+TOTAL_CEILING_BYTES = 245_497
 PER_FILE_CEILING_BYTES = {
-    "SKILL.md": 46_000,
-    "references/step-00-preamble.md": 19_825,
-    "references/step-01.md": 5_132,
-    "references/step-01b.md": 4_212,
-    "references/step-02.md": 10_239,
-    "references/step-03.md": 9_434,
-    "references/step-04.md": 24_856,
-    "references/step-05.md": 8_469,
-    "references/step-06.md": 3_763,
-    "references/step-07.md": 2_892,
-    "references/step-08.md": 24_678,
-    "references/step-09.md": 7_134,
-    "references/step-10.md": 1_969,
-    "references/step-11.md": 15_737,
-    "references/step-11_5.md": 5_311,
-    "references/step-12.md": 13_919,
-    "references/step-13.md": 4_389,
-    "references/step-14.md": 4_382,
-    "references/step-15.md": 2_288,
-    "references/step-16.md": 12_094,
-    "references/run-record.md": 23_000,
-    "references/whole-issue-delegation.md": 8_500,
-    "references/state-and-resume.md": 7_000,
-    "references/quality-bar.md": 4_000,
+    "SKILL.md": 46_099,
+    "references/quality-bar.md": 3_616,
+    "references/run-record.md": 23_202,
+    "references/state-and-resume.md": 6_476,
+    "references/step-00-preamble.md": 18_925,
+    "references/step-01.md": 4_364,
+    "references/step-01b.md": 3_444,
+    "references/step-02.md": 9_676,
+    "references/step-03.md": 8_831,
+    "references/step-04.md": 23_727,
+    "references/step-05.md": 7_818,
+    "references/step-06.md": 2_995,
+    "references/step-07.md": 2_124,
+    "references/step-08.md": 23_557,
+    "references/step-09.md": 6_416,
+    "references/step-10.md": 1_201,
+    "references/step-11.md": 15_023,
+    "references/step-11_5.md": 4_543,
+    "references/step-12.md": 13_287,
+    "references/step-13.md": 3_621,
+    "references/step-14.md": 3_614,
+    "references/step-15.md": 1_520,
+    "references/step-16.md": 11_545,
+    "references/whole-issue-delegation.md": 8_236,
 }
+
+
+# AC7 (#874): allowed headroom above actual before a ceiling reads as STALE.
+# Hybrid on purpose. A percentage alone punishes small files (5% of 400 bytes is
+# 20, which no real ceiling fits inside); an absolute alone becomes
+# disproportionately strict on large ones. The aggregate margin is deliberately
+# TIGHTER than per-file so many individually-legal gaps cannot accumulate into
+# paste-sized corpus slack.
+STALE_CEILING_PCT = 0.05
+STALE_CEILING_MIN_BYTES = 256
+STALE_TOTAL_PCT = 0.02
+STALE_TOTAL_MIN_BYTES = 1_024
+
+
+def allowed_headroom(actual: int, pct: float, floor: int) -> int:
+    """Bytes a ceiling may sit above actual before it reads as stale."""
+    return max(floor, -(-int(actual) * int(pct * 10_000) // 10_000))  # ceil, no float drift
 
 
 def measured_sizes() -> dict:
@@ -116,6 +132,22 @@ def budget_violations(sizes: dict, budgets: dict, total_ceiling: int) -> list:
                 f"its {ceiling}-byte ceiling. Trim it, or raise the ceiling in the "
                 f"same commit and say why in the PR."
             )
+        else:
+            # AC7: the SYMMETRIC direction. A ceiling far above actual is
+            # unguarded slack — a paste-class regression would fit under it
+            # while this guard stayed green. Only reachable when NOT over
+            # ceiling, so the two directions are mutually exclusive by
+            # construction.
+            allowed = allowed_headroom(size, STALE_CEILING_PCT, STALE_CEILING_MIN_BYTES)
+            excess = ceiling - size - allowed
+            if excess > 0:
+                violations.append(
+                    f"STALE CEILING: {path} is {size} bytes but its ceiling is "
+                    f"{ceiling} — {ceiling - size} bytes of headroom against an "
+                    f"allowed {allowed} ({excess} bytes too much). Lower the "
+                    f"ceiling to actual + allowed in the same commit as the "
+                    f"shrink (#874 AC7)."
+                )
     total = sum(sizes.values())
     if total > total_ceiling:
         violations.append(
@@ -123,6 +155,16 @@ def budget_violations(sizes: dict, budgets: dict, total_ceiling: int) -> list:
             f"over the {total_ceiling}-byte total ceiling. Trim prose, or raise the "
             f"ceiling in the same commit and say why in the PR."
         )
+    elif sizes:
+        allowed = allowed_headroom(total, STALE_TOTAL_PCT, STALE_TOTAL_MIN_BYTES)
+        excess = total_ceiling - total - allowed
+        if excess > 0:
+            violations.append(
+                f"STALE TOTAL: the corpus is {total} bytes but the total ceiling is "
+                f"{total_ceiling} — {total_ceiling - total} bytes of headroom against "
+                f"an allowed {allowed} ({excess} bytes too much). Lower the total "
+                f"ceiling in the same commit as the shrink (#874 AC7)."
+            )
     return violations
 
 
@@ -197,3 +239,71 @@ def test_corpus_total_stays_within_ceiling():
         if v.startswith("OVER TOTAL:")
     ]
     assert not violations, "\n".join(violations)
+
+
+# --- AC7 (#874): STALE CEILING — a ceiling far above actual is paste-sized slack ---
+# Red-before-green: these were written and observed FAILING before the
+# allowed-headroom logic existed in budget_violations.
+
+
+def test_stale_ceiling_flags_a_ceiling_far_above_actual():
+    """The #874 split shrinks these files; a ceiling left at the old size would
+    leave ~30 KB of unguarded slack while every other class stays green."""
+    sizes = {"a.md": 1_000}
+    budgets = {"a.md": 40_000}
+    v = budget_violations(sizes, budgets, 100_000)
+    assert any("STALE CEILING" in m for m in v), v
+    msg = next(m for m in v if "STALE CEILING" in m)
+    for token in ("a.md", "1000", "40000"):
+        assert token in msg.replace("_", ""), f"{token!r} missing from: {msg}"
+
+
+def test_within_margin_ceiling_is_not_flagged():
+    """Modest headroom must stay legal or every ordinary edit trips the guard.
+    5% of 100_000 is 5_000, so a 4_000-byte gap is inside the margin."""
+    sizes = {"a.md": 100_000}
+    budgets = {"a.md": 104_000}
+    assert [m for m in budget_violations(sizes, budgets, 200_000)
+            if "STALE CEILING" in m] == []
+
+
+def test_small_file_gets_an_absolute_floor_not_a_percentage():
+    """A percentage alone punishes small files: 5% of 400 is 20 bytes, which no
+    real ceiling can sit inside. The floor is 256 bytes."""
+    sizes = {"tiny.md": 400}
+    budgets = {"tiny.md": 640}          # 240-byte gap, under the 256 floor
+    assert [m for m in budget_violations(sizes, budgets, 10_000)
+            if "STALE CEILING" in m] == []
+    budgets_over = {"tiny.md": 900}     # 500-byte gap, over the floor
+    assert any("STALE CEILING" in m
+               for m in budget_violations(sizes, budgets_over, 10_000))
+
+
+def test_total_ceiling_has_the_same_symmetric_check_with_a_tighter_margin():
+    """The aggregate analog (AC7). Deliberately tighter (2%) than per-file (5%)
+    so many individually-legal gaps cannot accumulate into corpus-wide slack."""
+    sizes = {"a.md": 1_000, "b.md": 1_000}       # total 2_000
+    v = budget_violations(sizes, {"a.md": 1_100, "b.md": 1_100}, 50_000)
+    assert any("STALE TOTAL" in m for m in v), v
+    # 2% of 2_000 is 40, so the 1_024 floor governs: a 1_000-byte gap is legal.
+    assert [m for m in budget_violations(sizes, {"a.md": 1_100, "b.md": 1_100}, 3_000)
+            if "STALE TOTAL" in m] == []
+
+
+def test_over_and_stale_are_mutually_exclusive_per_file():
+    """A file cannot be both over its ceiling and far under it — the two
+    directions must never both fire for one path."""
+    sizes = {"a.md": 100}
+    v = budget_violations(sizes, {"a.md": 50}, 10_000)      # over
+    assert any("OVER CEILING" in m for m in v)
+    assert not any("STALE CEILING" in m for m in v)
+
+
+def test_live_corpus_has_no_stale_ceilings():
+    """The real budgets must satisfy the margin — this is what forces the #874
+    split's shrunken files to carry recalibrated ceilings rather than the
+    monolith's old slack."""
+    v = [m for m in budget_violations(measured_sizes(), PER_FILE_CEILING_BYTES,
+                                      TOTAL_CEILING_BYTES)
+         if "STALE" in m]
+    assert v == [], "stale ceilings in the live budget:\n" + "\n".join(v)
