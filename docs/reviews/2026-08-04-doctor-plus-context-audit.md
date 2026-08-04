@@ -5,10 +5,12 @@
 report-only) · **Scope:** the context a rawgentic-bound Claude Code session actually loads
 
 > doctor-plus audits a workspace against the 6 "then & now" context-engineering shifts
-> Anthropic published for the Claude 5 models (source: an X article by @trq212, Jul 2026 —
-> **inferred, not fetched**; the 6 principles were judged on their own merits). Part 1 runs the
-> built-in `claude doctor`; Part 2 audits the principles; Part 3 reports before changing anything.
-> This document is that report. **Nothing has been changed.**
+> Anthropic published for the Claude 5 models. **Source confirmed 2026-08-04:** an official
+> Anthropic blog post — ["The new rules of context engineering for Claude 5 generation
+> models"](https://claude.com/blog/the-new-rules-of-context-engineering-for-claude-5-generation-models)
+> by Thariq Shihipar (member of technical staff), 2026-07-24 — not just the X thread doctor-plus
+> cites. Part 1 runs the built-in `claude doctor`; Part 2 audits the principles; Part 3 reports
+> before changing anything. This document is that report. **Nothing has been changed.**
 
 ## Verdict table
 
@@ -16,8 +18,8 @@ report-only) · **Scope:** the context a rawgentic-bound Claude Code session act
 |---|---|---|---|---|
 | 1 | Rules → judgement | **FLAG (mild)** | ponytail session hook's Output/Boundaries text contradicts the user tier's voice-ownership section (incl. a stale "pair with Caveman" line — Caveman is disabled) | Trim the hook's injected text to build-discipline only (C3) |
 | 2 | Examples → interfaces | **PASS** | — | — |
-| 3 | Upfront → progressive disclosure | **FLAG (biggest)** | ~75.5 KB (~19k tokens) of guidance loads every session; project manual §5 (~90 lines) duplicates the quality-bar skill created 2026-07-27 *specifically* to take that content out of every-session load | Trim §5 to a pointer (C1); tier de-dup (C2); description diet (C5) |
-| 4 | Repetition → one home | **FLAG** | "git reset --hard under auto-mode" verbatim in two tiers; "timeout ≠ failure" in three; "never blanket git add" in four places | Delete the narrower copies that add nothing (C2) |
+| 3 | Upfront → progressive disclosure | **FLAG (biggest)** | ~75.5 KB (~19k tokens) of guidance loads every session; project manual §5 (~90 lines) duplicates the quality-bar skill created 2026-07-27 *specifically* to take that content out of every-session load | Trim §5 to a pointer (C1); tier de-dup (C2); description diet (C5) — all fit M1; skill splits (C4) → M1 #856 |
+| 4 | Repetition → one home | **FLAG** | "git reset --hard under auto-mode" verbatim in two tiers; "timeout ≠ failure" in three; "never blanket git add" in four places | Delete the narrower copies that add nothing (C2, fits M1) |
 | 5 | CLAUDE.md memory → auto-memory | **PASS** (deliberate architecture) | — | minor: move decision-archaeology prose out of always-loaded tiers (noted, low priority) |
 | 6 | Simple specs → rich references | **PASS** (best-in-class) | two skill-count strings still hand-pinned | finish the computed-guard conversion (C6) |
 
@@ -37,7 +39,7 @@ Audited what a rawgentic-bound session actually loads (confirmed by measurement,
 | project tier | `projects/rawgentic/CLAUDE.md` | 27.5 KB / 393 lines | when rawgentic is bound |
 | memory index | auto-memory `MEMORY.md` (frozen) | 1.2 KB / 15 lines | every session |
 | **total guidance** | | **75.5 KB ≈ 19k tokens** | **before any work starts** |
-| skill descriptions | 30 plugin-skill frontmatter descriptions | 13.3 KB | every session (availability listing), plus workspace/user skill descriptions on top |
+| skill descriptions | 21 plugin-skill frontmatter descriptions | 10.8 KB | every session (availability listing), plus workspace/user skill descriptions on top |
 | session-start hooks | ponytail full prompt, claude-reflect notice, WAL note, project list, cross-project links | ~8 KB observed | every session |
 
 On-demand context (SKILL.md bodies, `references/`, `docs/*.md`) was sampled, not exhaustively read.
@@ -103,7 +105,10 @@ correctness-under-concurrency constraints — costly-wrong-call territory, not f
    (25.4 KB), adversarial-review (23.9 KB), create-issue (23.7 KB), peer-consult (17.9 KB),
    pane-handoff (17.2 KB), epic-run (16.5 KB) — measured 2026-08-04. implement-feature proves
    the house pattern works (43.9 KB body + 23 reference files). Caveat: this costs per
-   *invocation*, not per session, so it ranks below items 1–2.
+   *invocation*, not per session, so it ranks below items 1–2. *(Post-verification note: against
+   Anthropic's explicit 500-line SKILL.md guidance, only incident — 537 lines, zero references —
+   is over among these; the others are byte-heavy but under 500 lines. See the verification
+   section.)*
 
 ### Shift 4 — one home over repetition: FLAG
 
@@ -121,11 +126,14 @@ rule (all confirmed by grep, 2026-08-04):
 | Vercel design-doc mandate | user:171 + workspace:132 | same decision, same date, restated; workspace copy adds the command (legitimate), user copy carries workspace mechanics |
 | Ponytail "pair with Caveman" | hook injection vs. universal voice-ownership | the drifted-copy case: one home says the other is disabled |
 
-Also under this shift's "simple tool descriptions" half: **13.3 KB of frontmatter descriptions
-across the 30 plugin skills** load into every session. Top offenders: pane-handoff (1,323 chars),
-revalidate-children (1,076), adversarial-review (1,026). The repo's own bar (§5: "description =
-triggering symptoms not workflow summary") is not met by several — adversarial-review's
-description carries backend `pip install` instructions, which is body material.
+Also under this shift's "simple tool descriptions" half: **10.8 KB of frontmatter descriptions
+across the 21 plugin skills** load into every session. Top offenders: pane-handoff (1,174 chars —
+over Anthropic's documented 1,024-character `description` maximum), revalidate-children (991),
+adversarial-review (842). *(Figures corrected 2026-08-04 by exact YAML parsing; this report's
+first revision overstated them — see the verification section.)* The repo's own bar (§5:
+"description = triggering symptoms not workflow summary") is not met by several —
+adversarial-review's description carries backend `pip install` instructions, which is body
+material.
 (pane-handoff's ~20 dictated trigger variants look deliberate — owner decision referenced in the
 description itself — keep those, cut the summary prose around them.)
 
@@ -208,13 +216,87 @@ skills", "6 workspace management"). Small `chore(tests):` PR.
 **Suggested sequence:** C1+C2 together (one docs PR + two direct tier edits; removes
 ~150–200 always-loaded lines), then C3 (owner config), then C5, C6, and C4 last.
 
+## Verification against primary sources (added 2026-08-04)
+
+Owner-requested second pass: every shift re-checked against Anthropic's own publications
+(fetched via Exa + direct doc fetch, 2026-08-04).
+
+**The premise is confirmed and upgraded.** The "6 shifts" source is an official Anthropic blog
+post — [claude.com/blog/the-new-rules-of-context-engineering-for-claude-5-generation-models](https://claude.com/blog/the-new-rules-of-context-engineering-for-claude-5-generation-models),
+Thariq Shihipar, 2026-07-24 — not merely the X thread doctor-plus credits. Verbatim: *"We removed
+over 80% of Claude Code's system prompt for models like Claude Opus 5 and Claude Fable 5 with no
+measurable loss on our coding evaluations."* The post also states the best practices were put
+into `claude doctor` itself — which is why Part 1 and Part 2 of this audit are the same exercise
+at two depths.
+
+Per-shift verification (blog post + [Anthropic's skill-authoring best
+practices](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices)):
+
+- **Shift 1 — confirmed verbatim.** *"Overall, we found that we were overconstraining Claude
+  Code… we have since found we can delete many of them and let the model use surrounding context
+  and judgement instead."* The audit's practice of not flagging deliberate costly-wrong-call
+  rules matches the post's own framing (old rules existed "to avoid worst case scenarios").
+- **Shift 2 — confirmed, with a nuance that supports the PASS.** The best-practices doc still
+  endorses worked input/output examples *"for Skills where output quality depends on seeing
+  examples"* — examples are discouraged as tool-usage teaching ("giving examples actually
+  constrains them to a certain exploration space"), not banned outright.
+- **Shift 3 — confirmed and quantified.** *"Keep SKILL.md body under 500 lines for optimal
+  performance"*; split when approaching the limit; *"consider having a tree of files that can be
+  loaded at the right time."* Measured against the 500-line figure: **incident (537 lines, zero
+  reference files)** and implement-feature (549 lines — but already split, 23 reference files)
+  are the only two over; the four other byte-heavy skills sit under 500 lines. This *downgrades
+  C4 further*: the per-invocation win is real but smaller than the tier trims.
+- **Shift 4 — confirmed.** *"We found we could delete these repeat examples and put instructions
+  on how to use tools in the tool descriptions rather than the system prompt."* Also verified: the
+  `description` field maximum is **1,024 characters** — pane-handoff's is **1,174**, over the
+  documented cap (it works today because Claude Code does not enforce the API-side validation;
+  still a defect). **Correction:** this report's first revision cited 1,323/1,076/1,026 for three
+  skills — a frontmatter-parsing overcount. Exact YAML parsing: pane-handoff 1,174,
+  revalidate-children 991, adversarial-review 842; total 10.8 KB across 21 skills (not 13.3 KB
+  across 30). Only pane-handoff exceeds the cap.
+- **Shift 5 — confirmed.** *"Claude now automatically saves memories that are relevant to the
+  work and to you."* The PASS stands: mempalace is a deliberate substitute implementing the same
+  principle (facts out of guidance files, into a memory system).
+- **Shift 6 — confirmed.** *"A HTML mockup of a design will generally produce better results than
+  a description of the design or a screenshot"*; test suites and rubrics as references — exactly
+  the repo's drift-guard/diagram/eval posture.
+
+## Milestone-map fit (added 2026-08-04)
+
+Owner-requested check against the current milestone map:
+`docs/planning/2026-08-03-756-rationalization-roadmap.md`. State confirmed from its §10
+retrospective: **M0 (UNBREAK) is DONE** — four PRs (#867/#868/#870/#872) + #869 merged
+2026-08-04, suite 7031→4659 — so **M1 "STAY SMALL" is the active milestone.**
+
+**Convergence, first:** the roadmap independently cites the *same* Anthropic guidance this audit
+verifies (roadmap §5: "SKILL.md <500 lines, progressive disclosure, scripts over prose ('the
+context window is a public good')") and is already executing shift 1 on the workflow prose
+(D175: ~34 → ~15 WF2 gates) and shift 3 on the biggest skill (#856). The audit's findings are the
+complementary remainder: the roadmap shrinks the workflow skills; C1–C6 shrink the guidance tiers
+and skill metadata *around* them.
+
+| Finding | Milestone fit |
+|---|---|
+| **C1** trim project §5 | Not in the roadmap; **fits M1 cleanly** — and should land BEFORE #856 pins CI byte ceilings, so ceilings capture the trimmed baseline |
+| **C2** tier de-dup | Not in the roadmap; **fits M1** — M1 already touches the workspace manual (the D179 issue throttle lands there), same window |
+| **C3** ponytail hook trim | **Outside the roadmap** (user-level plugin config) — standalone owner action, any time |
+| **C4** references/ split | **Largely accomplished by M1 #856** as written (steps.md → step-local files; CI byte ceilings, total + per-file, glob-exact). Residual: add **incident** (the one zero-reference skill over 500 lines) to #856's scope; the ceilings police the rest |
+| **C5** description diet | Not in the roadmap; **fits #856 naturally** — descriptions are always-loaded corpus, so per-file ceilings should include a frontmatter budget; pane-handoff's 1,174 chars is over Anthropic's hard cap regardless |
+| **C6** computed count guards | **Rides M1 #822** — both extend the existing version-pin test |
+
+Net: nothing in C1–C6 conflicts with the roadmap; four of six fold into already-scheduled M1
+items (#856, #822), and the remaining two (C1+C2) are small M1-shaped additions. One consistency
+note: roadmap §10 records *"docs/reviews/ is gitignored by design — the M0 review verdicts live
+in the PR bodies"*, which matches the reading this report's own commit relied on (per-run
+by-products stay local; curated standalone audits have committed precedent). The owner
+adjudicates that at the PR.
+
 ## What was NOT checked
 
 Other projects' manuals (chorestory, 3dstories-studio, saystory); mempalace content quality;
-the full bodies of all 30 plugin skills (structure + sizes measured, ~6 read); user-level and
-workspace-level skill description weight (listed, not measured); other session-start hooks'
-exact byte cost (observed qualitatively); and the source X article behind the 6 shifts (link not
-fetched — principles evaluated on their own merits).
+the full bodies of all 21 plugin skills (structure + sizes measured, ~6 read); user-level and
+workspace-level skill description weight (listed, not measured); and other session-start hooks'
+exact byte cost (observed qualitatively).
 
 ## Provenance
 
