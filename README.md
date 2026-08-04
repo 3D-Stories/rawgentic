@@ -741,7 +741,7 @@ For major changes, please open an issue first to discuss the approach.
   passing block) was **REFUTED** during queue revalidation and the issue rescoped by owner decision
   D187; the renderer is deliberately unchanged, and the 28 historical records are deliberately not
   rewritten (the store is append-only), so those summaries keep their duplicate line as a stated
-  consequence. Tests: 6 new — strict rejection, index naming, the actionable `security_scan` pointer,
+  consequence. Tests: 7 new — strict rejection, index naming, the actionable `security_scan` pointer,
   the same record passing once the row is removed, the CLI write path exiting 1 without persisting,
   and two lenient-read pins that go red if the guard is ever moved out of strict mode — one on
   `validate_record`, one on `load_store` itself (the read path that actually consumes the store),
