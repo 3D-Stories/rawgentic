@@ -26,7 +26,6 @@ from datetime import datetime, timezone
 from typing import Final, Literal
 
 from atomic_write_lib import atomic_write_text
-from complexity_gate import plan_content_digest
 
 
 class PlanFormatError(ValueError):
@@ -2766,10 +2765,7 @@ def _cmd_assert_pr_body(args) -> int:
       ``(True, [])`` on an empty deferred list BY DESIGN (the section is omitted-when-empty), so a
       wrong ``--plan-file`` path or a malformed plan would otherwise satisfy the gate vacuously.
       "No tasks at all" is a different fact from "tasks, none deferred" and only the second is a pass.
-    - **``--plan-file`` binds to the gate's recorded ``plan_digest``** when ``--gate-file`` is given,
-      so the gate cannot be satisfied against a plan revised after it was taken. Same rule
-      ``executor_routing_lib`` enforces as ``gate_stale_for_plan`` / ``gate_missing_plan_digest``,
-      reusing ``complexity_gate.plan_content_digest`` rather than a second implementation.
+      (The old ``--gate-file`` plan-digest binding left with the complexity gate — M0d, #866.)
 
     Fail-CLOSED throughout: this is a security-adjacent completion gate, so anything it cannot
     evaluate is refused rather than waved through (`CLAUDE.md` §3 decision guide).
@@ -2799,34 +2795,6 @@ def _cmd_assert_pr_body(args) -> int:
             "That is a wrong path or a malformed plan, not a plan with nothing deferred; "
             "passing here would satisfy the gate vacuously\n")
         return 2
-    if args.gate_file:
-        # #796 finding 2 — bind the plan to the gate that approved it.
-        if not _contained(args.gate_file, root):
-            sys.stderr.write("assert-pr-body: REFUSED — --gate-file resolves outside "
-                             f"--project-root ({root})\n")
-            return 2
-        try:
-            with open(args.gate_file, encoding="utf-8") as fh:
-                snapshot = _json.loads(fh.read())
-        except (OSError, ValueError) as e:
-            sys.stderr.write(f"assert-pr-body: cannot read --gate-file: {e}\n")
-            return 2
-        if not isinstance(snapshot, dict):
-            sys.stderr.write("assert-pr-body: --gate-file is not a JSON object\n")
-            return 2
-        recorded = snapshot.get("plan_digest")
-        if not _is_nonempty_str(recorded):
-            sys.stderr.write(
-                "assert-pr-body: REFUSED — the gate records no plan_digest, so it cannot prove "
-                "this plan is the one that was gated (mirrors gate_missing_plan_digest)\n")
-            return 2
-        live = plan_content_digest(plan_content)
-        if live != recorded:
-            sys.stderr.write(
-                "assert-pr-body: REFUSED — the plan is STALE for this gate: recorded plan_digest "
-                f"{recorded!r} != live {live!r}. The plan was revised after the gate was taken "
-                "(mirrors gate_stale_for_plan)\n")
-            return 2
     try:
         with open(args.pr_body_file, encoding="utf-8") as fh:
             pr_body = fh.read()
@@ -2875,8 +2843,6 @@ def main(argv: list[str] | None = None) -> int:
                        help="execute the Step-12 deferral gate: PR section + run-record (#796)")
     a.add_argument("--plan-file", required=True, dest="plan_file")
     a.add_argument("--pr-body-file", required=True, dest="pr_body_file")
-    a.add_argument("--gate-file", dest="gate_file", default=None,
-                   help="bind --plan-file to this gate's recorded plan_digest (#796)")
     a.add_argument("--record-file", dest="record_file", default=None,
                    help="also assert every deferral is recorded in the run-record")
     a.add_argument("--project-root", default=".",
