@@ -39,9 +39,141 @@ def test_marketplace_registers_skill():
     assert skills == sorted(skills)
 
 
+# --- version surfaces + changelog tail tokens (#822) -------------------------
+#
+# Fail mode: fail-CLOSED (CLAUDE.md §3). These are release-contract guards; a
+# surface that cannot be read, or a changelog that cannot be parsed, must FAIL
+# rather than pass vacuously — the whole point is finding out here instead of
+# after a release ships with a stale surface.
+#
+# THREE surfaces must agree, not four: #866 M0d retired the `phase_executor`
+# canary, and CLAUDE.md now reads "The version lives in THREE surfaces that must
+# match". Two of them are files; the third is the pinned literal below, which is
+# why bumping a version means editing a TEST — a scoped local run that skips this
+# file is exactly how the miss reaches CI.
+EXPECTED_PLUGIN_VERSION = "3.125.2"
+
+VERSION_SURFACE_FILES = (
+    ".claude-plugin/plugin.json",
+    "plugins/rawgentic/.codex-plugin/plugin.json",
+)
+
+# Both tail tokens the README changelog shape mandates. Presence searches, and
+# deliberately WITHOUT a trailing-boundary assertion: #796 rev 4 proposed
+# `(?![\w.])`, which forbids a trailing period — measured against this corpus it
+# misses 198 of 224 token-bearing entries, because `no diagram REV.` ends a
+# sentence. That fabricated-verification error is what killed the earlier design,
+# so these regexes are validated against the live corpus by a test below.
+#
+# The separator is BOTH forms: 45 live entries use ASCII `->`, the rest `→`.
+SUITE_DELTA_RE = re.compile(r"Suite\s+\S+\s*(?:→|->)\s*\S+")
+DIAGRAM_DECISION_RE = re.compile(r"(?:no diagram REV|diagram REVs?\s+\d+\.\d+\.\d+)")
+
+# Legacy entries that carry a token but word it differently. NAMED individually so
+# a NEW miss fails loudly instead of being absorbed by loosening the regex.
+LEGACY_SUITE_EXCEPTIONS = frozenset({"v3.31.1"})       # "Suite unchanged 2556+1skip."
+LEGACY_DIAGRAM_EXCEPTIONS = frozenset({"v3.121.0"})    # "the diagram REV is DEFERRED to M0d"
+
+
+def _changelog_entries():
+    """[(version, entry_text)] newest-first. Fail-CLOSED on an unreadable changelog."""
+    readme = (REPO_ROOT / "README.md").read_text()
+    marker = "## Changelog"
+    assert marker in readme, (
+        f"README.md has no {marker!r} section — the changelog guards cannot "
+        "evaluate, so they fail rather than pass vacuously"
+    )
+    body = readme[readme.index(marker):]
+    entries = re.split(r"\n(?=### v)", body)[1:]
+    assert entries, (
+        "README.md's Changelog section parsed to ZERO entries — refusing to pass "
+        "vacuously (a heading-shape change would otherwise silently disable these guards)"
+    )
+    out = []
+    for entry in entries:
+        m = re.match(r"### (v\S+)", entry)
+        assert m, f"changelog entry does not start with a `### vX.Y.Z` heading: {entry[:80]!r}"
+        out.append((m.group(1), entry))
+    return out
+
+
 def test_plugin_version_bumped():
-    plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "3.125.1"
+    """All THREE version surfaces must agree, and disagreement names each stale one.
+
+    Previously this asserted only `.claude-plugin/plugin.json`, so the codex-plugin
+    copy — the one CLAUDE.md §4 mistake #1 says everyone forgets — was pinned by
+    nothing. Verified before this change: desyncing it to 9.9.9 left the whole file
+    green at 36 passed.
+    """
+    found = {}
+    for rel in VERSION_SURFACE_FILES:
+        path = REPO_ROOT / rel
+        assert path.exists(), f"version surface {rel} is missing"
+        found[rel] = json.loads(path.read_text())["version"]
+    found["tests/hooks/test_adversarial_review_registration.py::EXPECTED_PLUGIN_VERSION"] = (
+        EXPECTED_PLUGIN_VERSION)
+
+    stale = {k: v for k, v in found.items() if v != EXPECTED_PLUGIN_VERSION}
+    assert not stale, (
+        "version surfaces disagree — each stale surface and its value:\n"
+        + "\n".join(f"  {k}: {v!r} (expected {EXPECTED_PLUGIN_VERSION!r})"
+                    for k, v in sorted(stale.items()))
+        + "\nAll THREE must be bumped together (#866 M0d retired the canary fourth)."
+    )
+
+
+def test_newest_changelog_entry_carries_both_tail_tokens():
+    """The newest entry must carry the diagram decision AND the `Suite old→new` delta.
+
+    Scoped to the NEWEST entry on purpose: the convention is not retroactive — 112
+    live entries predate it and carry no `Suite` token at all, so gating every entry
+    would fail on a third of the corpus.
+    """
+    version, entry = _changelog_entries()[0]
+    assert DIAGRAM_DECISION_RE.search(entry), (
+        f"newest changelog entry {version} carries no diagram decision. State it "
+        "explicitly either way: `no diagram REV` or `diagram REV <X.Y.Z>`."
+    )
+    assert SUITE_DELTA_RE.search(entry), (
+        f"newest changelog entry {version} carries no `Suite <old>→<new>` delta."
+    )
+
+
+def test_changelog_tail_regexes_match_the_live_corpus():
+    """AC3: validate both regexes against the LIVE corpus, not a snapshot.
+
+    This is the check whose absence killed #796 rev 4: it claimed "verified against
+    the live corpus" without running anything, and the proposed pattern would have
+    rejected almost every real release. Any entry carrying a token whose regex does
+    not match is either a regex bug or a new wording — both must surface here.
+    """
+    for version, entry in _changelog_entries():
+        if "diagram REV" in entry and version not in LEGACY_DIAGRAM_EXCEPTIONS:
+            assert DIAGRAM_DECISION_RE.search(entry), (
+                f"{version} mentions a diagram REV but DIAGRAM_DECISION_RE does not "
+                "match it — fix the regex or add the version to "
+                "LEGACY_DIAGRAM_EXCEPTIONS with its wording in a comment"
+            )
+        if "Suite " in entry and version not in LEGACY_SUITE_EXCEPTIONS:
+            assert SUITE_DELTA_RE.search(entry), (
+                f"{version} mentions a Suite delta but SUITE_DELTA_RE does not match "
+                "it — fix the regex or add the version to LEGACY_SUITE_EXCEPTIONS "
+                "with its wording in a comment"
+            )
+
+
+def test_tail_token_regexes_accept_a_trailing_period():
+    """AC3's named trap, pinned explicitly: a terminating period must still match.
+
+    `no diagram REV.` ends a sentence in the overwhelming majority of live entries
+    (196 with the period against 14 without), so a pattern that forbids one rejects
+    the corpus it is meant to validate.
+    """
+    for probe in ("no diagram REV.", "diagram REV 3.125.0.", "WF2 diagram REVs 3.93.0."):
+        assert DIAGRAM_DECISION_RE.search(probe), f"trailing period broke: {probe!r}"
+    for probe in ("Suite 4791→4793.", "Suite 6497->6511.",
+                  "Suite 2409+1skip→2411+1skip."):
+        assert SUITE_DELTA_RE.search(probe), f"trailing period broke: {probe!r}"
 
 
 def test_descriptions_consistent_count():
