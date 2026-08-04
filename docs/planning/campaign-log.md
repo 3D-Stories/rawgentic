@@ -14,6 +14,24 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #875 M1 — #905: driver_lib.py refuses CLI invocation loudly · v3.125.5
+
+Post-mortem child (round-5 session, small-standard lane, plugin 3.125.4 cache). A bare
+`python3 hooks/driver_lib.py <anything>` imported and exited 0 silently — read live as a passing
+gate while `launcher_lib.py next-child` was refusing rc 6. Fix: tail `__main__` stub (stderr
+refusal naming `hooks/launcher_lib.py`, exit 2), `sys` imported inside the guard so the
+import-time surface is unchanged; purity source-grep untouched.
+
+**Telemetry (run-record `wf2-905-bbad90f6`):** gates — Design Critique 1/1 pass (rubric-only,
+lane), Plan Drift skipped (lane), Per-task Review skipped (no high-risk), Implementation Drift
+0/0 pass, Code Review 2/2 pass (inline clean; runner gpt-5.6-sol found 2 Low, both verified and
+applied — full remediation-string pin + docstring purity qualifier); security scan PASS
+(skipped: iac). Tests 3 added, suite 4809→4812/0 (twice-run discipline held + one evidence-driven
+pre-PR re-run after the review-fix commit). Loop-backs 0/3; no reopen token minted (lane
+single-reviewer shape — the #761 AC6 gap, noted not papered over). Usage 54.7M in / 189k out
+(≈$77.9 rate-card), wall 1,330s; timing complete (design 404s · plan 16s · implement 347s ·
+review 563s). PR #911, CI test+lint+security-review all green per-sha.
+
 ## Epic #875 M1 slot 1 — #856: CI byte ceilings for the WF2 prose corpus · v3.123.1
 
 First post-retreat WF2 run (small-standard lane, manual handoff, first M1 child on plugin
