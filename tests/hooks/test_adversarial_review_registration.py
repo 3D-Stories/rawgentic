@@ -68,8 +68,24 @@ VERSION_SURFACE_FILES = (
 # so these regexes are validated against the live corpus by a test below.
 #
 # The separator is BOTH forms: 45 live entries use ASCII `->`, the rest `→`.
-SUITE_DELTA_RE = re.compile(r"Suite\s+\S+\s*(?:→|->)\s*\S+")
-DIAGRAM_DECISION_RE = re.compile(r"(?:no diagram REV|diagram REVs?\s+\d+\.\d+\.\d+)")
+#
+# `(?!\w)` after REV is NOT the rev-4 trap: rev 4 used `(?![\w.])`, which forbids a
+# trailing PERIOD. `(?!\w)` still accepts `no diagram REV.` while rejecting longer
+# words like `REVISION`. Operands are numeric with the live `+Nskip` suffix rather
+# than a permissive `\S+`, so a placeholder cannot pose as a delta. Both forms
+# measured against the live corpus: 0 misses on 225 and 227 token-bearing entries.
+SUITE_DELTA_RE = re.compile(
+    r"Suite\s+\d+(?:\+\d+skip)?\s*(?:→|->)\s*\d+(?:\+\d+skip)?")
+DIAGRAM_DECISION_RE = re.compile(
+    r"(?:no diagram REV|diagram REVs?\s+\d+\.\d+\.\d+)(?!\w)")
+
+# How much of an entry counts as its TAIL for the newest-entry gate. The tokens are
+# a tail convention, and searching a whole entry is fail-open: an entry that merely
+# DISCUSSES `no diagram REV` in prose (this one does) would satisfy the guard with
+# its real decision deleted. Measured: 207 of 221 fully-conforming live entries carry
+# both tokens inside the last 200 characters, which is why the tail rule gates the
+# NEWEST entry only while the corpus test below stays presence-based.
+TAIL_CHARS = 200
 
 # Legacy entries that carry a token but word it differently. NAMED individually so
 # a NEW miss fails loudly instead of being absorbed by loosening the regex.
@@ -86,15 +102,27 @@ def _changelog_entries():
         "evaluate, so they fail rather than pass vacuously"
     )
     body = readme[readme.index(marker):]
-    entries = re.split(r"\n(?=### v)", body)[1:]
+    # Split on EVERY level-3 heading, not on a `### v` lookahead. Splitting on the
+    # narrower lookahead was fail-OPEN and cross-model review caught it: a malformed
+    # newest heading (say `### 3.125.2`, missing the v) is not a split point, so that
+    # entry got glued into the preamble chunk that `[1:]` discards — the previous
+    # release silently became entries[0] and the newest-entry gate then validated a
+    # STALE entry and PASSED. Proven before the fix: malforming the newest heading
+    # made entries[0] resolve to v3.125.1 (#822).
+    entries = re.split(r"\n(?=### )", body)[1:]
     assert entries, (
         "README.md's Changelog section parsed to ZERO entries — refusing to pass "
         "vacuously (a heading-shape change would otherwise silently disable these guards)"
     )
     out = []
     for entry in entries:
-        m = re.match(r"### (v\S+)", entry)
-        assert m, f"changelog entry does not start with a `### vX.Y.Z` heading: {entry[:80]!r}"
+        head = entry.splitlines()[0]
+        m = re.match(r"### (v\d+\.\d+\.\d+) \(\d{4}-\d{2}-\d{2}\)$", head)
+        assert m, (
+            f"malformed changelog heading {head!r} — must be `### vX.Y.Z (YYYY-MM-DD)`. "
+            "A malformed heading must FAIL here rather than vanish from the entry list "
+            "and let a stale entry pass as the newest."
+        )
         out.append((m.group(1), entry))
     return out
 
@@ -130,14 +158,28 @@ def test_newest_changelog_entry_carries_both_tail_tokens():
     Scoped to the NEWEST entry on purpose: the convention is not retroactive — 112
     live entries predate it and carry no `Suite` token at all, so gating every entry
     would fail on a third of the corpus.
+
+    Checked against the entry's TAIL, not the whole entry. Searching the whole entry
+    is fail-open, and this very changelog proves it: the v3.125.2 entry DISCUSSES
+    `no diagram REV` in prose, so deleting its real decision would have left the guard
+    green. Cross-model review caught that (#822).
     """
     version, entry = _changelog_entries()[0]
-    assert DIAGRAM_DECISION_RE.search(entry), (
-        f"newest changelog entry {version} carries no diagram decision. State it "
-        "explicitly either way: `no diagram REV` or `diagram REV <X.Y.Z>`."
+    tail = entry.rstrip()[-TAIL_CHARS:]
+    assert DIAGRAM_DECISION_RE.search(tail), (
+        f"newest changelog entry {version} carries no diagram decision in its last "
+        f"{TAIL_CHARS} characters. State it explicitly either way, at the END: "
+        "`no diagram REV` or `diagram REV <X.Y.Z>`."
     )
-    assert SUITE_DELTA_RE.search(entry), (
-        f"newest changelog entry {version} carries no `Suite <old>→<new>` delta."
+    assert SUITE_DELTA_RE.search(tail), (
+        f"newest changelog entry {version} carries no `Suite <old>→<new>` delta in its "
+        f"last {TAIL_CHARS} characters (numeric operands, optional `+Nskip`)."
+    )
+    # Anchored: the delta is the LAST thing in the entry, so it cannot be satisfied by
+    # an example quoted mid-prose.
+    assert re.search(r"Suite\s+\d+(?:\+\d+skip)?\s*(?:→|->)\s*\d+(?:\+\d+skip)?\.?\s*$",
+                     entry.rstrip()), (
+        f"newest changelog entry {version} must END with its `Suite <old>→<new>` delta"
     )
 
 
