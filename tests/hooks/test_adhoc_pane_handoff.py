@@ -51,6 +51,15 @@ PANE_GET_OK = json.dumps({"result": {"pane": {
                       "value": "sess-new-123"}}}})
 REGISTRY_ROW = json.dumps({"session_id": "sess-new-123", "project": PROJECT,
                            "project_path": PROJECT_PATH})
+# #800 — the SAME directory, written the other way. `--project-path` arrives workspace-relative
+# (`./projects/rawgentic`, what the workspace entry holds), but the successor is a model following
+# the switch skill and Step 4 of that skill tells it to resolve relative paths against the
+# workspace root — so it writes the absolute form about half the time. Measured on 5 real rows in
+# this workspace: 3 relative, 2 absolute. `project_root` here is `str(REPO_ROOT)` (see `_handoff`),
+# so this is the absolute spelling of `PROJECT_PATH` under that base.
+REGISTRY_ROW_ABSOLUTE = json.dumps({
+    "session_id": "sess-new-123", "project": PROJECT,
+    "project_path": str(REPO_ROOT / "projects" / "rawgentic")})
 # The armed condition is what the row carries, so build the fixture from the module's own helper
 # rather than retyping it — a capped goal arms truncated text (see `armed_condition`).
 GOAL_ROW = json.dumps({"attachment": {"type": "goal_status", "met": False, "sentinel": True,
@@ -125,10 +134,15 @@ class Artifacts:
     unsubmitted until something submits it.
     """
 
-    def __init__(self, runner, *, marker_after_nudges=0, goal_row=GOAL_ROW):
+    def __init__(self, runner, *, marker_after_nudges=0, goal_row=GOAL_ROW,
+                 registry_row=None):
         self.runner = runner
         self.marker_after_nudges = marker_after_nudges
         self.goal_row = goal_row
+        # #800 — which REPRESENTATION the successor writes for `project_path`. Defaults to the
+        # workspace-relative row every other test in this file assumes, so their behaviour is
+        # unchanged; the absolute variant is the live failure the gate used to refuse.
+        self.registry_row = REGISTRY_ROW if registry_row is None else registry_row
         self.reads: dict[str, int] = {}
 
     def __call__(self, path):
@@ -137,7 +151,7 @@ class Artifacts:
         if n == 1:
             return ""
         if path == REGISTRY_PATH:
-            return REGISTRY_ROW + "\n"
+            return self.registry_row + "\n"
         text = ""
         if len(self.runner.nudges()) >= self.marker_after_nudges:
             text += RESUME_PROMPT + "\n"
@@ -1317,3 +1331,126 @@ class TestRefusalRemedyAccuracy:
         assert "if a goal is still armed" in msg
         assert "reports no goal is set" in msg
         assert "/goal clear" in msg and "--no-teardown" in msg
+
+
+class TestProjectSwitchedAcceptsEitherPathRepresentation:
+    """#800 — the gate used to compare `project_path` by EXACT STRING EQUALITY against a value the
+    SUCCESSOR writes, and the successor is a model, so it does not reliably pick one spelling.
+
+    Live evidence, 2026-08-01, two consecutive `ad-hoc-handoff` runs with IDENTICAL inputs (both
+    passed `--project-path ./projects/claude-skills`): attempt 1's successor wrote
+    `./projects/claude-skills` and passed; attempt 2's wrote
+    `/home/rocky00717/rawgentic/projects/claude-skills` and FAILED `project_switched` — despite its
+    own transcript saying "Bound to: claude-skills". The successor pane was then torn down for a
+    bind that had actually succeeded. No caller-side value fixes this: the absolute form breaks
+    attempt-1-style successors and the relative form breaks attempt-2-style ones, because the
+    variance is on the other side.
+    """
+
+    def test_an_absolute_row_satisfies_a_relative_expectation(self) -> None:
+        """THE regression. Before #800 this returned `ok: False`, `failed_step:
+        project_switched`."""
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, registry_row=REGISTRY_ROW_ABSOLUTE)))
+        assert out["results"]["project_switched"] is True, \
+            "a successor that wrote the ABSOLUTE form bound correctly — the gate must not refuse it"
+        assert out["ok"] is True, out["failed_step"]
+
+    def test_the_relative_row_still_passes(self) -> None:
+        """The other representation must keep working — this is the half that already worked."""
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r)))
+        assert out["results"]["project_switched"] is True
+        assert out["ok"] is True, out["failed_step"]
+
+    def test_a_different_project_directory_is_still_refused(self) -> None:
+        """#665 is not weakened: equivalence accepts two spellings of ONE directory, never two
+        directories. `rawgentic-next` is a real sibling project in this workspace."""
+        foreign = json.dumps({"session_id": "sess-new-123", "project": PROJECT,
+                              "project_path": str(REPO_ROOT / "projects" / "rawgentic-next")})
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, registry_row=foreign)))
+        assert out["results"]["project_switched"] is False
+        assert out["failed_step"] == "project_switched"
+
+    def test_the_failure_names_which_field_mismatched(self) -> None:
+        """#800's second half: a never-matching compare and a plain 120 s poll timeout produced
+        BYTE-IDENTICAL output, which cost the #875 campaign a published wrong diagnosis
+        (corrected in issuecomment-5183100635). The failure must say which field disagreed."""
+        foreign = json.dumps({"session_id": "sess-new-123", "project": PROJECT,
+                              "project_path": str(REPO_ROOT / "projects" / "rawgentic-next")})
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, registry_row=foreign)))
+        notes = [s.get("note") or "" for s in out["steps"]
+                 if s.get("kind") == "project_switched"]
+        assert notes, "the failed gate recorded no diagnosis at all"
+        joined = " ".join(notes)
+        assert "project_path" in joined, joined
+        assert "rawgentic-next" in joined, joined
+
+    def test_a_missing_row_is_diagnosed_as_a_missing_row_not_a_mismatch(self) -> None:
+        """The distinction the diagnosis exists to make: nothing was written (a successor that
+        never bound, or a permission-blocked one) is NOT the same failure as a row that is
+        present and disagrees."""
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, registry_row=json.dumps(
+                {"session_id": "somebody-else", "project": PROJECT,
+                 "project_path": PROJECT_PATH}))))
+        assert out["failed_step"] == "project_switched"
+        joined = " ".join(s.get("note") or "" for s in out["steps"]
+                          if s.get("kind") == "project_switched")
+        assert "sess-new-123" in joined, joined
+        assert "no registry row" in joined.lower(), joined
+
+
+class TestTheDiagnosisDoesNotReReadTheRegistry:
+    """#800 Step-11 inline finding IF-1: the failure branch used to call `read_text` a SECOND time
+    to build its diagnosis. `perform_handoff`'s default reader is a bare `open()` with no error
+    handling, so an unreadable registry would have raised from the exact branch whose job is to
+    report the failure. The diagnosis is now built from the tail the poll already judged."""
+
+    class CountingArtifacts(Artifacts):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.registry_reads = 0
+
+        def __call__(self, path):
+            if path == REGISTRY_PATH:
+                self.registry_reads += 1
+            return super().__call__(path)
+
+    def test_the_failure_branch_adds_no_extra_registry_read(self) -> None:
+        foreign = json.dumps({"session_id": "sess-new-123", "project": PROJECT,
+                              "project_path": str(REPO_ROOT / "projects" / "rawgentic-next")})
+        r = Runner(_responses())
+        arts = self.CountingArtifacts(r, registry_row=foreign)
+        out = ll.perform_handoff(**_handoff(r, read_text=arts))
+        assert out["failed_step"] == "project_switched"
+        # 1 baseline + SWITCH_POLL_ATTEMPTS polls, and nothing after them.
+        assert arts.registry_reads == 1 + ll.SWITCH_POLL_ATTEMPTS, arts.registry_reads
+        notes = " ".join(s.get("note") or "" for s in out["steps"]
+                         if s.get("kind") == "project_switched")
+        assert "rawgentic-next" in notes, notes
+
+    def test_a_reader_that_raises_after_the_poll_cannot_break_the_report(self) -> None:
+        """The property IF-1 is really about: the failure report must survive a registry that
+        becomes unreadable, because that is when a diagnosis matters most."""
+        calls = {"n": 0}
+
+        def read_text(path):
+            if path != REGISTRY_PATH:
+                return GOAL_ROW + "\n"
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return ""                       # the pre-launch baseline
+            if calls["n"] > 1 + ll.SWITCH_POLL_ATTEMPTS:
+                raise OSError("registry vanished")   # only reachable via an extra read
+            return json.dumps({"session_id": "sess-new-123", "project": PROJECT,
+                               "project_path": "./projects/somewhere-else"}) + "\n"
+
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(r, read_text=read_text))
+        assert out["ok"] is False
+        assert out["failed_step"] == "project_switched"
