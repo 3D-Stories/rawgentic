@@ -33,7 +33,7 @@ Every claim below carries its evidence; when a doc and a test disagree, **the te
     block, cap the read, fail open, and validate the values (strict parse, clamp, safe default,
     stderr warning — `context_meter.py`'s config loader is the exemplar). Anything
     that needs the *capabilities object* still goes through `derive`.
-- **The former fourth layer, `phase_executor/`, was DELETED in the M0 executor retreat
+- **The former fourth layer — the executor phase package — was DELETED in the M0 executor retreat
   (#866 M0d, roadmap 2026-08-03).** Cross-model review runs through `hooks/review_runner.py`
   (one entry point, pinned reviewer identity); analysis and implementation run inline (D174).
   Do not resurrect executor machinery — a retirement tripwire test fails on retired

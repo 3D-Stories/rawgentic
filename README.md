@@ -238,7 +238,7 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 - Global loopback budget of 3 across all retry loops (five sources: design ×2, spec_tighten ×2, tdd/review/review_design ×1)
 - Learning config: updates `.rawgentic.json` when new patterns discovered
 
-Since v2.61.0 (#158), the WF2 skill itself loads as a ~295-line spine with on-demand references (`references/steps.md` for per-step detail, `state-and-resume.md`, `headless.md`, `run-record.md`) instead of a 1,600-line monolith — progressive disclosure that shrinks the context paid on every invocation. All gates are preserved verbatim and drift-guarded via the `tests/corpus.py` helper.
+Since v2.61.0 (#158), the WF2 skill itself loads as a ~295-line spine with on-demand references (`references/steps.md` for per-step detail, `state-and-resume.md`, `run-record.md`) instead of a 1,600-line monolith — progressive disclosure that shrinks the context paid on every invocation. All gates are preserved verbatim and drift-guarded via the `tests/corpus.py` helper.
 </details>
 
 <details>
@@ -256,7 +256,7 @@ Since v2.61.0 (#158), the WF2 skill itself loads as a ~295-line spine with on-de
 - Pre-flight dependency check before first test run
 - Respects project-level merge approval rules
 
-Since v2.62.0 (#159), the WF3 skill itself loads as a ~224-line spine with on-demand references (`references/steps.md` for per-step detail, `incident.md`, `headless.md`) instead of a monolith — progressive disclosure that shrinks the context paid on every invocation. `references/incident.md` carries the deprecated WF11 comms/post-mortem checklist for incident-severity bugs, absorbed in the WF11 merge. All gates are preserved verbatim and drift-guarded via the `tests/corpus.py` helper.
+Since v2.62.0 (#159), the WF3 skill itself loads as a ~224-line spine with on-demand references (`references/steps.md` for per-step detail, `incident.md`) instead of a monolith — progressive disclosure that shrinks the context paid on every invocation. `references/incident.md` carries the deprecated WF11 comms/post-mortem checklist for incident-severity bugs, absorbed in the WF11 merge. All gates are preserved verbatim and drift-guarded via the `tests/corpus.py` helper.
 </details>
 
 <details>
@@ -337,11 +337,11 @@ Rawgentic includes hooks that run automatically on Claude Code events:
 | `wal-stop` | Stop | Logs session end marker |
 | `wal-context` | UserPromptSubmit | Injects session context (project, recent WAL activity) |
 | `wal-bind-guard` | PreToolUse | Blocks tool use if session unbound with multiple active projects; blocks cross-project file writes |
-| `wal-guard` | PreToolUse | Blocks dangerous production commands with per-project protection levels (sandbox/standard/strict); in headless mode also blocks **all** `ssh`/`scp`/`rsync`/`sftp` (unless `headlessAllowSSH: true`) |
+| `wal-guard` | PreToolUse | Blocks dangerous production commands with per-project protection levels (sandbox/standard/strict) |
 | `session-start` | SessionStart | WAL recovery, **notes size handler**, project reconciliation, security pattern staleness check, **self-healing security scanner bootstrap** (`scanner_bootstrap.py` — re-checks each startup/resume, background install of what's missing, status file), **post-update feature reconcile** (`post_update_reconcile.py`), resume context. Reads the session subtype from the `source` field |
 | `notes-size-handler` | (called by session-start) | Trims session notes exceeding 800 lines to keep last 200; optionally ingests to memorypalace before trimming |
 | `scanner_bootstrap.py` | (called by session-start) | Re-checks scanner presence, installs missing ones in the background, throttles retries, writes `~/.rawgentic/scanner-status.json` so a no-fire/failure is visible (opt-out: `RAWGENTIC_SKIP_SCANNER_INSTALL=1` / `installScanners: false`) |
-| `post_update_reconcile.py` | (called by session-start) | On a plugin version change, turns new opt-OUT features on by default (honoring opt-outs), leaves headless opt-in, and nudges to run `/rawgentic:setup` — **version-aware (#184):** only when the upgrade jump crossed a feature's `since` (the version that introduced its setup step); otherwise silent marker bump. Workspace-level `"setupPrompt": false` opts out; record-once per version |
+| `post_update_reconcile.py` | (called by session-start) | On a plugin version change, turns new opt-OUT features on by default (honoring opt-outs) and nudges to run `/rawgentic:setup` — **version-aware (#184):** only when the upgrade jump crossed a feature's `since` (the version that introduced its setup step); otherwise silent marker bump. Workspace-level `"setupPrompt": false` opts out; record-once per version |
 | `security-guard` | PreToolUse | Blocks writing dangerous patterns (credentials, secrets, eval) to files |
 | `security-guard-check` | SessionStart | Recommends disabling the official security-guidance plugin **once** if it's enabled (record-once decision in `~/.rawgentic/security-guidance-decision`), then stays silent — no per-session nag |
 | `context_meter.py` | UserPromptSubmit **+** PostToolUse **+** Stop | **Context-pressure trigger (#687, #713).** Reads the session's own transcript, expresses usage as a fraction of the context window, and injects an advisory (default 35%) then a directive (default 50%) nag — once each per session per effective window **per delivery channel**. Throttled to every 5 turns **or** 5 minutes, whichever comes first: the turn arm rides `UserPromptSubmit`, the minute arm rides `PostToolUse`, because a long autonomous run gets one prompt and then works for hours. The `Stop` arm (#713) speaks where `/goal` decides whether to re-prompt, and is narrower by design — directive tier only, only when `stop_hook_active` is true, throttle-exempt — because at `Stop` every channel that reaches the model also continues the turn. At that same point it also **INSERTS A PROSE PROMPT** into its own pane asking for the pane-handoff skill (#718) — injected text is data a model may decline, an inserted prompt is user input; bounded to once per session per window on its own `stop-insert` channel, herdr-only, project-config required, kill switch `insertPrompt`. Fail-open, but never silent about being disabled. Tunable via the `contextMeter` config block — see `docs/context-meter.md` |
@@ -855,7 +855,7 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 - Global loopback budget of 3 across all retry loops (five sources: design ×2, spec_tighten ×2, tdd/review/review_design ×1)
 - Learning config: updates `.rawgentic.json` when new patterns discovered
 
-Since v2.61.0 (#158), the WF2 skill itself loads as a ~295-line spine with on-demand references (`references/steps.md` for per-step detail, `state-and-resume.md`, `headless.md`, `run-record.md`) instead of a 1,600-line monolith — progressive disclosure that shrinks the context paid on every invocation. All gates are preserved verbatim and drift-guarded via the `tests/corpus.py` helper.
+Since v2.61.0 (#158), the WF2 skill itself loads as a ~295-line spine with on-demand references (`references/steps.md` for per-step detail, `state-and-resume.md`, `run-record.md`) instead of a 1,600-line monolith — progressive disclosure that shrinks the context paid on every invocation. All gates are preserved verbatim and drift-guarded via the `tests/corpus.py` helper.
 </details>
 
 <details>
@@ -873,7 +873,7 @@ Since v2.61.0 (#158), the WF2 skill itself loads as a ~295-line spine with on-de
 - Pre-flight dependency check before first test run
 - Respects project-level merge approval rules
 
-Since v2.62.0 (#159), the WF3 skill itself loads as a ~224-line spine with on-demand references (`references/steps.md` for per-step detail, `incident.md`, `headless.md`) instead of a monolith — progressive disclosure that shrinks the context paid on every invocation. `references/incident.md` carries the deprecated WF11 comms/post-mortem checklist for incident-severity bugs, absorbed in the WF11 merge. All gates are preserved verbatim and drift-guarded via the `tests/corpus.py` helper.
+Since v2.62.0 (#159), the WF3 skill itself loads as a ~224-line spine with on-demand references (`references/steps.md` for per-step detail, `incident.md`) instead of a monolith — progressive disclosure that shrinks the context paid on every invocation. `references/incident.md` carries the deprecated WF11 comms/post-mortem checklist for incident-severity bugs, absorbed in the WF11 merge. All gates are preserved verbatim and drift-guarded via the `tests/corpus.py` helper.
 </details>
 
 <details>
@@ -954,11 +954,11 @@ Rawgentic includes hooks that run automatically on Claude Code events:
 | `wal-stop` | Stop | Logs session end marker |
 | `wal-context` | UserPromptSubmit | Injects session context (project, recent WAL activity) |
 | `wal-bind-guard` | PreToolUse | Blocks tool use if session unbound with multiple active projects; blocks cross-project file writes |
-| `wal-guard` | PreToolUse | Blocks dangerous production commands with per-project protection levels (sandbox/standard/strict); in headless mode also blocks **all** `ssh`/`scp`/`rsync`/`sftp` (unless `headlessAllowSSH: true`) |
+| `wal-guard` | PreToolUse | Blocks dangerous production commands with per-project protection levels (sandbox/standard/strict) |
 | `session-start` | SessionStart | WAL recovery, **notes size handler**, project reconciliation, security pattern staleness check, **self-healing security scanner bootstrap** (`scanner_bootstrap.py` — re-checks each startup/resume, background install of what's missing, status file), **post-update feature reconcile** (`post_update_reconcile.py`), resume context. Reads the session subtype from the `source` field |
 | `notes-size-handler` | (called by session-start) | Trims session notes exceeding 800 lines to keep last 200; optionally ingests to memorypalace before trimming |
 | `scanner_bootstrap.py` | (called by session-start) | Re-checks scanner presence, installs missing ones in the background, throttles retries, writes `~/.rawgentic/scanner-status.json` so a no-fire/failure is visible (opt-out: `RAWGENTIC_SKIP_SCANNER_INSTALL=1` / `installScanners: false`) |
-| `post_update_reconcile.py` | (called by session-start) | On a plugin version change, turns new opt-OUT features on by default (honoring opt-outs), leaves headless opt-in, and nudges to run `/rawgentic:setup` — **version-aware (#184):** only when the upgrade jump crossed a feature's `since` (the version that introduced its setup step); otherwise silent marker bump. Workspace-level `"setupPrompt": false` opts out; record-once per version |
+| `post_update_reconcile.py` | (called by session-start) | On a plugin version change, turns new opt-OUT features on by default (honoring opt-outs) and nudges to run `/rawgentic:setup` — **version-aware (#184):** only when the upgrade jump crossed a feature's `since` (the version that introduced its setup step); otherwise silent marker bump. Workspace-level `"setupPrompt": false` opts out; record-once per version |
 | `security-guard` | PreToolUse | Blocks writing dangerous patterns (credentials, secrets, eval) to files |
 | `security-guard-check` | SessionStart | Recommends disabling the official security-guidance plugin **once** if it's enabled (record-once decision in `~/.rawgentic/security-guidance-decision`), then stays silent — no per-session nag |
 | `context_meter.py` | UserPromptSubmit **+** PostToolUse **+** Stop | **Context-pressure trigger (#687, #713).** Reads the session's own transcript, expresses usage as a fraction of the context window, and injects an advisory (default 35%) then a directive (default 50%) nag — once each per session per effective window **per delivery channel**. Throttled to every 5 turns **or** 5 minutes, whichever comes first: the turn arm rides `UserPromptSubmit`, the minute arm rides `PostToolUse`, because a long autonomous run gets one prompt and then works for hours. The `Stop` arm (#713) speaks where `/goal` decides whether to re-prompt, and is narrower by design — directive tier only, only when `stop_hook_active` is true, throttle-exempt — because at `Stop` every channel that reaches the model also continues the turn. At that same point it also **INSERTS A PROSE PROMPT** into its own pane asking for the pane-handoff skill (#718) — injected text is data a model may decline, an inserted prompt is user input; bounded to once per session per window on its own `stop-insert` channel, herdr-only, project-config required, kill switch `insertPrompt`. Fail-open, but never silent about being disabled. Tunable via the `contextMeter` config block — see `docs/context-meter.md` |
@@ -1296,16 +1296,6 @@ pytest tests/hooks/test_wal_guard.py -v
 Skills are tested via the `/skill-creator` eval pipeline (10/21 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `epic-post-mortem`, `epic-run`, `housekeeping`, `interview`, `revalidate-children`, `run-feedback`, `scan`, `session-mining`, and `session-recall` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard.
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
-
----
-
-## Headless Mode
-
-Workflow skills can run non-interactively for CI/orchestrator integration. Set `RAWGENTIC_HEADLESS=1` and use `claude --print` with `--permission-mode bypassPermissions`. When a skill needs user input, it posts a structured comment to the GitHub issue, adds the `rawgentic:ai-waiting` label, and exits cleanly. Resume with `claude --resume {session_id}` after the user replies. See [`docs/config-reference.md`](docs/config-reference.md#headless-mode) for the full orchestrator interface contract.
-
-The QUESTION-suspend and resume paths are driven from Bash via `hooks/headless_interaction.py` subcommands (`new-id`, `format-comment`, `write-suspend`, `read-suspend`, `parse-reply`) so the skill never reconstructs fragile inline `python3 -c` snippets, and the resumption step is chosen by `hooks/resume_lib.py detect-step` (the priority-ordered cascade lives in one tested place instead of being hand-applied in prose). Both fail closed on unusable inputs. See [`docs/config-reference.md`](docs/config-reference.md#python-helper) for the subcommand contracts.
-
-**Label-triggered Action pilot (#165, v3.1.0).** `.github/workflows/rawgentic-auto.yml` runs headless WF2 on this repo via `anthropics/claude-code-action` (SHA-pinned): a maintainer applies the `rawgentic:auto` label to an issue and the Action implements it end-to-end, terminating at PR creation (never merges, deploys, or SSHes). Applying the label IS the approval gate — the issue body becomes the agent's instructions. Progress surfaces as non-blocking STATUS comments at step boundaries (`format-comment --type status`); guardrails are the job's `timeout-minutes` plus the STATUS heartbeat, and a large-PR warning posts when the PR exceeds `RAWGENTIC_LARGE_PR_FILES` (default 50) files. Auth defaults to subscription OAuth (`claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN` repo secret; referenced by name only). Per-project access control gains a per-trigger allowlist: `headlessEnabled` now also accepts `{"enabled": true, "triggers": ["issue-label"], "auth": "subscription-oauth"}` — see [`docs/config-reference.md`](docs/config-reference.md#per-project-access-control).
 
 ---
 

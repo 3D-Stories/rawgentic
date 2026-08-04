@@ -549,7 +549,7 @@ class TestConfigTemplateRetiredKeys:
     def test_template_parses_and_carries_no_retired_examples(self):
         with open(self._REPO / "templates" / "rawgentic-json-schema.json") as f:
             tpl = json.load(f)  # invalid JSON would raise — the validity half of the cell
-        for retired in ("phaseExecutorTable", "executorTerminalBackend", "telemetryAlerts"):
+        for retired in ("phaseExecutorTable", "executorTerminalBackend", "telemetryAlerts"):  # tripwire-exempt: negative guard
             assert retired not in tpl, f"retired template example resurrected: {retired}"
 
 

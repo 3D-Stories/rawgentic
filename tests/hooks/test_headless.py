@@ -1,7 +1,7 @@
 """Post-retreat survivors of the old headless-infrastructure test file (#43 → #866 M0d).
 
 The headless ORCHESTRATION (access gate, suspend/QUESTION protocol,
-headless_interaction.py, references/headless.md, the Action pilot) was deleted in
+the headless-interaction hook, references/headless.md, the Action pilot) was deleted in
 M0d. What remains here:
 - the <config-loading> skill-count canary (hooks/skill_registration_check.py:229
   reads EXPECTED_CONFIG_LOADING_COUNT out of THIS file by path — do not move it

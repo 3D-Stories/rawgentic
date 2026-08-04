@@ -243,8 +243,8 @@ class TestInlineContractWF3:
 
     def test_no_executor_vocabulary_in_wf3_corpus(self):
         corpus = _norm(_text())
-        for needle in ("executor `build` seat", "executor `review` seat", "begin-run",
-                       "mint-gate", "DISPATCH issue="):
+        for needle in ("executor `build` seat", "executor `review` seat", "begin-run",  # tripwire-exempt: negative guard
+                       "mint-gate", "DISPATCH issue="):  # tripwire-exempt: negative guard
             assert needle not in corpus, (
                 f"executor vocabulary {needle!r} re-entered the fix-bug corpus")
 

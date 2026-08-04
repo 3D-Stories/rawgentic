@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "_comment": "Single machine-readable source of truth for the herdr toolchain pin (#609, epic #667). Read by #390's workspace-doctor check 8 ('herdr binary present AND version == the pinned release'). MUST stay equal to HERDR_VERSION_FLOOR in phase_executor/src/phase_executor/herdr_backend.py — tests/hooks/test_herdr_pin.py asserts it. Verify an install with: sha256sum ~/.local/bin/herdr, compared against gh api repos/<repo>/releases/tags/<tag> asset .digest. Full procedure and rationale: docs/reviews/2026-07-27-609-herdr-supply-chain-vet.md",
+  "_comment": "Single machine-readable source of truth for the herdr toolchain pin (#609, epic #667; SELF-AUTHORITATIVE since the executor retreat #866 M0d — the executor-side version-floor constant it once mirrored is deleted, tests/hooks/test_herdr_pin.py guards this file's shape). Read by #390's workspace-doctor check 8 ('herdr binary present AND version == the pinned release'). Verify an install with: sha256sum ~/.local/bin/herdr, compared against gh api repos/<repo>/releases/tags/<tag> asset .digest. Full procedure and rationale: docs/reviews/2026-07-27-609-herdr-supply-chain-vet.md",
   "pin": {
     "version": "0.7.5",
     "tag": "v0.7.5",

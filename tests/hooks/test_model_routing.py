@@ -292,15 +292,15 @@ class TestLoadBlockKeyAndMissing:
 
     def test_absent_key_returns_missing_sentinel(self, tmp_path):
         ws = self._ws(tmp_path, {"name": "x", "modelRouting": {"review": "opus"}})
-        assert mr._load_block(ws, "x", key="executorRouting") is mr._ABSENT
+        assert mr._load_block(ws, "x", key="someBlock") is mr._ABSENT
 
     def test_present_non_dict_returned_raw(self, tmp_path):
-        ws = self._ws(tmp_path, {"name": "x", "executorRouting": "oops"})
-        assert mr._load_block(ws, "x", key="executorRouting") == "oops"
+        ws = self._ws(tmp_path, {"name": "x", "someBlock": "oops"})
+        assert mr._load_block(ws, "x", key="someBlock") == "oops"
 
     def test_present_dict_returned(self, tmp_path):
-        ws = self._ws(tmp_path, {"name": "x", "executorRouting": {"version": 1}})
-        assert mr._load_block(ws, "x", key="executorRouting") == {"version": 1}
+        ws = self._ws(tmp_path, {"name": "x", "someBlock": {"version": 1}})
+        assert mr._load_block(ws, "x", key="someBlock") == {"version": 1}
 
     def test_load_project_entry(self, tmp_path):
         ws = self._ws(tmp_path, {"name": "x", "path": "./p"})

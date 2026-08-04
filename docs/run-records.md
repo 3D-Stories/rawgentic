@@ -329,7 +329,7 @@ Two audit streams exist by design and are reconciled by DECLARATION, not by wiri
   receipt by `receipt_nonce`; real build receipts participate in that join. The `reconcile`
   verb enumerates `unlanded`, `orphan`, `mismatch`, and `conflict` buckets, plus the
   report-only `pre_cutover_unverifiable` bucket. A wired WF2 Step-3 **design round**
-  (`bakeoff_policy.py design-round`, #765) associates its record and candidates with the
+  (the retired design-round CLI, #765) associates its record and candidates with the
   workflow by `run_id`; it carries `correlation_id`, but no current reconciliation join is
   performed on `correlation_id`. The **build bake-off** stream remains UNCALLED and
   unjoined: no workflow caller ships in #762, and its competitive-round correlation-id
@@ -584,6 +584,6 @@ decision stays "computable, pending data" (see
 
 ## I3 seat-outcomes sidecar (retired, M0d #866)
 
-`hooks/seat_outcomes_lib.py` and its run-end harvest were deleted with the executor.
+The seat-outcomes sidecar hook and its run-end harvest were deleted with the executor.
 The sidecar store `docs/measurements/seat-outcomes.jsonl` remains as read-only archival
 data from executor-era runs.

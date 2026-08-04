@@ -6,7 +6,7 @@ the plugin-root agents/ directory; the installed agent type is namespaced
 "rawgentic:<name>"). Its job is mechanical — run exactly one
 hooks/review_runner.py command from the orchestrator's brief and report the
 result path + exit code; the cross-model review itself happens inside the
-runner. agents/rawgentic-implementer.md was DELETED in M0c (implementation runs
+runner. The bundled implementer agent definition was DELETED in M0c (implementation runs
 inline per D174; genuinely parallel tasks use generic Agent-tool worktree
 subagents, never a bundled type).
 
@@ -43,7 +43,7 @@ def _frontmatter(path: Path) -> dict:
 def test_implementer_definition_removed():
     """M0c (#866): the implementer agent is deleted — implementation is inline
     (D174). A resurrected definition would re-offer a retired dispatch path."""
-    assert not (AGENTS_DIR / "rawgentic-implementer.md").exists()
+    assert not (AGENTS_DIR / "rawgentic-implementer.md").exists()  # tripwire-exempt: negative guard
 
 
 def test_reviewer_definition_exists_with_name_and_description():
@@ -108,7 +108,7 @@ def test_wf2_references_no_bundled_agent_types():
     (tests/test_no_executor_prose.py is the repo-wide guard; this is the
     corpus-level mirror)."""
     corpus = skill_corpus("implement-feature")
-    assert corpus.count("rawgentic:rawgentic-implementer") == 0
+    assert corpus.count("rawgentic:rawgentic-implementer") == 0  # tripwire-exempt: negative guard
     assert corpus.count("rawgentic:rawgentic-reviewer") == 0
 
 

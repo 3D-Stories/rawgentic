@@ -7,9 +7,9 @@ the pin can never silently disagree with the version floor the build seat alread
 enforces.
 
 The load-bearing test here is `test_pin_version_matches_herdr_version_floor`:
-`HERDR_VERSION_FLOOR` in `phase_executor/src/phase_executor/herdr_backend.py` and the pin
-file are two records of ONE fact. Mirrored constants drift silently, so they are asserted
-equal — neither can move without the other.
+`HERDR_VERSION_FLOOR` in the executor's herdr backend and the pin file were two
+records of ONE fact; the executor died in the M0 retreat (#866), so the pin file is
+now the single self-authoritative record.
 
 The same file also carries the `integrations` block (#610): what herdr's per-agent hook
 installs do to a host. Those guards come in two kinds, and the distinction is deliberate
@@ -68,7 +68,7 @@ def test_pin_carries_the_upstream_identity(pin: dict) -> None:
 
 
 def test_pin_is_self_authoritative(pin: dict) -> None:
-    """M0d (#866): phase_executor.herdr_backend.HERDR_VERSION_FLOOR was deleted
+    """M0d (#866): the executor herdr-backend version-floor constant was deleted
     with the executor — this pin file is now the ONE record of the qualified
     herdr version (#609 provenance intact). The pin must carry a parseable
     version so future bumps stay deliberate."""

@@ -57,8 +57,8 @@ classifier correctly refuses credential transfer off darwin and mid-run firewall
 3. **Sandbox precondition (REQUIRED before the seat dispatches):** set a sandboxed gateway backend
    (`hermes config set terminal.backend docker` or equivalent) and restart the gateway. Verify
    `/v1/capabilities` reports a non-`local` backend.
-4. **Live cell — retired with the seat** (was `tests/phase_executor/test_hermes_adapter.py`,
-   deleted in M0d).
+4. **Live cell — retired with the seat** (its adapter test was deleted with the
+   executor trees in M0d).
 
 ## Deferred (post-retreat: folds into epic #871)
 

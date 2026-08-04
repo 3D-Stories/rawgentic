@@ -1158,7 +1158,7 @@ class TestAggregateGrouped:
 
 
 class TestAggregateDispatches:
-    def _d(self, role, outcome, resolution, model=None, subagent_type="rawgentic-implementer",
+    def _d(self, role, outcome, resolution, model=None, subagent_type="legacy-build-agent",
            effort="medium"):
         return {"role": role, "subagent_type": subagent_type, "model": model,
                 "effort": effort, "outcome": outcome, "resolution": resolution}
@@ -1642,7 +1642,7 @@ class TestValidateDispatches:
         rec = _valid_record()
         rec["dispatches"] = [
             self._dispatch(),
-            self._dispatch(role="implementation", subagent_type="rawgentic-implementer",
+            self._dispatch(role="implementation", subagent_type="legacy-build-agent",
                            model=None, effort=None, outcome="retried",
                            resolution="fallback"),
         ]

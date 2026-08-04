@@ -2,7 +2,7 @@
 
 Operational reference for the herdr terminal multiplexer as this workspace uses it.
 
-herdr is load-bearing for this workspace's pane workflows (pane-handoff, sibling sessions, the launcher's herdr mode). Until the M0 executor retreat (#866), `projects/rawgentic` and `projects/thewanderinginn` also routed their WF2 **build seat** through it (`executorTerminalBackend: {"build": "herdr"}`) — the build seat left the workflows in M0b and that config surface was removed in M0c, so nothing routes executor work through herdr anymore; the herdr install, pin, and launcher integration below are unchanged.
+herdr is load-bearing for this workspace's pane workflows (pane-handoff, sibling sessions, the launcher's herdr mode). Until the M0 executor retreat (#866), `projects/rawgentic` and `projects/thewanderinginn` also routed their WF2 **build seat** through it (the executor terminal-backend config) — the build seat left the workflows in M0b and that config surface was removed in M0c, so nothing routes executor work through herdr anymore; the herdr install, pin, and launcher integration below are unchanged.
 
 **Scope of this page today (#610).** It covers the **Claude Code integration** — what installing it changes, how to prove the rest of the harness survived, and how to remove it. The binary pin itself lives in `hooks/herdr-pin.json` and its provenance in `docs/reviews/2026-07-27-609-herdr-supply-chain-vet.md`. Section 7 covers the launcher's herdr mode (#611). Sections 9-12 cover the workspace conventions, the attach/detach/remote recipes, the measured rough edges, and a from-scratch walkthrough (#613).
 
@@ -174,15 +174,11 @@ Delete it when you are done. For a shareable artifact use the committed sanitize
 
 **`herdr wait` does not exist in 0.7.5** even though the herdr agent skill documents it. Tracked as #696. (It was previously cited here as #659, which is herdr **version-drift detection** — a different concern, so nothing actually tracked this.)
 
-**Only the `build` seat pops a pane.** Review and analysis seats return `transport: "native"` and no pane, by design. Expecting a pane from a review dispatch means waiting forever.
-
-**On this project a build-seat dispatch is currently refused outright**, so no pane appears from it either. The build seat resolves to a Claude model, but `MUTATING_FS_SANDBOXED` in `hooks/executor_routing_lib.py` allowlists `codex` alone (owner decision 2026-07-20: codex is Landlock-confined, claude has no FS sandbox), so a mutating-claude dispatch returns `EXIT_REFUSED` at STEP 0 with tag `mutating_claude_requires_fs_sandbox` — before any worktree or pane is created. Closing that needs either a declared codex build lane or the FS-sandbox child.
-
-**A pane-less process cannot dispatch the build seat.** `HerdrBackend` dispatches via `herdr pane split --current`, so a cron-spawned process gets `{"error":{"code":"no_current_pane"}}`. This is why arming a durable launcher for a herdr-gated project needs the #611 herdr-aware variant first.
+**Executor seat dispatch is retired (#866 M0d).** Until the M0 retreat, WF2's build seat dispatched through `herdr pane split` and carried a refusal matrix (codex-only mutation allowlist, no-current-pane failures); that machinery is deleted and its behavior notes live in git history. herdr remains load-bearing for pane-handoff, sibling sessions, and the launcher's herdr mode below.
 
 ## 7. Unattended resume: the launcher's herdr mode
 
-A herdr-gated project routes its build seat through `herdr pane split --current`. A cron-spawned launcher has no current pane, so a session it starts the ordinary pane-less way dies at its first build-seat dispatch with `{"error":{"code":"no_current_pane"}}`. Without herdr mode, every herdr-gated project loses unattended resumption entirely.
+A cron-spawned launcher has no current pane, so a session it starts the ordinary pane-less way cannot split sibling panes — `herdr pane split --current` returns `{"error":{"code":"no_current_pane"}}`. (Before the M0 retreat this also killed herdr-routed build dispatches outright.) Without herdr mode, a herdr-anchored project loses unattended pane workflows entirely.
 
 **The mechanism, and the one probed fact it rests on:** `herdr pane split` accepts an **explicit** pane id (`--pane <ID>`), not only `--current`. Splitting from a named **anchor pane** therefore needs no current pane — and the session started in the resulting pane *has* one, so `--current` resolves normally for that session's own dispatches. No `HerdrBackend` change is needed.
 
