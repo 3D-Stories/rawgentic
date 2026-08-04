@@ -541,6 +541,27 @@ class TestClosingKeywordGuardWF3:
             "the check-pr-refs gate must be invoked BEFORE `gh pr create` in WF3's "
             "steps.md (#901 AC2)")
 
+    def test_gated_body_path_is_project_contained(self):
+        """Step-11 cross-model finding 1 (Critical), WF3 surface."""
+        sec = self._gate_section()
+        assert "/tmp/wf3-pr-body.md" not in sec
+        assert "./.rawgentic/wf3-pr-body.md" in sec
+
+    def test_pr_creation_publishes_the_same_file_the_gate_read(self):
+        """WF3 published its body via an inline heredoc, so the gated file was
+        not the published one at all. It now writes and publishes one file."""
+        text = self.STEPS.read_text()
+        assert "--body-file ./.rawgentic/wf3-pr-body.md" in text, (
+            "WF3's gh pr create must publish the same project-contained body "
+            "file item 3b gated (#901)")
+
+    def test_commit_range_is_required(self):
+        """Step-11 cross-model finding 2 (High): WF3's command omitted commit
+        scanning entirely, while Step 10 commits `(closes #<issue>)`."""
+        sec = self._gate_section()
+        assert "--commit-range origin/<default>..HEAD --project-root ." in sec
+        assert "[--commit-range" not in sec
+
     def test_gate_command_declares_this_runs_issue(self):
         sec = self._gate_section()
         assert "python3 hooks/plan_lib.py check-pr-refs" in sec

@@ -459,6 +459,9 @@ _CLOSING_REF_RE = re.compile(
 )
 
 
+_SHA_RE = re.compile(r"[0-9a-fA-F]{7,64}")
+
+
 @dataclass(frozen=True)
 class ClosingRef:
     """One closing-keyword-adjacent issue reference found in a text."""
@@ -3246,25 +3249,50 @@ def _cmd_check_pr_refs(args) -> int:
             sys.stderr.write("check-pr-refs: REFUSED — --commit-range may not start "
                              "with '-' (it would be read as a git option)\n")
             return 2
+        # TWO-STAGE on purpose: hashes first, then one message per hash. A single
+        # sentinel-delimited `git log` pass looked cheaper, but a commit message
+        # containing the record delimiter split the hazardous text into a segment
+        # the parser skipped — a fail-open in the guard itself, and a commit
+        # message is attacker-influenced text (Step 11 cross-model finding 3).
+        # Nothing is skipped here: an unparseable hash is rc 2, never `continue`.
         try:
-            proc = subprocess.run(
-                ["git", "log", "--format=%H%x1f%B%x1e", args.commit_range],
+            listing = subprocess.run(
+                ["git", "log", "--format=%H", args.commit_range, "--"],
                 cwd=root, capture_output=True, text=True, timeout=30, check=False)
-        except (OSError, subprocess.SubprocessError) as e:
+        except (OSError, subprocess.SubprocessError, UnicodeError) as e:
             sys.stderr.write(f"check-pr-refs: git log failed for --commit-range "
                              f"{args.commit_range!r}: {e}\n")
             return 2
-        if proc.returncode != 0:
+        if listing.returncode != 0:
             sys.stderr.write(
                 f"check-pr-refs: REFUSED — git log rejected --commit-range "
-                f"{args.commit_range!r}: {proc.stderr.strip()}\n")
+                f"{args.commit_range!r}: {listing.stderr.strip()}\n")
             return 2
-        for record in proc.stdout.split("\x1e"):
-            if "\x1f" not in record:
+        for raw in listing.stdout.splitlines():
+            sha = raw.strip()
+            if not sha:
                 continue
-            sha, msg = record.split("\x1f", 1)
-            if msg.strip():
-                sources.append((f"commit {sha.strip()[:8]}", msg))
+            if not _SHA_RE.fullmatch(sha):
+                sys.stderr.write(
+                    f"check-pr-refs: REFUSED — git log returned an unparseable "
+                    f"commit id {sha!r}; refusing rather than skipping it\n")
+                return 2
+            try:
+                one = subprocess.run(
+                    ["git", "log", "-1", "--format=%B", sha, "--"],
+                    cwd=root, capture_output=True, text=True, timeout=30,
+                    check=False)
+            except (OSError, subprocess.SubprocessError, UnicodeError) as e:
+                sys.stderr.write(
+                    f"check-pr-refs: cannot read commit message for {sha[:8]}: {e}\n")
+                return 2
+            if one.returncode != 0:
+                sys.stderr.write(
+                    f"check-pr-refs: REFUSED — cannot read commit message for "
+                    f"{sha[:8]}: {one.stderr.strip()}\n")
+                return 2
+            if one.stdout.strip():
+                sources.append((f"commit {sha[:8]}", one.stdout))
     errors: list[str] = []
     for label, text in sources:
         ok, errs = assert_pr_body_closing_refs(text, intended)

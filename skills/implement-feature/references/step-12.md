@@ -204,12 +204,19 @@ are failures: never treat either as the fallback.
    **The rule: never place a closing keyword — `close`, `closes`, `closed`, `fix`, `fixes`,
    `fixed`, `resolve`, `resolves`, `resolved` — adjacent to an issue number unless closure is
    intended.** When the issue must stay open, write **"leaves #N open"**. `Part of #N` and
-   `Refs #N` are always safe. GitHub parses commit messages too, so `--commit-range` covers them.
+   `Refs #N` are always safe. GitHub parses commit messages too, so `--commit-range` is REQUIRED,
+   not optional — a body-only run returns 0 while a commit still closes the issue.
+
+   **The body file must live INSIDE the project root** — the gate refuses any `--pr-body-file`
+   outside `--project-root` before opening it, so a `/tmp/...` draft makes this command return
+   rc 2 every time. Draft the body at `./.rawgentic/wf2-pr-body.md` (`mkdir -p .rawgentic` first;
+   git-ignored) and pass that SAME file to `gh pr create --body-file` in item 5, so the gate and
+   the published PR can never diverge.
    ```bash
    python3 hooks/plan_lib.py check-pr-refs \
-     --pr-body-file /tmp/wf2-pr-body.md \
+     --pr-body-file ./.rawgentic/wf2-pr-body.md \
      [--closes <issue this PR genuinely closes>]... \
-     [--commit-range origin/<default>..HEAD] --project-root .
+     --commit-range origin/<default>..HEAD --project-root .
    ```
    Executes `find_closing_refs` + `assert_pr_body_closing_refs`. `0` clean · `1` FLAGGED —
    findings on stdout; rewrite the sentence, or add `--closes <n>` when the closure is genuinely
@@ -224,8 +231,10 @@ are failures: never treat either as the fallback.
    gh pr create \
      --repo ${capabilities.repo} \
      --title "<type>(scope): <description> (#<issue_number>)" \
-     --body-file /tmp/wf2-pr-body.md
+     --body-file ./.rawgentic/wf2-pr-body.md
    ```
+   The body file is the SAME project-contained path item 4b gated (#901) — publishing a
+   different file than the one the closing-keyword gate read would defeat the gate.
 
    PR body template:
    ```

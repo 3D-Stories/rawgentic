@@ -1815,6 +1815,37 @@ class TestClosingKeywordGuardWF2:
             "omission means 'skip the check' gets the #901 defect back")
         assert "fails toward asking" in sec
 
+    def test_gated_body_path_is_project_contained(self):
+        """Step-11 cross-model finding 1 (Critical): the gate refuses any
+        --pr-body-file outside --project-root BEFORE opening it, so a /tmp draft
+        made the documented command return rc 2 every single time — the mandatory
+        gate was unsatisfiable as written."""
+        sec = self._gate_section()
+        assert "/tmp/wf2-pr-body.md" not in sec, (
+            "the gated body path must be project-contained — a /tmp path always "
+            "returns rc 2 (#901 Step-11 finding 1)")
+        assert "./.rawgentic/wf2-pr-body.md" in sec
+
+    def test_pr_creation_publishes_the_same_file_the_gate_read(self):
+        """A gate that reads one file while `gh pr create` publishes another
+        gates nothing."""
+        text = self.STEP12.read_text()
+        assert "--body-file ./.rawgentic/wf2-pr-body.md" in text, (
+            "gh pr create must publish the SAME project-contained body file the "
+            "closing-keyword gate read")
+        assert "--body-file /tmp/wf2-pr-body.md" not in text
+
+    def test_commit_range_is_required_not_optional(self):
+        """Step-11 cross-model finding 2 (High): GitHub parses commit messages
+        too, so an optional --commit-range left the documented gate able to
+        return 0 while a commit still closed the issue."""
+        sec = self._gate_section()
+        assert "--commit-range origin/<default>..HEAD --project-root ." in sec, (
+            "--commit-range must be prescribed unbracketed in the WF2 command")
+        assert "[--commit-range" not in sec, (
+            "--commit-range must NOT be shown as optional — that is the "
+            "fail-open the changelog claims closed")
+
     def test_multi_pr_rule_kept_with_the_gate(self):
         sec = self._gate_section()
         assert "only the LAST PR declares `--closes`" in sec, (

@@ -433,3 +433,87 @@ def test_commit_range_rc2_on_an_unresolvable_range(tmp_path):
               "--commit-range", "deadbeef1234..HEAD", "--project-root", str(root)])
     assert r.returncode == 2, f"rc={r.returncode} stdout={r.stdout}"
     assert "REFUSED" in r.stderr
+
+
+# --- Step 11 fix round: cross-model findings 1, 3, 5 ---
+
+def test_commit_message_containing_the_old_record_delimiter_is_still_scanned():
+    """Cross-model finding 3: the first implementation split `git log` output on
+    \\x1e and skipped any segment without \\x1f, so a commit message carrying
+    that delimiter could hide a closing reference. The two-stage reader has no
+    delimiter to poison — pinned at the scanner level, which is what a crafted
+    message would exploit."""
+    msg = "fix: a thing\n\x1e\x1f\nthis PR does not close #874\n"
+    assert [h.issue for h in plan_lib.find_closing_refs(msg)] == [874]
+
+
+def test_control_characters_do_not_hide_a_reference_from_the_commit_scan(tmp_path):
+    root, rng = _git_repo(tmp_path, ["fix: a thing\n\x1erecord\x1fsplit\n"
+                                     "this PR does not close #874\n"])
+    body = _body(root, "## Summary\nClean.\n\nPart of #875\n")
+    r = _run(["check-pr-refs", "--pr-body-file", body,
+              "--commit-range", rng, "--project-root", str(root)])
+    assert r.returncode == 1, f"rc={r.returncode} stdout={r.stdout} stderr={r.stderr}"
+    assert "874" in r.stdout
+
+
+def test_commit_range_rc2_on_an_undecodable_commit_message(tmp_path):
+    """Cross-model finding 5: `text=True` decodes `git log` output strictly, so a
+    non-UTF-8 commit message raised UnicodeDecodeError — which is a ValueError,
+    not an OSError — and escaped as a traceback at rc 1, the code reserved for
+    real findings.
+
+    `i18n.commitEncoding` is load-bearing to the repro and was measured, not
+    guessed: with the default config git TRANSCODES a non-UTF-8 message to UTF-8
+    and warns ("commit message did not conform to UTF-8"), so the naive attempt
+    decodes cleanly and proves nothing. Setting a non-UTF-8 commit encoding makes
+    git store and emit the raw bytes, which is the configuration that reaches the
+    handler.
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    def git(*a, **kw):
+        return subprocess.run(["git", *a], cwd=str(root), capture_output=True,
+                              timeout=30, check=True, **kw)
+    git("init", "-q")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "T")
+    git("config", "i18n.commitEncoding", "ISO-8859-1")
+    git("commit", "-q", "--allow-empty", "-m", "base")
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(root),
+                          capture_output=True, text=True, check=True).stdout.strip()
+    (root / "msg.bin").write_bytes(b"fix: caf\xe9 latin1 \xff\xfe\n")
+    (root / "f.txt").write_text("x", encoding="utf-8")
+    git("add", "f.txt")
+    git("commit", "-q", "-F", "msg.bin")
+    body = _body(root, "## Summary\nClean.\n\nPart of #875\n")
+    r = _run(["check-pr-refs", "--pr-body-file", body,
+              "--commit-range", f"{base}..HEAD", "--project-root", str(root)])
+    assert r.returncode == 2, f"rc={r.returncode} stdout={r.stdout} stderr={r.stderr}"
+    assert "Traceback" not in r.stderr
+
+
+def test_a_project_contained_body_path_is_accepted(tmp_path):
+    """Cross-model finding 1: the workflows now prescribe a body file INSIDE the
+    project root, because the containment check refuses anything outside it. This
+    executes that documented shape."""
+    root = tmp_path / "repo"
+    (root / ".rawgentic").mkdir(parents=True)
+    drafted = root / ".rawgentic" / "wf2-pr-body.md"
+    drafted.write_text("## Summary\nA fix.\n\nCloses #901\n", encoding="utf-8")
+    r = _run(["check-pr-refs", "--pr-body-file", "./.rawgentic/wf2-pr-body.md",
+              "--closes", "901", "--project-root", "."], cwd=str(root))
+    assert r.returncode == 0, f"rc={r.returncode} stderr={r.stderr}"
+
+
+def test_a_tmp_body_path_is_refused_which_is_why_the_prose_moved(tmp_path):
+    """The defect finding 1 named: a /tmp draft can never satisfy the gate."""
+    outside = tmp_path / "wf2-pr-body.md"
+    outside.write_text("Closes #901\n", encoding="utf-8")
+    root = tmp_path / "repo"
+    root.mkdir()
+    r = _run(["check-pr-refs", "--pr-body-file", str(outside),
+              "--closes", "901", "--project-root", str(root)])
+    assert r.returncode == 2
+    assert "REFUSED" in r.stderr

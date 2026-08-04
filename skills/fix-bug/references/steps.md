@@ -609,24 +609,32 @@ are failures: never treat either as the fallback.
    `Fixes #<issue-number>` stay exactly as they are, and Step 14 still relies on that linkage to
    close the issue on the owner's merge. The rule binds every OTHER issue the body mentions.
 
-   Run the mechanical gate on the drafted body (write it to a file first, then pass that file to
-   both this gate and `gh pr create --body-file`):
+   **The body file must live INSIDE the project root** — the gate refuses any `--pr-body-file`
+   outside `--project-root` before opening it, so a `/tmp/...` draft returns rc 2 every time.
+   Draft the body at `./.rawgentic/wf3-pr-body.md` (`mkdir -p .rawgentic` first; git-ignored) and
+   pass that SAME file to `gh pr create --body-file` in item 4, so the gate and the published PR
+   cannot diverge. `--commit-range` is REQUIRED: GitHub parses commit messages too, and Step 10
+   commits one, so a body-only run would leave that surface unchecked.
    ```bash
    python3 hooks/plan_lib.py check-pr-refs \
-     --pr-body-file /tmp/wf3-pr-body.md \
-     --closes <this run's issue> --project-root .
+     --pr-body-file ./.rawgentic/wf3-pr-body.md \
+     --closes <this run's issue> \
+     --commit-range origin/<default>..HEAD --project-root .
    ```
    `0` no unintended closing reference · `1` FLAGGED — findings on stdout; rewrite the sentence,
    or add `--closes <n>` when that closure is genuinely intended · `2` caller error (an empty
-   body file is rc 2 by design, never a pass). Omitting `--closes` entirely means "this PR closes
-   nothing", so every closing reference flags — the gate fails toward asking, never silently.
+   body file, or invalid UTF-8, is rc 2 by design, never a pass). Omitting `--closes` entirely
+   means "this PR closes nothing", so every closing reference flags — the gate fails toward
+   asking, never silently.
 
 4. Create PR:
 
+   Write the body to the SAME project-contained file item 3b gated, then publish THAT file
+   (#901 — publishing a different body than the one the closing-keyword gate read would defeat
+   the gate):
    ```bash
-   gh pr create --repo capabilities.repo \
-     --title "fix(scope): description" \
-     --body "$(cat <<'EOF'
+   mkdir -p .rawgentic
+   cat > ./.rawgentic/wf3-pr-body.md <<'EOF'
    ## Summary
    - Fixes #<issue-number>
    - Root cause: [brief RCA]
@@ -640,7 +648,9 @@ are failures: never treat either as the fallback.
 
    Generated with [Claude Code](https://claude.com/claude-code) using WF3
    EOF
-   )" \
+   gh pr create --repo capabilities.repo \
+     --title "fix(scope): description" \
+     --body-file ./.rawgentic/wf3-pr-body.md \
      --label "bug"
    ```
 
