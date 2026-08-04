@@ -814,7 +814,16 @@ def run_review(*, verb: str, artifact=None, artifact_type: str = "generic",
                           if key(f) not in have)
             merged.sort(key=lambda x: (arl._SEVERITY_RANK[x["severity"]],
                                        x["category"]))
-            parsed = {"findings": merged, "summary": parsed["summary"],
+            # Adversarial A2 (#902): the re-roll's summary alone can omit or
+            # contradict the retained held findings — disclose them
+            # deterministically so the top-level narrative stays honest.
+            retained = len(merged) - len(parsed["findings"])
+            summary = parsed["summary"]
+            if retained:
+                summary += (f" [merge note: {retained} finding(s) retained "
+                            f"from the pre-re-roll round are not described "
+                            f"above]")
+            parsed = {"findings": merged, "summary": summary,
                       "proposal": parsed["proposal"]}
             any_mapped = any(f.get("confidence_source") == "mapped"
                              for f in merged)

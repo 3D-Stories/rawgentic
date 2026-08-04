@@ -614,6 +614,10 @@ class TestNumericConfidence:
         assert by_desc["fail-open guard"]["confidence_source"] == "mapped"
         assert by_desc["a different native finding"]["confidence_source"] == "native"
         assert r["confidence_mapped"] is True  # a mapped held finding survived
+        # Adversarial A2 (#902): the re-roll's summary alone could omit or
+        # contradict retained held findings — the merge disclosure names them.
+        assert r["summary"].startswith("fresh")
+        assert "[merge note: 1 finding(s) retained" in r["summary"]
 
     def test_native_reroll_matching_finding_takes_native_copy(self, stub, project):
         # Same finding (identical dedupe key) in both rounds: the native
