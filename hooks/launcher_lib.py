@@ -732,9 +732,78 @@ def parse_pane_agent_status(pane_get_stdout: str) -> str | None:
     return status if isinstance(status, str) and status else None
 
 
+def _path_key(value, base: str | None) -> tuple[bool, tuple[str, ...]] | None:
+    """`value` as `(is_absolute, normalized components)`, resolved against `base` if relative.
+
+    Lexical only — `os.path.normpath`, never `realpath`. Returns None for anything that is not a
+    usable path string.
+
+    **`is_absolute` is part of the key, and dropping it was a real false accept** (found by
+    `test_the_false_accept_the_guard_prevents` while this function was being written): the
+    component split discards the empty leading field of an absolute path, so a bare component
+    comparison made `/projects/rawgentic` equal to `./projects/rawgentic` — two different
+    directories, matched with no base in sight. Keeping absoluteness in the key forces that pair
+    through the base-resolution branch, where it correctly fails.
+    """
+    if not isinstance(value, str) or isinstance(value, bool) or not value.strip():
+        return None
+    if not os.path.isabs(value) and isinstance(base, str) and base.strip():
+        value = os.path.join(base, value)
+    norm = os.path.normpath(value)
+    return (os.path.isabs(norm),
+            tuple(p for p in norm.split(os.sep) if p not in ("", ".")))
+
+
+def project_paths_equivalent(recorded, expected, project_root: str | None = None) -> bool:
+    """Do two `project_path` spellings denote the SAME directory? PURE — no filesystem access.
+
+    #800: the registry's `project_path` is written by a MODEL following the switch skill, and it
+    does not reliably pick one representation. Measured on two consecutive `ad-hoc-handoff` runs
+    with identical inputs (2026-08-01): one successor wrote `./projects/claude-skills`, the next
+    wrote `/home/rocky00717/rawgentic/projects/claude-skills`. A bare `!=` therefore refused a bind
+    that had actually succeeded, and no caller-side value fixes it — the variance is on the
+    producer's side.
+
+    The rule, in order:
+
+    1. Either side not a usable non-empty string → False (a row with no `project_path` reaches
+       here as None and must never become a match).
+    2. Equal as `(is_absolute, normalized components)` → True. This alone settles `./a/b` vs `a/b`
+       vs `a/b/`. Absoluteness is part of that key deliberately — see `_path_key`.
+    3. `project_root` given → resolve each RELATIVE side against it and compare again. This is the
+       repo's established convention for exactly this value: `context_meter.py`'s `bound_project`
+       uses `os.path.normpath(os.path.join(workspace_root, rel))` and `wal-lib.sh` the shell
+       equivalent. `os.path.join` leaves an already-absolute side untouched, so a base can never
+       corrupt an absolute row, and because BOTH sides share one base a wrong base can only fail
+       to complete a mixed pair — never manufacture a match between two different directories.
+    4. Otherwise False — the pre-#800 exact comparison. A caller that supplies no base loses the
+       fix, never its safety.
+
+    **Deliberately NOT a component-suffix match**, which is the obvious base-free alternative and
+    was refuted by probe: `projects/rawgentic` is a suffix of `/other/ws/projects/rawgentic`, and
+    `rawgentic` is a suffix of `/home/x/rawgentic/projects/rawgentic`. Both would be false ACCEPTS
+    on a gate whose whole job is refusing the wrong project.
+
+    **Deliberately lexical.** This function is pure and its callers compare paths that need not
+    exist, so the module's honest bound stands: it claims nothing about symlinks.
+    """
+    a = _path_key(recorded, None)
+    b = _path_key(expected, None)
+    if a is None or b is None:
+        return False
+    if a == b:
+        return True
+    if not (isinstance(project_root, str) and project_root.strip()):
+        return False
+    ra = _path_key(recorded, project_root)
+    rb = _path_key(expected, project_root)
+    return ra is not None and ra == rb
+
+
 def registry_has_session(registry_text: str, session_id: str, *,
                          expected_project: str | None = None,
-                         expected_project_path: str | None = None) -> bool:
+                         expected_project_path: str | None = None,
+                         project_root: str | None = None) -> bool:
     """A `claude_docs/session_registry.jsonl` line carrying the NEW session id.
 
     `expected_project` / `expected_project_path` are #665 additions and both default to None, so
@@ -744,9 +813,14 @@ def registry_has_session(registry_text: str, session_id: str, *,
     wrong repository (design §5, pass-2 finding 2).
 
     The project pair is matched, not just the label, because nothing here establishes that
-    project labels are globally unique. The honest bound: this is an exact string comparison
-    against the same producer's representation (the switch skill writes a workspace-relative
-    `./projects/<name>`), NOT a filesystem canonicalisation — it claims nothing about symlinks.
+    project labels are globally unique. The LABEL is compared exactly — that is what makes a
+    successor bound to a different project fail. The PATH is compared path-equivalently via
+    `project_paths_equivalent` (#800), because the producer is a model and does not reliably
+    choose between the workspace-relative `./projects/<name>` and its absolute spelling; pass
+    `project_root` (the workspace root those relative paths are relative to) to enable that.
+    With no `project_root` the path comparison stays exact, so the fix is opt-in per caller and
+    fail-closed. Still lexical, never a filesystem canonicalisation — it claims nothing about
+    symlinks.
     """
     if not session_id:
         return False
@@ -762,11 +836,79 @@ def registry_has_session(registry_text: str, session_id: str, *,
             continue
         if expected_project is not None and rec.get("project") != expected_project:
             continue
-        if expected_project_path is not None \
-                and rec.get("project_path") != expected_project_path:
+        if expected_project_path is not None and not project_paths_equivalent(
+                rec.get("project_path"), expected_project_path, project_root):
             continue
         return True
     return False
+
+
+_REGISTRY_CONTRACT_TAIL = ("claude_docs", "session_registry.jsonl")
+
+
+def _workspace_root_of_registry(registry_path: str) -> str | None:
+    """The workspace root a registry file implies, or None when the path is off-contract.
+
+    #800: `retire_predecessor` compares against `position["project_path"]` — possibly the
+    workspace-relative spelling — but holds no workspace root of its own. The switch skill writes
+    the registry at `<workspace root>/claude_docs/session_registry.jsonl`, the SAME contract that
+    makes `project_path` workspace-relative, so the directory two levels up is that root.
+
+    The tail check is load-bearing, not decoration (Step-4 F1): deriving unconditionally would turn
+    `/x/registry.jsonl` into the base `/`, and a row claiming `/projects/rawgentic` would then
+    compare equal to an expectation of `./projects/rawgentic` — a false ACCEPT manufactured by a
+    wrong base. Off-contract → None → the path comparison stays exact, which is fail-closed.
+    """
+    if not isinstance(registry_path, str) or not registry_path.strip():
+        return None
+    parts = os.path.normpath(os.path.abspath(registry_path)).split(os.sep)
+    if tuple(parts[-2:]) != _REGISTRY_CONTRACT_TAIL:
+        return None
+    root = os.sep.join(parts[:-2])
+    return root or os.sep
+
+
+def registry_match_diagnosis(registry_text: str, session_id: str, *,
+                             expected_project: str | None = None,
+                             expected_project_path: str | None = None,
+                             project_root: str | None = None) -> str:
+    """WHY `registry_has_session` did not match — one line, for the failure report.
+
+    #800's second half. A never-matching comparison and a plain poll timeout produced
+    BYTE-IDENTICAL output, so a gate that could never pass was indistinguishable from a successor
+    that was merely slow. That cost the #875 campaign a published wrong diagnosis. This says which
+    field disagreed, and names the base, because the base is what decides a path comparison.
+
+    Reports on the LAST row carrying the session id: on a poll the newest row is the successor's
+    own. Never raises — a diagnosis that throws while explaining a failure is worse than no
+    diagnosis, so unparseable lines are skipped exactly as the matcher skips them.
+    """
+    if registry_has_session(
+            registry_text, session_id, expected_project=expected_project,
+            expected_project_path=expected_project_path, project_root=project_root):
+        return "matched"
+    found = None
+    for line in (registry_text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict) and rec.get("session_id") == session_id:
+            found = rec
+    if found is None:
+        return (f"no registry row carries session {session_id!r} — the successor never wrote its "
+                f"bind (it may have been blocked at a permission prompt, or never ran the switch)")
+    if expected_project is not None and found.get("project") != expected_project:
+        return (f"the registry row for session {session_id!r} records project "
+                f"{found.get('project')!r}, but this handoff expects {expected_project!r} — the "
+                f"successor bound the WRONG project")
+    base = project_root if (isinstance(project_root, str) and project_root.strip()) else None
+    return (f"the registry row for session {session_id!r} records project_path "
+            f"{found.get('project_path')!r}, which is not the same directory as "
+            f"{expected_project_path!r} (resolved against project_root {base!r})")
 
 
 def transcript_has_marker(transcript_text: str, marker: str) -> bool:
@@ -1820,14 +1962,32 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         # artifact the successor itself writes, which is why it is the gate.
         def _project_switched() -> bool:
             tail = _tail(read_text(registry_path), registry_baseline)
+            # #800 — `project_root` IS the workspace root those relative `./projects/<name>` paths
+            # are relative to (the pane-handoff skill passes `--project-root <workspace root>`),
+            # so the comparison accepts either spelling the successor may have written.
             return tail is not None and registry_has_session(
                 tail, session_id, expected_project=expected_project,
-                expected_project_path=expected_project_path)
+                expected_project_path=expected_project_path, project_root=project_root)
 
         out["results"]["project_switched"] = _poll_for(
             _project_switched,
             attempts=SWITCH_POLL_ATTEMPTS, delay_s=SWITCH_POLL_DELAY_S, sleeper=sleeper)
         if not out["results"]["project_switched"]:
+            # #800 — say WHICH field disagreed. Without this, a comparison that could never match
+            # looked exactly like a slow successor, and the #875 campaign published a wrong
+            # diagnosis off that ambiguity. Diagnosed over the SAME post-baseline tail the gate
+            # polls: a row that predates the launch must not satisfy — or explain — this check
+            # (#611 Step-11 Medium 4). A void baseline means the registry stopped being an
+            # append-only extension of what we measured, which is its own distinct explanation.
+            tail = _tail(read_text(registry_path), registry_baseline)
+            record("project_switched", ["<registry poll>"],
+                   note=(registry_match_diagnosis(
+                       tail, session_id, expected_project=expected_project,
+                       expected_project_path=expected_project_path,
+                       project_root=project_root) if tail is not None else
+                         f"the registry {registry_path!r} is no longer an append-only extension "
+                         f"of its pre-launch baseline (truncated, rotated or replaced), so no "
+                         f"positional evidence about session {session_id!r} is trustworthy"))
             # A successor that never binds is also the shape a permission-BLOCKED successor takes,
             # so the failure names that possibility rather than leaving an operator guessing. The
             # launcher cannot fix it: `--permission-mode` is refused by `_ALLOWED_CLAUDE_ARGS` as
@@ -2860,7 +3020,8 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
         out["results"]["project_switched"] = registry_has_session(
             read_or_empty(registry_path), session_id,
             expected_project=position["project"],
-            expected_project_path=position["project_path"])
+            expected_project_path=position["project_path"],
+            project_root=_workspace_root_of_registry(registry_path))
         # #840 — the same launcher-owned producer as `perform_handoff`, recomputed here rather
         # than trusted from the predecessor's run. This is the LAST gate before an irreversible
         # teardown, and the predecessor may have merged another child since it reported. Both

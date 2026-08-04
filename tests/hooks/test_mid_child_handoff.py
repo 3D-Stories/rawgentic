@@ -192,6 +192,165 @@ class TestRegistryProjectBinding:
             expected_project_path="./projects/rawgentic") is False
 
 
+WS = "/home/rocky00717/rawgentic"          # the workspace root real rows are relative to
+REL = "./projects/rawgentic"
+ABS = "/home/rocky00717/rawgentic/projects/rawgentic"
+
+
+class TestProjectPathsEquivalent:
+    """#800 — two spellings of one directory must compare equal; two directories must not.
+
+    The rule is LEXICAL on purpose. Every input below names a directory that does not exist in the
+    test environment, which is the point: the helper is pure, so it can be unit-tested without a
+    filesystem, and the module's honest bound ("claims nothing about symlinks") stays true.
+    """
+
+    def test_identical_spellings_match_without_any_base(self):
+        assert ll.project_paths_equivalent(REL, REL) is True
+        assert ll.project_paths_equivalent(ABS, ABS) is True
+
+    def test_cosmetic_differences_match_without_a_base(self):
+        """`./a/b`, `a/b` and `a/b/` are one directory by inspection — no base needed."""
+        assert ll.project_paths_equivalent("./projects/rawgentic", "projects/rawgentic") is True
+        assert ll.project_paths_equivalent("./projects/rawgentic/", "./projects/rawgentic") is True
+
+    def test_mixed_representations_match_under_the_workspace_base(self):
+        """THE bug, at the level it is fixed. Both directions, because either side can be the
+        one a model spelled out."""
+        assert ll.project_paths_equivalent(ABS, REL, WS) is True
+        assert ll.project_paths_equivalent(REL, ABS, WS) is True
+
+    def test_mixed_representations_are_refused_with_no_base(self):
+        """Fail-CLOSED: with no base there is nothing to resolve against, so the pre-#800 exact
+        comparison stands. A caller that passes no base loses the fix, never its safety."""
+        assert ll.project_paths_equivalent(ABS, REL) is False
+        assert ll.project_paths_equivalent(REL, ABS) is False
+
+    def test_two_relative_forms_match_under_ANY_base(self):
+        """Both sides share one base, so a wrong base cannot break the equal case — it can only
+        fail to complete a mixed pair. This is why deriving a base is safe."""
+        assert ll.project_paths_equivalent(REL, "projects/rawgentic", "/nowhere/at/all") is True
+
+    def test_a_sibling_project_is_refused(self):
+        """The anti-regression anchor: `rawgentic-next` is a real sibling in this workspace."""
+        assert ll.project_paths_equivalent("./projects/rawgentic-next", REL, WS) is False
+        assert ll.project_paths_equivalent(
+            "/home/rocky00717/rawgentic/projects/rawgentic-next", REL, WS) is False
+
+    def test_the_same_tail_under_a_FOREIGN_root_is_refused(self):
+        """Probe-derived counter-example #1 (the reason this helper takes a base at all): a bare
+        component-suffix rule would ACCEPT this, because `projects/rawgentic` is a suffix of
+        `/other/ws/projects/rawgentic`. It is a different directory."""
+        assert ll.project_paths_equivalent("/other/ws/projects/rawgentic", REL, WS) is False
+
+    def test_a_one_component_relative_path_is_refused(self):
+        """Probe-derived counter-example #2, the nastier one: `rawgentic` is a component-suffix of
+        `/home/rocky00717/rawgentic/projects/rawgentic`, so a suffix rule would accept a row
+        naming an entirely different directory."""
+        assert ll.project_paths_equivalent("./rawgentic", ABS, WS) is False
+
+    @pytest.mark.parametrize("bad", [None, "", 42, [], {}, True])
+    def test_a_non_string_or_empty_side_never_matches(self, bad):
+        """A row with `project_path` absent reaches this as None; `rec.get()` must not become a
+        match, and a bool must not sneak through as a string-ish truthy value."""
+        assert ll.project_paths_equivalent(bad, REL, WS) is False
+        assert ll.project_paths_equivalent(REL, bad, WS) is False
+
+    @pytest.mark.parametrize("base", [None, "", 42, [], {}])
+    def test_an_unusable_base_degrades_to_the_exact_comparison(self, base):
+        assert ll.project_paths_equivalent(REL, REL, base) is True
+        assert ll.project_paths_equivalent(ABS, REL, base) is False
+
+
+class TestRegistryHasSessionPathEquivalence:
+    """#800 at the gate: the same equivalence, reached through `registry_has_session`, with the
+    project LABEL comparison provably untouched."""
+
+    def _line(self, session, project, path):
+        return json.dumps({"session_id": session, "project": project, "project_path": path,
+                           "started": "2026-08-04T00:00:00Z", "cwd": WS})
+
+    def test_an_absolute_row_matches_a_relative_expectation_given_the_base(self):
+        text = self._line("succ-1", "rawgentic", ABS)
+        assert ll.registry_has_session(
+            text, "succ-1", expected_project="rawgentic",
+            expected_project_path=REL, project_root=WS) is True
+
+    def test_a_relative_row_matches_an_absolute_expectation_given_the_base(self):
+        text = self._line("succ-1", "rawgentic", REL)
+        assert ll.registry_has_session(
+            text, "succ-1", expected_project="rawgentic",
+            expected_project_path=ABS, project_root=WS) is True
+
+    def test_without_the_base_the_pre_800_behaviour_stands(self):
+        text = self._line("succ-1", "rawgentic", ABS)
+        assert ll.registry_has_session(
+            text, "succ-1", expected_project="rawgentic",
+            expected_project_path=REL) is False
+
+    def test_the_project_LABEL_still_matches_EXACTLY(self):
+        """#665's protection is the label, and equivalence must not touch it: same directory,
+        different recorded project name → still refused."""
+        text = self._line("succ-1", "thewanderinginn", ABS)
+        assert ll.registry_has_session(
+            text, "succ-1", expected_project="rawgentic",
+            expected_project_path=REL, project_root=WS) is False
+
+    def test_a_row_without_a_project_path_is_refused(self):
+        text = json.dumps({"session_id": "succ-1", "project": "rawgentic", "cwd": WS})
+        assert ll.registry_has_session(
+            text, "succ-1", expected_project="rawgentic",
+            expected_project_path=REL, project_root=WS) is False
+
+    def test_session_id_only_callers_are_unchanged(self):
+        """#611's callers pass no expectations at all; the new parameter must not reach them."""
+        text = self._line("succ-1", "rawgentic", ABS)
+        assert ll.registry_has_session(text, "succ-1") is True
+        assert ll.registry_has_session(text, "nobody") is False
+
+
+class TestRegistryMatchDiagnosis:
+    """#800 AC4 — a never-matching compare and a 120 s timeout used to be indistinguishable."""
+
+    def _line(self, session, project, path):
+        return json.dumps({"session_id": session, "project": project, "project_path": path,
+                           "started": "2026-08-04T00:00:00Z", "cwd": WS})
+
+    def test_a_match_says_so(self):
+        text = self._line("succ-1", "rawgentic", ABS)
+        assert ll.registry_match_diagnosis(
+            text, "succ-1", expected_project="rawgentic",
+            expected_project_path=REL, project_root=WS) == "matched"
+
+    def test_no_row_for_the_session_is_named_as_such(self):
+        text = self._line("someone-else", "rawgentic", REL)
+        msg = ll.registry_match_diagnosis(
+            text, "succ-1", expected_project="rawgentic", expected_project_path=REL)
+        assert "no registry row" in msg.lower()
+        assert "succ-1" in msg
+
+    def test_a_label_mismatch_names_both_labels(self):
+        text = self._line("succ-1", "thewanderinginn", REL)
+        msg = ll.registry_match_diagnosis(
+            text, "succ-1", expected_project="rawgentic", expected_project_path=REL)
+        assert "project" in msg
+        assert "thewanderinginn" in msg and "rawgentic" in msg
+
+    def test_a_path_mismatch_names_both_paths_and_the_base(self):
+        text = self._line("succ-1", "rawgentic", "./projects/rawgentic-next")
+        msg = ll.registry_match_diagnosis(
+            text, "succ-1", expected_project="rawgentic",
+            expected_project_path=REL, project_root=WS)
+        assert "project_path" in msg
+        assert "rawgentic-next" in msg
+        assert WS in msg, "the base is what decides the comparison — it must be legible"
+
+    def test_an_empty_registry_is_not_reported_as_a_mismatch(self):
+        msg = ll.registry_match_diagnosis(
+            "", "succ-1", expected_project="rawgentic", expected_project_path=REL)
+        assert "no registry row" in msg.lower()
+
+
 class TestCmdHandoffRefusesForeignKinds:
     """#611's launcher entry point reads the SAME state file. A mid-child record there means a
     resume is already in flight; building a fresh-child handoff from it would put two
@@ -2017,3 +2176,99 @@ class TestAReArmedPredecessorIsNotClosed:
         out = _retire(state, world, tmp_path)
         assert out["outcome"] == "retired", out
         assert world.kinds().count("pane_close") == 1
+
+
+class TestWorkspaceRootOfRegistry:
+    """#800 — `retire_predecessor` holds no workspace root, so it derives one from the registry
+    path. The derivation is only sound where the registry really sits at its contracted location,
+    and the guard that enforces that is what keeps a wrong base from ACCEPTING a wrong directory
+    (Step-4 F1)."""
+
+    def test_the_contracted_location_yields_the_workspace_root(self):
+        assert ll._workspace_root_of_registry(
+            "/home/rocky00717/rawgentic/claude_docs/session_registry.jsonl") \
+            == "/home/rocky00717/rawgentic"
+
+    def test_an_off_contract_location_yields_no_base(self):
+        """`/x/registry.jsonl` would otherwise derive the base `/`, and then a row claiming
+        `/projects/rawgentic` would compare EQUAL to an expectation of `./projects/rawgentic` —
+        a false accept manufactured entirely by a wrong base."""
+        assert ll._workspace_root_of_registry("/x/registry.jsonl") is None
+        assert ll._workspace_root_of_registry("/x/claude_docs/other.jsonl") is None
+        assert ll._workspace_root_of_registry("/x/notes/session_registry.jsonl") is None
+
+    def test_the_false_accept_the_guard_prevents(self):
+        """Stated as behaviour, not just as a None: with the guard, the off-contract path cannot
+        make these two different directories match."""
+        base = ll._workspace_root_of_registry("/x/registry.jsonl")
+        assert ll.project_paths_equivalent(
+            "/projects/rawgentic", "./projects/rawgentic", base) is False
+
+    @pytest.mark.parametrize("bad", [None, "", "   ", 42, [], {}])
+    def test_an_unusable_path_yields_no_base(self, bad):
+        assert ll._workspace_root_of_registry(bad) is None
+
+    def test_a_registry_at_the_filesystem_root_still_yields_a_root(self):
+        """Degenerate but real: the join must not produce an empty string that then reads as
+        'no base'."""
+        assert ll._workspace_root_of_registry("/claude_docs/session_registry.jsonl") == os.sep
+
+
+class TestRetireAcceptsEitherPathRepresentation:
+    """#800 AC5 — the SECOND call site. `retire_predecessor` re-verifies `project_switched` from
+    the successor's own artifacts before an irreversible teardown, so it needed the same fix; a
+    handoff that survived `perform_handoff` would otherwise die at the last gate instead.
+    """
+
+    def _contracted_registry(self, tmp_path, project_path_value):
+        """The registry where the switch skill really writes it: `<ws>/claude_docs/...`. The
+        derived base is therefore `tmp_path`, and `project_path_value` is compared against
+        `./projects/rawgentic` under that base."""
+        reg = tmp_path / "claude_docs" / "session_registry.jsonl"
+        reg.parent.mkdir(parents=True, exist_ok=True)
+        reg.write_text(json.dumps(
+            {"session_id": SUCC, "project": "rawgentic",
+             "project_path": project_path_value, "started": "2026-08-04T00:00:00Z",
+             "cwd": str(tmp_path)}) + "\n", encoding="utf-8")
+        return str(reg)
+
+    def test_an_absolute_row_still_authorises_the_teardown(self, tmp_path):
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        reg = self._contracted_registry(tmp_path, str(tmp_path / "projects" / "rawgentic"))
+        out = _retire(state, world, tmp_path, registry_path=reg)
+        assert out["results"]["project_switched"] is True, out
+        assert out["outcome"] == "retired", out
+
+    def test_a_relative_row_still_authorises_the_teardown(self, tmp_path):
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        reg = self._contracted_registry(tmp_path, "./projects/rawgentic")
+        out = _retire(state, world, tmp_path, registry_path=reg)
+        assert out["results"]["project_switched"] is True, out
+        assert out["outcome"] == "retired", out
+
+    def test_a_different_project_directory_still_blocks_the_teardown(self, tmp_path):
+        """The gate must keep refusing what it exists to refuse — and refusing means the
+        predecessor is NOT closed."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        reg = self._contracted_registry(tmp_path, str(tmp_path / "projects" / "rawgentic-next"))
+        out = _retire(state, world, tmp_path, registry_path=reg)
+        assert out["results"]["project_switched"] is False, out
+        assert out["ok"] is False
+        assert "pane_close" not in world.kinds(), world.kinds()
+
+    def test_a_wrong_project_label_still_blocks_the_teardown(self, tmp_path):
+        """#665 unchanged at this site too: same directory, wrong recorded project."""
+        world = _world(tmp_path)
+        state = _write_state(tmp_path, world)
+        reg = tmp_path / "claude_docs" / "session_registry.jsonl"
+        reg.parent.mkdir(parents=True, exist_ok=True)
+        reg.write_text(json.dumps(
+            {"session_id": SUCC, "project": "thewanderinginn",
+             "project_path": str(tmp_path / "projects" / "rawgentic"),
+             "started": "2026-08-04T00:00:00Z", "cwd": str(tmp_path)}) + "\n", encoding="utf-8")
+        out = _retire(state, world, tmp_path, registry_path=str(reg))
+        assert out["results"]["project_switched"] is False, out
+        assert "pane_close" not in world.kinds(), world.kinds()
