@@ -211,8 +211,10 @@ not a task
 
     def test_invalid_risklevel_value_treated_as_missing(self):
         """A `riskLevel: super-high` line doesn't match the regex (high|standard
-        only), so the task is considered untagged. If it's the only task, the
-        pre-P15 path applies; if mixed with a tagged task, fail-closed."""
+        only). Since #880 an ATTEMPTED riskLevel line that fails the format
+        raises PlanFormatError outright (word-anchored attempt trigger) — the
+        old lone-task silent pre-P15 downgrade is gone; the mixed plan below
+        raises at the malformed line."""
         mod = _reload_plan_lib()
         plan_mixed = """
 ### Task 1: ok
@@ -2212,3 +2214,156 @@ class TestPublicFileLock:
         lines = [ln for ln in order.read_text(encoding="utf-8").splitlines() if ln]
         assert lines == ["child-in", "child-out", "parent-in"], (
             f"parent acquired the lock before the child released it: {lines}")
+
+
+# --- #880 Defect E: parse_tasks fails loudly; token ids (red-first) ---
+
+
+class TestParseTasksFailLoud:
+    """#880 Defect E: a plan can no longer silently parse to zero tasks.
+
+    Before this fix `_TASK_HEADER_RE` required a numeric id, and a
+    non-matching `### Task ` heading was silently ignored — a `### Task T1:`
+    plan parsed to ZERO tasks, the riskLevel fail-closed rule never fired
+    (no tasks to check), Step 8a never fired (no high-risk task), and Step 9's
+    coverage gate passed vacuously. The #879 run hit this live.
+    """
+
+    def test_token_id_parses(self):
+        """AC-E(i): `### Task T1:` parses to one task with id == "T1"."""
+        mod = _reload_plan_lib()
+        plan = "### Task T1: widen the id\n- riskLevel: high (parser)\n"
+        tasks = mod.parse_tasks(plan)
+        assert [t.id for t in tasks] == ["T1"]
+        assert tasks[0].risk_level == "high"
+
+    def test_mixed_token_ids_parse(self):
+        mod = _reload_plan_lib()
+        plan = (
+            "### Task 1: numeric\n- riskLevel: standard\n\n"
+            "### Task 1a: alnum\n- riskLevel: standard\n\n"
+            "### Task 2.3: dotted\n- riskLevel: standard\n"
+        )
+        assert [t.id for t in mod.parse_tasks(plan)] == ["1", "1a", "2.3"]
+
+    def test_missing_colon_heading_raises_with_line_number(self):
+        """AC-E(ii) + gate amendment: `### Task T1` (no colon) raises — the
+        most direct typo must never silently drop a task."""
+        mod = _reload_plan_lib()
+        plan = "# plan\n\n### Task T1\n- riskLevel: high (x)\n"
+        with pytest.raises(mod.PlanFormatError, match=r"line 3"):
+            mod.parse_tasks(plan)
+
+    def test_empty_title_heading_raises(self):
+        mod = _reload_plan_lib()
+        plan = "### Task 1:\n- riskLevel: standard\n"
+        with pytest.raises(mod.PlanFormatError):
+            mod.parse_tasks(plan)
+
+    def test_prose_task_heading_raises_with_remediation(self):
+        """A prose heading beginning `Task ` inside a PLAN raises loudly with
+        remediation text — a loud rename beats a silent drop (owner-approved
+        Step 4 disposition, 2026-08-04)."""
+        mod = _reload_plan_lib()
+        plan = "### Task Decomposition\n\n### Task 1: real\n- riskLevel: standard\n"
+        with pytest.raises(mod.PlanFormatError, match=r"### Task <id>: <title>"):
+            mod.parse_tasks(plan)
+
+    def test_non_task_headings_still_ignored(self):
+        """`### Tasks` / `### Task-notes` (no whitespace after `Task`) never
+        match the attempt trigger; only `### Task <ws>` does."""
+        mod = _reload_plan_lib()
+        plan = (
+            "### Tasks\n\n### Task-notes\n\n### Overview\n\n"
+            "### Task 1: real\n- riskLevel: standard\n"
+        )
+        assert [t.id for t in mod.parse_tasks(plan)] == ["1"]
+
+    def test_numeric_plans_byte_identical(self):
+        """AC-E(iii): the existing numeric corpus parses identically."""
+        mod = _reload_plan_lib()
+        plan = (
+            "### Task 1: foo\n- riskLevel: standard\n\n"
+            "### Task 2: bar\n- riskLevel: high (module boundary)\n\n"
+            "### Task 3.5: baz\n- riskLevel: standard\n"
+        )
+        tasks = mod.parse_tasks(plan)
+        assert [t.id for t in tasks] == ["1", "2", "3.5"]
+        assert [t.risk_level for t in tasks] == ["standard", "high", "standard"]
+        assert tasks[1].reason == "module boundary"
+
+    def test_wrapped_risklevel_reason_raises(self):
+        """AC-E(iv): the wrapped reason is FORBIDDEN. Before this fix it
+        silently downgraded high -> standard via the pre-P15 path (reproduced
+        live on this run), which disables Step 8a."""
+        mod = _reload_plan_lib()
+        plan = (
+            "### Task 1: t\n"
+            "- riskLevel: high (a reason that continues\n"
+            "  onto a second line)\n"
+        )
+        with pytest.raises(mod.PlanFormatError, match=r"riskLevel"):
+            mod.parse_tasks(plan)
+
+    def test_lone_invalid_risklevel_value_raises_not_downgrades(self):
+        """A lone `riskLevel: super-high` used to fall into the pre-P15
+        default-to-standard path (docstring-only claim, never pinned). It now
+        raises — an ATTEMPTED riskLevel line that fails the regex is a typo,
+        not a pre-P15 plan."""
+        mod = _reload_plan_lib()
+        plan = "### Task 1: bad level\n- riskLevel: super-high\n"
+        with pytest.raises(mod.PlanFormatError):
+            mod.parse_tasks(plan)
+
+    def test_pre_p15_plan_still_defaults(self):
+        """Backward compat: a plan with NO riskLevel lines at all (pre-P15)
+        still defaults every task to standard with the warning — the new raise
+        fires only on a line that LOOKS like a riskLevel attempt."""
+        mod = _reload_plan_lib()
+        plan = "### Task 1: old style\n- some content\n\n### Task 2: also old\n- more\n"
+        tasks = mod.parse_tasks(plan)
+        assert [t.risk_level for t in tasks] == ["standard", "standard"]
+
+
+class TestTaskIdShellSafety:
+    """#880 gate round 2: ids flow into the Step 8a append-review-log shell
+    command, so the grammar is [A-Za-z0-9][A-Za-z0-9._-]* — a metacharacter id
+    RAISES via the fail-loud rule instead of parsing."""
+
+    @pytest.mark.parametrize("bad_id", ["1;rm", "$(x)", "`x`", 'a"b', "a'b", "a\\b", ";x"])
+    def test_metacharacter_ids_raise(self, bad_id):
+        mod = _reload_plan_lib()
+        plan = f"### Task {bad_id}: t\n- riskLevel: standard\n"
+        with pytest.raises(mod.PlanFormatError):
+            mod.parse_tasks(plan)
+
+    def test_underscore_dash_dot_ids_parse(self):
+        mod = _reload_plan_lib()
+        plan = ("### Task a_1: t\n- riskLevel: standard\n\n"
+                "### Task b-2: t\n- riskLevel: standard\n\n"
+                "### Task 3.5: t\n- riskLevel: standard\n")
+        assert [t.id for t in mod.parse_tasks(plan)] == ["a_1", "b-2", "3.5"]
+
+
+class TestRiskLevelMissingColon:
+    """#880 Step 6 gate (owner-authorized direct amendment): the attempt
+    trigger is word-anchored, not colon-anchored."""
+
+    @pytest.mark.parametrize("line", ["- riskLevel high", "- riskLevel"])
+    def test_colonless_risklevel_attempt_raises(self, line):
+        """`- riskLevel high` slipped the colon-anchored trigger and silently
+        downgraded a SINGLE-task plan via the pre-P15 path."""
+        mod = _reload_plan_lib()
+        plan = f"### Task 1: t\n{line}\n"
+        with pytest.raises(mod.PlanFormatError, match=r"riskLevel"):
+            mod.parse_tasks(plan)
+
+
+class TestRiskLevelContinuationBound:
+    def test_valid_line_with_stray_continuation_keeps_level_loses_fragment(self):
+        """Gate round 2 accepted bound: the level is always correct; only
+        advisory reason text is lost; the fragment reads as body prose."""
+        mod = _reload_plan_lib()
+        plan = "### Task 1: t\n- riskLevel: high (short)\n  more text)\n"
+        tasks = mod.parse_tasks(plan)
+        assert tasks[0].risk_level == "high" and tasks[0].reason == "short"

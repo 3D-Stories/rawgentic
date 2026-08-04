@@ -1558,3 +1558,22 @@ class TestStep4BudgetExhaustedClose:
         # The SKILL.md carve-out must fence itself to the design source.
         text = " ".join(_text().split())
         assert "The carve-out is deliberately narrow and does NOT generalize" in text
+
+
+class TestPlanFormatContractIdRule:
+    """#880 Defect E AC-(v): Step 5's contract states the id grammar, the
+    fail-loud heading rule, and the one-line (wrapped-forbidden) reason rule —
+    the prose gap that let `### Task T1:` silently parse to zero tasks."""
+
+    def test_step5_contract_states_id_grammar_and_fail_loud(self):
+        step5 = _section(_text(), "## Step 5:", "## Step 6:")
+        assert "[A-Za-z0-9][A-Za-z0-9._-]*" in step5
+        norm = " ".join(step5.split())
+        assert ("An unparseable `### Task ` heading fails closed "
+                "(parse error naming the line → STOP), never silently skipped.") in norm
+
+    def test_step5_contract_forbids_wrapped_reason(self):
+        step5 = _section(_text(), "## Step 5:", "## Step 6:")
+        norm = " ".join(step5.split())
+        assert "the reason stays on ONE line" in norm
+        assert "a wrapped reason is forbidden and fails closed" in norm

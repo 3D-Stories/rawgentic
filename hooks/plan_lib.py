@@ -169,11 +169,21 @@ SEVERITY_BANDED_CONFIDENCE: Final[dict[str, float]] = {
 
 # --- parse_tasks: plan markdown -> [Task] ---
 
-_TASK_HEADER_RE = re.compile(r"^###\s+Task\s+([0-9.]+)\s*:\s*(.+?)\s*$")
+# #880 Defect E: the id is any shell-safe token (T1, 1a, 2.3 — not just numeric).
+# Charset deliberately narrower than \S+: ids flow into the Step 8a
+# `append-review-log` shell command as an argument, so metacharacters must not
+# parse (gate round 2, owner-approved). A `### Task ` heading that fails this
+# regex RAISES via _TASK_ATTEMPT_RE below — it is never silently skipped.
+_TASK_HEADER_RE = re.compile(r"^###\s+Task\s+([A-Za-z0-9][A-Za-z0-9._-]*)\s*:\s*(.+?)\s*$")
+_TASK_ATTEMPT_RE = re.compile(r"^###\s+Task\s+")
 _RISKLEVEL_RE = re.compile(
     r"^\s*[-*]\s*riskLevel\s*:\s*(high|standard)(?:\s*\(([^)]+)\))?\s*$",
     re.IGNORECASE,
 )
+# #880: word-anchored (not colon-anchored) so `- riskLevel high` — the missing
+# colon typo — is an ATTEMPT that must validate, not prose to skip (Step 6
+# gate, owner-authorized). An attempt that fails _RISKLEVEL_RE raises.
+_RISKLEVEL_ATTEMPT_RE = re.compile(r"^\s*[-*]\s*riskLevel\b", re.IGNORECASE)
 # Optional parallel-execution annotations (PR 3a). Both purely additive — their
 # absence never changes the riskLevel fail-closed contract or the pre-P15 migration.
 _PARALLEL_GROUP_RE = re.compile(r"^\s*[-*]\s*parallel_group\s*:\s*(\S+)\s*$", re.IGNORECASE)
@@ -202,12 +212,21 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
     """Extract Task objects from a WF2 plan markdown.
 
     Contract:
-    - Each task starts with `### Task <id>: <title>` heading.
+    - Each task starts with `### Task <id>: <title>` heading; the id matches
+      `[A-Za-z0-9][A-Za-z0-9._-]*` (shell-safe — ids reach the Step 8a
+      `append-review-log` command line; #880).
+    - A line beginning `### Task ` that does NOT parse as a task heading raises
+      PlanFormatError naming the line (#880 — a typo like `### Task T1` with a
+      missing colon must never silently drop a task and its mandatory review).
     - Each task MUST include a `- riskLevel: high|standard` line within its body
       (before the next ### heading); high-risk tasks may include a parenthesized
-      reason: `- riskLevel: high (security surface)`.
-    - Tasks without a riskLevel line raise PlanFormatError (fail-closed).
-    - Non-task `###` headings (anything not starting with `Task `) are ignored.
+      reason: `- riskLevel: high (security surface)` — reason on ONE line
+      (wrapped reasons are forbidden and raise, #880).
+    - A bullet beginning with the word `riskLevel` that does not validate raises
+      PlanFormatError (#880 — `- riskLevel high` and `- riskLevel: super-high`
+      were silent downgrades via the pre-P15 path).
+    - Tasks without ANY riskLevel attempt raise PlanFormatError (fail-closed).
+    - Non-task `###` headings (no `Task ` + whitespace prefix) are ignored.
 
     Backward compatibility: if NO task in the plan has a riskLevel line, the
     plan is treated as pre-P15 (created before this feature shipped) and every
@@ -223,6 +242,15 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
     while i < len(lines):
         m = _TASK_HEADER_RE.match(lines[i])
         if not m:
+            if _TASK_ATTEMPT_RE.match(lines[i]):
+                # #880 Defect E: an attempted-but-unparseable task heading is a
+                # typo, never prose — silently skipping it dropped the task and
+                # its mandatory Step 8a review.
+                raise PlanFormatError(
+                    f"line {i + 1}: unparseable task heading {lines[i].strip()!r} — "
+                    f"task headings must be `### Task <id>: <title>` with id matching "
+                    f"[A-Za-z0-9][A-Za-z0-9._-]*; rename prose headings that begin 'Task '"
+                )
             i += 1
             continue
         task_id, title = m.group(1), m.group(2)
@@ -241,6 +269,16 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
             if mm:
                 risk_level = mm.group(1).lower()
                 reason = mm.group(2).strip() if mm.group(2) else None
+            elif _RISKLEVEL_ATTEMPT_RE.match(lines[j]):
+                # #880 Defect E: an attempted riskLevel line that fails the
+                # format is a typo (missing colon, off-vocab value, wrapped
+                # reason) — before this it silently downgraded high->standard
+                # via the pre-P15 path, disabling Step 8a.
+                raise PlanFormatError(
+                    f"line {j + 1}: unparseable riskLevel line {lines[j].strip()!r} — "
+                    f"must be `- riskLevel: high|standard`, any parenthesized reason "
+                    f"on the SAME line (wrapped reasons are forbidden)"
+                )
             pg = _PARALLEL_GROUP_RE.match(lines[j])
             if pg:
                 parallel_group = pg.group(1)

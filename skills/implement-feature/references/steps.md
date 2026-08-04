@@ -787,9 +787,9 @@ form (run them when not in the lane).
    8. **Regex on untrusted input** — ReDoS risk, lookahead in user-controlled input
 
    **Plan format contract** (enforced by `plan_lib.parse_tasks`):
-   - Each task begins with `### Task <id>: <title>` heading.
-   - Each task body MUST contain a line `- riskLevel: high|standard`; high-risk tasks include a parenthesized reason: `- riskLevel: high (security surface)`.
-   - Tasks lacking a `riskLevel` line **fail closed** (parse error → STOP).
+   - Each task begins with `### Task <id>: <title>` heading; the id matches `[A-Za-z0-9][A-Za-z0-9._-]*` (`T1`, `1a`, `2.3` — shell-safe, #880). An unparseable `### Task ` heading fails closed (parse error naming the line → STOP), never silently skipped.
+   - Each task body MUST contain a line `- riskLevel: high|standard`; high-risk tasks include a parenthesized reason: `- riskLevel: high (security surface)` — the reason stays on ONE line (a wrapped reason is forbidden and fails closed, #880).
+   - Tasks lacking a `riskLevel` line **fail closed** (parse error → STOP); so does a malformed riskLevel attempt (`- riskLevel high`, an off-vocab value).
    - OPTIONAL: `- parallel_group: <id>` and `- files: <comma-separated paths>` (see Task ordering above). These are purely additive — absent fields just mean the task is not parallel-eligible; they never affect the `riskLevel` fail-closed contract or the pre-P15 migration.
 
    **Calibration sanity (judgment, not a helper call):** the 15–30% high-risk ratio is the
