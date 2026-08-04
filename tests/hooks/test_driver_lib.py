@@ -11,6 +11,7 @@ The fuller state-transition validator (record_outcome/defer_issue/queue mutation
 is intentionally NOT part of this module (deferred, #134 follow-up #2).
 """
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -962,3 +963,42 @@ class TestIncludeBindLeavesThePromptForTheHerdrPath:
         s = _st([_iss(682, "queued")], generation=1, extra={"epic": 684}, project=None)
         disp = dl.fresh_session_handoff(s, mode=dl.FRESH_SESSION_MODE, include_bind=False)
         assert disp["outcome"] == "no_project", disp
+
+
+class TestCliRefusalStub:
+    """#905: driver_lib invoked as a CLI must refuse loudly (rc 2), never exit 0 silently.
+
+    A silent rc-0 `driver_lib.py next-child` invocation was read as a passing gate while the
+    real gate (`launcher_lib.py next-child`) was refusing with rc 6 — observed live 2026-08-04.
+    Black-box via subprocess, exactly as a shell would invoke it (docs/testing.md philosophy).
+    """
+
+    CLI = str(HOOKS_DIR / "driver_lib.py")
+
+    def _run(self, *args):
+        return subprocess.run([sys.executable, self.CLI, *args],
+                              capture_output=True, text=True, timeout=30)
+
+    def test_cli_invocation_with_args_refuses_rc2_on_stderr(self):
+        proc = self._run("next-child", "--driver-state", "nope.json")
+        assert proc.returncode == 2, f"expected loud refusal rc 2, got {proc.returncode}"
+        assert "pure library" in proc.stderr
+        assert "launcher_lib.py" in proc.stderr
+        assert proc.stdout == ""  # nothing success-shaped on stdout for a gate to misread
+
+    def test_bare_cli_invocation_refuses_the_same_way(self):
+        proc = self._run()
+        assert proc.returncode == 2
+        assert "pure library" in proc.stderr
+        assert proc.stdout == ""
+
+    def test_importing_the_module_stays_silent(self):
+        # Characterization pin (green from the start): the stub must not add any
+        # import-time behavior — consumers import driver_lib in every session.
+        proc = subprocess.run(
+            [sys.executable, "-c",
+             "import sys; sys.path.insert(0, %r); import driver_lib" % str(HOOKS_DIR)],
+            capture_output=True, text=True, timeout=30)
+        assert proc.returncode == 0
+        assert proc.stdout == ""
+        assert proc.stderr == ""
