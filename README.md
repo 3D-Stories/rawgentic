@@ -725,6 +725,27 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.125.7 (2026-08-04)
+- **A `gates[]` row for step 11.5 is now rejected at write time (#904, epic #875).** The run-record
+  schema forbids it — Step 11.5's result lives in the `security_scan` section, and
+  `CANONICAL_GATE_NAMES` deliberately carries no `11.5` key — but the rule was documented at
+  `hooks/work_summary.py:76-77` and never enforced, so Step-16 assembly kept re-adding the row: **28
+  of the 205 records** in the committed store carry one, and each renders a DUPLICATE Security-Scan
+  line. `validate_record` now rejects such a row in STRICT (write-time) mode only, naming the
+  offending index and pointing at `security_scan`, mirroring the `SCANNER_KINDS` vocabulary check.
+  Strict-only is the load-bearing choice: `load_store` validates leniently, so a non-strict guard
+  would have evicted all 28 historical records — verified against the real store, which still loads
+  205 records with 0 excluded. Every write path is covered, because `persist_record` has exactly one
+  caller and it is reachable only past the strict validation that returns 1 without persisting. This
+  issue's originally filed symptom (a renderer that reported "Security Scan: not run" for a valid
+  passing block) was **REFUTED** during queue revalidation and the issue rescoped by owner decision
+  D187; the renderer is deliberately unchanged, and the 28 historical records are deliberately not
+  rewritten (the store is append-only), so those summaries keep their duplicate line as a stated
+  consequence. Tests: 6 new — strict rejection, index naming, the actionable `security_scan` pointer,
+  the same record passing once the row is removed, the CLI write path exiting 1 without persisting,
+  and a lenient-read pin that goes red if the guard is ever moved out of strict mode. No
+  workflow-spine change → no diagram REV. Suite 4880→4886.
+
 ### v3.125.6 (2026-08-04)
 - **The `project_switched` handoff gate compares `project_path` path-equivalently, and says which
   field disagreed when it refuses (#800, epic #875).** `registry_has_session` matched the registry
