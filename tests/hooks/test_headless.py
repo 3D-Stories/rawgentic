@@ -1,6 +1,6 @@
 """Post-retreat survivors of the old headless-infrastructure test file (#43 → #866 M0d).
 
-The headless ORCHESTRATION (access gate, suspend/QUESTION protocol,
+The headless ORCHESTRATION (the session-start gate, suspend/QUESTION protocol,
 the headless-interaction hook, references/headless.md, the Action pilot) was deleted in
 M0d. What remains here:
 - the <config-loading> skill-count canary (hooks/skill_registration_check.py:229
