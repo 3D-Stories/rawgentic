@@ -146,6 +146,9 @@ skipped scanner is a real coverage gap, so setup installs whatever is missing.
    In an interactive setup, tell the user this is happening and that they can
    decline. If they decline, persist it: read `.rawgentic_workspace.json`, set
    top-level `"installScanners": false`, write it back (and skip the install).
+   When `RAWGENTIC_HEADLESS=1`, do NOT install — just record the gap. (The
+   headless machinery retires in M0d; this unattended-install guard leaves
+   with it, never before it.)
 
 3. **Report** which scanners are now present and which remain missing (so the
    user knows the WF2/WF9 scan will skip those). The installer's `--check` mode
@@ -167,11 +170,12 @@ is the explicit, user-visible confirmation.
 
 ### New features are ON by default (opt-OUT)
 
-The feature steps above (2d adversarial review, 2e scanners, 2g peer consult) run
+The feature steps above (2d adversarial review, 2e scanners, 2g peer consult,
+2h design artifacts) run
 on **every** setup invocation, including Sub-flow A re-runs against an existing
 `.rawgentic.json`. When the plugin gains a capability, re-running setup therefore
 **enriches an older config and turns the new feature on by default** — features
-are opt-OUT, not opt-in. Two deliberate exceptions, which always require an
+are opt-OUT, not opt-in. Three deliberate exceptions, which always require an
 explicit answer and are never force-enabled:
 
 - **Adversarial review / WF5 (2d)** depends on an OpenAI account for the Codex CLI,
@@ -180,6 +184,9 @@ explicit answer and are never force-enabled:
 - **Peer consult / WF13 (2g)** mirrors 2d's answer-required pattern (same Codex CLI
   dependency) but, unlike WF5, has no default-on recommendation — it always asks,
   and "no" leaves the WF2 integration off (the standalone skill still works).
+- **Design artifact / lifecycle (2h)** stays default-off — it always asks its two
+  questions; declining stages a disabled block (byte-identical behavior), and it
+  is never force-enabled by a re-run.
 
 Everything else (e.g. the security scanners) installs/enables by default unless the
 user has an opt-out on record. The SessionStart post-update reconcile

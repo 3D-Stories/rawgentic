@@ -1389,6 +1389,16 @@ class TestHeadlessStatusCorpus:
         spine = (SKILLS_DIR / "setup" / "SKILL.md").read_text()
         assert "headlessEnabled" not in spine and "Step 2c" not in spine
 
+    def test_setup_step_2e_keeps_headless_install_guard(self):
+        """M0c review finding 2: the headless RUNTIME survives until M0d, so
+        Step 2e's unattended-install guard survives with it — a
+        headless-enabled project running setup must not install packages
+        unattended. The guard leaves in M0d with the machinery, never before."""
+        spine = (SKILLS_DIR / "setup" / "SKILL.md").read_text()
+        assert "RAWGENTIC_HEADLESS=1" in spine
+        norm = " ".join(spine.split())
+        assert "do NOT install — just record the gap" in norm
+
 
 class TestHeadlessInteractionBlock:
     """Lint: the headless protocol lives in references/headless.md (loaded on demand),
