@@ -748,7 +748,7 @@ For major changes, please open an issue first to discuss the approach.
   deliberately does not auto-dissolve at the #393 join, so a refuted finding stays re-raisable.
   Bounded limitation stated rather than assumed: this boundary validates the findings it is GIVEN
   and cannot detect a Critical/High the caller omitted, nor verify an `applied` was truly applied.
-  WF2 diagram REV 3.127.0 (station 04 delta). Suite 5031→5065.
+  WF2 diagram REV 3.127.0 (station 04 delta). Suite 5031→5072.
 
 ### v3.126.0 (2026-08-04)
 - **Reviewer confidence is now a native number the severity band filter can consume mechanically

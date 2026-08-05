@@ -1121,10 +1121,13 @@ class TestSevereFindingsDisposedHardening:
         # overrides, so caller-controlled text could recolor, reorder or conceal parts of the
         # operator-facing refusal.
         mod = _reload_plan_lib()
-        nasty = "red\x1b[31mESC\x00NUL‮THGIR-OT-TFEL‬"
+        # The bidi overrides are written as escapes, never as literal characters: pylint's
+        # E2502 (bidirectional-unicode) is an ENABLED check on a HARD CI lane, so a literal
+        # U+202E here fails the lint that this very test exists to justify.
+        nasty = "red\x1b[31mESC\x00NUL\u202eTHGIR-OT-TFEL\u202c"
         _, why = mod.severe_findings_are_disposed(
             [_disposed(disp=None, desc=nasty, loc=nasty)])
-        for ch in ("\x1b", "\x00", "‮", "‬"):
+        for ch in ("\x1b", "\x00", "\u202e", "\u202c"):
             assert ch not in why, f"{ch!r} must not reach operator-facing output"
 
     def test_offenders_past_the_cap_are_counted_not_rendered(self):
