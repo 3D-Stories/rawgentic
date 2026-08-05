@@ -725,6 +725,33 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.128.2 (2026-08-05)
+- **The last two hand-pinned skill-count strings are now computed, finishing the #271 conversion
+  (#910, epic #875).** `CLAUDE.md` §4 mistake #2 named "All 7 config-driven skills" and "6 workspace
+  management" as the residue the #271 guards never reached. Nothing read those lines, so both had
+  already rotted — the real counts are 9 and 9 — and the #528 run record booked exactly that drift
+  as a follow-up on 2026-07-20, where it sat for fifteen days. Correcting the numbers is a forced
+  consequence of guarding them, not a separate cleanup. The fix extends the checker that already
+  exists rather than adding a parallel guard beside it (`hooks/skill_registration_check.py`, #528):
+  `CLAUDE.md` joins `SWEEP_GLOBS` — it is not "docs" in the excluded sense but the operating manual
+  a model reads as instruction — and `pin:config-driven` is promoted into `COMPUTED_FAMILIES`, so it
+  is checked against the tree instead of against its own copies. That promotion is the substantive
+  half: consensus had failed in the only way consensus can, with README and its own test literal
+  agreeing on 8 while the corpus carried 9, every copy consistent and every copy wrong. A lone pin
+  trivially agrees with itself, which is why one occurrence reported OK for months. `pin:workspace`
+  deliberately stays consensus-only and says so in the source — no per-skill category metadata
+  exists to derive it from, and inventing a taxonomy would add a hand-maintained surface while
+  claiming to remove one; its net is cross-surface consensus plus the existing `breakdown-sum`
+  guard. The checker already names the stale surface with file:line, so the failure message
+  requirement needed no new machinery. Verified by reverting the prose: `pin:config-driven` reports
+  `expected 9, stale at: ... README.md:460 (8), CLAUDE.md:221 (7)` and `pin:workspace` names
+  `CLAUDE.md:222 (6)` against six surfaces at 9. Four new tests cover the promotion, the widened
+  sweep, the fail-closed path that must never silently demote a computed family back to consensus,
+  and AC3's claim itself; all four are mutation-verified. The change also exposed a latent bug in the checker's
+  own fixture, which claimed two config-driven skills over a tree containing one — the single-copy
+  blind spot reproducing itself inside the test suite. No workflow-spine change → no diagram REV.
+  Suite 5249→5253.
+
 ### v3.128.1 (2026-08-05)
 - **Skill frontmatter descriptions brought under Anthropic's 1,024-char cap, two descriptions
   un-truncated, and `incident/SKILL.md` split into `references/` (#909, epic #875).** The headline

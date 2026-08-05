@@ -63,7 +63,7 @@ README = d("""# Fixture
 
 provides_2_skills
 
-All_2_config-driven_skills share a block.
+All_1_config-driven_skills share a block.
 
 0/2_skills_have_evals.json
 
@@ -386,6 +386,57 @@ def test_sweep_consensus_names_both_locations(tmp_path):
     assert "test_straggler.py" in joined
 
 
+# --- #910: the last two hand-pinned count strings --------------------------
+
+def test_config_driven_pin_is_computed_not_consensus(tmp_path):
+    """A lone copy must be checked against the tree, not against itself.
+
+    This is the exact failure #910 exists to fix. Under consensus-only, ONE
+    occurrence trivially agrees with itself, so README sat at 8 while the
+    corpus carried 9 and the checker reported OK. The fixture has a single
+    config-driven pin, so it reproduces that shape precisely.
+    """
+    root = make_repo(tmp_path)
+    readme = (root / "README.md")
+    readme.write_text(readme.read_text().replace(
+        d("All_1_config-driven_skills"), d("All_7_config-driven_skills")))
+    bad = [f for f in stale(src.sweep_hand_pins(root))
+           if f.surface == "pin:config-driven"]
+    assert bad, "a lone stale copy must fail — consensus with itself is not evidence"
+    detail = " ".join(f.detail for f in bad)
+    assert "README.md" in detail and "expected 1" in detail, detail
+
+
+def test_claude_md_is_swept(tmp_path):
+    """CLAUDE.md is in scope (#910) — being outside it is why the two counts rotted."""
+    root = make_repo(tmp_path)
+    (root / "CLAUDE.md").write_text(
+        d("Registration: All_4_config-driven_skills, 3_workspace_management.\n"))
+    findings = stale(src.sweep_hand_pins(root))
+    detail = " ".join(f.detail for f in findings)
+    assert "CLAUDE.md" in detail, f"CLAUDE.md must be swept; got: {detail}"
+    assert {"pin:config-driven", "pin:workspace"} <= {f.surface for f in findings}
+
+
+def test_config_driven_expectation_failure_never_falls_back_to_consensus(
+        tmp_path, monkeypatch):
+    """Fail-CLOSED: an uncomputable expectation must not silently demote.
+
+    Falling through to the consensus branch would report OK for a lone stale
+    copy — indistinguishable from a real pass, and precisely the weaker check
+    this family was promoted out of.
+    """
+    root = make_repo(tmp_path)
+    monkeypatch.setattr(src, "_skills_with_config_loading",
+                        lambda _root: (_ for _ in ()).throw(OSError("corpus gone")))
+    findings = src.sweep_hand_pins(root)
+    cd = [f for f in findings if f.surface == "pin:config-driven"]
+    assert cd and not any(f.ok for f in cd), (
+        "an uncomputable config-driven expectation must fail, never pass"
+    )
+    assert "corpus gone" in " ".join(f.detail for f in cd)
+
+
 def test_bad_encoding_skill_md_fails_closed(tmp_path):
     # R1-F2 (#528 review): a non-UTF-8 SKILL.md anywhere must yield STALE
     # findings, never a traceback (UnicodeDecodeError is a ValueError)
@@ -460,3 +511,18 @@ def test_real_repo_is_clean():
     out, _, rc = _run_cli("check", "--skill", "implement-feature",
                           "--project-root", str(REPO_ROOT))
     assert rc == 0, f"checker found stale surfaces in the live repo:\n{out}"
+
+
+def test_real_repo_manual_claims_no_hand_pinned_counts():
+    """#910 AC3 — the manual must not advertise a count as hand-pinned.
+
+    The claim is now false wherever it appears: `CLAUDE.md` is inside
+    `SWEEP_GLOBS` and both of its counts are policed above. Left standing, the
+    sentence would send the next reader looking for a residue that no longer
+    exists — and it is the sentence that let this one sit unfixed.
+    """
+    manual = " ".join((REPO_ROOT / "CLAUDE.md").read_text().split())
+    assert d("Still_hand-pinned") not in manual, (
+        "CLAUDE.md still claims a count string is hand-pinned; #910 converted "
+        "the last two to the computed pin:config-driven / pin:workspace sweep"
+    )
