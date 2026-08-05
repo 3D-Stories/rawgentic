@@ -186,6 +186,12 @@ PANE_READY_ERROR_CODE = "agent_pane_busy"
 PANE_READY_ATTEMPTS = 15
 PANE_READY_DELAY_S = 2.0
 
+# #731 — the OTHER instant refusal, and the one that must NOT be retried: a bound agent name
+# stays bound (the live 2026-07-30 failure had it bound to the predecessor's own pane), so a
+# same-name retry is structurally guaranteed to fail. It gets a name-specific `failed_step`
+# instead, on both the pre-split preflight and the start-time race path.
+NAME_TAKEN_ERROR_CODE = "agent_name_taken"
+
 # Order is CAUSAL, and #694 REORDERED it: `spawned -> project_switched -> goal_armed`, matching the
 # order the sends now happen in. Each rung is the durable artifact produced by the send before it.
 #
@@ -401,6 +407,16 @@ def build_agent_start_argv(*, name: str, pane: str, claude_args=None,
     if extra:
         argv += ["--"] + extra
     return argv
+
+
+def build_agent_list_argv() -> list[str]:
+    """`herdr agent list` — every agent herdr knows, with an OPTIONAL `name` per entry.
+
+    Verified live against herdr 0.8.0 (2026-08-05): the JSON is
+    `{"id": "cli:agent:list", "result": {"agents": [...], "type": "agent_list"}}` and only
+    named agents carry a `name` key. Used by the #731 pre-split name preflight.
+    """
+    return ["herdr", "agent", "list"]
 
 
 def build_agent_wait_argv(*, target: str, until: str = "idle",
@@ -2467,6 +2483,22 @@ def _is_pane_busy(proc, body: str) -> bool:
         return False
     err = doc.get("error") if isinstance(doc, dict) else None
     return isinstance(err, dict) and err.get("code") == PANE_READY_ERROR_CODE
+
+
+def _error_code(body) -> str | None:
+    """The `error.code` of a herdr error payload, or None when there is no such thing.
+
+    The sibling of `_is_pane_busy` for callers that need the code itself rather than one
+    yes/no: #731 branches `agent_name_taken` to a name-specific `failed_step`. Same guarded
+    parse — any non-JSON, non-dict, or code-less shape is None, never an exception.
+    """
+    try:
+        doc = json.loads(body or "")
+    except (ValueError, TypeError):
+        return None
+    err = doc.get("error") if isinstance(doc, dict) else None
+    code = err.get("code") if isinstance(err, dict) else None
+    return code if isinstance(code, str) and code else None
 
 
 def _error_note(body: str) -> str | None:

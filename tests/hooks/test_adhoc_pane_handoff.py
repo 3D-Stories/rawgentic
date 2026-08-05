@@ -1454,3 +1454,36 @@ class TestTheDiagnosisDoesNotReReadTheRegistry:
         out = ll.perform_handoff(**_handoff(r, read_text=read_text))
         assert out["ok"] is False
         assert out["failed_step"] == "project_switched"
+
+
+# ---------------------------------------------------------------------------
+# #731 — T1: the agent-list argv builder and the herdr error-code helper
+# ---------------------------------------------------------------------------
+
+class TestAgentListArgvAndErrorCode:
+    def test_agent_list_argv_shape(self) -> None:
+        """Pure list argv, fixed strings — the same contract as every other builder."""
+        assert ll.build_agent_list_argv() == ["herdr", "agent", "list"]
+
+    def test_name_taken_code_constant_matches_herdr(self) -> None:
+        """The code herdr 0.8.0 returns when `agent start` hits a bound name (issue #731's
+        live reproduction)."""
+        assert ll.NAME_TAKEN_ERROR_CODE == "agent_name_taken"
+
+    def test_error_code_extracts_the_herdr_code(self) -> None:
+        body = json.dumps({"error": {"code": "agent_name_taken",
+                                     "message": "agent name x is already used"}})
+        assert ll._error_code(body) == "agent_name_taken"
+
+    def test_error_code_is_none_on_non_json(self) -> None:
+        assert ll._error_code("herdr exploded, plain text") is None
+
+    def test_error_code_is_none_on_json_without_error_dict(self) -> None:
+        assert ll._error_code(json.dumps({"result": {"ok": True}})) is None
+
+    def test_error_code_is_none_when_error_has_no_code(self) -> None:
+        assert ll._error_code(json.dumps({"error": {"message": "no code field"}})) is None
+
+    def test_error_code_is_none_on_empty_or_none(self) -> None:
+        assert ll._error_code("") is None
+        assert ll._error_code(None) is None
