@@ -1116,3 +1116,125 @@ class TestGlmSingleAttempt:
         assert res["status"] == "failure"
         assert res["error_class"] == "transport"
         assert len(calls) == 2
+
+
+# ===========================================================================
+# #761 T4 — the `--task-class` / `--issue` flag pair on all three verbs.
+#
+# C3/C7 (pass-6 High, terminal ADOPTED disposition d-761-6-7-b750): omitting
+# `--issue` conflates a legitimately issue-less review with an accidental
+# omission on an issue-scoped one. The latter would silently inject the project
+# default instead of the snapshotted class, so the prompt could display the
+# WRONG class with no failure and no diagnostic. Hence: `--issue` without
+# `--task-class` REFUSES rather than defaulting.
+#
+# Design AC 10 (docs/planning/2026-08-04-761-proportionality-contract-design.md
+# :319): an out-of-enum value is refused (exit 2) BEFORE egress, and absence of
+# the flag leaves behaviour unchanged.
+# ===========================================================================
+
+class TestTaskClassFlags:
+    def test_out_of_enum_task_class_refuses_before_egress(self, stub, project):
+        result = _cli(_artifact_args(project, extra=("--task-class", "bogus")),
+                      stub.env)
+        assert result.returncode == 2
+        assert stub.calls == 0, "refusal must precede egress"
+        r = _result(project)
+        assert r["error_class"] == "invalid_input"
+        assert "bogus" in r["error_detail"]
+
+    def test_issue_without_task_class_refuses(self, stub, project):
+        """C3/C7: an issue-scoped review may not fall back to the default."""
+        result = _cli(_artifact_args(project, extra=("--issue", "761")),
+                      stub.env)
+        assert result.returncode == 2
+        assert stub.calls == 0
+        r = _result(project)
+        assert r["error_class"] == "invalid_input"
+        assert "--task-class" in r["error_detail"]
+
+    def test_issue_with_task_class_succeeds_and_records_both(self, stub, project):
+        result = _cli(
+            _artifact_args(project,
+                           extra=("--task-class", "disposable", "--issue", "761")),
+            stub.env)
+        assert result.returncode == 0, result.stderr
+        r = _result(project)
+        assert r["status"] == "success"
+        assert r["task_class"] == "disposable"
+        assert r["issue"] == 761
+
+    def test_task_class_renders_in_the_artifact_prompt(self, stub, project):
+        stub.env["CODEX_STUB_STDIN_FILE"] = str(project / "stdin.txt")
+        result = _cli(_artifact_args(project,
+                                     extra=("--task-class", "disposable")),
+                      stub.env)
+        assert result.returncode == 0, result.stderr
+        prompt = (project / "stdin.txt").read_text()
+        assert "TASK CLASS: disposable" in prompt
+        assert "TASK CLASS: production" not in prompt
+
+    def test_absent_flag_leaves_behaviour_unchanged(self, stub, project):
+        """Always-render, defaulting to the strictest class — never NO line."""
+        stub.env["CODEX_STUB_STDIN_FILE"] = str(project / "stdin.txt")
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        r = _result(project)
+        assert r["task_class"] == "production"
+        assert r["issue"] is None
+        assert "TASK CLASS: production" in (project / "stdin.txt").read_text()
+
+    def test_consult_threads_the_task_class(self, stub, project):
+        stub.env["CODEX_STUB_BODY"] = VALID_PROPOSAL
+        stub.env["CODEX_STUB_STDIN_FILE"] = str(project / "stdin.txt")
+        args = [
+            "consult", "--artifact", str(project / "artifact.md"),
+            "--reviewer", "gpt-5.5-codex",
+            "--out", str(project / "result.json"),
+            "--project-root", str(project),
+            "--task-class", "internal", "--issue", "761",
+        ]
+        result = _cli(args, stub.env)
+        assert result.returncode == 0, result.stderr
+        assert "TASK CLASS: internal" in (project / "stdin.txt").read_text()
+        assert _result(project)["task_class"] == "internal"
+
+    def test_consult_issue_without_task_class_refuses(self, stub, project):
+        args = [
+            "consult", "--artifact", str(project / "artifact.md"),
+            "--reviewer", "gpt-5.5-codex",
+            "--out", str(project / "result.json"),
+            "--project-root", str(project),
+            "--issue", "761",
+        ]
+        result = _cli(args, stub.env)
+        assert result.returncode == 2
+        assert stub.calls == 0
+        assert _result(project)["error_class"] == "invalid_input"
+
+    def test_review_code_threads_the_task_class(self, stub, repo):
+        stub.env["CODEX_STUB_STDIN_FILE"] = str(repo / "stdin.txt")
+        result = _cli(_code_args(repo, extra=("--task-class", "internal",
+                                              "--issue", "761")),
+                      stub.env, cwd=str(repo))
+        assert result.returncode == 0, result.stderr
+        assert "TASK CLASS: internal" in (repo / "stdin.txt").read_text()
+        assert json.loads((repo / "result.json").read_text())["task_class"] \
+            == "internal"
+
+    def test_review_code_issue_without_task_class_refuses(self, stub, repo):
+        result = _cli(_code_args(repo, extra=("--issue", "761")),
+                      stub.env, cwd=str(repo))
+        assert result.returncode == 2
+        assert stub.calls == 0
+        r = json.loads((repo / "result.json").read_text())
+        assert r["error_class"] == "invalid_input"
+
+    def test_refusal_is_recorded_in_the_receipt_not_just_stderr(self, stub,
+                                                               project):
+        """The orchestrator gates on the receipt, so the refusal must be IN it."""
+        result = _cli(_artifact_args(project, extra=("--task-class", "Production")),
+                      stub.env)
+        assert result.returncode == 2, "the enum is case-SENSITIVE"
+        assert (project / "result.json").exists()
+        assert _result(project)["status"] == "refused"
