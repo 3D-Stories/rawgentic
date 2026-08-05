@@ -54,7 +54,7 @@ def test_marketplace_registers_skill():
 # a scoped local run that skips this file is exactly how the miss reaches CI.
 # Deliberately not naming the retired module here: tests/test_retirement_tripwire.py
 # scans active surfaces for retired vocabulary and flagged the earlier wording.
-EXPECTED_PLUGIN_VERSION = "3.128.1"
+EXPECTED_PLUGIN_VERSION = "3.128.2"
 
 VERSION_SURFACE_FILES = (
     ".claude-plugin/plugin.json",
@@ -332,7 +332,12 @@ def test_readme_count_strings_updated():
         f"plugin description breakdown {breakdown} must sum to the "
         f"{n_skills} skills on disk"
     )
-    assert "All 8 config-driven skills" in readme
+    # #910: this literal is no longer the guard — `pin:config-driven` in
+    # hooks/skill_registration_check.py computes the count from the tree and
+    # sweeps every copy, including this one. It stayed at 8 while the corpus
+    # carried 9 precisely because consensus between two stale copies looked
+    # like agreement.
+    assert "All 9 config-driven skills" in readme
     # #271: computed from disk, never a hand-maintained literal. A skill
     # "has evals" iff evals.json exists in its own evals/ dir or its
     # -workspace evals/ dir.

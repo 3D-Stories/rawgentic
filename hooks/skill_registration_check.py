@@ -44,15 +44,34 @@ PIN_FAMILIES = {
     "pin:provides": re.compile(r"provides (\d+) skills"),
     "pin:evals": re.compile(r"(\d+)/(\d+) skills have evals\.json"),
 }
-COMPUTED_FAMILIES = ("pin:provides", "pin:evals")
+# `pin:config-driven` joined the computed set in #910. Consensus alone had let
+# it rot in the only way consensus can: README and its own test literal agreed
+# on 8 while the tree carried 9, so every copy was consistent and every copy was
+# wrong. The count is derivable — it is the canary's population — so agreement
+# is no longer accepted as a substitute for correctness.
+#
+# `pin:workspace` deliberately stays consensus-only: no per-skill category
+# metadata exists in the tree, so there is nothing to derive it from. Inventing
+# a category taxonomy to compute it would create a new hand-maintained surface
+# while claiming to remove one. Its safety net is consensus across the config
+# surfaces PLUS `breakdown-sum`, which already pins the four-way breakdown to
+# the on-disk skill count.
+COMPUTED_FAMILIES = ("pin:provides", "pin:evals", "pin:config-driven")
 NEGATIVE_PIN_TAIL_RE = re.compile(r"""["']?\s*not\s+in\b""")
 
-# Sweep scope: the CI-pinned surfaces plus the project's own config description.
-# docs/*.md are deliberately excluded (known-stale on counts by convention —
-# the add-skill skill's rule: tests are the truth, docs defer to them).
+# Sweep scope: the CI-pinned surfaces plus the project's own config description
+# and the repo operating manual. docs/*.md are deliberately excluded
+# (known-stale on counts by convention — the add-skill skill's rule: tests are
+# the truth, docs defer to them).
+#
+# CLAUDE.md is IN scope since #910. It is not "docs" in that sense — it is the
+# operating manual a model reads as instruction, and its §4 mistake #2 carried
+# the last two hand-pinned counts. Being outside the sweep is exactly why they
+# rotted unnoticed to 7 and 6 against a real 9 and 9.
 SWEEP_GLOBS = ("tests/**/*.py", "README.md", ".claude-plugin/plugin.json",
                ".claude-plugin/marketplace.json",
-               "plugins/rawgentic/.codex-plugin/plugin.json", ".rawgentic.json")
+               "plugins/rawgentic/.codex-plugin/plugin.json", ".rawgentic.json",
+               "CLAUDE.md")
 
 
 @dataclass
@@ -298,12 +317,20 @@ def _sweep_lines(root: Path):
 def sweep_hand_pins(root: Path) -> list:
     skills = _disk_skills(root)
     n = len(skills)
+    findings = []
     expected = {
         "pin:provides": (str(n),),
         "pin:evals": (str(len(_evals_have(root, skills))), str(n)),
     }
+    # Fail-CLOSED (CLAUDE.md §3): this is a release-contract guard, so a corpus
+    # we cannot read must FAIL rather than quietly demote the family back to
+    # consensus — the demotion would look identical to a pass.
+    try:
+        expected["pin:config-driven"] = (str(len(_skills_with_config_loading(root))),)
+    except (OSError, ValueError) as exc:
+        findings.append(Finding("pin:config-driven", False,
+                                f"cannot compute the config-loading population: {exc}"))
     occurrences = {family: [] for family in PIN_FAMILIES}
-    findings = []
     for rel, lineno, line in _sweep_lines(root):
         if line == "\x00unreadable":
             findings.append(Finding("pin:sweep", False, f"{rel} unreadable"))
@@ -321,6 +348,12 @@ def sweep_hand_pins(root: Path) -> list:
         if not occ:
             continue
         if family in COMPUTED_FAMILIES:
+            if family not in expected:
+                # The expectation could not be computed; a failing Finding was
+                # already recorded above. Do NOT fall through to the consensus
+                # branch — that would silently downgrade a computed family to
+                # the weaker check whose failure mode this family exists to fix.
+                continue
             want = expected[family]
             bad = [(rel, ln, g) for rel, ln, g in occ if g != want]
             if bad:
