@@ -760,8 +760,19 @@ For major changes, please open an issue first to discuss the approach.
   that permanently; a non-string `defaultTaskClass` was silent where a bad string diagnosed; the
   issue-less WF5/WF13 path resolved the project default and then discarded it, so a configured
   `internal` could never reach a prompt; and `resolve`'s failure surface was a raw traceback rather
-  than the `task-class: FAILED — <reason>` line its own docs promise.
-  No workflow-spine change → no diagram REV. Suite 5080→5197.
+  than the `task-class: FAILED — <reason>` line its own docs promise. Step 11 then ran two passes plus
+  the mandated adversarial diff layer and returned twelve more findings (0 dropped by band, 10 unique):
+  nine applied, one declined on the merits, and one — the argument that the runner should refuse
+  outright when no snapshot exists — left closed because D207 had already ruled on exactly that
+  question. Two are worth naming because they were regressions in the Step-8a fixes themselves: the
+  corrected WF5/WF13 instruction was contradicted by its own completion checklist, and gating the
+  issue fetch left the `jq` body extraction unguarded, so the empty-body hole had moved rather than
+  closed. Also fixed: a newly-created snapshot directory's own entry was never fsynced (durable
+  contents inside a directory a crash could still lose); `os.path.exists` followed symlinks, so a
+  dangling link read as "absent" and took the trust-the-caller branch; an excluded-candidate notice
+  was suppressed whenever the config default was also invalid; and block-quote exclusion missed
+  CommonMark lazy continuation, so quoted documentation of the field could set it.
+  No workflow-spine change → no diagram REV. Suite 5080→5208.
 
 ### v3.127.1 (2026-08-05)
 - **herdr re-pinned to v0.8.0 against the migrated `herdrdev/herdr` org, with every value 0.8.0
