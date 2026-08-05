@@ -57,7 +57,8 @@ def _transcript(tmp_path, session_id, rows):
 def _run(payload, *, home, cwd=None, extra_env=None, timeout=20):
     env = dict(os.environ)
     env["HOME"] = str(home)
-    env.pop("RAWGENTIC_HEADLESS", None)
+    env.pop("RAWGENTIC_HEADLESS", None)  # tripwire-exempt: scrubs the retired var
+    # so an inherited value cannot influence a test of the signal that replaced it
     env.pop("RAWGENTIC_LAUNCHER_ARMED", None)
     env.pop("RAWGENTIC_FRESH_LAUNCH_SUPPORTED", None)
     # #732 — dev shells here run UNDER herdr, so the inherited env would flip the
@@ -838,7 +839,7 @@ def test_unattended_without_a_launcher_still_routes_to_clear_prep(tmp_path):
 
 
 def test_setting_the_retired_env_var_changes_nothing(tmp_path):
-    """#943 clean break: `RAWGENTIC_HEADLESS` is retired, and nothing reads it.
+    """#943 clean break: the retired env var is dead, and nothing reads it.
 
     Without a declaration the session is attended, and exporting the old variable
     must NOT resurrect the unattended branch — otherwise the env var would still be
@@ -850,7 +851,8 @@ def test_setting_the_retired_env_var_changes_nothing(tmp_path):
     plain.mkdir()
     tagged.mkdir()
     attended = _nag(plain)
-    with_env = _nag(tagged, {"RAWGENTIC_HEADLESS": "1"})
+    with_env = _nag(tagged, {"RAWGENTIC_HEADLESS": "1"})  # tripwire-exempt: the
+    # negative assertion's SUBJECT is the retired token — setting it must do nothing
     assert with_env == attended
     assert "Unattended" not in with_env
 

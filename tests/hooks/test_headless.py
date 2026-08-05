@@ -8,8 +8,8 @@ M0d. What remains here:
   without updating that reader),
 - the D178 negative guard (no skill body re-grows a <headless-mode> pointer),
 - the two setup pins (setup stages no headless config; Step 2e keeps the
-  no-unattended-installs guard — D184: RAWGENTIC_HEADLESS survives only as the
-  bare "nobody is watching" signal until epic #871),
+  no-unattended-installs guard, which #943 moved onto the declared supervision
+  state — the env var it used to read is retired, and nothing consults it),
 - the Step 1b goal-guard and mandatory-steps lints (never headless-specific;
   they live here for historical reasons).
 """

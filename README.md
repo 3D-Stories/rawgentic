@@ -682,14 +682,38 @@ Skills are tested via the `/skill-creator` eval pipeline (11/24 skills have eval
 
 ---
 
-## Headless Mode (retired)
+## Supervision state (replaces headless mode)
 
 The headless orchestration mode — the session-start access gate, the GitHub-comment
 QUESTION/suspend protocol, and the label-triggered Action pilot — was **retired in the M0
-executor retreat (#866, M0d)**. `RAWGENTIC_HEADLESS=1` survives only as a bare
-"nobody is watching this session" signal consumed by the context-pressure handoff routing and
-the no-unattended-installs guards (owner decision D184); a first-class away mode replaces it in
-epic #871.
+executor retreat (#866, M0d)**. Its last remnant was a bare environment variable that
+meant only "nobody is watching", with no way to say whether the owner was reachable, and
+no way for a session to clear it. **That variable is retired as of #943**; nothing reads
+it, and setting it now has no effect.
+
+In its place, supervision is **declared**, in
+`<workspace>/claude_docs/.supervision.json`:
+
+| Command | Meaning |
+|---|---|
+| `/rawgentic:away [until]` | absent, still reachable by phone |
+| `/rawgentic:sleeping <wake time>` | unreachable until a stated time (required) |
+| `/rawgentic:back` | watching again — the ONLY thing that lifts the guards |
+
+Two guards read it, and they fail safe in **opposite** directions, which is why there are
+two predicates rather than one flag:
+
+- **`nobody-to-ask`** decides whether a context-pressure nag says "hand over" or "tell
+  me". An expired declaration relaxes it — past a stated return time, assume the owner is
+  back, since the only cost is which advice is printed.
+- **`installs-forbidden`** decides whether missing security scanners may be
+  auto-installed. An expired declaration does **not** relax it, and neither does a state
+  file that cannot be parsed: installing packages is an outward act, and a clock passing a
+  timestamp is not evidence anybody returned.
+
+Blocker routing while unsupervised — texting the owner, consulting cross-model, parking a
+campaign — is **not** part of this and is deliberately gated off; it lands in #947. See
+`docs/supervision.md`.
 
 ---
 

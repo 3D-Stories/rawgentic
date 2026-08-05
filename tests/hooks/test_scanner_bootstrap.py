@@ -287,7 +287,8 @@ class TestMainIntegration:
         """#943 clean break. The old variable is retired; exporting it must not
         suppress an install, or it would still be a live input under a new name."""
         installer, sentinel = _fake_installer(tmp_path, missing=("trivy",))
-        r = _run_main(tmp_path, installer, extra_env={"RAWGENTIC_HEADLESS": "1"})
+        r = _run_main(tmp_path, installer,  # tripwire-exempt: subject IS the token
+                      extra_env={"RAWGENTIC_HEADLESS": "1"})  # tripwire-exempt: ditto
         assert r.returncode == 0
         st = json.loads(_status_path(tmp_path).read_text())
         assert st["outcome"] == "installing"
@@ -357,7 +358,8 @@ class TestMainIntegration:
         """The whole point of Hole 2's detectability: even a skip writes a fresh,
         timestamped status — a stale/absent status is now a visible no-fire signal."""
         installer, _ = _fake_installer(tmp_path, missing=("trivy",))
-        _run_main(tmp_path, installer, extra_env={"RAWGENTIC_HEADLESS": "1"},
+        _run_main(tmp_path, installer,  # tripwire-exempt: proving the token is inert
+                  extra_env={"RAWGENTIC_HEADLESS": "1"},  # tripwire-exempt: ditto
                   now="2026-06-22T12:00:00Z")
         st = json.loads(_status_path(tmp_path).read_text())
         assert st["checked_at"] == "2026-06-22T12:00:00Z"

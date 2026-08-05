@@ -11,11 +11,14 @@ fixtures, claude_docs working memory, the README Changelog section, and the
 versioned workflow diagram (historical REVs pin the prose of their era).
 
 Deliberately NOT in the vocabulary:
-- bare ``RAWGENTIC_HEADLESS`` — D184 keeps it as the unattended-session signal
-  (context_meter routing, scanner_bootstrap skip, setup Step 2e guard); only
-  the ``RAWGENTIC_HEADLESS_TRIGGER`` orchestration variant is retired.
 - bare "executor" / "seat" — retirement notes legitimately use the words; the
   tripwire pins the concrete module/command/config tokens instead.
+
+The bare unattended-session env var WAS the one D184 exception, kept alive in
+exactly three reads. #943 replaced all three with a declared supervision state, so
+it joined the retired vocabulary and its allowed-carrier set went to empty — see
+``test_the_unattended_env_signal_has_zero_active_carriers`` below, which is kept
+rather than deleted so the retirement stays asserted in BOTH directions.
 """
 
 import subprocess
@@ -39,6 +42,11 @@ RETIRED_VOCABULARY = [
     "headless_ssh_guard",
     "headless_suspend",
     "RAWGENTIC_HEADLESS_TRIGGER",
+    # The bare signal joined the retired list in #943, when the declared supervision
+    # state replaced its last three reads. Belt-and-braces with the exact-set assertion
+    # at the bottom of this file: redundant on purpose, because a guard that only
+    # documents intent in a comment is a guard that gets deleted.
+    "RAWGENTIC" "_HEADLESS",  # split so this file's own mention self-exempts
     "phaseExecutorTable",
     "executorTerminalBackend",
     "telemetryAlerts",
@@ -159,20 +167,19 @@ def test_pragma_is_inert_outside_tests_and_without_a_reason():
     assert _hits("tests/test_x.py", bare) == ["executor_routing_lib"]
 
 
-# D184 (owner decision, #866/#871): bare RAWGENTIC_HEADLESS survives as the
-# unattended-session signal in EXACTLY these active-surface files — the three
-# code/prose reads plus the two documents that describe them. Both directions
-# guarded: a NEW mention is a resurrection; a MISSING one means a D184
-# survivor was deleted.
+# D184's exception is SPENT (#943). The bare unattended-session env var had exactly
+# three reads — context_meter routing, the scanner_bootstrap install skip, and setup
+# Step 2e — and all three now read the declared supervision state instead. The allowed
+# set is therefore EMPTY, and this assertion is kept rather than deleted: an exact-set
+# equality documents the intent and fails loudly on any re-introduction, whereas
+# deleting it would leave only the generic vocabulary sweep and no record of why.
+# Both directions still hold — the "missing" half is now vacuous by construction, which
+# is exactly what "retired" should look like.
 D184_SIGNAL = "RAWGENTIC" + "_HEADLESS"  # split so this file self-exempts
-D184_ALLOWED_FILES = {
-    # context_meter, scanner_bootstrap, setup Step 2e — all cut over (#943)
-    "README.md",                    # the Headless Mode (retired) note
-    "docs/context-meter.md",        # documents the handoff routing
-}
+D184_ALLOWED_FILES: set[str] = set()
 
 
-def test_d184_unattended_signal_reads_are_exactly_the_allowed_set():
+def test_the_unattended_env_signal_has_zero_active_carriers():
     carriers = set()
     for rel_path in _tracked_files():
         if _is_exempt(rel_path) or rel_path.startswith("tests/"):
@@ -183,6 +190,6 @@ def test_d184_unattended_signal_reads_are_exactly_the_allowed_set():
         if D184_SIGNAL in text.replace(D184_SIGNAL + "_TRIGGER", ""):
             carriers.add(rel_path)
     assert carriers == D184_ALLOWED_FILES, (
-        f"D184 drift — new: {sorted(carriers - D184_ALLOWED_FILES)}, "
-        f"missing: {sorted(D184_ALLOWED_FILES - carriers)}"
+        "the unattended env signal is RETIRED (#943) — it must not appear on any "
+        f"active surface, but was found in: {sorted(carriers)}"
     )
