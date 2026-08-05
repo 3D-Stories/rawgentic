@@ -109,17 +109,44 @@ def test_every_skill_references_dir_is_flat():
 
 
 def test_no_reference_file_uses_the_plugin_root_token():
-    offenders = [
-        f"{p.relative_to(SKILLS_DIR).as_posix()}"
-        for p in sorted(SKILLS_DIR.glob("*/references/*.md"))
-        if PLUGIN_ROOT_TOKEN in p.read_text(encoding="utf-8")
-    ]
+    """EVERY regular file below references/, not just direct .md children.
+
+    An earlier form globbed `*/references/*.md`, while this same change explicitly
+    permits top-level non-markdown assets — so an .html, .sh, .txt or template
+    reference carrying the token passed CI, and if its content were used as a
+    command the unsubstituted literal would reach a shell (#909 review F4).
+    Read as BYTES so a non-UTF-8 asset cannot raise instead of being checked.
+    """
+    needle = PLUGIN_ROOT_TOKEN.encode()
+    offenders = []
+    for skill_md in sorted(SKILLS_DIR.glob("*/SKILL.md")):
+        refs = skill_md.parent / "references"
+        if not refs.is_dir():
+            continue
+        for p in sorted(refs.rglob("*")):
+            if p.is_file() and needle in p.read_bytes():
+                offenders.append(p.relative_to(SKILLS_DIR).as_posix())
     assert not offenders, (
         "these reference files contain ${CLAUDE_PLUGIN_ROOT}, which is NOT "
         "substituted in a file opened with the Read tool — the literal token would "
         "reach a shell. Keep such commands in the SKILL.md body (repo CLAUDE.md §1): "
         + ", ".join(offenders)
     )
+
+
+def test_the_plugin_root_scan_covers_non_markdown_assets(tmp_path, monkeypatch):
+    """Proves the scan is not .md-only, using the permitted-asset shape."""
+    skill = tmp_path / "demo"
+    (skill / "references").mkdir(parents=True)
+    (skill / "SKILL.md").write_text("x", encoding="utf-8")
+    (skill / "references" / "template.html").write_text(
+        "<pre>" + PLUGIN_ROOT_TOKEN + "/scripts/x.py</pre>", encoding="utf-8"
+    )
+    monkeypatch.setattr("tests.test_skill_reference_structure.SKILLS_DIR", tmp_path)
+    import pytest
+
+    with pytest.raises(AssertionError, match=r"template\.html"):
+        test_no_reference_file_uses_the_plugin_root_token()
 
 
 def test_the_reference_tree_was_actually_walked():

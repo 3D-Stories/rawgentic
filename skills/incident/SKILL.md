@@ -116,9 +116,11 @@ produce no error and no test failure.
 **For SEV-1 and SEV-2: Step 5 is MANDATORY and non-skippable.** Must include evidence (screenshot, API response, or log excerpt) proving containment worked. Cannot proceed to Phase B without Step 5 sign-off from the user.
 </mandatory-verification>
 
-**For destructive actions (rollback, DB operations): Always get user approval first.**
-This governs Step 3's rollback and config-fix strategies and every database operation in
-any step.
+**For destructive actions (rollback, DB operations):** Always get user approval first.
+
+Scope is unchanged from before the #909 split — **destructive** actions only. A read-only
+diagnostic (a health check, a `pg_isready`, an inspection query) and a non-destructive
+config correction do NOT require approval, and must not stall a SEV-1 waiting for one.
 </safety-gates>
 
 <references>

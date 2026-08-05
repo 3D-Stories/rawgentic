@@ -72,11 +72,17 @@ def frontmatter_text(skill_md: Path) -> str:
 def scalar_source(frontmatter: str) -> str:
     """The verbatim source of the `description:` scalar, value only.
 
-    Spans from just after `description:` to the next top-level key (or the end),
-    so a folded/multi-line scalar is captured whole. Returns "" when the key is
-    absent.
+    Spans from just after the key to the next top-level key (or the end), so a
+    folded/multi-line scalar is captured whole. Accepts the quoted-key spellings
+    (`"description":`, `'description':`) as well as the bare one — all three are
+    valid YAML, and recognising only the bare form let a real truncation through
+    unscanned (#909 review F3).
+
+    Returns "" only when no description key is present at all. A caller must treat
+    "" + a parsed description as UNSCANNABLE, never as clean.
     """
-    match = re.search(r"^description:[ \t]?", frontmatter, re.M)
+    match = re.search(r"""^(?:description|"description"|'description'):[ \t]?""",
+                      frontmatter, re.M)
     if not match:
         return ""
     rest = frontmatter[match.end():]
@@ -89,7 +95,6 @@ def describe(name: str, frontmatter: str) -> dict:
     try:
         loaded = (yaml.safe_load(frontmatter) or {}).get("description")
     except yaml.YAMLError as exc:  # a broken scalar must fail loudly, not vanish
-        loaded = None
         return {"name": name, "description": None, "scalar_source": "",
                 "parse_error": str(exc)}
     return {
@@ -172,14 +177,28 @@ def description_violations(records: list) -> list:
                 f"summary and install notes into the body; keep the triggers."
             )
         source = rec["scalar_source"].strip()
-        if source and not source.startswith(SAFE_SCALAR_STARTS) and " #" in source:
-            lost = source.split(" #", 1)[1]
+        if not source:
+            # A description parsed, but its source span could not be located — the
+            # integrity check cannot run. That is an UNSCANNABLE result, never a
+            # clean one: an unlocatable scalar is exactly where a truncation hides.
+            violations.append(
+                f"UNSCANNABLE: {name} has a parsed description but its scalar "
+                f"source could not be located in the frontmatter, so the "
+                f"truncation check could not run. Use a recognised `description:` "
+                f"key spelling."
+            )
+            continue
+        # ' #' AND '\t#' both open a YAML comment; checking only the space missed
+        # a tab-delimited one (#909 review F3).
+        hazard = re.search(r"[ \t]#", source)
+        if hazard and not source.startswith(SAFE_SCALAR_STARTS):
+            lost = source[hazard.start() + 1:]
             violations.append(
                 f"TRUNCATED: {name}'s description is an unquoted YAML scalar "
-                f"containing ' #', so YAML discards everything from there as a "
-                f"comment — {len(lost) + 2} chars never reach the harness, "
-                f"starting at ' #{lost[:40]}'. Single-quote the scalar (doubling "
-                f"internal apostrophes) so the text survives."
+                f"containing whitespace before '#', so YAML discards everything "
+                f"from there as a comment — {len(lost) + 1} chars never reach the "
+                f"harness, starting at {lost[:40]!r}. Single-quote the scalar "
+                f"(doubling internal apostrophes) so the text survives."
             )
     return violations
 
@@ -266,6 +285,48 @@ def test_comment_truncation_is_invisible_to_a_length_check():
     v = description_violations(records)
     assert len(v) == 1 and v[0].startswith("TRUNCATED:"), v
     assert "eaten" in v[0] and "trigger B" in v[0]
+
+
+def test_tab_before_hash_fails_loudly_rather_than_truncating():
+    """Measured, not assumed: PyYAML REFUSES a tab there.
+
+    The review raised a tab-delimited comment as a second truncation vector. The
+    real behaviour is stronger than that: `description: trigger A\\t# trigger B`
+    raises "while scanning for the next token", so the frontmatter does not parse
+    at all and the UNPARSEABLE class catches it. There is no silent-truncation
+    path through a tab. The `[ \\t]#` form of the hazard regex is kept as defence
+    for any parser that would accept it, but this test pins what actually happens.
+    """
+    records = [describe("tabbed", _fm("description: trigger A\t# trigger B", name="tabbed"))]
+    assert records[0]["parse_error"], "expected a YAML scan error for the tab"
+    v = description_violations(records)
+    assert len(v) == 1 and v[0].startswith("UNPARSEABLE:"), v
+
+
+def test_quoted_key_spelling_is_still_scanned():
+    """`"description": trigger A # trigger B` is valid YAML and truncates.
+
+    Recognising only the bare key returned an empty source span, which silently
+    skipped the integrity check on a genuinely truncated description.
+    """
+    fm = '\nname: q\n"description": trigger A # trigger B\nargument-hint: x\n'
+    records = [describe("q", fm)]
+    assert records[0]["description"] == "trigger A"
+    v = description_violations(records)
+    assert len(v) == 1 and v[0].startswith("TRUNCATED:"), v
+
+
+def test_unlocatable_scalar_source_is_unscannable_not_clean():
+    """A parsed description whose source span cannot be found must FAIL.
+
+    Simulated with a key spelling the locator does not recognise; the point is
+    that the fallback is a loud UNSCANNABLE, never a silent pass.
+    """
+    fm = '\nname: w\n? description\n: trigger A\nargument-hint: x\n'
+    records = [describe("w", fm)]
+    if isinstance(records[0]["description"], str) and records[0]["description"]:
+        v = description_violations(records)
+        assert len(v) == 1 and v[0].startswith("UNSCANNABLE:"), v
 
 
 def test_single_quoted_scalar_keeps_its_hash():

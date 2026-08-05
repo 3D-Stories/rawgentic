@@ -15,6 +15,7 @@ have let an unrelated earlier `gh label create` satisfy the assertion vacuously.
 Also guards the split's own structural invariants: both safety gates stay in the
 always-loaded body, and every reference is reachable with a read condition.
 """
+import re
 from pathlib import Path
 
 from tests.corpus import assert_ordered_in_one_file, skill_files
@@ -55,27 +56,57 @@ def test_safety_gates_stay_in_the_always_loaded_body():
         "lazily-read reference (#909)"
     )
     assert "For SEV-1 and SEV-2: Step 5 is MANDATORY and non-skippable." in body
-    assert "For destructive actions (rollback, DB operations): Always get user approval first." in body
+    assert "**For destructive actions (rollback, DB operations):** Always get user approval first." in body, (
+        "the destructive-action rule must stay in SKILL.md, and its ORIGINAL scope "
+        "must be preserved — broadening it to every config fix and every DB "
+        "operation would stall a SEV-1 on a read-only health check (#909 review F1)"
+    )
+    # whitespace-normalised: the carve-out wraps across lines, and an exact
+    # substring over wrapped prose is the repo's documented drift-guard trap
+    flat = " ".join(body.split())
+    assert "read-only diagnostic" in flat, "the scope carve-out must be explicit"
+    assert "destructive** actions only" in flat
 
 
-def test_every_reference_is_linked_with_a_read_condition():
-    """Both directions, plus the condition.
+LINK_RE = re.compile(r"references/([A-Za-z0-9._-]+\.md)")
 
-    A one-way "every link resolves" check passes an ORPHAN reference that nothing
-    links to, and passes a bare link carrying no read instruction — either way the
-    prose is unreachable in practice while the guard stays green.
+
+def test_references_and_links_are_in_bijection_each_with_a_read_condition():
+    """Set EQUALITY both ways, plus a read condition bound to each link.
+
+    An earlier form of this guard hard-coded reverse resolution to the two phase
+    files, so deleting `quick-diagnostic-playbook.md` while leaving its link behind
+    passed; and it asserted the read-condition strings as unbound globals, so they
+    could sit anywhere in the file while a link had none (#909 review F2).
     """
     body = SKILL.read_text(encoding="utf-8")
-    refs = sorted(p.name for p in (SKILL_DIR / "references").glob("*.md"))
-    assert refs, "the split must leave at least one reference file"
-    for name in refs:
-        rel = f"references/{name}"
-        assert rel in body, f"{rel} exists but SKILL.md never links it — an orphan reference (#909)"
-    # every linked reference resolves, and a read condition is stated
-    for phase_ref in ("references/phase-a-stabilize.md", "references/phase-b-analyze.md"):
-        assert (SKILL_DIR / phase_ref).is_file(), f"{phase_ref} is linked but missing"
-    assert "Read before executing Steps 1–6." in body
-    assert "Read before executing Steps 7–14." in body
+    linked = set(LINK_RE.findall(body))
+    on_disk = {p.name for p in (SKILL_DIR / "references").glob("*.md")}
+
+    assert on_disk, "the split must leave at least one reference file"
+    dangling = sorted(linked - on_disk)
+    orphans = sorted(on_disk - linked)
+    assert not dangling, f"SKILL.md links references that do not exist: {dangling}"
+    assert not orphans, (
+        f"these reference files exist but nothing in SKILL.md links them — orphans, "
+        f"unreachable in practice: {orphans}"
+    )
+
+    # Each link's read condition must sit in the SAME <references> entry as the link,
+    # not merely somewhere in the file.
+    block = body[body.index("<references>"):body.index("</references>")]
+    for name in sorted(on_disk):
+        idx = block.find(f"references/{name}")
+        assert idx != -1, f"references/{name} is not listed in the <references> block"
+        entry = block[idx:idx + 400]
+        nxt = entry.find("- `references/", 1)
+        if nxt != -1:
+            entry = entry[:nxt]
+        assert "Read before executing" in entry, (
+            f"references/{name} is linked without a read condition in its own entry — "
+            f"references load lazily, so a link with no read instruction is prose "
+            f"that may never be read (#909)"
+        )
 
 
 def test_skill_body_stays_under_the_line_guidance():

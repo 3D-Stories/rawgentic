@@ -69,9 +69,10 @@ Choose one (safest to most invasive):
 5. **Workaround:** Complex root cause → temporary fix (disable feature, increase resources)
 6. **Escalate:** Inconclusive diagnosis + SEV-1 → escalate to user
 
-**The destructive-action approval rule is in `SKILL.md` and governs options 2 and 3
-and any DB operation.** It is not restated as procedure here on purpose: it must hold
-whether or not this file was read.
+**The destructive-action approval rule is in `SKILL.md`.** It is not restated as procedure
+here on purpose: it must hold whether or not this file was read. It covers **destructive**
+actions only — a rollback, a destructive config change, a destructive DB operation. A
+read-only diagnostic or a non-destructive config correction proceeds without approval.
 
 Log in session notes: `### WF11 Step 3: Strategy — [chosen strategy] (temporary|permanent)`
 
