@@ -1617,3 +1617,81 @@ class TestFailureDetailSurfacing:
         payload = json.loads(capsys.readouterr().out)
         assert payload["failure_detail"] is None
         assert payload["pane_capture"] is None
+
+
+# ---------------------------------------------------------------------------
+# #731 — T3: pre-split name preflight + start-time name_taken mapping (AC3)
+# ---------------------------------------------------------------------------
+
+AGENT_LIST_WITH_NAME = json.dumps({"id": "cli:agent:list", "result": {"type": "agent_list",
+    "agents": [{"pane_id": "w1:pEA", "name": "successor", "agent_status": "working"},
+               {"pane_id": "w1:pKG"}]}})          # the unnamed entry mirrors live 0.8.0 output
+AGENT_LIST_CLEAN = json.dumps({"id": "cli:agent:list", "result": {"type": "agent_list",
+    "agents": [{"pane_id": "w1:pKG", "name": "someone-else"}, {"pane_id": "w1:pHW"}]}})
+
+
+class TestNameTakenPreflight:
+    def test_a_taken_name_is_refused_before_any_split(self) -> None:
+        """The cheap-failure property under test: a refused name creates NOTHING."""
+        r = Runner({**_responses(), "herdr agent list": AGENT_LIST_WITH_NAME})
+        out = ll.perform_handoff(**_handoff(r))
+        assert out["ok"] is False
+        assert out["failed_step"] == "name_taken"
+        assert "w1:pEA" in out["failure_detail"]
+        assert not any(Runner.key(c) == "herdr pane split" for c in r.calls)
+        assert not any(Runner.key(c) == "herdr agent start" for c in r.calls)
+
+    def test_entries_without_a_name_key_are_skipped(self) -> None:
+        """herdr 0.8.0 names only named agents — an unnamed entry must not match anything."""
+        r = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r)))
+        assert out["ok"] is True, out["failed_step"]
+
+    def test_a_failed_list_fails_open_and_is_recorded(self) -> None:
+        r = Runner(_responses(), fail_on="herdr agent list")
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r)))
+        assert out["ok"] is True, out["failed_step"]
+        pre = [s for s in out["steps"] if s["kind"] == "agent_name_preflight"]
+        assert pre and pre[-1]["note"] and "FAIL-OPEN" in pre[-1]["note"]
+
+    def test_garbled_list_output_fails_open(self) -> None:
+        r = Runner({**_responses(), "herdr agent list": "not json"})
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r)))
+        assert out["ok"] is True, out["failed_step"]
+
+    def test_start_time_name_taken_race_maps_to_name_taken(self) -> None:
+        """Preflight clean, name grabbed between list and start: still name-specific, still
+        with the herdr message, and NEVER retried (only agent_pane_busy retries)."""
+        body = json.dumps({"error": {"code": "agent_name_taken",
+                                     "message": "agent name successor is already used; "
+                                                "candidates: pane_id=w1:pEA"}})
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+
+        def runner(argv, timeout=180):
+            if Runner.key(argv) == "herdr agent start":
+                base.calls.append(list(argv))
+                return FakeProc(returncode=1, stdout=body)
+            return base(argv, timeout)
+
+        out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert out["failed_step"] == "name_taken"
+        assert "agent name successor is already used" in out["failure_detail"]
+        starts = [c for c in base.calls if Runner.key(c) == "herdr agent start"]
+        assert len(starts) == 1, "a taken name must not be retried"
+
+    def test_pane_busy_retry_behavior_is_unchanged(self) -> None:
+        busy = json.dumps({"error": {"code": "agent_pane_busy",
+                                     "message": "not an available shell"}})
+        n = {"starts": 0}
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+
+        def runner(argv, timeout=180):
+            if Runner.key(argv) == "herdr agent start":
+                base.calls.append(list(argv))
+                n["starts"] += 1
+                return FakeProc(returncode=1, stdout=busy) if n["starts"] == 1 else FakeProc(0, "")
+            return base(argv, timeout)
+
+        out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert out["ok"] is True, out["failed_step"]
+        assert n["starts"] == 2

@@ -1931,6 +1931,45 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             out["failure_detail"] = revalidation_reason
             return out
 
+    # #731 — pre-split name preflight. A bound agent name makes `agent start` fail AFTER a
+    # pane exists, and a same-name retry is structurally impossible (the name stays bound) —
+    # so refuse BEFORE anything is created. FAIL-OPEN when the list cannot be read: the
+    # start-time path still refuses a taken name, now with its cause, and a broken
+    # `agent list` must not become a new way for handoffs to fail.
+    list_argv = build_agent_list_argv()
+    try:
+        proc = runner(list_argv)
+    except (OSError, subprocess.SubprocessError) as exc:
+        # Fail-open on transport trouble too: this runs BEFORE the ownership try/finally, so
+        # an uncaught raise here would crash the whole handoff over an optional preflight.
+        proc = None
+        record("agent_name_preflight", list_argv, None,
+               note=f"preflight FAIL-OPEN: `herdr agent list` raised {exc} — proceeding; a "
+                    "taken name is still refused at agent start")
+    if proc is None:
+        pass
+    elif getattr(proc, "returncode", 1) != 0:
+        record("agent_name_preflight", list_argv, proc,
+               note="preflight FAIL-OPEN: `herdr agent list` failed — proceeding; a taken "
+                    "name is still refused at agent start, with its cause")
+    else:
+        parsed, holder = _agent_name_holder(getattr(proc, "stdout", "") or "", name)
+        if not parsed:
+            record("agent_name_preflight", list_argv, proc,
+                   note="preflight FAIL-OPEN: `herdr agent list` output was unusable — "
+                        "proceeding; a taken name is still refused at agent start")
+        elif holder is not None:
+            detail = (f"agent name {name!r} is already bound to pane {holder} — refused "
+                      f"before any split, so nothing was created and nothing needs cleanup. "
+                      f"Check `herdr agent list` and pick a fresh --name: a same-name retry "
+                      f"cannot succeed while the name stays bound")
+            record("agent_name_preflight", list_argv, proc, note=detail)
+            out["failed_step"] = "name_taken"
+            out["failure_detail"] = detail
+            return out
+        else:
+            record("agent_name_preflight", list_argv, proc, note=f"name {name!r} is free")
+
     # Captured BEFORE the split so nothing already on disk can be mistaken for this launch's
     # evidence (#611 Step-11 Medium 4). A registry that exists but cannot be read yields no
     # baseline at all, and without a baseline there is no such thing as fresh evidence.
@@ -2010,6 +2049,13 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                          f"shell (attempt {attempt + 1}/{PANE_READY_ATTEMPTS})") if busy
                    else _error_note(body))
             if not busy:
+                # #731 — the preflight race: the name was free at the list and taken by start
+                # time. Same name-specific refusal as the preflight, never a bare agent_start,
+                # and never a retry (only agent_pane_busy is self-resolving).
+                if _error_code(body) == NAME_TAKEN_ERROR_CODE:
+                    out["failed_step"] = "name_taken"
+                    out["failure_detail"] = _error_note(body)
+                    return out
                 break
         if not started:
             out["failed_step"] = "agent_start"
@@ -2564,6 +2610,30 @@ def pane_capture(out) -> str | None:
                 if isinstance(note, str) and note:
                     return note
     return None
+
+
+def _agent_name_holder(agent_list_stdout, name) -> tuple[bool, str | None]:
+    """(parsed, holder_pane_id) from `herdr agent list` output.
+
+    parsed=False means the output was unusable — the preflight then FAILS OPEN (unlike
+    `_pane_inventory`, which fails closed, because *its* consumers close panes; refusing a
+    handoff over a garbled list would be a new failure mode, while proceeding just moves the
+    refusal to `agent start`, which now reports its cause). Entries carry an OPTIONAL `name`
+    key (herdr 0.8.0, verified live 2026-08-05) — unnamed and malformed entries are skipped.
+    """
+    try:
+        doc = json.loads(agent_list_stdout or "")
+    except (ValueError, TypeError):
+        return (False, None)
+    node = doc.get("result", doc) if isinstance(doc, dict) else None
+    agents = node.get("agents") if isinstance(node, dict) else None
+    if not isinstance(agents, list):
+        return (False, None)
+    for entry in agents:
+        if isinstance(entry, dict) and entry.get("name") == name:
+            pane = entry.get("pane_id")
+            return (True, pane if isinstance(pane, str) and pane else "<unknown pane>")
+    return (True, None)
 
 
 def _error_code(body) -> str | None:

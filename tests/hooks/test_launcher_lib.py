@@ -426,6 +426,7 @@ class TestPerformHandoff:
         assert out["results"] == {"spawned": True, "goal_armed": True,
                                   "project_switched": True}
         assert r.kinds() == [
+            "herdr agent list",                                 # #731 name preflight, FIRST
             "herdr pane list",                                  # pre-split inventory
             "herdr pane split", "herdr agent start", "herdr agent wait", "herdr pane get",
             "herdr pane send-text", "herdr pane send-keys",     # SEND 1 — the bind, alone
