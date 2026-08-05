@@ -749,6 +749,29 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.131.1 (2026-08-05)
+- **Three supervision CLI tests carried a dated time bomb and broke `main` an hour after
+  merging green (follow-up to #948, epic #871).** `tests/hooks/test_supervision_lib.py` and
+  `test_supervision_admin.py` freeze `NOW = 2026-08-05T21:00:00Z` and derive `LATER = NOW + 2h`.
+  That is correct for the in-process tests, because every one of them injects that clock. Three
+  tests handed `LATER` to a CLI **subprocess** instead, and a subprocess cannot take an injected
+  clock — `supervision_admin` deliberately has no `--now` override, since it gates outward
+  installs — so it read the real clock. At 2026-08-05T23:00:00Z `LATER` became the past and all
+  three failed permanently, not intermittently: `declare` refused with "`until` is in the past",
+  `effective` reported `attended-overdue` where the test expected `away`, and `nobody-to-ask`
+  inverted its exit code. CI was green at merge only because it ran before that instant. Fixed at
+  the boundary rather than at the constant: `_real_future()` / `_real_past()` build every
+  timestamp that crosses into `_cli` from the real clock, while the frozen `NOW` stays for the
+  injected in-process calls that want determinism. A sensitivity check confirms the assertions
+  still bite — inverting the helper reproduces exactly the three original failures, so the tests
+  were repaired rather than hollowed out. One guard added
+  (`test_no_cli_test_hands_a_frozen_future_timestamp_to_a_subprocess`), narrow by design per
+  CLAUDE.md §4 mistake #6: one exact pattern, in the CLI section of the two named files. A
+  repo-wide sweep for the same frozen-date-plus-subprocess shape found only
+  `tests/hooks/test_registry_prune.py` and `test_step_state.py`, and both are safe — the former
+  passes `--now` INTO its CLI, the latter injects into a pure function. No workflow-spine change
+  → no diagram REV. Suite 5487→5488.
+
 ### v3.131.0 (2026-08-05)
 - **Supervision is declared, not guessed — `RAWGENTIC_HEADLESS` is retired (#943 Part A, epic #871).**
   Three code paths asked "is anybody watching?" by reading one environment variable that could

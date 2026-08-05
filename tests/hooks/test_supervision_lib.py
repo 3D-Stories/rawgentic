@@ -38,6 +38,24 @@ def _iso(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _real_future(hours=2):
+    """An `until` the REAL clock has not reached yet.
+
+    `NOW` above is frozen, and every in-process call takes it as an injected clock, so
+    those tests stay deterministic. A CLI subprocess cannot be handed that clock — it
+    reads the real one — so a frozen future constant crossing into `_cli` expires for
+    good the moment wall-clock time passes it. `LATER` is 2026-08-05T23:00:00Z, and
+    three CLI tests here began failing permanently at that instant (#948). Anything
+    time-sensitive that crosses into `_cli` is therefore built from the real clock.
+    """
+    return _iso(datetime.now(timezone.utc) + timedelta(hours=hours))
+
+
+def _real_past(hours=2):
+    """A deadline the REAL clock has already passed — the `_real_future` mirror."""
+    return _iso(datetime.now(timezone.utc) - timedelta(hours=hours))
+
+
 def _record(state="away", until=None, **kw):
     rec = {
         "schema_version": 1,
@@ -428,14 +446,14 @@ def test_cli_installs_forbidden_exit_codes(tmp_path):
     _write(tmp_path, _record(state="away", until=None))
     assert _cli("installs-forbidden", "--workspace", str(tmp_path)).returncode == 0
 
-    _write(tmp_path, _record(state="away", until=_iso(EARLIER)))
+    _write(tmp_path, _record(state="away", until=_real_past()))
     assert _cli("installs-forbidden", "--workspace", str(tmp_path)).returncode == 0, (
         "an expired declaration must still forbid installs")
 
 
 def test_cli_nobody_to_ask_exit_codes(tmp_path):
     assert _cli("nobody-to-ask", "--workspace", str(tmp_path)).returncode == 1
-    _write(tmp_path, _record(state="sleeping", until=_iso(LATER)))
+    _write(tmp_path, _record(state="sleeping", until=_real_future()))
     assert _cli("nobody-to-ask", "--workspace", str(tmp_path)).returncode == 0
 
 
@@ -444,7 +462,7 @@ def test_cli_missing_required_workspace_is_a_usage_error():
 
 
 def test_cli_effective_prints_parseable_json(tmp_path):
-    _write(tmp_path, _record(state="away", until=_iso(LATER)))
+    _write(tmp_path, _record(state="away", until=_real_future()))
     r = _cli("effective", "--workspace", str(tmp_path))
     assert r.returncode == 0
     payload = json.loads(r.stdout)
@@ -461,3 +479,27 @@ def test_cli_diagnoses_an_invalid_file_on_stderr(tmp_path):
     r = _cli("installs-forbidden", "--workspace", str(tmp_path))
     assert r.returncode == 0            # forbidden
     assert r.stderr.strip(), "an invalid state file must be visible, never silent"
+
+
+# ------------------------------------------------- the #948 time bomb, pinned
+
+def test_no_cli_test_hands_a_frozen_future_timestamp_to_a_subprocess():
+    """A frozen future constant must never cross into a real-clock subprocess.
+
+    `LATER` is `NOW + 2h` off a FROZEN `NOW`, which is right for the in-process tests
+    because each one injects that clock. A CLI subprocess cannot take it and reads the
+    real clock instead, so formatting `LATER` below the `_cli` definition is a dated
+    bomb: it passes until wall-clock reaches the constant, then fails forever. That is
+    exactly what happened at 2026-08-05T23:00:00Z, when three tests across these two
+    files broke on `main` an hour after merging green (#948). Use `_real_future()`.
+
+    Deliberately narrow (CLAUDE.md §4 mistake #6): ONE exact pattern, in the CLI
+    section of two named files — not a corpus-wide regex.
+    """
+    needle = "_iso(" + "LATER)"          # split, so this guard is not its own match
+    for name in ("test_supervision_lib.py", "test_supervision_admin.py"):
+        src = (Path(__file__).parent / name).read_text()
+        cli_section = src[src.index("def _cli("):]
+        assert needle not in cli_section, (
+            f"{name}: a CLI test builds a timestamp from the frozen `LATER`, which "
+            f"expires against the real clock — use `_real_future()` instead")
