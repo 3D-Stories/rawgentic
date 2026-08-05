@@ -652,3 +652,25 @@ the rest are technical uncertainties with a named home.
 - Visual dashboard artifact (published 2026-07-21):
   https://claude.ai/code/artifact/e5e51d5b-7481-4ef1-b1c3-f5df3f944c19 — source of truth is
   the committed `docs/planning/2026-07-21-herdr-console-dashboard.html`.
+
+---
+
+## Addendum — 2026-08-05 (#886): herdr is Apache-2.0 as of v0.8.0
+
+**The plan body above is not rewritten** — it records the posture as confirmed on 2026-07-21.
+
+The **License (repo-confirmed)** bullet in §1.6 and the **AGPL-3.0 license** row in the risk table
+both rest on herdr being dual-licensed AGPL-3.0-or-later plus a commercial license. That is no longer
+current. herdr v0.8.0 (released 2026-08-03) relicensed to **Apache-2.0**, verified live 2026-08-05
+via `gh api repos/herdrdev/herdr` (`license.spdx_id: "Apache-2.0"`), the `LICENSE` file at tag
+`v0.8.0`, and `Cargo.toml` (`license = "Apache-2.0"`).
+
+**The risk row's conclusion is unchanged and now easier to hold:** no copyleft obligation attaches to
+rawgentic code in any proposed phase. Under Apache-2.0 that no longer depends on the separate-process
+argument, and the row's "re-verify if ever bundling herdr in an image we ship" caveat is retired as a
+*copyleft* concern — a redistribution would instead carry Apache-2.0's attribution/NOTICE
+requirements. The `NOASSERTION` explanation in that row is also historical: the API now reports the
+license cleanly.
+
+The subject link at the top of this plan points at `ogulcancelik/herdr`, which migrated to
+`herdrdev/herdr` at v0.8.0. Current coordinates live in `hooks/herdr-pin.json`.

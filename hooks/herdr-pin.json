@@ -2,24 +2,24 @@
   "version": 1,
   "_comment": "Single machine-readable source of truth for the herdr toolchain pin (#609, epic #667; SELF-AUTHORITATIVE since the executor retreat #866 M0d — the executor-side version-floor constant it once mirrored is deleted, tests/hooks/test_herdr_pin.py guards this file's shape). Read by #390's workspace-doctor check 8 ('herdr binary present AND version == the pinned release'). Verify an install with: sha256sum ~/.local/bin/herdr, compared against gh api repos/<repo>/releases/tags/<tag> asset .digest. Full procedure and rationale: docs/reviews/2026-07-27-609-herdr-supply-chain-vet.md",
   "pin": {
-    "version": "0.7.5",
-    "tag": "v0.7.5",
-    "repo": "ogulcancelik/herdr",
-    "release_url": "https://github.com/ogulcancelik/herdr/releases/tag/v0.7.5",
-    "published_at": "2026-07-21T18:11:20Z",
+    "version": "0.8.0",
+    "tag": "v0.8.0",
+    "repo": "herdrdev/herdr",
+    "release_url": "https://github.com/herdrdev/herdr/releases/tag/v0.8.0",
+    "published_at": "2026-08-03T19:00:03Z",
     "prerelease": false,
     "assets": {
       "linux-x86_64": {
         "name": "herdr-linux-x86_64",
-        "size": 21315048,
-        "sha256": "3dc83288073e4c2d3c679a30e7be97bcca9141c6fd17dbbb9219142e95c59253",
-        "url": "https://github.com/ogulcancelik/herdr/releases/download/v0.7.5/herdr-linux-x86_64"
+        "size": 21776680,
+        "sha256": "b872ea7e40fa2cb17e857ac9b62b1bf26db7b403c622f5d2f3f5b35f6e9acd28",
+        "url": "https://github.com/herdrdev/herdr/releases/download/v0.8.0/herdr-linux-x86_64"
       }
     },
     "api_schema": {
-      "protocol": 17,
+      "protocol": 19,
       "schema_version": 1,
-      "_comment": "Recorded from `herdr api schema --json` on the pinned binary. #609 only RECORDS this; asserting it against a live server is #390's check 10."
+      "_comment": "Recorded from `herdr api schema --json` on the pinned binary. #609 only RECORDS this; asserting it against a live server is #390's check 10. #886: 0.8.0 bumped the protocol 17 -> 19, SKIPPING 18 — read from the binary, never from the release notes, which do not mention a protocol bump at all. Probed by running the digest-verified 0.8.0 asset directly from a temp path BEFORE installing it: `api schema` is served by the binary itself, not by the running server, which is how 19 was read while the live server was still 0.7.5/protocol 17. Nothing pins this value, so it is a truth-of-the-record field."
     },
     "config_baseline": {
       "update.channel": "stable",
@@ -31,9 +31,9 @@
       "_comment": "Hardened target for ~/.config/herdr/config.toml. Keys and their upstream defaults were read from `herdr --default-config`, never assumed. manifest_check defaults to TRUE and makes herdr fetch a remote agent-detection manifest from herdr.dev in the background — behavior can change under a pinned binary with no version bump, which is the supply-chain hole a version pin alone does not close. Apply with `herdr config check && herdr server reload-config` (no restart needed). NOT yet applied to this host: owner-triggered per epic-run D-5."
     },
     "verified": {
-      "at": "2026-07-27",
+      "at": "2026-08-05",
       "issue": 609,
-      "method": "gh api repos/ogulcancelik/herdr/releases/tags/v0.7.5 asset .digest (sha256:3dc83288...c59253, size 21315048) compared against sha256sum ~/.local/bin/herdr (3dc83288...c59253) — identical digest AND identical size, so the installed binary is the official release bit-for-bit. Verified in place; no re-download and no re-install, because the live herdr server was backing 4 actively-working sessions.",
+      "method": "Re-verified under #886 after the herdrdev org migration. `gh api repos/herdrdev/herdr/releases/tags/v0.8.0` asset .digest (sha256:b872ea7e...acd28, size 21776680) compared against sha256sum of the asset downloaded from that release's browser_download_url (b872ea7e...acd28, size 21776680) — identical digest AND identical size, so the pinned bits are the official release bit-for-bit. The digest was fetched from the API and compared BEFORE the binary was installed anywhere, and the release notes were never treated as evidence. Note the `issue` field stays 609 because that is where this verification METHOD was established (and tests/hooks/test_herdr_pin.py pins it); #886 is the re-verification.",
       "install_method": "pinned release binary verified against its published digest (never curl|sh, which plan 1.6 excludes for this workspace)"
     }
   },
@@ -60,9 +60,9 @@
           "command": "bash '<HOME>/.claude/hooks/herdr-agent-state.sh' session",
           "timeout": 10
         },
-        "reformats_whole_file": true,
-        "drops_trailing_newline": true,
-        "_comment": "The SEMANTIC footprint is exactly the one SessionStart entry above — nothing else is added and nothing is removed. But the installer parses and re-serializes the WHOLE file with alphabetically sorted keys (top level and nested) and drops the trailing newline, so on a hand-maintained settings.json a 1-hook change renders as a ~300-line diff. Key order is not semantic in JSON; the reformat is cosmetic. Recorded because the next operator will otherwise read it as the installer rewriting their config."
+        "reformats_whole_file": false,
+        "drops_trailing_newline": false,
+        "_comment": "The SEMANTIC footprint is exactly the one SessionStart entry above — nothing else is added and nothing is removed. Both cosmetic flags were TRUE under 0.7.5, where the installer re-serialized the WHOLE file with alphabetically sorted keys and dropped the trailing newline, rendering a 1-hook change as a ~300-line diff. #886: both are now FALSE under 0.8.0, which fixed exactly this (upstream #2066, 'installs now preserve existing settings key order and formatting'). RE-MEASURED, not read from the release notes: the shipped 0.8.0 `integration install claude` was run against a sandboxed $HOME seeded with a byte copy of this host's live ~/.claude/settings.json — top-level key order UNCHANGED and still not alphabetized, trailing newline PRESERVED, unified diff 13 lines (was ~300), 241 -> 251 lines, no top-level key added or removed, and the hook-event set identical. The live file's sha256 was recorded before and after and was IDENTICAL (06fdd3f9...), so the real config was never touched. Nothing pins these two booleans; this is a truth-of-the-record fix."
       },
       "idempotency": {
         "dedupes_on": "the exact hook command string",

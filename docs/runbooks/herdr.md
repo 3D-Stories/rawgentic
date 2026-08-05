@@ -10,7 +10,7 @@ herdr is load-bearing for this workspace's pane workflows (pane-handoff, sibling
 
 | Component | State | Source of truth |
 |---|---|---|
-| herdr binary | `0.7.5` at `~/.local/bin/herdr`, verified bit-for-bit against the published release digest | `hooks/herdr-pin.json` → `pin` |
+| herdr binary | `0.8.0` at `~/.local/bin/herdr`, verified bit-for-bit against the published release digest (upstream repo moved to `herdrdev/herdr` at v0.8.0, #886) | `hooks/herdr-pin.json` → `pin` |
 | Claude Code integration | **installed, v7** | `hooks/herdr-pin.json` → `integrations.claude` |
 | Hardened `config.toml` baseline | documented, **not yet applied** (owner-triggered) | `hooks/herdr-pin.json` → `pin.config_baseline` |
 

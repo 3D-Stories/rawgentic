@@ -59,8 +59,11 @@ def test_pin_file_exists_and_parses(pin: dict) -> None:
 def test_pin_carries_the_upstream_identity(pin: dict) -> None:
     """A pin without its upstream coordinates cannot be re-verified by anyone else."""
     p = pin["pin"]
-    assert p["repo"] == "ogulcancelik/herdr"
-    assert p["version"] == "0.7.5"
+    # #886: the upstream repo MOVED to the herdrdev org at v0.8.0 ("Repository and
+    # installation links now use `herdrdev/herdr`", v0.8.0 Changed). Both of these are
+    # value asserts, so both move in the same commit as hooks/herdr-pin.json.
+    assert p["repo"] == "herdrdev/herdr"
+    assert p["version"] == "0.8.0"
     assert p["tag"] == f"v{p['version']}", "tag must be the v-prefixed version"
     assert p["prerelease"] is False, "never pin a prerelease build"
     assert p["repo"] in p["release_url"]
@@ -243,8 +246,14 @@ def test_claude_integration_records_the_measured_install_behaviours(
     assert idem["appends_on_path_mismatch"] is True
     assert idem["dedupes_on"].strip()
     fp = claude_integration["settings_footprint"]
-    assert fp["reformats_whole_file"] is True
-    assert fp["drops_trailing_newline"] is True
+    # #886: both flipped TRUE -> FALSE at herdr 0.8.0, which fixed the cosmetic rewrite
+    # (upstream #2066). Re-measured by running the shipped 0.8.0 installer against a
+    # sandboxed $HOME seeded with a byte copy of the live settings.json: key order
+    # unchanged, trailing newline preserved, 13-line diff instead of ~300. The values stay
+    # PINNED rather than relaxed to a type check, because the point of this guard is that
+    # a silent edit to the record gets caught.
+    assert fp["reformats_whole_file"] is False
+    assert fp["drops_trailing_newline"] is False
 
 
 def test_claude_integration_records_the_uninstall_path(claude_integration: dict) -> None:
