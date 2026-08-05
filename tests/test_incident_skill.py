@@ -83,6 +83,24 @@ def test_references_and_links_are_in_bijection_each_with_a_read_condition():
     linked = set(LINK_RE.findall(body))
     on_disk = {p.name for p in (SKILL_DIR / "references").glob("*.md")}
 
+    # Equal sets alone are not enough: deleting a reference AND its SKILL.md entry
+    # leaves two equal sets while a link inside ANOTHER reference file still points
+    # at the deleted target. So pin the required set, and check cross-file links too.
+    REQUIRED = {"phase-a-stabilize.md", "phase-b-analyze.md", "quick-diagnostic-playbook.md"}
+    assert REQUIRED <= on_disk, f"missing required incident references: {sorted(REQUIRED - on_disk)}"
+
+    cross = set()
+    for path, text in skill_files("incident").items():
+        if path == "SKILL.md":
+            continue
+        cross |= set(LINK_RE.findall(text))
+    broken = sorted(cross - on_disk)
+    assert not broken, (
+        f"reference files link to targets that do not exist: {broken} — a deleted "
+        f"reference stays linked from a sibling reference even when SKILL.md is "
+        f"consistent (#909 diff review D1)"
+    )
+
     assert on_disk, "the split must leave at least one reference file"
     dangling = sorted(linked - on_disk)
     orphans = sorted(on_disk - linked)

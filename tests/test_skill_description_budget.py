@@ -59,6 +59,8 @@ SAFE_SCALAR_STARTS = ("'", '"', ">", "|")
 # The next top-level frontmatter key ends the description's scalar span.
 _NEXT_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*:", re.M)
 
+_DESC_KEY = re.compile(r"""^(?:description|"description"|'description'):""", re.M)
+
 
 def frontmatter_text(skill_md: Path) -> str:
     """The raw YAML frontmatter block of a SKILL.md, without the --- fences."""
@@ -102,6 +104,7 @@ def describe(name: str, frontmatter: str) -> dict:
         "description": loaded,
         "scalar_source": scalar_source(frontmatter),
         "parse_error": None,
+        "key_count": len(_DESC_KEY.findall(frontmatter)),
     }
 
 
@@ -139,6 +142,18 @@ def description_violations(records: list) -> list:
                 f"({rec['parse_error'].splitlines()[0]}) — the skill may fail to "
                 f"load. A single-quoted scalar must double any internal "
                 f"apostrophe."
+            )
+            continue
+        if rec.get("key_count", 1) > 1:
+            # PyYAML resolves a duplicate mapping key to the LAST value while the
+            # source locator takes the FIRST, so a quoted decoy followed by a
+            # truncated real value would load truncated and be scanned as safe.
+            # Rather than reconcile the two, refuse the ambiguity outright.
+            violations.append(
+                f"DUPLICATE KEY: {name}'s frontmatter declares `description` "
+                f"{rec['key_count']} times. YAML takes the LAST value while a source "
+                f"scan finds the FIRST, so the loaded text and the checked text can "
+                f"differ — a truncated description could pass. Keep exactly one."
             )
             continue
         desc = rec["description"]
@@ -303,6 +318,22 @@ def test_tab_before_hash_fails_loudly_rather_than_truncating():
     assert len(v) == 1 and v[0].startswith("UNPARSEABLE:"), v
 
 
+def test_duplicate_description_keys_are_refused():
+    """The decoy attack: a safe first value, a truncated second one.
+
+    PyYAML takes the LAST duplicate value; a first-match source scan inspects the
+    FIRST. So `description: 'decoy'` followed by
+    `description: trigger A # trigger B` loads the truncated second value while the
+    scan sees a safely-quoted first one and passes.
+    """
+    fm = "\nname: dup\ndescription: 'decoy'\ndescription: trigger A # trigger B\nargument-hint: x\n"
+    rec = describe("dup", fm)
+    assert rec["description"] == "trigger A", "PyYAML should resolve to the LAST key"
+    assert rec["key_count"] == 2
+    v = description_violations([rec])
+    assert len(v) == 1 and v[0].startswith("DUPLICATE KEY:"), v
+
+
 def test_quoted_key_spelling_is_still_scanned():
     """`"description": trigger A # trigger B` is valid YAML and truncates.
 
@@ -415,6 +446,15 @@ def test_the_corpus_was_actually_measured():
 # ("does NOT run the ad-hoc handoff"), so "every eval prompt must appear in the
 # description" would be both wrong and unsatisfiable.
 PANE_HANDOFF_REQUIRED_PHRASES = (
+    # The four BARE trigger verbs from the pre-change clause. Pinned after the
+    # adversarial diff pass caught the #909 diet silently dropping "pass over" and
+    # "send work" while every quoted variant survived — a compression can delete a
+    # selection phrase that no pinned quote covers, which is precisely the silent
+    # non-selection failure this issue exists to prevent.
+    "pass off",
+    "pass over",
+    "hand off",
+    "send work",
     "pass off session in new herdr pane",
     "do the herdr session pane pass off",
     "passoff",
