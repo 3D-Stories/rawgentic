@@ -1,6 +1,6 @@
 ---
 name: adversarial-review
-description: WF5 — Adversarially review a TEXT artifact (design, spec, implementation plan, PRD, ADR, RFC, README) using an independent DIFFERENT-MODEL reviewer. Selectable backend (#403) — `gpt` (Codex CLI, the default), `glm` (Zhipu GLM via the zhipuai SDK), or `both` (two independent reviews, two reports). Report-only — writes a severity-ranked findings report to <project>/docs/reviews/ and NEVER edits the artifact. Also reviews code DIFFS via the `diff` artifact type (refutation lens, report-only) — this complements same-model self-review (the in-repo quality-bar rubric) with a cross-model second opinion on planning artifacts. Invoke with /rawgentic:adversarial-review followed by an artifact path. The gpt backend requires the Codex CLI installed and authenticated; the glm backend requires `pip install "zhipuai>=2.1.5"` and ZHIPUAI_API_KEY.
+description: 'WF5 — Adversarially review a TEXT artifact (design, spec, implementation plan, PRD, ADR, RFC, README) using an independent DIFFERENT-MODEL reviewer. Selectable backend (#403) — `gpt` (Codex CLI, the default), `glm` (Zhipu GLM via the zhipuai SDK), or `both` (two independent reviews, two reports). Report-only — writes a severity-ranked findings report to <project>/docs/reviews/ and NEVER edits the artifact. Also reviews code DIFFS via the `diff` artifact type (refutation lens, report-only) — this complements same-model self-review (the in-repo quality-bar rubric) with a cross-model second opinion on planning artifacts. Invoke with /rawgentic:adversarial-review followed by an artifact path.'
 argument-hint: Artifact path (e.g., "docs/design/feature.md") with optional type hint (design|spec|plan|prd|adr|rfc|readme|diff) and optional --backend (gpt|glm|both)
 ---
 
@@ -42,6 +42,12 @@ ENV (all optional):
   RAWGENTIC_ADV_REVIEW_GLM_MODEL   (default glm-5.2) — glm model slug
   ZHIPUAI_API_KEY / ZHIPU_API_KEY / GLM_API_KEY (read at call time) — glm credential; a Coding Plan subscription key works
   ZHIPUAI_BASE_URL / GLM_JUDGE_BASE_URL (default https://api.z.ai/api/coding/paas/v4) — glm endpoint; must be https with no userinfo/query/fragment
+
+BACKEND PREREQUISITES (#909 — moved here from the frontmatter description, which
+  is for triggering symptoms, not install instructions):
+  gpt — the Codex CLI installed and authenticated
+  glm — install: `pip install "zhipuai>=2.1.5"`; credential: export ZHIPUAI_API_KEY
+        (a z.ai Coding Plan subscription key works)
 </constants>
 
 <reviewer-invocation>
