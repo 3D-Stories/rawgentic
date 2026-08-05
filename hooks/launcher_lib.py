@@ -186,6 +186,15 @@ PANE_READY_ERROR_CODE = "agent_pane_busy"
 PANE_READY_ATTEMPTS = 15
 PANE_READY_DELAY_S = 2.0
 
+# #731 — the OTHER instant refusal, and the one that must NOT be retried: a bound agent name
+# stays bound (the live 2026-07-30 failure had it bound to the predecessor's own pane), so a
+# same-name retry is structurally guaranteed to fail. It gets a name-specific `failed_step`
+# instead, on both the pre-split preflight and the start-time race path.
+NAME_TAKEN_ERROR_CODE = "agent_name_taken"
+# The preflight list's own runner timeout (seconds): an optional check must not hold every
+# handoff for the 180 s default runner bound when herdr hangs (#731 Step-11).
+NAME_PREFLIGHT_TIMEOUT_S = 5
+
 # Order is CAUSAL, and #694 REORDERED it: `spawned -> project_switched -> goal_armed`, matching the
 # order the sends now happen in. Each rung is the durable artifact produced by the send before it.
 #
@@ -401,6 +410,16 @@ def build_agent_start_argv(*, name: str, pane: str, claude_args=None,
     if extra:
         argv += ["--"] + extra
     return argv
+
+
+def build_agent_list_argv() -> list[str]:
+    """`herdr agent list` — every agent herdr knows, with an OPTIONAL `name` per entry.
+
+    Verified live against herdr 0.8.0 (2026-08-05): the JSON is
+    `{"id": "cli:agent:list", "result": {"agents": [...], "type": "agent_list"}}` and only
+    named agents carry a `name` key. Used by the #731 pre-split name preflight.
+    """
+    return ["herdr", "agent", "list"]
 
 
 def build_agent_wait_argv(*, target: str, until: str = "idle",
@@ -1811,7 +1830,8 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
 
     out: dict = {"ok": False, "steps": [], "results": {}, "truncated": False,
                  "failed_step": None, "new_pane": None, "session_id": None,
-                 "cleanup": None, "teardown_skipped": None, "predecessor_guard": None}
+                 "cleanup": None, "teardown_skipped": None, "predecessor_guard": None,
+                 "failure_detail": None, "pane_capture": None}
 
     ladder = _VERIFICATION_STEPS if steps is None else steps
     gate_steps = _predecessor_steps(ladder)
@@ -1822,6 +1842,11 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             "(`retire-predecessor`), not to the session being retired")
 
     def record(kind, argv, proc=None, note=None):
+        if note is None and proc is not None and getattr(proc, "returncode", 1) != 0:
+            # #731 — one choke point: a failed step's herdr error body becomes its note
+            # automatically, so no failure record is ever bare.
+            note = _error_note(f"{getattr(proc, 'stdout', '') or ''}"
+                               f"{getattr(proc, 'stderr', '') or ''}")
         out["steps"].append({"kind": kind, "argv": argv,
                              "returncode": getattr(proc, "returncode", None),
                              "note": note})
@@ -1906,7 +1931,52 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         if not revalidated:
             out["failed_step"] = QUEUE_REVALIDATED_STEP
             out["reason"] = revalidation_reason
+            out["failure_detail"] = revalidation_reason
             return out
+
+    # #731 — pre-split name preflight. A bound agent name makes `agent start` fail AFTER a
+    # pane exists, and a same-name retry is structurally impossible (the name stays bound) —
+    # so refuse BEFORE anything is created. FAIL-OPEN when the list cannot be read: the
+    # start-time path still refuses a taken name, now with its cause, and a broken
+    # `agent list` must not become a new way for handoffs to fail.
+    list_argv = build_agent_list_argv()
+    try:
+        try:
+            proc = runner(list_argv, timeout=NAME_PREFLIGHT_TIMEOUT_S)
+        except TypeError:
+            # A legacy caller-supplied runner without a timeout parameter — the preflight
+            # matters more than its bound (#731 Step-11).
+            proc = runner(list_argv)
+    except (OSError, subprocess.SubprocessError, LauncherError) as exc:
+        # Fail-open on transport trouble too: this runs BEFORE the ownership try/finally, so
+        # an uncaught raise here would crash the whole handoff over an optional preflight.
+        proc = None
+        record("agent_name_preflight", list_argv, None,
+               note=f"preflight FAIL-OPEN: `herdr agent list` raised {exc} — proceeding; a "
+                    "taken name is still refused at agent start")
+    if proc is None:
+        pass
+    elif getattr(proc, "returncode", 1) != 0:
+        record("agent_name_preflight", list_argv, proc,
+               note="preflight FAIL-OPEN: `herdr agent list` failed — proceeding; a taken "
+                    "name is still refused at agent start, with its cause")
+    else:
+        parsed, holder = _agent_name_holder(getattr(proc, "stdout", "") or "", name)
+        if not parsed:
+            record("agent_name_preflight", list_argv, proc,
+                   note="preflight FAIL-OPEN: `herdr agent list` output was unusable — "
+                        "proceeding; a taken name is still refused at agent start")
+        elif holder is not None:
+            detail = (f"agent name {name!r} is already bound to pane {holder} — refused "
+                      f"before any split, so nothing was created and nothing needs cleanup. "
+                      f"Check `herdr agent list` and pick a fresh --name: a same-name retry "
+                      f"cannot succeed while the name stays bound")
+            record("agent_name_preflight", list_argv, proc, note=detail)
+            out["failed_step"] = "name_taken"
+            out["failure_detail"] = detail
+            return out
+        else:
+            record("agent_name_preflight", list_argv, proc, note=f"name {name!r} is free")
 
     # Captured BEFORE the split so nothing already on disk can be mistaken for this launch's
     # evidence (#611 Step-11 Medium 4). A registry that exists but cannot be read yields no
@@ -1914,6 +1984,9 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     registry_baseline = _baseline(read_text, registry_path)
     if registry_baseline is None:
         out["failed_step"] = "registry_baseline_unreadable"
+        out["failure_detail"] = (
+            "the session registry exists but could not be read for a pre-launch baseline — "
+            "without one, no later row can count as fresh evidence")
         return out
 
     # Pane inventory before the split. REQUIRED, not best-effort (#611 Step-11 pass-6 High 1):
@@ -1924,6 +1997,9 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     panes_before = _pane_inventory(runner)
     if panes_before is None:
         out["failed_step"] = "pane_inventory_unavailable"
+        out["failure_detail"] = (
+            "`herdr pane list` failed or returned an unusable inventory — a new pane could "
+            "not be proven ours, so no split was attempted")
         return out
 
     transferred = False
@@ -1981,6 +2057,13 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                          f"shell (attempt {attempt + 1}/{PANE_READY_ATTEMPTS})") if busy
                    else _error_note(body))
             if not busy:
+                # #731 — the preflight race: the name was free at the list and taken by start
+                # time. Same name-specific refusal as the preflight, never a bare agent_start,
+                # and never a retry (only agent_pane_busy is self-resolving).
+                if _error_code(body) == NAME_TAKEN_ERROR_CODE:
+                    out["failed_step"] = "name_taken"
+                    out["failure_detail"] = _error_note(body)
+                    return out
                 break
         if not started:
             out["failed_step"] = "agent_start"
@@ -2158,6 +2241,9 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             out["results"]["prompt_landed"] = landed
             if not landed:
                 out["failed_step"] = "prompt_landed"
+                out["failure_detail"] = (
+                    "the resume prompt's marker never appeared in the successor transcript "
+                    "within the poll budget — transport rc 0 proves delivery, not arrival")
                 return out
 
         # SEND 3 of 3 — the GUARD, LAST, deliberately while the successor is already working.
@@ -2191,6 +2277,9 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             attempts=GOAL_POLL_ATTEMPTS, delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
         if not out["results"]["goal_armed"]:
             out["failed_step"] = "goal_armed"
+            out["failure_detail"] = (
+                "no unmet goal_status row for the armed condition appeared in the successor "
+                "transcript within the poll budget")
             return out
 
         # The unguarded window is now BETWEEN send 2 and this row, and it is bounded by exactly the
@@ -2201,11 +2290,15 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         ok, failed, _ = evaluate_verifications(out["results"], steps=gate_steps)
         if not ok:
             out["failed_step"] = failed
+            out["failure_detail"] = (
+                f"verification {failed!r} did not pass — fail-closed: an unreported check "
+                "counts as failed")
             return out
 
         transferred = True
     except (LauncherError, OSError, subprocess.SubprocessError) as exc:
         out["failed_step"] = out["failed_step"] or f"exception: {exc}"
+        out["failure_detail"] = out["failure_detail"] or str(exc)
         return out
     finally:
         if not transferred:
@@ -2219,6 +2312,24 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                 # A pane may exist that we cannot name. Report it; never guess (see
                 # `_report_possible_orphan`).
                 out["cleanup"] = _report_possible_orphan(panes_before, runner, anchor_pane)
+        # #731 — no try-body exit returns a bare failed_step: derive the cause from the failing
+        # step's own recorded note when no site set it explicitly. Idempotent (explicit wins),
+        # and the pane capture recorded during cleanup is lifted the same way.
+        if out.get("failed_step") and not out.get("failure_detail"):
+            out["failure_detail"] = failure_detail(out)
+        if out.get("pane_capture") is None:
+            out["pane_capture"] = pane_capture(out)
+
+    def _finalize():
+        # #731 Step-11 (merged Medium): teardown-phase exits fill the derived fields at the
+        # LIBRARY level too — not just the CLI serialization. `predecessor_guard`, when set,
+        # IS this phase's failure narrative, so it wins over a step note that would name the
+        # step without its cause (e.g. teardown_predecessor's note is the ALLOWED reason).
+        if out.get("failed_step") and not out.get("failure_detail"):
+            guard = out.get("predecessor_guard")
+            out["failure_detail"] = (guard if isinstance(guard, str) and guard
+                                     else failure_detail(out))
+        return out
 
     # Teardown LAST, only when authorized, and its result is NOT ignored (Step-11 Medium 5).
     allowed, reason = teardown_allowed(out["results"], steps=gate_steps)
@@ -2241,7 +2352,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     f"the predecessor pane {anchor_pane} is ALIVE and STILL GUARDED — its "
                     f"transcript could not be baselined, so {_CLEAR_COMMAND!r} was never sent. Run "
                     f"{_CLEAR_COMMAND!r} in it by hand, then close it")
-                return out
+                return _finalize()
             # #707 — THREE states, not two. The first revision sent the clear unconditionally and
             # then required a NEW receipt row, so "no guard was ever armed" produced no receipt and
             # was reported as "the clear may not have landed": the pane was stranded with an
@@ -2266,7 +2377,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     f"the predecessor pane {anchor_pane} is ALIVE and may still be GUARDED — its "
                     f"transcript could not be read ({exc}), and an unreadable transcript is not "
                     f"evidence that nothing is armed. Run {_CLEAR_COMMAND!r} in it by hand")
-                return out
+                return _finalize()
 
             # #758 strict goal binding (D18). The validated snapshot — the sentinel-only live
             # goal the caller's verbatim-carry check ran against, INCLUDING the explicit
@@ -2288,7 +2399,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     out["predecessor_guard"] = (
                         f"the predecessor pane {anchor_pane} is LEFT OPEN and its guard "
                         f"untouched — {exc}")
-                    return out
+                    return _finalize()
                 if live_now != expected_goal_snapshot:
                     def _shape(v):
                         return "none" if v is None else f"{len(v)} chars"
@@ -2310,7 +2421,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                         f"underneath the handoff is exactly what #758 forbids. The successor "
                         f"is armed with the VALIDATED goal and keeps running. Inspect the "
                         f"pane; clear and close it by hand only after reading its goal")
-                    return out
+                    return _finalize()
 
             if strict_goal_binding:
                 # Step-8a wave Critical (#758): under strict binding the #707 three-state
@@ -2364,7 +2475,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                         f"{kind} failed, so aborting BEFORE the close. If the text landed but the "
                         f"Enter did not, {_CLEAR_COMMAND!r} is staged unsubmitted in its input. "
                         f"Check the pane and run {_CLEAR_COMMAND!r} by hand")
-                    return out
+                    return _finalize()
 
             # Bound to `live_condition` — the guard actually in force — and NOT to the caller's
             # supplied one. #665 Step-11 pass-3 proved the binding is necessary at all: with ANY
@@ -2385,7 +2496,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     f"{_CLEAR_COMMAND!r} was transported but never confirmed by a met:true "
                     f"sentinel row. Its guard state is AMBIGUOUS — verify the pane and run "
                     f"{_CLEAR_COMMAND!r} by hand before closing it")
-                return out
+                return _finalize()
         else:
             # The campaign launcher does not know the predecessor's session id, so the clear could
             # not be confirmed even if it were sent. Its behaviour is therefore UNCHANGED —
@@ -2405,7 +2516,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                 f"the predecessor pane {anchor_pane} could NOT be closed (rc="
                 f"{getattr(proc, 'returncode', None)}). If its goal was cleared it will stop "
                 f"normally; otherwise run {_CLEAR_COMMAND!r} in it by hand")
-            return out
+            return _finalize()
     elif not teardown:
         # #700 field defect 3, and the one that actually bit: the default path left the guard armed
         # and said NOTHING, so the owner met a pane that looped its Stop hook with no idea why.
@@ -2449,7 +2560,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                 f"re-prompting itself at every Stop until you run {_CLEAR_COMMAND!r} in it. "
                 "That is deliberate (teardown is opt-in), but it is not automatic")
     out["ok"] = True
-    return out
+    return _finalize()
 
 
 def _is_pane_busy(proc, body: str) -> bool:
@@ -2467,6 +2578,113 @@ def _is_pane_busy(proc, body: str) -> bool:
         return False
     err = doc.get("error") if isinstance(doc, dict) else None
     return isinstance(err, dict) and err.get("code") == PANE_READY_ERROR_CODE
+
+
+def failure_detail(out) -> str | None:
+    """The human-readable cause behind out['failed_step'], or None.
+
+    Precedence: an explicitly-set out['failure_detail'] → the LAST recorded note of the step
+    kind that failed → out['reason'] → out['predecessor_guard'] (only for the teardown-phase
+    predecessor_goal_* failures, whose whole cause lives there) → None. Deliberately NO
+    cross-kind note fallback: borrowing an unrelated step's note would attribute the failure
+    to the wrong cause, which is worse than admitting no detail was captured (#731).
+    """
+    if not isinstance(out, dict) or not out.get("failed_step"):
+        return None
+    explicit = out.get("failure_detail")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    failed = out["failed_step"]
+    steps = out.get("steps")
+    if isinstance(steps, list):
+        for step in reversed(steps):
+            if isinstance(step, dict) and step.get("kind") == failed:
+                note = step.get("note")
+                if isinstance(note, str) and note:
+                    return note
+    reason = out.get("reason")
+    if isinstance(reason, str) and reason:
+        return reason
+    if isinstance(failed, str) and failed.startswith("predecessor_goal"):
+        guard = out.get("predecessor_guard")
+        if isinstance(guard, str) and guard:
+            return guard
+    return None
+
+
+def pane_capture(out) -> str | None:
+    """The tentative pane's captured output (the 'cleanup_pane_capture' step note), or None.
+
+    Lifted from the step record so the CLI payload can carry it without shipping the whole
+    ladder — the successor's own output is the single most informative artifact of a failed
+    handoff, and cleanup used to destroy it unread (#731 AC2).
+    """
+    if not isinstance(out, dict):
+        return None
+    steps = out.get("steps")
+    if isinstance(steps, list):
+        for step in reversed(steps):
+            if isinstance(step, dict) and step.get("kind") == "cleanup_pane_capture" \
+                    and step.get("returncode") == 0:
+                note = step.get("note")
+                if isinstance(note, str) and note:
+                    return note
+    return None
+
+
+_PANE_CAPTURE_CAP = 2000
+# The cleanup capture's own runner timeout (seconds). The default runner bound is 180 s
+# (`_default_runner`) — acceptable for launch steps, far too long to hold a best-effort
+# read during cleanup (#731 Step-8a).
+PANE_CAPTURE_TIMEOUT_S = 5
+
+
+def _capped_tail(text: str, cap: int = _PANE_CAPTURE_CAP) -> str:
+    """The LAST `cap` chars — tail-biased, because a failing pane's error is at the end,
+    and a megabyte of scrollback must not ride a JSON report."""
+    if len(text) <= cap:
+        return text
+    return f"[capture truncated to the last {cap} chars]\n" + text[-cap:]
+
+
+def _agent_name_holder(agent_list_stdout, name) -> tuple[bool, str | None]:
+    """(parsed, holder_pane_id) from `herdr agent list` output.
+
+    parsed=False means the output was unusable — the preflight then FAILS OPEN (unlike
+    `_pane_inventory`, which fails closed, because *its* consumers close panes; refusing a
+    handoff over a garbled list would be a new failure mode, while proceeding just moves the
+    refusal to `agent start`, which now reports its cause). Entries carry an OPTIONAL `name`
+    key (herdr 0.8.0, verified live 2026-08-05) — unnamed and malformed entries are skipped.
+    """
+    try:
+        doc = json.loads(agent_list_stdout or "")
+    except (ValueError, TypeError):
+        return (False, None)
+    node = doc.get("result", doc) if isinstance(doc, dict) else None
+    agents = node.get("agents") if isinstance(node, dict) else None
+    if not isinstance(agents, list):
+        return (False, None)
+    for entry in agents:
+        if isinstance(entry, dict) and entry.get("name") == name:
+            pane = entry.get("pane_id")
+            return (True, pane if isinstance(pane, str) and pane else "<unknown pane>")
+    return (True, None)
+
+
+def _error_code(body) -> str | None:
+    """The `error.code` of a herdr error payload, or None when there is no such thing.
+
+    The sibling of `_is_pane_busy` for callers that need the code itself rather than one
+    yes/no: #731 branches `agent_name_taken` to a name-specific `failed_step`. Same guarded
+    parse — any non-JSON, non-dict, or code-less shape is None, never an exception.
+    """
+    try:
+        doc = json.loads(body or "")
+    except (ValueError, TypeError):
+        return None
+    err = doc.get("error") if isinstance(doc, dict) else None
+    code = err.get("code") if isinstance(err, dict) else None
+    return code if isinstance(code, str) and code else None
 
 
 def _error_note(body: str) -> str | None:
@@ -2570,9 +2788,45 @@ def _close_tentative_pane(pane: str, runner, record, expected_session: str | Non
             record("cleanup_identity_probe", probe, proc)
             live = parse_pane_agent_session(getattr(proc, "stdout", "") or "")
             if getattr(proc, "returncode", 1) != 0 or live != expected_session:
+                # #731 Step-8a High (security): a refused probe means the handle may have
+                # been REUSED — reading it would disclose another session's output into the
+                # report. No ownership, no read; the skip stays visible.
+                record("cleanup_pane_capture", [], None,
+                       note="capture SKIPPED: the pane no longer provably hosts our session "
+                            "— reading it could disclose another session's output")
                 return (f"NOT closed {pane}: it no longer provably hosts {expected_session!r} "
                         f"(saw {live!r}) — the handle may have been reused, and closing it could "
                         "kill an unrelated session; check `herdr pane list`")
+
+        # #731 AC2 — capture the pane's visible output BEFORE the close destroys it: the
+        # successor's own words are the single most informative artifact of a failed handoff.
+        # This runs AFTER the ownership check above, on exactly the close's own ownership
+        # basis (probe passed, or the early-failure case where no session was ever
+        # established and the close proceeds on the pre-split-inventory bound). Best-effort
+        # in every direction: no capture failure may block the close, and the read carries
+        # its own short timeout — the default runner bound is 180 s, far too long to hold a
+        # cleanup for a best-effort read.
+        read_argv = build_pane_read_argv(pane)
+        try:
+            try:
+                read_proc = runner(read_argv, timeout=PANE_CAPTURE_TIMEOUT_S)
+            except TypeError:
+                # A legacy caller-supplied runner without a timeout parameter (#731 Step-11:
+                # this module never passed a runner kwarg before — losing the capture AND the
+                # close to a TypeError would orphan the pane).
+                read_proc = runner(read_argv)
+        except (OSError, subprocess.SubprocessError, LauncherError) as exc:
+            read_proc = None
+            record("cleanup_pane_capture", read_argv, None,
+                   note=f"pane read raised {exc} — capture skipped")
+        if read_proc is not None:
+            if getattr(read_proc, "returncode", 1) == 0:
+                text = (getattr(read_proc, "stdout", "") or "").strip()
+                record("cleanup_pane_capture", read_argv, read_proc,
+                       note=_capped_tail(text) if text
+                       else "pane read succeeded but the viewport was empty")
+            else:
+                record("cleanup_pane_capture", read_argv, read_proc)
         argv = build_teardown_argv(pane)
         proc = runner(argv)
         record("cleanup_tentative_pane", argv, proc)
@@ -4303,6 +4557,16 @@ def _cmd_ad_hoc_handoff(args) -> int:
     payload = {k: out[k] for k in
                ("ok", "results", "failed_step", "new_pane", "session_id",
                 "truncated", "cleanup", "teardown_skipped", "predecessor_guard")}
+    # #731 — the cause and the captured pane output ride the payload; `steps` stays out.
+    # Via the helpers, not out[...]: they tolerate results that predate these keys, and they
+    # derive from the step records for exits (teardown-phase) the library did not pre-fill.
+    payload["failure_detail"] = failure_detail(out)
+    if payload["failed_step"] and not payload["failure_detail"]:
+        # #731 Step-8a Medium: the contract is a detail for EVERY failed step. An uncovered
+        # or legacy result shape still names the step rather than shipping null.
+        payload["failure_detail"] = (f"step {payload['failed_step']!r} failed with no "
+                                     "recorded detail")
+    payload["pane_capture"] = pane_capture(out)
     if used_override:
         # #758 — the audit record rides the output ONLY when an override was actually
         # consumed (goals differed AND an affirmative owner answer authorized it);

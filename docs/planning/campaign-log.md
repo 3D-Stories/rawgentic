@@ -14,6 +14,48 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #906 M2 — #731: a failed handoff now says why · v3.129.1
+
+**Issue:** [#731](https://github.com/3D-Stories/rawgentic/issues/731) ·
+**Design:** brief note, small-standard lane (no separate design doc)
+
+Two consecutive live handoffs failed with `"failed_step": "agent_start"` and nothing else, while
+the cause — herdr's `agent_name_taken` — was already captured in `out["steps"][].note` and then
+dropped by the CLI payload filter, which copies nine keys and not `steps`. The name stayed bound,
+so the obvious operator recovery ("run it again") was structurally impossible. The fix follows the
+choke-point rule: `record()` now derives a failure note from any failed proc's herdr body, a pure
+`failure_detail(out)` reader lifts the failing step's own note (never an unrelated one — wrong
+attribution beats no detail is false), and the payload carries `failure_detail` plus
+`pane_capture` — the tentative pane's last words, read before cleanup destroys them, and only when
+the pane provably still hosts our session.
+
+**The preflight makes the poisoned retry impossible instead of merely legible.** Before any split,
+`herdr agent list` (verified live on 0.8.0 — entries carry `name` only when named) is checked for
+the requested name; taken → `failed_step: "name_taken"` naming the holding pane, with no pane
+created. Fail-open in every direction — non-zero rc, garbled output, a raising or legacy runner —
+because a broken optional check must not become a new way for handoffs to fail. The start-time
+race maps to the same name-specific step and is never retried; only `agent_pane_busy` remains
+retryable.
+
+**What the reviews caught.** The Step 8a wave (two passes over the two high-risk commits) found
+the real security defect in the first cut: the capture ran before the identity probe, so a reused
+handle could have disclosed a foreign viewport into the report — reordered, with a visible
+capture-skip on refusal. Step 11's passes then caught the first-ever runner `timeout=` kwarg
+breaking legacy caller-supplied runners (TypeError → orphaned pane; fixed with a fallback) and the
+library-level teardown exits still returning a bare `failed_step` (fixed with a finalizer that
+prefers `predecessor_guard`). Declined with recorded rationale: never-capture-when-no-session (it
+guts AC2's motivating case, and the strictly more destructive close already proceeds on the
+identical #611 honest bound) and a herdr integration test (CI has no herdr; injected-runner
+black-box is this repo's testing philosophy).
+
+**Gates:** suite 5303 → 5340, 0 failed, exit 0 · Step 8a: 3 findings, both Highs fixed ·
+Step 11: 9 findings (7 unique post-merge), 5 fixed, 2 declined with rationale, 0 deferred ·
+security scan PASS (1 visible skip: iac not applicable) · loop-backs: 2 mints spent, 0 returns to
+Step 3 · no workflow-spine change → no diagram REV. *(PR #, CI, merge SHA: filled by the next
+slot's pass.)*
+
+---
+
 ## Epic #875 M1 — #910: the last two hand-pinned counts, and a guard that already existed · v3.128.2
 
 **Issue:** [#910](https://github.com/3D-Stories/rawgentic/issues/910) ·

@@ -1454,3 +1454,475 @@ class TestTheDiagnosisDoesNotReReadTheRegistry:
         out = ll.perform_handoff(**_handoff(r, read_text=read_text))
         assert out["ok"] is False
         assert out["failed_step"] == "project_switched"
+
+
+# ---------------------------------------------------------------------------
+# #731 — T1: the agent-list argv builder and the herdr error-code helper
+# ---------------------------------------------------------------------------
+
+class TestAgentListArgvAndErrorCode:
+    def test_agent_list_argv_shape(self) -> None:
+        """Pure list argv, fixed strings — the same contract as every other builder."""
+        assert ll.build_agent_list_argv() == ["herdr", "agent", "list"]
+
+    def test_name_taken_code_constant_matches_herdr(self) -> None:
+        """The code herdr 0.8.0 returns when `agent start` hits a bound name (issue #731's
+        live reproduction)."""
+        assert ll.NAME_TAKEN_ERROR_CODE == "agent_name_taken"
+
+    def test_error_code_extracts_the_herdr_code(self) -> None:
+        body = json.dumps({"error": {"code": "agent_name_taken",
+                                     "message": "agent name x is already used"}})
+        assert ll._error_code(body) == "agent_name_taken"
+
+    def test_error_code_is_none_on_non_json(self) -> None:
+        assert ll._error_code("herdr exploded, plain text") is None
+
+    def test_error_code_is_none_on_json_without_error_dict(self) -> None:
+        assert ll._error_code(json.dumps({"result": {"ok": True}})) is None
+
+    def test_error_code_is_none_when_error_has_no_code(self) -> None:
+        assert ll._error_code(json.dumps({"error": {"message": "no code field"}})) is None
+
+    def test_error_code_is_none_on_empty_or_none(self) -> None:
+        assert ll._error_code("") is None
+        assert ll._error_code(None) is None
+
+
+# ---------------------------------------------------------------------------
+# #731 — T2: failure_detail + pane_capture surfacing (AC1)
+# ---------------------------------------------------------------------------
+
+class TestFailureDetailSurfacing:
+    """AC1: every failed_step return carries the underlying error text — the CLI payload
+    filter used to drop `steps`, so the operator saw a bare token and nothing else."""
+
+    def test_a_failing_step_records_the_herdr_error_without_an_explicit_note(self) -> None:
+        """record() derives the note itself from a failed proc's body — one choke point,
+        every failure record carries the herdr error without touching 30+ call sites."""
+        body = json.dumps({"error": {"code": "split_denied", "message": "no space"}})
+        base = Runner(_responses())
+
+        def runner(argv, timeout=180):
+            if Runner.key(argv) == "herdr pane split":
+                base.calls.append(list(argv))
+                return FakeProc(returncode=1, stdout=body)
+            return base(argv, timeout)
+
+        out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert out["failed_step"] == "split"
+        split_steps = [s for s in out["steps"] if s["kind"] == "split"]
+        assert split_steps and split_steps[-1]["note"] == "herdr error: split_denied — no space"
+        assert out["failure_detail"] == "herdr error: split_denied — no space"
+
+    def test_failure_detail_prefers_the_failing_steps_last_note(self) -> None:
+        out = {"failed_step": "agent_start", "steps": [
+            {"kind": "agent_start", "note": "first attempt"},
+            {"kind": "other", "note": "unrelated"},
+            {"kind": "agent_start", "note": "herdr error: x — y"}]}
+        assert ll.failure_detail(out) == "herdr error: x — y"
+
+    def test_failure_detail_never_borrows_an_unrelated_note(self) -> None:
+        """Wrong attribution is worse than no detail — no cross-kind fallback."""
+        out = {"failed_step": "agent_wait", "steps": [{"kind": "split", "note": "fine"}]}
+        assert ll.failure_detail(out) is None
+
+    def test_failure_detail_falls_back_to_reason(self) -> None:
+        out = {"failed_step": "queue_revalidated", "steps": [], "reason": "receipt stale"}
+        assert ll.failure_detail(out) == "receipt stale"
+
+    def test_failure_detail_is_none_on_success_and_on_a_bare_dict(self) -> None:
+        assert ll.failure_detail({"failed_step": None, "steps": []}) is None
+        assert ll.failure_detail({}) is None
+
+    def test_pane_capture_lifts_only_a_successful_captures_note(self) -> None:
+        ok = {"steps": [{"kind": "cleanup_pane_capture", "returncode": 0,
+                         "note": "the pane said X"}]}
+        assert ll.pane_capture(ok) == "the pane said X"
+        failed = {"steps": [{"kind": "cleanup_pane_capture", "returncode": 1,
+                             "note": "herdr error: read_failed — nope"}]}
+        assert ll.pane_capture(failed) is None, \
+            "a capture-failure status note must never masquerade as pane text"
+        assert ll.pane_capture({"steps": []}) is None
+        assert ll.pane_capture({}) is None
+
+    def test_goal_armed_failure_carries_a_detail(self) -> None:
+        r = Runner(_responses())
+        bad_goal = json.dumps({"attachment": {"type": "goal_status", "met": False,
+                                              "sentinel": True, "condition": "something else"}})
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, goal_row=bad_goal)))
+        assert out["failed_step"] == "goal_armed"
+        assert out["failure_detail"], "a poll failure with no step record must still explain itself"
+
+    def test_prompt_landed_failure_carries_a_detail(self) -> None:
+        r = Runner(_responses(pane_read="nothing recognizable"))
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, marker_after_nudges=99)))
+        assert out["failed_step"] == "prompt_landed"
+        assert out["failure_detail"]
+
+    def test_registry_baseline_unreadable_carries_a_detail(self) -> None:
+        r = Runner(_responses())
+
+        def read_text(path):
+            raise OSError("registry unreadable")
+
+        out = ll.perform_handoff(**_handoff(r, read_text=read_text))
+        assert out["failed_step"] == "registry_baseline_unreadable"
+        assert out["failure_detail"]
+
+    def test_pane_inventory_unavailable_carries_a_detail(self) -> None:
+        r = Runner(_responses(), fail_on="herdr pane list")
+        out = ll.perform_handoff(**_handoff(r))
+        assert out["failed_step"] == "pane_inventory_unavailable"
+        assert out["failure_detail"]
+
+    def test_an_exception_exit_carries_the_exception_text(self) -> None:
+        base = Runner(_responses())
+
+        def runner(argv, timeout=180):
+            if Runner.key(argv) == "herdr pane get":
+                raise OSError("herdr socket vanished")
+            return base(argv, timeout)
+
+        out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert out["failed_step"].startswith("exception:")
+        assert "herdr socket vanished" in out["failure_detail"]
+
+    def test_cli_payload_carries_failure_detail_and_pane_capture(self, tmp_path, monkeypatch,
+                                                                 capsys) -> None:
+        """The AC6 headline shape: the operator's JSON names the cause, not a bare token."""
+        detail = "herdr error: agent_name_taken — agent name successor is already used"
+
+        def fake(**kw):
+            return {"ok": False, "results": {}, "steps": [
+                        {"kind": "agent_start", "argv": [], "returncode": 1, "note": detail},
+                        {"kind": "cleanup_pane_capture", "argv": [], "returncode": 0,
+                         "note": "successor pane tail"}],
+                    "new_pane": "w1:pZZ", "session_id": None,
+                    "cleanup": "closed tentative pane w1:pZZ", "truncated": False,
+                    "failed_step": "agent_start", "teardown_skipped": None,
+                    "predecessor_guard": None}
+
+        monkeypatch.setattr(ll, "perform_handoff", fake)
+        rc = ll.main(_argv(tmp_path))
+        assert rc == 4
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["failure_detail"] == detail
+        assert payload["pane_capture"] == "successor pane tail"
+        assert "steps" not in payload, "the report surfaces the cause, never the whole ladder"
+
+    def test_cli_payload_keys_are_none_on_success(self, tmp_path, monkeypatch, capsys) -> None:
+        def fake(**kw):
+            return {"ok": True, "results": {}, "steps": [], "new_pane": "w1:pZZ",
+                    "session_id": "s", "cleanup": None, "truncated": False,
+                    "failed_step": None, "teardown_skipped": None, "predecessor_guard": None}
+
+        monkeypatch.setattr(ll, "perform_handoff", fake)
+        assert ll.main(_argv(tmp_path)) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["failure_detail"] is None
+        assert payload["pane_capture"] is None
+
+
+# ---------------------------------------------------------------------------
+# #731 — T3: pre-split name preflight + start-time name_taken mapping (AC3)
+# ---------------------------------------------------------------------------
+
+AGENT_LIST_WITH_NAME = json.dumps({"id": "cli:agent:list", "result": {"type": "agent_list",
+    "agents": [{"pane_id": "w1:pEA", "name": "successor", "agent_status": "working"},
+               {"pane_id": "w1:pKG"}]}})          # the unnamed entry mirrors live 0.8.0 output
+AGENT_LIST_CLEAN = json.dumps({"id": "cli:agent:list", "result": {"type": "agent_list",
+    "agents": [{"pane_id": "w1:pKG", "name": "someone-else"}, {"pane_id": "w1:pHW"}]}})
+
+
+class TestNameTakenPreflight:
+    def test_a_taken_name_is_refused_before_any_split(self) -> None:
+        """The cheap-failure property under test: a refused name creates NOTHING."""
+        r = Runner({**_responses(), "herdr agent list": AGENT_LIST_WITH_NAME})
+        out = ll.perform_handoff(**_handoff(r))
+        assert out["ok"] is False
+        assert out["failed_step"] == "name_taken"
+        assert "w1:pEA" in out["failure_detail"]
+        assert not any(Runner.key(c) == "herdr pane split" for c in r.calls)
+        assert not any(Runner.key(c) == "herdr agent start" for c in r.calls)
+
+    def test_entries_without_a_name_key_are_skipped(self) -> None:
+        """herdr 0.8.0 names only named agents — an unnamed entry must not match anything."""
+        r = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r)))
+        assert out["ok"] is True, out["failed_step"]
+
+    def test_a_failed_list_fails_open_and_is_recorded(self) -> None:
+        r = Runner(_responses(), fail_on="herdr agent list")
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r)))
+        assert out["ok"] is True, out["failed_step"]
+        pre = [s for s in out["steps"] if s["kind"] == "agent_name_preflight"]
+        assert pre and pre[-1]["note"] and "FAIL-OPEN" in pre[-1]["note"]
+
+    def test_garbled_list_output_fails_open(self) -> None:
+        r = Runner({**_responses(), "herdr agent list": "not json"})
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r)))
+        assert out["ok"] is True, out["failed_step"]
+
+    def test_start_time_name_taken_race_maps_to_name_taken(self) -> None:
+        """Preflight clean, name grabbed between list and start: still name-specific, still
+        with the herdr message, and NEVER retried (only agent_pane_busy retries)."""
+        body = json.dumps({"error": {"code": "agent_name_taken",
+                                     "message": "agent name successor is already used; "
+                                                "candidates: pane_id=w1:pEA"}})
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+
+        def runner(argv, timeout=180):
+            if Runner.key(argv) == "herdr agent start":
+                base.calls.append(list(argv))
+                return FakeProc(returncode=1, stdout=body)
+            return base(argv, timeout)
+
+        out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert out["failed_step"] == "name_taken"
+        assert "agent name successor is already used" in out["failure_detail"]
+        starts = [c for c in base.calls if Runner.key(c) == "herdr agent start"]
+        assert len(starts) == 1, "a taken name must not be retried"
+
+    def test_pane_busy_retry_behavior_is_unchanged(self) -> None:
+        busy = json.dumps({"error": {"code": "agent_pane_busy",
+                                     "message": "not an available shell"}})
+        n = {"starts": 0}
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+
+        def runner(argv, timeout=180):
+            if Runner.key(argv) == "herdr agent start":
+                base.calls.append(list(argv))
+                n["starts"] += 1
+                return FakeProc(returncode=1, stdout=busy) if n["starts"] == 1 else FakeProc(0, "")
+            return base(argv, timeout)
+
+        out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert out["ok"] is True, out["failed_step"]
+        assert n["starts"] == 2
+
+
+# ---------------------------------------------------------------------------
+# #731 — T4: capture the tentative pane BEFORE cleanup closes it (AC2)
+# ---------------------------------------------------------------------------
+
+class TestCaptureBeforeCleanup:
+    @staticmethod
+    def _failing_start_runner(base, body):
+        def runner(argv, timeout=180):
+            if Runner.key(argv) == "herdr agent start":
+                base.calls.append(list(argv))
+                return FakeProc(returncode=1, stdout=body)
+            return base(argv, timeout)
+        return runner
+
+    BOOM = json.dumps({"error": {"code": "kaboom", "message": "agent exploded"}})
+
+    def test_pane_is_read_before_it_is_closed(self) -> None:
+        """AC2: the successor's own output is the most informative artifact of a failed
+        handoff — it must be in the report before teardown destroys it."""
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+        out = ll.perform_handoff(**_handoff(self._failing_start_runner(base, self.BOOM),
+                                            read_text=Artifacts(base)))
+        assert out["failed_step"] == "agent_start"
+        reads = [i for i, c in enumerate(base.calls)
+                 if c[:3] == ["herdr", "pane", "read"] and c[3] == "w1:pZZ"]
+        closes = [i for i, c in enumerate(base.calls)
+                  if c[:3] == ["herdr", "pane", "close"] and c[3] == "w1:pZZ"]
+        assert reads and closes and reads[0] < closes[0], \
+            f"capture must precede close (calls: {[Runner.key(c) for c in base.calls]})"
+        assert out["pane_capture"] == PANE_PASTE_WAITING.strip()
+        cap = [s for s in out["steps"] if s["kind"] == "cleanup_pane_capture"]
+        assert cap and cap[-1]["note"] == PANE_PASTE_WAITING.strip()
+
+    def test_capture_read_failure_is_recorded_and_close_proceeds(self) -> None:
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN},
+                      fail_on="herdr pane read")
+        out = ll.perform_handoff(**_handoff(self._failing_start_runner(base, self.BOOM),
+                                            read_text=Artifacts(base)))
+        assert any(c[:3] == ["herdr", "pane", "close"] for c in base.calls), \
+            "a failed capture must never block the close"
+        cap = [s for s in out["steps"] if s["kind"] == "cleanup_pane_capture"]
+        assert cap and cap[-1]["returncode"] == 1
+        assert out["pane_capture"] is None
+        assert "closed tentative pane" in out["cleanup"]
+
+    def test_a_raising_capture_read_still_closes(self) -> None:
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+        start_runner = self._failing_start_runner(base, self.BOOM)
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "read"]:
+                base.calls.append(list(argv))
+                raise OSError("read socket died")
+            return start_runner(argv, timeout)
+
+        out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert any(c[:3] == ["herdr", "pane", "close"] for c in base.calls)
+        assert out["pane_capture"] is None
+        assert "closed tentative pane" in out["cleanup"]
+
+    def test_a_long_capture_is_tail_truncated(self) -> None:
+        long_body = "A" * 3000 + "THE-END"
+        base = Runner({**_responses(pane_read=long_body), "herdr agent list": AGENT_LIST_CLEAN})
+        out = ll.perform_handoff(**_handoff(self._failing_start_runner(base, self.BOOM),
+                                            read_text=Artifacts(base)))
+        assert out["pane_capture"] is not None
+        assert out["pane_capture"].endswith("THE-END"), "tail-biased: the error is at the end"
+        assert len(out["pane_capture"]) <= 2100
+
+
+# ---------------------------------------------------------------------------
+# #731 — Step 8a wave fixes: probe-before-capture (F-B), capture timeout (F-A),
+# CLI failure_detail invariant (F-C)
+# ---------------------------------------------------------------------------
+
+class TestCaptureOwnershipAndTimeout:
+    BOOM = json.dumps({"error": {"code": "kaboom", "message": "agent exploded"}})
+
+    def test_a_probe_refused_pane_is_never_read(self) -> None:
+        """F-B (Step 8a High, security): a reused handle must not leak another session's
+        viewport into the payload — no ownership, no read, and the skip stays visible."""
+        # Fail AFTER the session id is known, so cleanup runs its identity probe — and make
+        # the probe see a DIFFERENT session than the one we established.
+        foreign = json.dumps({"result": {"pane": {"pane_id": "w1:pZZ", "agent_status": "idle",
+                              "agent_session": {"agent": "claude", "kind": "id",
+                                                "source": "herdr:claude",
+                                                "value": "someone-elses-session"}}}})
+        gets = {"n": 0}
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "get"]:
+                base.calls.append(list(argv))
+                gets["n"] += 1
+                # First get: spawned-check reads the real session. Later gets (the cleanup
+                # identity probe) see a foreign session — the handle was reused.
+                return FakeProc(0, PANE_GET_OK if gets["n"] == 1 else foreign)
+            if argv[:3] == ["herdr", "pane", "send-text"]:
+                base.calls.append(list(argv))
+                return FakeProc(returncode=1, stdout=self.BOOM)   # force failure post-session
+            return base(argv, timeout)
+
+        out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert out["ok"] is False
+        assert "NOT closed" in out["cleanup"]
+        assert not any(c[:3] == ["herdr", "pane", "read"] for c in base.calls), \
+            "an unowned pane's contents must never be read into the report"
+        assert out["pane_capture"] is None
+        skips = [s for s in out["steps"] if s["kind"] == "cleanup_pane_capture"]
+        assert skips and "skipped" in (skips[-1]["note"] or "").lower(), \
+            "the skip must stay visible"
+
+    def test_capture_read_carries_a_short_cleanup_timeout(self) -> None:
+        """F-A (Step 8a High, resolved with evidence): the default runner bound is 180s —
+        a best-effort capture must not hold the close for that long."""
+        seen = {}
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "read"]:
+                seen["timeout"] = timeout
+            if Runner.key(argv) == "herdr agent start":
+                base.calls.append(list(argv))
+                return FakeProc(returncode=1, stdout=self.BOOM)
+            return base(argv, timeout)
+
+        ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert seen.get("timeout") == ll.PANE_CAPTURE_TIMEOUT_S
+        assert ll.PANE_CAPTURE_TIMEOUT_S <= 10
+
+
+class TestCliFailureDetailInvariant:
+    def test_a_failed_step_with_no_detail_gets_a_stable_fallback(self, tmp_path, monkeypatch,
+                                                                 capsys) -> None:
+        """F-C (Step 8a Medium): the README promises a detail for EVERY failed step — an
+        uncovered or legacy result shape must yield a diagnostic naming the step, not null."""
+        def fake(**kw):
+            return {"ok": False, "results": {}, "steps": [], "new_pane": None,
+                    "session_id": None, "cleanup": None, "truncated": False,
+                    "failed_step": "some_legacy_step", "teardown_skipped": None,
+                    "predecessor_guard": None}
+
+        monkeypatch.setattr(ll, "perform_handoff", fake)
+        assert ll.main(_argv(tmp_path)) == 4
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["failure_detail"] == \
+            "step 'some_legacy_step' failed with no recorded detail"
+
+
+# ---------------------------------------------------------------------------
+# #731 — Step 11 wave fixes: preflight timeout (S11-1), legacy-runner TypeError
+# fallback + LauncherError containment (ADV-1), teardown-phase failure_detail
+# at the library level (S11-4/ADV-4)
+# ---------------------------------------------------------------------------
+
+class TestStep11WaveFixes:
+    BOOM = json.dumps({"error": {"code": "kaboom", "message": "agent exploded"}})
+
+    def test_preflight_list_carries_a_short_timeout(self) -> None:
+        seen = {}
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+
+        def runner(argv, timeout=180):
+            if Runner.key(argv) == "herdr agent list":
+                seen["timeout"] = timeout
+            return base(argv, timeout)
+
+        out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert out["ok"] is True, out["failed_step"]
+        assert seen.get("timeout") == ll.NAME_PREFLIGHT_TIMEOUT_S
+        assert ll.NAME_PREFLIGHT_TIMEOUT_S <= 10
+
+    def test_a_legacy_runner_without_timeout_kwarg_still_captures_and_closes(self) -> None:
+        """The timeout kwarg is the FIRST one this module ever passes a runner — a legacy
+        caller-supplied runner without the parameter must not lose capture or the close."""
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+        boom = self.BOOM
+
+        def legacy(argv):                       # NO timeout parameter, deliberately
+            if Runner.key(argv) == "herdr agent start":
+                base.calls.append(list(argv))
+                return FakeProc(returncode=1, stdout=boom)
+            return base(argv)
+
+        out = ll.perform_handoff(**_handoff(legacy, read_text=Artifacts(base)))
+        assert out["failed_step"] == "agent_start"
+        assert out["pane_capture"] == PANE_PASTE_WAITING.strip()
+        assert any(c[:3] == ["herdr", "pane", "close"] for c in base.calls)
+
+    def test_a_capture_raising_launcher_error_still_closes(self) -> None:
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+        boom = self.BOOM
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "read"]:
+                base.calls.append(list(argv))
+                raise ll.LauncherError("synthetic refusal")
+            if Runner.key(argv) == "herdr agent start":
+                base.calls.append(list(argv))
+                return FakeProc(returncode=1, stdout=boom)
+            return base(argv, timeout)
+
+        out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert any(c[:3] == ["herdr", "pane", "close"] for c in base.calls), \
+            "a capture exception must never cost the close"
+        assert out["pane_capture"] is None
+        assert "closed tentative pane" in out["cleanup"]
+
+    def test_teardown_phase_failure_fills_failure_detail_at_the_library_level(self) -> None:
+        """S11-4/ADV-4: the LIBRARY result carries the detail too — not only the CLI
+        serialization; predecessor_guard is the narrative for this phase."""
+        r = Runner(_responses())
+        art = Artifacts(r)
+
+        def read_text(path):
+            if path.endswith("pred-sess.jsonl"):
+                raise OSError("pred transcript unreadable")
+            return art(path)
+
+        out = ll.perform_handoff(**_handoff(r, read_text=read_text, teardown=True,
+                                            predecessor_session="pred-sess"))
+        assert out["failed_step"] == "predecessor_goal_clear"
+        assert out["failure_detail"], "a teardown-phase exit must not be bare at the library level"
+        assert out["failure_detail"] == out["predecessor_guard"]

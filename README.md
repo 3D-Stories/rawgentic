@@ -725,6 +725,17 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.129.1 (2026-08-05)
+- **Ad-hoc pane handoff failures now name their cause (#731, epic #906).** `perform_handoff`
+  derives `failure_detail` for every `failed_step` (`record()` auto-notes failed steps from the
+  herdr error body; poll and pre-split exits carry inline causes), captures the tentative pane's
+  output into the report as `pane_capture` before cleanup closes it, preflights the agent name
+  via `herdr agent list` and refuses `name_taken` without splitting a pane (start-time race maps
+  to the same name-specific step, never retried); the pane-handoff skill's failure table routes
+  operators to `failure_detail` and a fresh `--name`. Tests: injected-runner coverage for the
+  preflight, the race, capture-before-close ordering, tail truncation, and every note-less
+  failure exit. No workflow-spine change → no diagram REV. Suite 5303→5340.
+
 ### v3.129.0 (2026-08-05)
 - **Behavioural selection gate for skill evals (#928, epic #906).** `hooks/skill_evals.py` turns
   eleven `evals.json` files from inert data into a runnable gate: `discover_eval_files` finds both
