@@ -73,7 +73,7 @@ LATER — with reopen triggers, not vibes | watch list §6 refreshed | note
 ```legend
 crit | broken or flaky today — fix first
 warn | protects size or reliability
-ok | pure deletion win
+ok | shipped / done (in M0's rows: deletion wins)
 note | scheduled, not started
 ```
 
@@ -92,15 +92,9 @@ kept as-is | 5 | note
 
 rawgentic is broken on main today. Three things broke it:
 
-1. **WF2's implementation path points at a machine that has never run.** Every implementation
-   dispatch routes through the executor build seat (`steps.md:997`) — a seat with zero real-run
-   history, that only codex can drive, and codex is weekly-quota-capped.
-2. **All three mandatory review gates fail as written.** The dispatch command the prose gives
-   omits a flag the code requires (`--author-provider`, #863) — exit 4, every time.
-3. **The workflow prose outgrew what any model can follow.** ~75k tokens carrying ~302 hard
-   obligations. Measured research puts the compliance cliff near **80 simultaneous rules**
-   (IFScale, arXiv 2507.11538). The #840 run proved it: a session running WF2 bypassed three of
-   WF2's own controls without noticing (#855).
+1. **WF2's implementation path points at a machine that has never run.** Every implementation dispatch routes through the executor build seat (`steps.md:997`) — a seat with zero real-run history, that only codex can drive, and codex is weekly-quota-capped.
+2. **All three mandatory review gates fail as written.** The dispatch command the prose gives omits a flag the code requires (`--author-provider`, #863) — exit 4, every time.
+3. **The workflow prose outgrew what any model can follow.** ~75k tokens carrying ~302 hard obligations. Measured research puts the compliance cliff near **80 simultaneous rules** (IFScale, arXiv 2507.11538). The #840 run proved it: a session running WF2 bypassed three of WF2's own controls without noticing (#855).
 
 The last 4 days (~45 PRs, ~30k lines) were mostly machinery to harden machinery, and each big
 machinery PR spawned a new defect wave (#840's two PRs → six new issues; #829's review → three;
@@ -196,14 +190,10 @@ outside explicitly archival dirs) and an import/CLI smoke test for surviving hoo
 *Also closed by M0d: #449 (driver-bench executor cells — outside the 48 but its subject is deleted).*
 
 ### M1 — STAY SMALL: prose ceilings + the lite lane
-- Measure the post-retreat corpus, then pin **CI byte ceilings** (total + per-file, glob-exact so
-  a new unbudgeted file can't evade it) at actual + modest headroom (#856).
-- `steps.md` → step-local files, loaded one step at a time (SKILL.md stays a short index —
-  Anthropic's own guidance: <500 lines, progressive disclosure).
-- Targeted characterization pins only (mandatory review sites, reviewer≠author, artifact delivery,
-  loop-back debit, deferral honesty, no executor vocabulary) — not every sentence.
-- **WF2-lite lane** (#761 rescoped): `disposable | internal | production` task class; disposable
-  work gets a short lane with its own definition of done.
+- Measure the post-retreat corpus, then pin **CI byte ceilings** (total + per-file, glob-exact so a new unbudgeted file can't evade it) at actual + modest headroom (#856).
+- `steps.md` → step-local files, loaded one step at a time (SKILL.md stays a short index — Anthropic's own guidance: <500 lines, progressive disclosure).
+- Targeted characterization pins only (mandatory review sites, reviewer≠author, artifact delivery, loop-back debit, deferral honesty, no executor vocabulary) — not every sentence.
+- **WF2-lite lane** (#761 rescoped): `disposable | internal | production` task class; disposable work gets a short lane with its own definition of done.
 - #822 folded into the existing version-pin test (names the stale surface, checks changelog tail).
 - The **issue throttle** (D179) lands in the workspace manual.
 
@@ -213,28 +203,11 @@ outside explicitly archival dirs) and an import/CLI smoke test for surviving hoo
 surface. The 2026-08-03 text below is otherwise unchanged.)*
 
 Priority order (epic-run depends on this chain per D176):
-1. **Launcher robustness** (#731+#800+#835): error text on every `failed_step` + capture-before-
-   cleanup + name preflight; path-equivalent `project_switched` compare; goal-send Enter-nudge
-   recovery (the #700 pattern, extended to the goal).
-2. **Meter rework** (D177 spec): never-latch re-resolution, mid-turn directive delivery, 55/75,
-   the rolling log summary (#797's third AC — kept, not dropped), and a code shrink while keeping
-   the two-threshold pane-handoff behavior. **Honest mechanism note:** the T2 "force" is delivered
-   through the prompt-insert channel — authoritative user input that Claude Code queues to the
-   next tool boundary, which is exactly "let the current task finish, then act". It cannot
-   physically seize control, so it is **acknowledgement-tracked**: the meter records the insert,
-   watches for the handoff's own evidence (successor registry line), and re-fires if none appears
-   — never fire-and-forget.
-3. **#726** — refuse handoff while background work is in flight (wait-or-decide, overridable),
-   **plus** the issue's two teeth: a mechanical durable-path check (a successor cannot be handed a
-   predecessor-session-scoped `/tmp` path), and abandoned in-flight work is NAMED in the successor
-   prompt so it re-dispatches instead of waiting forever.
-4. **Epic-run rework** (D176): children continue via pane-handoff; claim/lease/receipt machinery
-   retired; lightweight stale-body check at child startup; **the #769 child-boundary sweep**
-   (completed child's findings swept across every remaining child's scope/deps, recorded — this is
-   NOT the same as head-revalidation and is kept, per review finding 6); visible both-projects
-   confirmation (the #763 residual, one line).
-5. **Trusted goal reader** (#864+#772): one origin-bound reader (LIVE/CLEARED/NEVER_ARMED/
-   AMBIGUOUS) behind the CLI and both destructive paths.
+1. **Launcher robustness** (#731+#800+#835): error text on every `failed_step` + capture-before- cleanup + name preflight; path-equivalent `project_switched` compare; goal-send Enter-nudge recovery (the #700 pattern, extended to the goal).
+2. **Meter rework** (D177 spec): never-latch re-resolution, mid-turn directive delivery, 55/75, the rolling log summary (#797's third AC — kept, not dropped), and a code shrink while keeping the two-threshold pane-handoff behavior. **Honest mechanism note:** the T2 "force" is delivered through the prompt-insert channel — authoritative user input that Claude Code queues to the next tool boundary, which is exactly "let the current task finish, then act". It cannot physically seize control, so it is **acknowledgement-tracked**: the meter records the insert, watches for the handoff's own evidence (successor registry line), and re-fires if none appears — never fire-and-forget.
+3. **#726** — refuse handoff while background work is in flight (wait-or-decide, overridable), **plus** the issue's two teeth: a mechanical durable-path check (a successor cannot be handed a predecessor-session-scoped `/tmp` path), and abandoned in-flight work is NAMED in the successor prompt so it re-dispatches instead of waiting forever.
+4. **Epic-run rework** (D176): children continue via pane-handoff; claim/lease/receipt machinery retired; lightweight stale-body check at child startup; **the #769 child-boundary sweep** (completed child's findings swept across every remaining child's scope/deps, recorded — this is NOT the same as head-revalidation and is kept, per review finding 6); visible both-projects confirmation (the #763 residual, one line).
+5. **Trusted goal reader** (#864+#772): one origin-bound reader (LIVE/CLEARED/NEVER_ARMED/ AMBIGUOUS) behind the CLI and both destructive paths.
 6. **#806** rescoped: goal cap read from the constant + exact-text display; no auto-arm.
 
 ### M2.5 — MINIMUM TELEMETRY TRUTH *(added 2026-08-05, consult-driven)*
@@ -248,15 +221,9 @@ mode before durable records produces unattended runs that cannot be reconstructe
 ### M3 — TRUST THE NEW MACHINERY *(reordered 2026-08-05; absorbs the old "small tail")*
 The retreat's replacement machinery earns trust here. Kept as **linked siblings, not merged** —
 different trust boundaries need independent tests (consult finding, adopted):
-- **Runner hardening:** #876 (trusted `--brief` for review-artifact) · #894 (exit/signal + OOM
-  evidence on a no-END death) · #365 (contaminated/fabricated-citation returns get named handling)
-  · #893 (Step 8a engagement-evidence rule for runner passes).
-- **Review-loop economics:** #889 (refund an unused reopen token on a clean round) · #892 (fuzzy
-  re-litigation flag, never auto-dissolve) · #891 (retire the fail-open absence-based riskLevel
-  default) · #895 (blindness guard: reserved artifact prefix + pre-draft search exclusion).
-- **Config + old tail:** #884 + #883 (resolver distinguishes project-absent from field-absent;
-  setup offers diffReviewMode) · #860 (consult-on-exhaustion into the gates) · #808 (WF3's own
-  budget-exhausted close) · #750 (registry append helper) · #759-lite (owner deferral registry).
+- **Runner hardening:** #876 (trusted `--brief` for review-artifact) · #894 (exit/signal + OOM evidence on a no-END death) · #365 (contaminated/fabricated-citation returns get named handling) · #893 (Step 8a engagement-evidence rule for runner passes).
+- **Review-loop economics:** #889 (refund an unused reopen token on a clean round) · #892 (fuzzy re-litigation flag, never auto-dissolve) · #891 (retire the fail-open absence-based riskLevel default) · #895 (blindness guard: reserved artifact prefix + pre-draft search exclusion).
+- **Config + old tail:** #884 + #883 (resolver distinguishes project-absent from field-absent; setup offers diffReviewMode) · #860 (consult-on-exhaustion into the gates) · #808 (WF3's own budget-exhausted close) · #750 (registry append helper) · #759-lite (owner deferral registry).
 
 ### M4 — AWAY MODE, AS A BOUNDED SLICE *(added 2026-08-05)*
 **#871** (the epic — replace the retired headless stopgaps with a proper "nobody is watching"
@@ -293,23 +260,12 @@ sandbox-runtime → codex containment) · PreCompact auto-dump backstop if hando
 §6 watch list (three items fired 2026-08-05, seven standing).
 
 ## 5. Research this plan stands on (so we stop guessing)
-- **Anthropic (primary sources):** SKILL.md <500 lines, progressive disclosure, scripts over prose
-  ("the context window is a public good"); *coding is a poor multi-agent fit* — inline endorsed;
-  subagents are for side tasks that would flood the main context (reviews fit exactly).
-- **Measured instruction decay:** best frontier models ~68% compliance at 500 rules; perfect
-  compliance collapses by ~80 rules (IFScale; Prompt Design at Scale). WF2 carried ~302.
-- **Review economics (Cloudflare, cubic, Greptile):** risk-tiered depth, deterministic pre-filters
-  (not LLM severity judges), confidence fields in structured output, truncation retry, generated-
-  noise stripping. Greptile: prompting against nits failed; embedding-filters worked — don't build
-  an LLM severity judge.
-- **Hooks over prose:** PreToolUse deny survives even permission-skip mode; "if violating it once
-  is an incident, make it a hook; otherwise it's a skill line"; hook-fed state machine prior art
-  (Nick Tune) is the template for #856's guard direction; practitioners report cutting standing
-  instructions ~1/3 after moving enforcement into hooks.
-- **codex exec:** `--output-schema` + `-o` gives machine-checkable review artifacts; repo-aware
-  `codex exec review --base|--commit|--uncommitted` exists in the installed 0.146.0.
-- **Subagent silent-death rates 14–30%** (claude-code#47936): the artifact gate + proof-token
-  pattern is the cheap mitigation until the SDK surfaces termination status.
+- **Anthropic (primary sources):** SKILL.md <500 lines, progressive disclosure, scripts over prose ("the context window is a public good"); *coding is a poor multi-agent fit* — inline endorsed; subagents are for side tasks that would flood the main context (reviews fit exactly).
+- **Measured instruction decay:** best frontier models ~68% compliance at 500 rules; perfect compliance collapses by ~80 rules (IFScale; Prompt Design at Scale). WF2 carried ~302.
+- **Review economics (Cloudflare, cubic, Greptile):** risk-tiered depth, deterministic pre-filters (not LLM severity judges), confidence fields in structured output, truncation retry, generated- noise stripping. Greptile: prompting against nits failed; embedding-filters worked — don't build an LLM severity judge.
+- **Hooks over prose:** PreToolUse deny survives even permission-skip mode; "if violating it once is an incident, make it a hook; otherwise it's a skill line"; hook-fed state machine prior art (Nick Tune) is the template for #856's guard direction; practitioners report cutting standing instructions ~1/3 after moving enforcement into hooks.
+- **codex exec:** `--output-schema` + `-o` gives machine-checkable review artifacts; repo-aware `codex exec review --base|--commit|--uncommitted` exists in the installed 0.146.0.
+- **Subagent silent-death rates 14–30%** (claude-code#47936): the artifact gate + proof-token pattern is the cheap mitigation until the SDK surfaces termination status.
 
 ## 6. Future watch list (not now; revisit on trigger) — *statuses verified 2026-08-05*
 1. Claude Code native Bash sandboxing — **FIRED: shipped** (`/sandbox`, Seatbelt/bubblewrap) → decision ticket **#931**
@@ -333,30 +289,12 @@ sandbox-runtime → codex containment) · PreCompact auto-dump backstop if hando
 - Historical receipts, measurements and planning docs are archival — M0 does not rewrite history.
 
 ## 8. Execution notes
-- **M0 runs in plain supervised sessions, NOT through WF2 (D180)** — WF2 is broken as written, and
-  a session executes the installed cache's prose while editing the repo's, a self-reference trap.
-  Hand-applied discipline is mandatory: TDD for behavior changes; full-suite + both pylint gates
-  against the recorded baseline (7031 passed / 24 skipped at `98547d41`); secrets scan; codex
-  available for consults; an adversarial cross-model review of every PR diff (through the M0a
-  runner once it exists — the retreat dogfoods its own replacement); proper PR mechanics.
-  **Rawgentic returns at M1**, which doubles as the test that the retreat worked.
-- **Comparison telemetry (D181):** plain-session runs write per-PR run-records into the same
-  append-only store (`docs/measurements/run_records.jsonl`) as `workflow: "plain-session"`,
-  `architecture: "inline"` — wall-clock, usage, review findings, tests, LOC — so
-  cost / quality / time compares directly against the 32 executor/legacy records since
-  2026-07-28. One store, one query.
-- Every milestone item ships as PRs from branches off fresh `origin/main`; owner merges (no
-  standing auto-merge grant exists after this session).
-- **Doc publishing goes through the `/design-doc-publish` skill** (its `publish_doc.py` owns
-  render + Vercel deploy + verification in one command; `--type` picks the template). Sessions do
-  not hand-invoke the raw render launcher. M0b's prose rewrite points WF2/WF3's doc-publish steps
-  at the skill's command the same way (owner decision 2026-08-03, this session — this document is
-  itself published through it).
-- M0d's cutover: finish/abandon in-flight work → merge → `claude plugin remove/install` → fresh
-  session. Old sessions may still hold cached executor-era skills; don't reinstall mid-session.
-- Issue mechanics on owner approval of this roadmap: closing comments citing D174–D179 on the 28
-  closures; 3 new combined-work issues + the epic-run rework issue + M0 umbrella issue; epic #756
-  gets a final honest summary comment and closes in favor of this roadmap's milestone tracking.
+- **M0 runs in plain supervised sessions, NOT through WF2 (D180)** — WF2 is broken as written, and a session executes the installed cache's prose while editing the repo's, a self-reference trap. Hand-applied discipline is mandatory: TDD for behavior changes; full-suite + both pylint gates against the recorded baseline (7031 passed / 24 skipped at `98547d41`); secrets scan; codex available for consults; an adversarial cross-model review of every PR diff (through the M0a runner once it exists — the retreat dogfoods its own replacement); proper PR mechanics. **Rawgentic returns at M1**, which doubles as the test that the retreat worked.
+- **Comparison telemetry (D181):** plain-session runs write per-PR run-records into the same append-only store (`docs/measurements/run_records.jsonl`) as `workflow: "plain-session"`, `architecture: "inline"` — wall-clock, usage, review findings, tests, LOC — so cost / quality / time compares directly against the 32 executor/legacy records since 2026-07-28. One store, one query.
+- Every milestone item ships as PRs from branches off fresh `origin/main`; owner merges (no standing auto-merge grant exists after this session).
+- **Doc publishing goes through the `/design-doc-publish` skill** (its `publish_doc.py` owns render + Vercel deploy + verification in one command; `--type` picks the template). Sessions do not hand-invoke the raw render launcher. M0b's prose rewrite points WF2/WF3's doc-publish steps at the skill's command the same way (owner decision 2026-08-03, this session — this document is itself published through it).
+- M0d's cutover: finish/abandon in-flight work → merge → `claude plugin remove/install` → fresh session. Old sessions may still hold cached executor-era skills; don't reinstall mid-session.
+- Issue mechanics on owner approval of this roadmap: closing comments citing D174–D179 on the 28 closures; 3 new combined-work issues + the epic-run rework issue + M0 umbrella issue; epic #756 gets a final honest summary comment and closes in favor of this roadmap's milestone tracking.
 
 ## 9. Review provenance
 gpt-5.6-sol consulted on the draft (7 sections, repo-verified) and then adversarially reviewed the
@@ -379,67 +317,29 @@ in `docs/measurements/run_records.jsonl` (`workflow: "plain-session"`).
 
 ### What went to plan
 
-- The four-PR decomposition held exactly as written — no scope moved between PRs, and each
-  merge left main releasable (WF2 was runnable again the day M0b merged, as promised).
-- The runner dogfood worked: M0b/M0c/M0d reviews all went through `review_runner.py`,
-  one dispatch each, no retries. Its own path containment refused two /tmp dispatches
-  live in M0c — the M0a hardening catching the M0c orchestrator.
+- The four-PR decomposition held exactly as written — no scope moved between PRs, and each merge left main releasable (WF2 was runnable again the day M0b merged, as promised).
+- The runner dogfood worked: M0b/M0c/M0d reviews all went through `review_runner.py`, one dispatch each, no retries. Its own path containment refused two /tmp dispatches live in M0c — the M0a hardening catching the M0c orchestrator.
 - D183 (merge-as-created) held the whole run without a single CI red on merge.
 
 ### Discoveries that were NOT planned for
 
-1. **The adversarial reviewer caught a self-inflicted 606-line README duplication.** M0d's
-   docs-contraction commit pasted a whole re-rendered README span (Quick-Start-steps →
-   Testing → a second marketplace section) instead of just the retirement note. The next
-   session's editor MISREAD the doubled sections as pre-existing ("patterns found 2x") and
-   worked around them. Only the cross-model review named it. Lesson: a 618-insertion diff
-   for a "10-line note" commit should have failed a size sanity check at commit time.
-2. **The handoff log drifted from the code.** Entry 1 said `assert_review_coverage` DIES in
-   M0b; the actual M0b implementation kept it (correctly — Step 8a/9 prose still route
-   coverage through it). The M0d diagram deltas were written from the current prose,
-   re-verified per station, not from the notes. Lesson: handoff entries are plans, not
-   records — re-verify before acting (the workspace rule existed; it earned its keep).
-3. **gitleaks range-scanning bites retirement prose.** A phrase in the retirement
-   notes — a gate-related keyword followed by a slash-joined protocol name — matched
-   the generic-api-key rule — and because the
-   pre-PR scan covers `origin/main..HEAD` (every commit), rewording the current tree could
-   not clear it, and the `.gitleaksignore` comment that quoted the phrase then flagged
-   itself. Three fingerprint pins with justification. Lesson: retirement notes are
-   adversarial inputs to secret scanners; scan early, not at PR time.
-4. **`review-artifact` has no trusted-brief channel.** The M0d diff (3.1MB) exceeded any
-   model context, so the review ran on a composed `git diff -D` artifact — and the brief had
-   to ride inside the untrusted artifact because only `review-code` takes `--brief`. The
-   reviewer itself flagged that as an injection-shaped hole. Candidate runner follow-up
-   (not filed — D179, owner decides).
-5. **The smoke test passed for the wrong reason.** Hooks import siblings bare
-   (`from atomic_write_lib import …`), and the new import-smoke subprocess only passed
-   because pytest's environment leaked a suitable path. Confirmed by running it under
-   `env -i`: ModuleNotFoundError. Fixed to be self-sufficient and to run under a clean env.
+1. **The adversarial reviewer caught a self-inflicted 606-line README duplication.** M0d's docs-contraction commit pasted a whole re-rendered README span (Quick-Start-steps → Testing → a second marketplace section) instead of just the retirement note. The next session's editor MISREAD the doubled sections as pre-existing ("patterns found 2x") and worked around them. Only the cross-model review named it. Lesson: a 618-insertion diff for a "10-line note" commit should have failed a size sanity check at commit time.
+2. **The handoff log drifted from the code.** Entry 1 said `assert_review_coverage` DIES in M0b; the actual M0b implementation kept it (correctly — Step 8a/9 prose still route coverage through it). The M0d diagram deltas were written from the current prose, re-verified per station, not from the notes. Lesson: handoff entries are plans, not records — re-verify before acting (the workspace rule existed; it earned its keep).
+3. **gitleaks range-scanning bites retirement prose.** A phrase in the retirement notes — a gate-related keyword followed by a slash-joined protocol name — matched the generic-api-key rule — and because the pre-PR scan covers `origin/main..HEAD` (every commit), rewording the current tree could not clear it, and the `.gitleaksignore` comment that quoted the phrase then flagged itself. Three fingerprint pins with justification. Lesson: retirement notes are adversarial inputs to secret scanners; scan early, not at PR time.
+4. **`review-artifact` has no trusted-brief channel.** The M0d diff (3.1MB) exceeded any model context, so the review ran on a composed `git diff -D` artifact — and the brief had to ride inside the untrusted artifact because only `review-code` takes `--brief`. The reviewer itself flagged that as an injection-shaped hole. Candidate runner follow-up (not filed — D179, owner decides).
+5. **The smoke test passed for the wrong reason.** Hooks import siblings bare (`from atomic_write_lib import …`), and the new import-smoke subprocess only passed because pytest's environment leaked a suitable path. Confirmed by running it under `env -i`: ModuleNotFoundError. Fixed to be self-sufficient and to run under a clean env.
 
 ### Out-of-plan work that had to happen
 
-- **D184 (owner ruling, mid-M0d):** `RAWGENTIC_HEADLESS` survives as a bare
-  unattended-session signal in exactly three reads; epic **#871** (away mode) was filed from
-  the owner's five ACs. The retirement tripwire deliberately excludes the bare token and now
-  pins the exact surviving read set in both directions.
-- **Keep-decisions the roadmap didn't enumerate:** `model_routing_lib.py` (dead-ish, not on
-  the deletion list — M1/backlog) and the plan_lib ceremony helpers + unit tests (the M0b
-  allowlist said "M0d-pending", the roadmap's deletion list never named them; kept under the
-  owner's "don't delete anything good" directive — backlog decides).
-- **telemetryAlerts** was removed in M0c though the kickoff's trap-list named only 2i/2k —
-  roadmap §4 M0c named it explicitly; the kickoff list was traps, not scope.
+- **D184 (owner ruling, mid-M0d):** `RAWGENTIC_HEADLESS` survives as a bare unattended-session signal in exactly three reads; epic **#871** (away mode) was filed from the owner's five ACs. The retirement tripwire deliberately excludes the bare token and now pins the exact surviving read set in both directions.
+- **Keep-decisions the roadmap didn't enumerate:** `model_routing_lib.py` (dead-ish, not on the deletion list — M1/backlog) and the plan_lib ceremony helpers + unit tests (the M0b allowlist said "M0d-pending", the roadmap's deletion list never named them; kept under the owner's "don't delete anything good" directive — backlog decides).
+- **telemetryAlerts** was removed in M0c though the kickoff's trap-list named only 2i/2k — roadmap §4 M0c named it explicitly; the kickoff list was traps, not scope.
 
 ### Gotchas for M1
 
-- The plain-session cost accounting is **session-cumulative snapshots** (#363), not per-PR
-  deltas — compare at effort level (M0 ≈ $390 for 5 merged PRs) against the executor
-  cohort's per-issue records (32 records since 2026-07-28: median $191.23, mean $241.10 per
-  issue), not line-by-line.
-- The post-merge **plugin reinstall is still owner-owned** (CLAUDE.md §7): sessions keep
-  loading the cached 3.122.0 until it happens; the switch-bind staleness nudge about model
-  routing is expected until then.
-- `docs/reviews/` is gitignored by design — the M0 review verdicts live in the PR bodies;
-  the raw result JSONs exist only on this host.
+- The plain-session cost accounting is **session-cumulative snapshots** (#363), not per-PR deltas — compare at effort level (M0 ≈ $390 for 5 merged PRs) against the executor cohort's per-issue records (32 records since 2026-07-28: median $191.23, mean $241.10 per issue), not line-by-line.
+- The post-merge **plugin reinstall is still owner-owned** (CLAUDE.md §7): sessions keep loading the cached 3.122.0 until it happens; the switch-bind staleness nudge about model routing is expected until then.
+- `docs/reviews/` is gitignored by design — the M0 review verdicts live in the PR bodies; the raw result JSONs exist only on this host.
 
 ## 11. M1 shipped + the 2026-08-05 backlog rationalization (written 2026-08-05)
 
@@ -453,20 +353,12 @@ run-records are in the store).
 **The backlog rationalization** (owner-approved this session, consult: gpt-5.6-sol via the
 runner's own `consult` verb — the M0a machinery reviewing its own backlog):
 
-- **47 issues closed** with citing comments: the roadmap §3 closures that were never executed
-  (D174/D178 leftovers), work M0a had already delivered (#855, #793, #357), subjects the retreat
-  deleted (the HD2 herdr-executor epic #621 + children, bake-off #484, seats #549, build-seat
-  issues #666/#671, driver-bench #624/#681, #371, #661), five superseded tracking epics
-  (#590/#595/#596/#597/#598) plus #599, #626, #685, #722 — and **#756 itself**, closed with its
-  final summary as §8 directed. #670 verified fixed in claude-skills#16 by probe before closing.
+- **46 issues closed** with citing comments: the roadmap §3 closures that were never executed (D174/D178 leftovers), work M0a had already delivered (#855, #793, #357), subjects the retreat deleted (the HD2 herdr-executor epic #621 + children, bake-off #484, seats #549, build-seat issues #666/#671, driver-bench #624/#681, #371, #661), five superseded tracking epics (#590/#595/#596/#597/#598) plus #599, #626, #685, #722 — and **#756 itself**, closed with its final summary as §8 directed.
+- **#670 corrected on review:** first closed as fixed-in-successor, then the cross-model diff review prompted a sharper retest — inline links and `---` rules ARE fixed in the claude-skills engine, but the damaging defect (wrapped list items splitting the `<li>`; numbered lists too) **persists**. Record corrected, issue reopened and **transferred to claude-skills**, where its code lives. This roadmap's own bullets were unwrapped to render correctly until that fix lands.
 - **3 duplicates folded:** #660→#363, #588+#355→#888.
-- **3 decision tickets filed** (owner-approved under the D179 throttle): #931 native sandboxing,
-  #932 LLM-judged hooks, #933 sandbox-runtime — the three §6 triggers that fired.
+- **3 decision tickets filed** (owner-approved under the D179 throttle): #931 native sandboxing, #932 LLM-judged hooks, #933 sandbox-runtime — the three §6 triggers that fired.
 - **Open issues: 116 → 72.** Epic #906 (M2) and this roadmap are the only tracking surfaces.
-- **Ordering changes** (consult-driven, adopted): #928 to the front (Anthropic's skill-evals
-  harness shipped and our nine `evals.json` files already match its schema); a minimum
-  telemetry-truth layer (M2.5) gates away mode; away mode runs as a bounded slice (M4), not a
-  wholesale deferral; sibling pairs stay linked-but-separate rather than merged.
+- **Ordering changes** (consult-driven, adopted): #928 to the front (Anthropic's skill-evals harness shipped and our nine `evals.json` files already match its schema); a minimum telemetry-truth layer (M2.5) gates away mode; away mode runs as a bounded slice (M4), not a wholesale deferral; sibling pairs stay linked-but-separate rather than merged.
 
 Full evidence, per-issue: `2026-08-05-backlog-rationalization-post-m1.md`
 (hosted: https://rawgentic-analysis-backlog-post-m1.vercel.app).

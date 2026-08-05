@@ -1,15 +1,15 @@
 **Date:** 2026-08-05 · **Author:** Fable 5, with gpt-5.6-sol as consultant (runner `consult` verb, repo-verified)
 **Follows:** the 2026-08-03 rationalization roadmap (`2026-08-03-756-rationalization-roadmap.md`). M0 and M1 are merged; this doc dispositions everything that remains.
 
-Of the 116 open issues, **40 can close today on evidence** (owner rulings that were never executed, work that already shipped, or subjects the M0 retreat deleted), **6 are gray-zone calls**, **1 transfers** to the repo its code moved to, and **69 stay open** — reordered into six milestones plus a LATER shelf, most impactful first. Nothing has been closed, filed, or edited yet; this document is the evidence, and four owner questions follow it.
+Of the 116 open issues, **46 closed on evidence** (owner rulings that were never executed, work that already shipped, subjects the M0 retreat deleted, superseded tracking epics, and six gray-zone calls the owner approved), **1 was transferred** to the repo its code moved to after a retest, **3 duplicates folded into survivors**, and **69 stay open** — reordered into seven milestones plus a LATER shelf, most impactful first. This document was written as the evidence table BEFORE execution and, after owner approval, updated into the execution record — §8 lists exactly what ran and the one correction made along the way.
 
 ```chips
 116 open issues, all dispositioned | note
-40 close today, with evidence | ok
-6 gray-zone owner calls | warn
-1 transfer (code moved repos) | note
-69 stay open across 6 milestones | note
-3 watch-list triggers fired | warn
+46 closed, with citing comments | ok
+1 transferred after retest (#670) | note
+3 duplicates folded into survivors | note
+69 stay open across 7 milestones | note
+3 decision tickets filed (#931-#933) | warn
 ```
 
 ```callout
@@ -97,9 +97,11 @@ My recommendation is **close all six**; gpt-5.6-sol dissents on two (marked).
 | #626 | close | herdr Phase C epic — every child is done, dead, or closing (#622, #623, #624, #625) |
 | #680 | close | herdr detection-manifest bug reported against an old herdr; we now pin 0.8.0, and the defect belongs upstream (herdrdev/herdr). Comment: retest on 0.8.0, file upstream if it persists |
 
-## 4. The transfer
+## 4. The transfer — and the correction it took
 
-**#670** (render_artifact.py mangles inline links/rules/wrapped list items): that script left this repo in #807; the render engine lives in the **claude-skills** repo's design-doc-publish add-on. `gh issue transfer 670 3D-Stories/claude-skills` moves it with history; reversible by transferring back.
+**#670** (render_artifact.py mangles inline links/rules/wrapped list items): that script left this repo in #807; the render engine lives in the **claude-skills** repo's design-doc-publish add-on.
+
+**Outcome (corrected during review):** a first probe checked links, `---` rules and code-span pairing — all fixed by claude-skills#16 — and the issue was closed as fixed-in-successor. The cross-model diff review then flagged fragmented lists in this PR's own rendered HTML; a sharper probe confirmed **the wrapped-list-item defect (the issue's "damaging one") persists** in the successor engine, for `-` bullets and numbered lists alike. The record was corrected on the issue, and it was **reopened and transferred** to 3D-Stories/claude-skills, where its code lives — the owner's originally-preferred disposition, now with its relevance proven.
 
 ## 5. What stays open — M2 and beyond, most impactful first
 
@@ -164,9 +166,14 @@ Kept as **linked siblings, not merged** (codex: different trust boundaries need 
 
 gpt-5.6-sol reviewed the full disposition table via `review_runner.py consult` (result JSON in this session's `docs/reviews/` sink, gitignored by design). Adopted from its verdict: don't collapse the sibling pairs (#593/#594, #345/#346, #370/#379, #876/#894/#365, #884/#883, #889/#892) — group, don't merge; #928 to the earliest tranche; minimum telemetry before away mode; away mode as a bounded slice; every epic closure names child destinations; #815/#450 closures carry machine-searchable reopen triggers; #568 kept-rescoped rather than closed. Its two gray-zone dissents (#622, #745) are shown in §3 rather than resolved silently.
 
-## 8. What has NOT been done
+## 8. Execution record (2026-08-05, owner-approved)
 
-No issue closed, no issue filed, no body edited, nothing transferred, plan doc not yet rewritten. Every action above waits on the owner's answers to four questions: (1) execute the 40 closures, (2) the six gray-zone calls, (3) the #670 transfer, (4) whether the three fired watch-list triggers become decision tickets or stay plan prose.
+This section replaced the pre-execution "what has NOT been done" note once the owner answered the four questions (all approved; #670 routed to "verify relevance first").
+
+- **46 issues closed** with citing comments; **3 duplicates folded** (#660→#363, #588+#355→#888, absorption comments posted on the survivors); **5 survivor comments** posted (#871, #363, #888, #568-rescope, #906-amendments); **3 decision tickets filed** (#931 sandboxing, #932 LLM-judged hooks, #933 sandbox-runtime). Open issues: **116 → 72**.
+- **One correction, made in the open:** #670 was first closed as fixed-in-successor on a probe that checked links/rules/code-spans. The cross-model diff review of this very PR surfaced fragmented lists; the sharper re-probe proved the wrapped-list-item defect persists in the claude-skills engine. The closing comment was corrected, the issue reopened and **transferred to 3D-Stories/claude-skills**. No other disposition changed.
+- No issue **bodies** were edited anywhere — all context rides comments, per convention.
+- The roadmap doc was updated (phases block, M2 amendments, new M2.5–M7 sections, §6 statuses, §11) and redeployed to its existing URL; this doc and the roadmap ship together in one docs PR.
 
 ```provenance
 Code state | main @ ce9eba67, checked 2026-08-05
