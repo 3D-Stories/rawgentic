@@ -121,6 +121,34 @@ def test_api_schema_pin_recorded_for_issue_390(pin: dict) -> None:
     assert isinstance(s["schema_version"], int) and s["schema_version"] > 0
 
 
+def test_cli_surface_qualification_is_recorded(pin: dict) -> None:
+    """#886: a subcommand EXISTING is not qualification for a load-bearing CLI upgrade.
+
+    The pin must record which launcher_lib-consumed commands were actually run against the
+    pinned binary and found to still return the shapes launcher_lib parses. This guards the
+    RECORD, never a live host: tests/hooks/test_launcher_lib.py runs against responses
+    captured from an older herdr, so it structurally cannot detect a live shape change —
+    the same limit already carried by api_schema and the integration digest.
+    """
+    q = pin["pin"]["cli_surface_qualified"]
+    assert re.match(r"^\d{4}-\d{2}-\d{2}$", q["at"])
+    assert isinstance(q["issue"], int) and q["issue"] > 0
+    cmds = q["commands"]
+    assert isinstance(cmds, list) and cmds
+    # Every command the pane machinery actually drives must appear, or the recorded
+    # qualification is narrower than the code's real dependency surface.
+    driven = {
+        "pane get", "pane list", "pane split",
+        "pane send-text", "pane send-keys", "tab list",
+    }
+    missing = sorted(driven - set(cmds))
+    assert not missing, f"driven but unqualified: {missing}"
+    assert q["_comment"].strip(), "record HOW each command was qualified"
+    assert q["not_qualified"].strip(), (
+        "state what was NOT re-captured, or the qualification record overclaims"
+    )
+
+
 # --------------------------------------------------------------------------------------
 # integrations block (#610) — herdr's per-agent hook installs
 # --------------------------------------------------------------------------------------

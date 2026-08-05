@@ -21,6 +21,22 @@
       "schema_version": 1,
       "_comment": "Recorded from `herdr api schema --json` on the pinned binary. #609 only RECORDS this; asserting it against a live server is #390's check 10. #886: 0.8.0 bumped the protocol 17 -> 19, SKIPPING 18 — read from the binary, never from the release notes, which do not mention a protocol bump at all. Probed by running the digest-verified 0.8.0 asset directly from a temp path BEFORE installing it: `api schema` is served by the binary itself, not by the running server, which is how 19 was read while the live server was still 0.7.5/protocol 17. Nothing pins this value, so it is a truth-of-the-record field."
     },
+    "cli_surface_qualified": {
+      "at": "2026-08-05",
+      "issue": 886,
+      "commands": [
+        "pane get",
+        "pane list",
+        "pane split",
+        "pane rename",
+        "pane send-text",
+        "pane send-keys",
+        "pane close",
+        "tab list"
+      ],
+      "_comment": "#886, answering a Step-11 review finding: existence of a subcommand is NOT qualification for a load-bearing CLI upgrade, especially across the protocol 17 -> 19 jump. Every command above is one hooks/launcher_lib.py actually invokes, and each was run live against the installed 0.8.0 and checked for the exact thing launcher_lib consumes. Argv shape: `send-text <PANE_ID> <TEXT>` and `send-keys <PANE_ID> <KEY>...` are still positional, matching build_send_text_argv (launcher_lib.py:456-457). Parsed output shape: `pane get` returns `result` with a non-empty string `pane_id` and an `agent_status` (the fields read at launcher_lib.py:698, :725, :731); `pane split` and `pane rename` return `result.pane.pane_id` with `type: pane_info` (the branch at :2886-2894); `pane close` returns `result.type: \"ok\"`; `pane list` returns `result.panes[].pane_id` (:2503-2516); `tab list` returns `result.tabs[].tab_id`. Exit status: all rc 0. `send-text` and `send-keys` print NOTHING on success, which is what launcher_lib expects — it reads their exit status, never their stdout. Probed on a scratch pane split off the plain shell pane, never an agent pane, and the scratch pane was closed afterwards (census 8 before and after). WHY THIS IS RECORDED RATHER THAN TESTED: tests/hooks/test_launcher_lib.py runs against responses captured from 0.7.5, so it structurally cannot detect a live shape change — the same limit already noted for api_schema and the integration digest. The operator check is to re-run these commands against the host. tests/hooks/test_herdr_pin.py guards that this record exists and stays parseable, not that a live host matches it.",
+      "not_qualified": "docs/runbooks/herdr.md's wider command inventory and the `herdr --default-config` key list were NOT re-captured on 0.8.0; only the launcher_lib-consumed surface above was."
+    },
     "config_baseline": {
       "update.channel": "stable",
       "update.version_check": false,

@@ -10,7 +10,9 @@ cron-spawned launcher has no current pane, so a session it starts the ordinary w
 resumption entirely.
 
 The fix is launcher-side and hinges on one probed fact: **`herdr pane split` accepts an
-EXPLICIT pane id, not only `--current`** (read from the pinned 0.7.5 binary's `--help`).
+EXPLICIT pane id, not only `--current`** (read from herdr 0.7.5's `--help`; still true on the
+now-pinned 0.8.0, where `pane split` takes `[PANE_ID]` and `send-text`/`send-keys` take it as a
+mandatory positional — re-probed live under #886).
 Splitting from a named *anchor* pane needs no current pane, and the session started in the
 resulting pane HAS one — so `--current` resolves normally for that session's own dispatches.
 No `HerdrBackend` change is required.

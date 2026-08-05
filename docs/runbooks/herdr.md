@@ -525,7 +525,11 @@ guaranteed present on every `PaneInfo` (that guarantee is what makes #611's fail
 
 ## 10. Attach, detach, remote (#613)
 
-Every command below is from `herdr --help` and `herdr --default-config` on the pinned 0.7.5.
+Every command below was captured from `herdr --help` and `herdr --default-config` on herdr **0.7.5**.
+The pin moved to **0.8.0** in #886, which re-probed only the pane/tab surface `launcher_lib` drives
+(recorded at `hooks/herdr-pin.json` → `pin.cli_surface_qualified`). This section's wider command
+inventory and the `--default-config` key list were **not** re-captured on 0.8.0 — treat them as
+0.7.5-era until they are.
 
 **Local attach.** `herdr` launches or attaches to the persistent session — the same command for
 both, so it is safe to run when you are unsure whether a server is up. `herdr session attach <name>`
