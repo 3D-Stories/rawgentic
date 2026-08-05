@@ -110,20 +110,12 @@ measurable signal — not just a sentence the user reads once.
    (optional-additive in `validate_record`, absent on legacy records). The
    seat-Observation sidecar harvest retired with the executor.
 
-3a. **The record may ALREADY be persisted — render only, never summarize twice (#888).** On the
-   merge-grant path, Step 14 assembled, persisted, committed and CI-re-verified the record before
-   merging (§14, "Merge-grant path"). That run reaches here with its record already in the store,
-   so it renders from it with `--no-persist` rather than calling `summarize` a second time:
-   ```bash
-   python3 hooks/work_summary.py summarize \
-     --record-file /tmp/wf2-run-record-<issue>-<session-id>.json \
-     --project-root <activeProject.path> --no-persist
-   ```
-   Check with `python3 hooks/work_summary.py find --issue <issue>` (rc 0 = already there) when
-   unsure — a resumed session cannot tell from context alone. Since #888 `persist_record` is
-   idempotent, so a second summarize no-ops with a stderr notice and rc 0 instead of duplicating
-   the line; that guard is the BACKSTOP, not the plan. Every other run (no merge grant, PR
-   terminal) persists here as item 3 describes.
+3a. **May ALREADY be persisted — render only, never summarize twice (#888).** On the merge-grant
+   path, Step 14 assembled, persisted, committed and CI-re-verified the record before merging
+   (§14). That run adds `--no-persist` to item 3's command rather than summarizing twice.
+   `persist_record` is idempotent since #888, so a second summarize no-ops at rc 0 with a stderr
+   notice instead of duplicating the line — that guard is the BACKSTOP, not the plan. Every other
+   run persists per item 3.
 
 3. **Render + persist.** Carry `activeProject.path` in as a literal (shell vars
    do not persist across Bash tool calls):

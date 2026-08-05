@@ -91,7 +91,15 @@ PER_FILE_CEILING_BYTES = {
     "references/step-11_5.md": 4_543,
     "references/step-12.md": 14_999,
     "references/step-13.md": 3_621,
-    "references/step-14.md": 3_614,
+        # #888 raised this one, trim-first per the #903 precedent: the merge-grant
+    # sub-step (persist -> commit -> per-sha CI re-verify -> prove-landed -> merge)
+    # is genuinely NEW gated prose, not commentary — Step 14 had no run-record
+    # ordering at all before, and the gap it closes cost 5 of 6 records on saystory
+    # epic #204. The draft was compressed 1_365 -> 1_113 bytes over the old ceiling
+    # before raising, and step-16.md's companion edit was trimmed to fit under its
+    # existing ceiling rather than raised alongside.
+    #   references/step-14.md  actual 4_727 + headroom 256 -> ceiling 4_983
+    "references/step-14.md": 4_983,
     "references/step-15.md": 1_520,
     "references/step-16.md": 11_545,
     "references/whole-issue-delegation.md": 8_236,
