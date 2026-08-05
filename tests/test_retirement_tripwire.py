@@ -166,7 +166,7 @@ def test_pragma_is_inert_outside_tests_and_without_a_reason():
 # survivor was deleted.
 D184_SIGNAL = "RAWGENTIC" + "_HEADLESS"  # split so this file self-exempts
 D184_ALLOWED_FILES = {
-    "hooks/context_meter.py",       # context-pressure handoff routing
+    # hooks/context_meter.py — cut over to the supervision signal (#943)
     "hooks/scanner_bootstrap.py",   # no-unattended-installs skip
     "skills/setup/SKILL.md",        # Step 2e install guard
     "README.md",                    # the Headless Mode (retired) note

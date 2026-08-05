@@ -810,10 +810,49 @@ def test_attended_text_asks_the_human_and_names_clear_prep(tmp_path):
         "at a command whose guard refuses it")
 
 
-def test_headless_without_a_launcher_still_routes_to_clear_prep(tmp_path):
-    text = _nag(tmp_path, {"RAWGENTIC_HEADLESS": "1"})
+def _declare_absence(tmp_path, state="away", until=None):
+    """Write a real workspace + a DECLARED supervision state (#943).
+
+    Since #943 the meter reads who is watching from
+    `claude_docs/.supervision.json`, not from an environment variable, so an
+    unattended-branch test has to declare rather than export.
+    """
+    (tmp_path / ".rawgentic_workspace.json").write_text(
+        json.dumps({"version": 1, "projects": []}))
+    sup = tmp_path / "claude_docs" / ".supervision.json"
+    sup.parent.mkdir(parents=True, exist_ok=True)
+    sup.write_text(json.dumps({
+        "schema_version": 1, "revision": 1, "state": state, "until": until,
+        "declared_at": "2026-08-05T20:00:00Z", "declared_by_session": "s",
+        "governed_campaign_ids": [],
+        "consult_grant": {"providers": [], "granted": False},
+    }))
+    return tmp_path
+
+
+def test_unattended_without_a_launcher_still_routes_to_clear_prep(tmp_path):
+    _declare_absence(tmp_path)
+    text = _nag(tmp_path)
     assert "clear-prep" in text
     assert "launcher_lib" not in text
+
+
+def test_setting_the_retired_env_var_changes_nothing(tmp_path):
+    """#943 clean break: `RAWGENTIC_HEADLESS` is retired, and nothing reads it.
+
+    Without a declaration the session is attended, and exporting the old variable
+    must NOT resurrect the unattended branch — otherwise the env var would still be
+    a live input under a different name.
+    """
+    # Two homes, because the meter reserves once per tier — a second run against the
+    # same home is silenced by its own marker, not by the env var.
+    plain, tagged = tmp_path / "plain", tmp_path / "tagged"
+    plain.mkdir()
+    tagged.mkdir()
+    attended = _nag(plain)
+    with_env = _nag(tagged, {"RAWGENTIC_HEADLESS": "1"})
+    assert with_env == attended
+    assert "Unattended" not in with_env
 
 
 def test_attended_advisory_names_pane_handoff_as_the_route(tmp_path):
@@ -829,8 +868,8 @@ def test_attended_advisory_names_pane_handoff_as_the_route(tmp_path):
 
 
 def test_only_both_capability_declarations_name_the_launcher_route(tmp_path):
-    text = _nag(tmp_path, {"RAWGENTIC_HEADLESS": "1",
-                           "RAWGENTIC_LAUNCHER_ARMED": "1",
+    _declare_absence(tmp_path)
+    text = _nag(tmp_path, {"RAWGENTIC_LAUNCHER_ARMED": "1",
                            "RAWGENTIC_FRESH_LAUNCH_SUPPORTED": "1"})
     assert "launcher_lib" in text
 
@@ -840,10 +879,11 @@ def test_launcher_armed_alone_is_not_enough(tmp_path):
     assert "launcher_lib" not in text
 
 
-def test_headless_with_a_herdr_pane_routes_to_pane_handoff(tmp_path):
+def test_unattended_with_a_herdr_pane_routes_to_pane_handoff(tmp_path):
     """#732 AC4, whole-pipeline form: HERDR_ENV=1 reaches nag_text through the
-    caller's env read."""
-    text = _nag(tmp_path, {"RAWGENTIC_HEADLESS": "1", "HERDR_ENV": "1"})
+    caller's env read; the absence itself is now DECLARED (#943)."""
+    _declare_absence(tmp_path)
+    text = _nag(tmp_path, {"HERDR_ENV": "1"})
     assert "pane-handoff" in text
     assert "launcher_lib" not in text
     assert "stop cleanly for a manual resume" not in text
@@ -1404,7 +1444,7 @@ def test_no_pointer_content_reaches_the_model(tmp_path):
 
     text = cm.nag_text(tier="advisory", used=130_000, window=200_000,
                        provenance="default", seam="seam", seam_reason=reason,
-                       headless=False, fresh_handoff_capable=False)
+                       unattended=False, fresh_handoff_capable=False)
     assert "IGNORE" not in text.upper() and "EXFILTRATE" not in text.upper()
 
 
@@ -1560,7 +1600,7 @@ def _text(tier, **kw):
     kw.setdefault("provenance", "env")
     kw.setdefault("seam", "unknown")
     kw.setdefault("seam_reason", "no workflow position recorded")
-    kw.setdefault("headless", False)
+    kw.setdefault("unattended", False)
     kw.setdefault("fresh_handoff_capable", False)
     return cm.nag_text(tier=tier, **kw)
 
@@ -1674,21 +1714,21 @@ HEADLESS_NO_HERDR_SENTENCE = (
 )
 
 
-def test_headless_with_a_herdr_pane_prefers_pane_handoff():
+def test_unattended_with_a_herdr_pane_prefers_pane_handoff():
     """AC4 (#732). Unattended + no launcher + a herdr pane: 'stop cleanly for a
     manual resume' means stop with nobody to continue — the exact overnight
     failure #713 documented — when a successor pane was available all along."""
-    text = _text("advisory", headless=True, herdr_available=True)
+    text = _text("advisory", unattended=True, herdr_available=True)
     assert "pane-handoff" in text
     assert HEADLESS_HERDR_SENTENCE in _norm(text)
     assert "`clear-prep` ALONE leaves no successor" in text
     assert "stop cleanly for a manual resume" not in text
 
 
-def test_headless_without_a_herdr_pane_keeps_the_stop_cleanly_text():
+def test_unattended_without_a_herdr_pane_keeps_the_stop_cleanly_text():
     """AC4 (#732), the other half: with genuinely no pane to spawn into, the
     existing clear-prep-then-stop text survives verbatim (full-sentence pin)."""
-    text = _text("advisory", headless=True, herdr_available=False)
+    text = _text("advisory", unattended=True, herdr_available=False)
     assert HEADLESS_NO_HERDR_SENTENCE in _norm(text)
     assert "pane-handoff" not in text
 
