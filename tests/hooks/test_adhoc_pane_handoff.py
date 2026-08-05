@@ -1770,3 +1770,82 @@ class TestCaptureBeforeCleanup:
         assert out["pane_capture"] is not None
         assert out["pane_capture"].endswith("THE-END"), "tail-biased: the error is at the end"
         assert len(out["pane_capture"]) <= 2100
+
+
+# ---------------------------------------------------------------------------
+# #731 — Step 8a wave fixes: probe-before-capture (F-B), capture timeout (F-A),
+# CLI failure_detail invariant (F-C)
+# ---------------------------------------------------------------------------
+
+class TestCaptureOwnershipAndTimeout:
+    BOOM = json.dumps({"error": {"code": "kaboom", "message": "agent exploded"}})
+
+    def test_a_probe_refused_pane_is_never_read(self) -> None:
+        """F-B (Step 8a High, security): a reused handle must not leak another session's
+        viewport into the payload — no ownership, no read, and the skip stays visible."""
+        # Fail AFTER the session id is known, so cleanup runs its identity probe — and make
+        # the probe see a DIFFERENT session than the one we established.
+        foreign = json.dumps({"result": {"pane": {"pane_id": "w1:pZZ", "agent_status": "idle",
+                              "agent_session": {"agent": "claude", "kind": "id",
+                                                "source": "herdr:claude",
+                                                "value": "someone-elses-session"}}}})
+        gets = {"n": 0}
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "get"]:
+                base.calls.append(list(argv))
+                gets["n"] += 1
+                # First get: spawned-check reads the real session. Later gets (the cleanup
+                # identity probe) see a foreign session — the handle was reused.
+                return FakeProc(0, PANE_GET_OK if gets["n"] == 1 else foreign)
+            if argv[:3] == ["herdr", "pane", "send-text"]:
+                base.calls.append(list(argv))
+                return FakeProc(returncode=1, stdout=self.BOOM)   # force failure post-session
+            return base(argv, timeout)
+
+        out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert out["ok"] is False
+        assert "NOT closed" in out["cleanup"]
+        assert not any(c[:3] == ["herdr", "pane", "read"] for c in base.calls), \
+            "an unowned pane's contents must never be read into the report"
+        assert out["pane_capture"] is None
+        skips = [s for s in out["steps"] if s["kind"] == "cleanup_pane_capture"]
+        assert skips and "skipped" in (skips[-1]["note"] or "").lower(), \
+            "the skip must stay visible"
+
+    def test_capture_read_carries_a_short_cleanup_timeout(self) -> None:
+        """F-A (Step 8a High, resolved with evidence): the default runner bound is 180s —
+        a best-effort capture must not hold the close for that long."""
+        seen = {}
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "read"]:
+                seen["timeout"] = timeout
+            if Runner.key(argv) == "herdr agent start":
+                base.calls.append(list(argv))
+                return FakeProc(returncode=1, stdout=self.BOOM)
+            return base(argv, timeout)
+
+        ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert seen.get("timeout") == ll.PANE_CAPTURE_TIMEOUT_S
+        assert ll.PANE_CAPTURE_TIMEOUT_S <= 10
+
+
+class TestCliFailureDetailInvariant:
+    def test_a_failed_step_with_no_detail_gets_a_stable_fallback(self, tmp_path, monkeypatch,
+                                                                 capsys) -> None:
+        """F-C (Step 8a Medium): the README promises a detail for EVERY failed step — an
+        uncovered or legacy result shape must yield a diagnostic naming the step, not null."""
+        def fake(**kw):
+            return {"ok": False, "results": {}, "steps": [], "new_pane": None,
+                    "session_id": None, "cleanup": None, "truncated": False,
+                    "failed_step": "some_legacy_step", "teardown_skipped": None,
+                    "predecessor_guard": None}
+
+        monkeypatch.setattr(ll, "perform_handoff", fake)
+        assert ll.main(_argv(tmp_path)) == 4
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["failure_detail"] == \
+            "step 'some_legacy_step' failed with no recorded detail"

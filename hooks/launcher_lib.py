@@ -2614,6 +2614,10 @@ def pane_capture(out) -> str | None:
 
 
 _PANE_CAPTURE_CAP = 2000
+# The cleanup capture's own runner timeout (seconds). The default runner bound is 180 s
+# (`_default_runner`) — acceptable for launch steps, far too long to hold a best-effort
+# read during cleanup (#731 Step-8a).
+PANE_CAPTURE_TIMEOUT_S = 5
 
 
 def _capped_tail(text: str, cap: int = _PANE_CAPTURE_CAP) -> str:
@@ -2759,14 +2763,33 @@ def _close_tentative_pane(pane: str, runner, record, expected_session: str | Non
     inventory alone — herdr 0.7.5 exposes no creation token that would close that gap.
     """
     try:
-        # #731 AC2 — capture the pane's visible output BEFORE anything closes it: the
-        # successor's own words are the single most informative artifact of a failed handoff,
-        # and this used to be destroyed unread. FIRST, even before the identity probe — a
-        # read is safe regardless of ownership, and a probe refusal should not cost the
-        # evidence. Best-effort in every direction: no capture failure may block the close.
+        if expected_session is not None:
+            probe = build_pane_get_argv(pane)
+            proc = runner(probe)
+            record("cleanup_identity_probe", probe, proc)
+            live = parse_pane_agent_session(getattr(proc, "stdout", "") or "")
+            if getattr(proc, "returncode", 1) != 0 or live != expected_session:
+                # #731 Step-8a High (security): a refused probe means the handle may have
+                # been REUSED — reading it would disclose another session's output into the
+                # report. No ownership, no read; the skip stays visible.
+                record("cleanup_pane_capture", [], None,
+                       note="capture SKIPPED: the pane no longer provably hosts our session "
+                            "— reading it could disclose another session's output")
+                return (f"NOT closed {pane}: it no longer provably hosts {expected_session!r} "
+                        f"(saw {live!r}) — the handle may have been reused, and closing it could "
+                        "kill an unrelated session; check `herdr pane list`")
+
+        # #731 AC2 — capture the pane's visible output BEFORE the close destroys it: the
+        # successor's own words are the single most informative artifact of a failed handoff.
+        # This runs AFTER the ownership check above, on exactly the close's own ownership
+        # basis (probe passed, or the early-failure case where no session was ever
+        # established and the close proceeds on the pre-split-inventory bound). Best-effort
+        # in every direction: no capture failure may block the close, and the read carries
+        # its own short timeout — the default runner bound is 180 s, far too long to hold a
+        # cleanup for a best-effort read.
         read_argv = build_pane_read_argv(pane)
         try:
-            read_proc = runner(read_argv)
+            read_proc = runner(read_argv, timeout=PANE_CAPTURE_TIMEOUT_S)
         except (OSError, subprocess.SubprocessError) as exc:
             read_proc = None
             record("cleanup_pane_capture", read_argv, None,
@@ -2779,16 +2802,6 @@ def _close_tentative_pane(pane: str, runner, record, expected_session: str | Non
                        else "pane read succeeded but the viewport was empty")
             else:
                 record("cleanup_pane_capture", read_argv, read_proc)
-
-        if expected_session is not None:
-            probe = build_pane_get_argv(pane)
-            proc = runner(probe)
-            record("cleanup_identity_probe", probe, proc)
-            live = parse_pane_agent_session(getattr(proc, "stdout", "") or "")
-            if getattr(proc, "returncode", 1) != 0 or live != expected_session:
-                return (f"NOT closed {pane}: it no longer provably hosts {expected_session!r} "
-                        f"(saw {live!r}) — the handle may have been reused, and closing it could "
-                        "kill an unrelated session; check `herdr pane list`")
         argv = build_teardown_argv(pane)
         proc = runner(argv)
         record("cleanup_tentative_pane", argv, proc)
@@ -4523,6 +4536,11 @@ def _cmd_ad_hoc_handoff(args) -> int:
     # Via the helpers, not out[...]: they tolerate results that predate these keys, and they
     # derive from the step records for exits (teardown-phase) the library did not pre-fill.
     payload["failure_detail"] = failure_detail(out)
+    if payload["failed_step"] and not payload["failure_detail"]:
+        # #731 Step-8a Medium: the contract is a detail for EVERY failed step. An uncovered
+        # or legacy result shape still names the step rather than shipping null.
+        payload["failure_detail"] = (f"step {payload['failed_step']!r} failed with no "
+                                     "recorded detail")
     payload["pane_capture"] = pane_capture(out)
     if used_override:
         # #758 — the audit record rides the output ONLY when an override was actually
