@@ -27,6 +27,7 @@ their Step 16 output. main() exits 1 in that case so the skill surfaces the gap.
 """
 import argparse
 import copy
+import hashlib
 import json
 import math
 import os
@@ -1066,13 +1067,84 @@ def load_record_file(path) -> dict:
         raise WorkSummaryError(f"record file {path} is not valid JSON: {exc}")
 
 
-def persist_record(record, store_path) -> None:
-    """Append one compact JSON line (one record per line) to the JSONL store,
-    creating the parent directory if needed."""
+# Writer-stamped or tool-computed at persist time, so they say nothing about WHICH
+# run this is. `timing` is the subtle one: `_auto_embed_timing` derives it from the
+# step-state history whenever the record file omits it, so a crash-recovery re-run
+# reads a GROWN history and produces a different value — an identity carrying it
+# would differ on exactly the re-run the guard exists to catch (#888).
+# `usage` is deliberately absent from this set: it is read from the record file, so
+# it is stable across re-runs of the same file and belongs to identity.
+_FINGERPRINT_VOLATILE_KEYS = ("generated_at", "schema_version", "timing")
+
+
+def record_fingerprint(record) -> str:
+    """Stable identity for one RUN, used to keep its record from landing twice (#888).
+
+    `run_id` (#473) wins when present — it is the explicit join key, so a run that
+    declares one is identified by it and by nothing else. Otherwise the identity is a
+    digest over the record's content with `_FINGERPRINT_VOLATILE_KEYS` removed.
+
+    Deduplicates RUNS, not issues: a later run over the same issue with different
+    findings has different content, so it appends normally.
+    """
+    if isinstance(record, dict):
+        run_id = record.get("run_id")
+        if _is_str(run_id) and run_id.strip():
+            return "run_id:" + run_id.strip()
+    body = record
+    if isinstance(record, dict):
+        body = {k: v for k, v in record.items() if k not in _FINGERPRINT_VOLATILE_KEYS}
+    # sort_keys so a re-serialized record with reordered keys is the same run.
+    blob = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
+    return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _store_fingerprints(store_path) -> set:
+    """Fingerprints of every record already in the store. Missing store -> empty set.
+
+    A line that will not parse is SKIPPED, never fatal: it cannot be the duplicate of
+    a valid record, and refusing the write over someone else's corrupt line would turn
+    a cosmetic problem into the data loss this whole issue is about.
+    """
+    seen = set()
+    p = Path(store_path)
+    if not p.exists():
+        return seen
+    with open(p, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                seen.add(record_fingerprint(json.loads(line)))
+            except (ValueError, TypeError):
+                continue
+    return seen
+
+
+def persist_record(record, store_path) -> str:
+    """Append one compact JSON line to the JSONL store, ONCE (#888/#355).
+
+    Returns ``"appended"`` or ``"duplicate"``. A duplicate is not an error: the caller
+    asked for this run to be in the store and it is, so the desired end state holds and
+    a documented crash-recovery re-run must not look like a failure.
+
+    **Fail-OPEN on a store it cannot read** — it warns and appends. Losing a record is
+    the worse failure of the two this issue closes (#588 measured 1 of 6 children
+    dropped; #355 cost one hand-discarded duplicate line), and it matches the repo's
+    convention that data you cannot classify is kept.
+    """
     p = Path(store_path)
     p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if record_fingerprint(record) in _store_fingerprints(p):
+            return "duplicate"
+    except OSError as exc:
+        print(f"warning: could not read {p} to check for a duplicate run-record "
+              f"({exc}); appending rather than risk losing it", file=sys.stderr)
     with open(p, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, separators=(",", ":")) + "\n")
+    return "appended"
 
 
 def _now() -> str:
@@ -1646,11 +1718,18 @@ def main(argv=None) -> int:
         if not args.no_persist:
             store = resolve_store_path(args.store, os.environ, args.project_root)
             try:
-                persist_record(record, store)
+                outcome = persist_record(record, store)
             except OSError as exc:
                 print(f"failed to persist run-record to {store}: {exc}",
                       file=sys.stderr)
                 return 1
+            if outcome == "duplicate":
+                # rc stays 0: re-running Step 16 is the documented crash-recovery
+                # path, and the end state it asked for holds (#888).
+                issue = record.get("issue") or {}
+                print(f"run-record for {record.get('workflow')} "
+                      f"#{issue.get('number')} is already in {store} — not appended "
+                      f"again", file=sys.stderr)
         return 0
 
     if args.cmd == "find":
