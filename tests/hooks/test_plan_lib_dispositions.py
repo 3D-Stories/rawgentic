@@ -1147,3 +1147,46 @@ class TestSevereFindingsDisposedHardening:
         _, why = mod.severe_findings_are_disposed(
             [_disposed(disp=None, desc="x " * 500_000)])
         assert len(why) < 2000, "the refusal message must stay bounded"
+
+
+class TestSevereFindingsDisposedStep11Fixes:
+    """Step 11 pre-PR review fixes (#903). Escapes, never literal characters — pylint
+    E2502 (bidirectional-unicode) is an ENABLED check on a HARD CI lane."""
+
+    def test_an_invisible_rationale_is_not_a_rationale(self):
+        # S11-2 (High): `str.strip()` removes whitespace only. A reason made solely of a
+        # zero-width space, ESC, NUL, soft hyphen or a bidi override survived it and read
+        # as non-empty, so a refuted Critical/High passed the gate with no visible
+        # rationale at all — the fail-open this boundary exists to prevent.
+        mod = _reload_plan_lib()
+        for reason in ("\u200b", "\x1b", "\x00", "\u00ad", "\u202e", " \u200b\t\u200d "):
+            ok, why = mod.severe_findings_are_disposed(
+                [_disposed(disp="refuted", reason=reason)])
+            assert ok is False, f"invisible reason {reason!r} must not satisfy the gate"
+            assert "disposition_reason" in why
+
+    def test_a_visible_rationale_still_passes(self):
+        # The fix must not reject legitimate text, including non-ASCII.
+        mod = _reload_plan_lib()
+        for reason in ("the cited logger is disabled", "refuté — voir #123", "见 #123"):
+            ok, why = mod.severe_findings_are_disposed(
+                [_disposed(disp="refuted", reason=reason)])
+            assert ok is True, f"{reason!r} is a real rationale: {why}"
+
+    def test_a_container_is_never_stringified_in_full(self):
+        # S11-3 (Medium): the pre-normalization bound applied only to str. A huge list or
+        # dict in a display field was materialized in full by `str(value)` before any
+        # slice — the bounded-refusal claim did not hold for non-strings.
+        mod = _reload_plan_lib()
+        huge = ["x" * 100] * 20000
+        _, why = mod.severe_findings_are_disposed(
+            [_disposed(disp=None, desc=huge, loc={"a": huge})])
+        assert len(why) < 2000
+        assert "<list>" in why and "<dict>" in why
+        assert "xxxxxxxxxx" not in why, "the container contents must never be rendered"
+
+    def test_a_container_severity_reports_its_type(self):
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed([_disposed(sev=["High"], disp=None)])
+        assert ok is False
+        assert "<list>" in why

@@ -2969,12 +2969,24 @@ def _one_line(value, limit: int) -> str:
     * a multi-megabyte field would be fully materialized before any cap applied, so the
       raw value is sliced FIRST. Collapsing only ever shrinks, so a generous prefix still
       fills `limit`.
+
+    A NON-STRING renders as a bounded type marker and is never stringified: `str()` on a
+    large list or dict materializes the whole representation before any slice could apply,
+    so the bound did not actually hold for containers (Step 11 S3). The message only needs
+    to say the type was wrong.
     """
-    raw = value if isinstance(value, str) else str(value)
-    text = " ".join(raw[:limit * 4].split())
-    return "".join(
-        c for c in text if unicodedata.category(c) not in ("Cc", "Cf")
-    )[:limit]
+    if not isinstance(value, str):
+        return f"<{type(value).__name__}>"[:limit]
+    # Order is load-bearing. Collapsing FIRST inserts a joining space between tokens, so
+    # " <ZWSP>\t<ZWJ> " survived as " " — non-empty, and an all-invisible string passed a
+    # substance check. Drop the non-whitespace controls first, THEN collapse. The
+    # `isspace()` clause keeps \t and \n (both Cc) alive long enough for `split()` to turn
+    # them into separators rather than deleting them and welding words together.
+    kept = "".join(
+        c for c in value[:limit * 4]
+        if c.isspace() or unicodedata.category(c) not in ("Cc", "Cf")
+    )
+    return " ".join(kept.split())[:limit]
 
 
 def severe_findings_are_disposed(findings: list) -> tuple[bool, str]:
@@ -3040,7 +3052,11 @@ def severe_findings_are_disposed(findings: list) -> tuple[bool, str]:
                        else f"terminal_disposition {_one_line(raw_disposition, 40)!r}")
         elif disposition in _DISPOSITION_NEEDS_REASON:
             reason = finding.get("disposition_reason")
-            if not isinstance(reason, str) or not reason.strip():
+            # `.strip()` alone is NOT substance: it removes whitespace only, so a reason
+            # made solely of a zero-width space, ESC, NUL or a bidi override read as
+            # non-empty and an invisible "rationale" satisfied the gate (Step 11 S2).
+            # `_one_line` drops every Cc/Cf character, so what survives is real text.
+            if not isinstance(reason, str) or not _one_line(reason, 200):
                 problem = f"{disposition} without a non-empty disposition_reason"
         if problem is None:
             continue
