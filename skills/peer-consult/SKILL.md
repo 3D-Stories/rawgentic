@@ -159,24 +159,35 @@ The egress warning text (and any detected secret categories).
 
 ### Instructions
 
-1. Run the consult through the runner (fail-closed; the codex binary is PATH-stubbed in tests):
+1. **Resolve the task class FIRST (#761) — required on this path, never guessed and never hand-defaulted.** Read it from the snapshot the run already committed to:
+   ```bash
+   # an issue IS in scope (the WF2 embedded case) — read THAT issue's snapshot
+   python3 hooks/task_class_lib.py read --issue "<ISSUE>" --project-root "<PROJECT_ROOT>"
+   # standalone problem artifact, NO issue in scope — omit --issue; returns the project default
+   python3 hooks/task_class_lib.py read --project-root "<PROJECT_ROOT>"
+   ```
+   Take `task_class` from the JSON on stdout (rc 1 = unreadable/invalid snapshot: STOP and relay it — never re-resolve and never substitute a default). **When an issue is in scope you MUST pass BOTH `--task-class` and `--issue` below.** Passing `--issue` without `--task-class` is REFUSED (exit 2, `invalid_input`) by design: an issue-scoped consult that quietly fell back to the project default would show the peer a class the issue never set, with no failure and no diagnostic.
+2. Run the consult through the runner (fail-closed; the codex binary is PATH-stubbed in tests):
    ```bash
    python3 hooks/review_runner.py consult \
      --artifact "<artifact>" \
      --author-model "<AUTHOR_MODEL>" \
      --reviewer "<PEER>" \
      --backend <gpt|glm> \
+     --task-class "<TASK_CLASS>" \
+     --issue "<ISSUE>" \
      --out "<PROJECT_ROOT>/.rawgentic-wf13-result.json" \
      --project-root "<PROJECT_ROOT>"
    ```
+   Drop the `--issue` line **and** the `--task-class` line together when no issue is in scope; the runner then renders the strictest class (`production`). Never drop only one.
    Under `both`, run TWO independent invocations — one `--backend gpt` (peer `gpt-5.6-sol`) and one `--backend glm` (omit `--reviewer`; it resolves `glm-5.2`) — with distinct `--out` paths. The result JSON carries the structured proposal: `{status, diagnostic, reviewer_model, backend, proposal: {approach, key_decisions, risks, sketch}, …}`. Consults are always `diagnostic: true` — a proposal never authorizes a fix round.
-2. **Interpret each invocation by its EXIT CODE — never by whether the out file exists:**
+3. **Interpret each invocation by its EXIT CODE — never by whether the out file exists:**
    - `0` → success; the result file holds the validated proposal.
    - `2` → refused (identity/validation/config — no egress happened). STOP and relay `error_detail`.
    - `3` → terminal backend failure (`error_class` says quota vs transport vs unclassified). STOP and report; **do not** fabricate a proposal, and do not add your own retry loop — the runner already applied the #857 policy.
    - `4` → empty/invalid backend output (an entirely-empty proposal is invalid_output, never a vacuous pass). STOP and report.
    - **`both` PARTIAL: one invocation succeeded, one failed → present the successful backend's proposal, name the failed backend with its `error_class`, do NOT stop.**
-3. On a single-backend 2/3/4, the consult did NOT succeed — report the failure. Never present a partial or invented proposal as a completed consult.
+4. On a single-backend 2/3/4, the consult did NOT succeed — report the failure. Never present a partial or invented proposal as a completed consult.
 
 ### Output
 The path(s) to the generated peer report(s) or the failure reason.
@@ -249,7 +260,7 @@ Before declaring WF13 complete, verify ALL of the following. Print the checklist
 2. [ ] Artifact validated (exists, under project root)
 3. [ ] Selected backend's prerequisite satisfied (gpt: codex; glm: zhipuai>=2.1.5 + key; both: >=1 ready, degradation warned)
 4. [ ] Egress notice printed (warn-only)
-5. [ ] Consult invoked through `hooks/review_runner.py` with the resolved backend, a pinned `--reviewer`, and `--author-model`; exit code interpreted (fail-closed on 2/3/4; both-mode partial presented with failure named; never gated on file existence)
+5. [ ] Consult invoked through `hooks/review_runner.py` with the resolved backend, a pinned `--reviewer`, `--author-model`, and the task class resolved via `task_class_lib.py read` (`--task-class` AND `--issue` together whenever an issue is in scope, both omitted when none is); exit code interpreted (fail-closed on 2/3/4; both-mode partial presented with failure named; never gated on file existence)
 6. [ ] On success: peer report(s) written to <project>/docs/reviews/ and presented (both under `both`)
 7. [ ] Artifact NOT modified (report-only invariant)
 

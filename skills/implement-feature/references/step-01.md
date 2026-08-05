@@ -23,7 +23,17 @@
    - Extract acceptance criteria, affected components, complexity from the issue body
    - If any are missing (manually created issue): generate them from the description and ask user to confirm.
 
-6. Display to user:
+6. **Resolve and snapshot the task class (#761).** With the body in hand, decide the class ONCE for this issue and persist it **write-once**. Every later gate reads the SNAPSHOT, never the body, so a body edited mid-run cannot change the class under a running gate:
+   ```bash
+   gh issue view <number> --repo ${capabilities.repo} --json body -q .body > .rawgentic-<number>-body.md
+   python3 hooks/task_class_lib.py resolve --issue <number> \
+     --body-file .rawgentic-<number>-body.md \
+     --out claude_docs/.wf2-state/<number>/task_class.json \
+     --project-root .
+   ```
+   The body may carry the canonical line `**Task class:** disposable|internal|production`. Absent → the project's `defaultTaskClass`, else `production`. Malformed, unrecognized, or duplicated → `production` **with a DIAGNOSTIC**, config default bypassed. **rc 1 = FAIL LOUD, abort Step 1** — a later gate must never read an absent or invalid snapshot, and it is never re-resolved silently. Carry the printed `task-class:` line into the Step-1 session-note marker as the tail `task_class=<class> provenance=<p>[ diagnostic=<reason>]`. The snapshot is keyed by ISSUE and immutable: to force a re-resolve, delete the file, and only when no run on that issue is live. **Never route the diagnostic into a prompt** — it carries body-derived text and the class line sits outside the nonce fence.
+
+7. Display to user:
    ```
    ISSUE #NNN: [title]
    State: Open | Labels: [list] | WF1 Origin: [yes/no] | Complexity: [S/M/L/XL]
@@ -46,11 +56,11 @@
    /goal command above (or say "skip goal" to decline — declining is fine and never blocks).
    ```
 
-7. APPEND to session notes. Wait for user confirmation (and, in the same round-trip, whether they ran `/goal` or declined — see Step 1b; no second prompt). In an unattended run (e.g. an epic-run child): a WF1-created issue auto-confirms and proceeds; a manually-created issue posts the summary as an issue comment and stops via the ERROR protocol — never an indefinite wait.
+8. APPEND to session notes. Wait for user confirmation (and, in the same round-trip, whether they ran `/goal` or declined — see Step 1b; no second prompt). In an unattended run (e.g. an epic-run child): a WF1-created issue auto-confirms and proceeds; a manually-created issue posts the summary as an issue comment and stops via the ERROR protocol — never an indefinite wait.
 
-8. **CI-quarantine staleness nag (#137):** if `capabilities.ci_quarantined == true` and `capabilities.ci_quarantined_since` is set, compute `(current local date from the workflow env) − (the YYYY-MM-DD date) > 30 calendar days`; if so, log a "fix or retire CI" advisory in session notes (quarantine is meant to be temporary; this keeps it from silently becoming permanent). Advisory only — never blocks. `ci_quarantined_since` is guaranteed a valid ISO date by `capabilities_lib` (a malformed value already fails the derive), so no parse-guard is needed here. If `ci_quarantined_since` is unset, note that a date should be added so staleness can be tracked.
+9. **CI-quarantine staleness nag (#137):** if `capabilities.ci_quarantined == true` and `capabilities.ci_quarantined_since` is set, compute `(current local date from the workflow env) − (the YYYY-MM-DD date) > 30 calendar days`; if so, log a "fix or retire CI" advisory in session notes (quarantine is meant to be temporary; this keeps it from silently becoming permanent). Advisory only — never blocks. `ci_quarantined_since` is guaranteed a valid ISO date by `capabilities_lib` (a malformed value already fails the derive), so no parse-guard is needed here. If `ci_quarantined_since` is unset, note that a date should be added so staleness can be tracked.
 
-9. **Branch-protection probe (#139 — advisory, fail-open).** So a passed PR does not overstate its server-side protection, probe once here. **URL-encode the branch** (a default branch like `release/v1` has a `/` that would otherwise hit the wrong endpoint and look like a 404):
+10. **Branch-protection probe (#139 — advisory, fail-open).** So a passed PR does not overstate its server-side protection, probe once here. **URL-encode the branch** (a default branch like `release/v1` has a `/` that would otherwise hit the wrong endpoint and look like a 404):
    ```bash
    BR_ENC=$(printf %s "${capabilities.default_branch}" | jq -sRr @uri)
    gh api "repos/${capabilities.repo}/branches/${BR_ENC}/protection" -i

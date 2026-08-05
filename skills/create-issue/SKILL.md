@@ -117,6 +117,18 @@ Step-entry state (#480, hook-emitted since #499): the PostToolUse hook (`hooks/s
    - **Scope:** explicit in-scope AND out-of-scope.
    - **Affected components:** only verified-real ones.
    - **Risk assessment** and a complexity t-shirt size (S/M/L/XL).
+   - **Task class (#761)** — one line, in exactly this form, on its own line:
+     `**Task class:** production`
+     The three values, and what each says about the work's intended durability:
+     - `disposable` — a throwaway probe, spike, or one-off script; nobody depends on it later.
+     - `internal` — tooling, fixtures, or scaffolding used inside the project only.
+     - `production` — anything users or other systems depend on. **The default: write
+       `production` unless the user explicitly chooses otherwise.**
+     Downstream, WF2 Step 1 resolves this line ONCE and snapshots it write-once, and every
+     review/consult prompt then renders that class. It is contextual metadata only — it does
+     not yet scale any demand or relax any gate. Omitting the line is not an error (it
+     resolves to the project's `defaultTaskClass`, else `production`), but a malformed or
+     duplicated line resolves to `production` with a visible diagnostic, so write it cleanly.
    - Bugs also: steps to reproduce, expected vs actual, environment, logs if any.
    - Cross-reference related issues found in the dedup search.
    If the draft exceeds ~2000 words, it's probably several issues — suggest splitting.
