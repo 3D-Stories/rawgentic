@@ -725,6 +725,14 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.128.4 (2026-08-05)
+- **Milestone epics referenced from the plan (#756 follow-through, part 2).** The five milestone
+  epics minted after #934 merged — #935 (M2.5), #936 (M3), #937 (M5), #938 (M6), #939 (M7) — are
+  now named in the roadmap's phases block and §4 section headers, and both execution records
+  (roadmap §11, disposition doc §8) note the minting; both pages redeployed. With #906 (M2) and
+  #871 (M4), every milestone has a GitHub tracking surface. Docs only; no workflow-spine change →
+  no diagram REV. Suite 5254→5254.
+
 ### v3.128.3 (2026-08-05)
 - **Post-M1 backlog rationalization: 116 open issues dispositioned, the roadmap reordered M2-and-
   beyond (#756 follow-through).** 46 issues closed with citing comments (never-executed D174/D178

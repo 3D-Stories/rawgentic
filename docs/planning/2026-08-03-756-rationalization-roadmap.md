@@ -42,25 +42,25 @@ M2 — THE PANE-HANDOFF CHAIN | epic #906 · active | crit
   5 | Trusted goal reader: #864 + #772 + #878 | note
   6 | #806 goal cap from the constant + exact-text display; no auto-arm | note
   SP | M1 spillover: #923 WF2-lite lane · #899 word budget | note
-M2.5 — MINIMUM TELEMETRY TRUTH | gates away mode | warn
+M2.5 — MINIMUM TELEMETRY TRUTH | epic #935 · gates away mode | warn
   #888 | One transactional persistence contract (absorbs #588 + #355) | note
   #363 | Per-run usage attribution (absorbs #660) | note
   #356 | Dispatch entries that survive session seams | note
-M3 — TRUST THE NEW MACHINERY | runner · review loop · config | warn
+M3 — TRUST THE NEW MACHINERY | epic #936 · runner · review loop · config | warn
   RH | Runner hardening (siblings, not merged): #876 trusted --brief · #894 death/OOM evidence · #365 contaminated returns · #893 engagement evidence | note
   RL | Review loop: #889 clean-round token refund · #892 re-litigation flag · #891 retire fail-open riskLevel default · #895 blindness guard | note
   CFG | #884 + #883 config pair · roadmap tail: #860 consult-on-exhaustion · #808 WF3 close · #750 registry helper · #759 deferral registry | note
 M4 — AWAY MODE, BOUNDED | epic #871 · gated on M2 + M2.5 | warn
   #871 | A narrow first slice: explicit duration, cancel, recovery limits | note
   #586 | Resume launcher that survives /clear | note
-M5 — IDENTITY & CONCURRENCY + WF HYGIENE | grouped pairs | note
+M5 — IDENTITY & CONCURRENCY + WF HYGIENE | epic #937 · grouped pairs | note
   P1 | #345 + #346 one keying design, two migrations · #593 + #594 concurrent same-project sessions | note
   P2 | #372 WF14-vs-guard · #364 doc-only resume state · #370 + #379 ambiguity-breaker pair | note
   P3 | #395 authored-blind checklist · #658 call-site inventory · #890 consumer-project hook invocation | note
-M6 — TAIL | small, independent | note
+M6 — TAIL | epic #938 · small, independent | note
   #361 | Step-16 assembly cross-checks | note
   #380 | wal-context internal deadline | note
-M7 — SKILLS & TOOLING | convenience tier | note
+M7 — SKILLS & TOOLING | epic #939 · convenience tier | note
   T1 | #400 usage auditor · #390 workspace-doctor · #391 session-index v2 | note
   T2 | #534 retire epic-run-analysis (unblocked, #508 shipped) · #536 deploy-verify · #537 security-vet · #399 group inference · #350 CodeGuard | note
 LATER — with reopen triggers, not vibes | watch list §6 refreshed | note
@@ -210,7 +210,7 @@ Priority order (epic-run depends on this chain per D176):
 5. **Trusted goal reader** (#864+#772): one origin-bound reader (LIVE/CLEARED/NEVER_ARMED/ AMBIGUOUS) behind the CLI and both destructive paths.
 6. **#806** rescoped: goal cap read from the constant + exact-text display; no auto-arm.
 
-### M2.5 — MINIMUM TELEMETRY TRUTH *(added 2026-08-05, consult-driven)*
+### M2.5 — MINIMUM TELEMETRY TRUTH *(added 2026-08-05, consult-driven — epic #935)*
 Before any unattended expansion, records must be trustworthy: **#888** — one transactional
 persistence contract (absorbs #588's dropped-on-compaction evidence and #355's blind-append
 duplicates): run-records that land exactly once, with the persist-before-merge ordering codified ·
@@ -218,7 +218,7 @@ duplicates): run-records that land exactly once, with the persist-before-merge o
 **#356** — dispatch entries that survive session seams. Rationale (gpt-5.6-sol, adopted): away
 mode before durable records produces unattended runs that cannot be reconstructed.
 
-### M3 — TRUST THE NEW MACHINERY *(reordered 2026-08-05; absorbs the old "small tail")*
+### M3 — TRUST THE NEW MACHINERY *(reordered 2026-08-05; absorbs the old "small tail" — epic #936)*
 The retreat's replacement machinery earns trust here. Kept as **linked siblings, not merged** —
 different trust boundaries need independent tests (consult finding, adopted):
 - **Runner hardening:** #876 (trusted `--brief` for review-artifact) · #894 (exit/signal + OOM evidence on a no-END death) · #365 (contaminated/fabricated-citation returns get named handling) · #893 (Step 8a engagement-evidence rule for runner passes).
@@ -232,7 +232,7 @@ mode; first slice with explicit duration, cancellation, artifact and recovery li
 remainder (keystroke-free restart) lands here. Decision ticket #931 (native Bash sandboxing)
 feeds this epic's design.
 
-### M5 — PROJECT IDENTITY & CONCURRENCY + WF HYGIENE *(2026-08-05)*
+### M5 — PROJECT IDENTITY & CONCURRENCY + WF HYGIENE *(2026-08-05 — epic #937)*
 #345 + #346 (one project-scoped keying design; two migration tickets — .wf2-state collisions and
 WF14 store routing) · #593 + #594 (concurrent same-project sessions: canonical notes home +
 auto-worktree on second bind — grouped siblings) · #372 (WF14 report path vs wal-bind-guard) ·
@@ -240,11 +240,11 @@ auto-worktree on second bind — grouped siblings) · #372 (WF14 report path vs 
 exemptions + visible inspection) · #395 (authored-blind pre-push checklist) · #658 (call-site
 inventory for class-of-defect fixes) · #890 (consumer-project hook invocation — measure first).
 
-### M6 — TAIL *(2026-08-05)*
+### M6 — TAIL *(2026-08-05 — epic #938)*
 #361 (Step-16 assembly cross-checks against session-note ground truth) · #380 (wal-context
 internal execution deadline).
 
-### M7 — SKILLS & TOOLING *(2026-08-05)*
+### M7 — SKILLS & TOOLING *(2026-08-05 — epic #939)*
 #400 (WF17 invoked-vs-should-have-fired auditor — conceptual pair of #928, which ships in M2) ·
 #390 (workspace-doctor) · #391 (session-index v2) · #534 (retire epic-run-analysis — unblocked,
 #508 shipped) · #536 (deploy-verify skill) · #537 (security-vet skill) · #399 (runner-group
@@ -358,6 +358,7 @@ runner's own `consult` verb — the M0a machinery reviewing its own backlog):
 - **3 duplicates folded:** #660→#363, #588+#355→#888.
 - **3 decision tickets filed** (owner-approved under the D179 throttle): #931 native sandboxing, #932 LLM-judged hooks, #933 sandbox-runtime — the three §6 triggers that fired.
 - **Open issues: 116 → 72.** Epic #906 (M2) and this roadmap are the only tracking surfaces.
+- **Milestone epics minted** (owner-approved, after PR #934 merged): **#935** (M2.5), **#936** (M3), **#937** (M5), **#938** (M6), **#939** (M7) — checkbox task lists referencing the existing issues, same shape as #906, nothing duplicated. With #906 (M2) and #871 (M4), every milestone now has a GitHub tracking surface; the LATER shelf deliberately has none.
 - **Ordering changes** (consult-driven, adopted): #928 to the front (Anthropic's skill-evals harness shipped and our nine `evals.json` files already match its schema); a minimum telemetry-truth layer (M2.5) gates away mode; away mode runs as a bounded slice (M4), not a wholesale deferral; sibling pairs stay linked-but-separate rather than merged.
 
 Full evidence, per-issue: `2026-08-05-backlog-rationalization-post-m1.md`
