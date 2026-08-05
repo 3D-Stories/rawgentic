@@ -14,6 +14,58 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #875 M1 — #909: a description cap, and the YAML comment that was eating triggers · v3.128.1
+
+**Issue:** [#909](https://github.com/3D-Stories/rawgentic/issues/909) ·
+**Design:** `docs/planning/2026-08-05-909-description-diet-and-incident-split.md`
+([live](https://rawgentic-design-909.vercel.app/)) · **Follow-up:** #928
+
+Filed as a character-cap chore. The cap was real — `pane-handoff` at 1,174 against Anthropic's
+documented 1,024 — but measuring it surfaced a worse defect the issue never mentioned: **an unquoted
+YAML plain scalar treats ` #` as a comment start**, so `epic-run`'s description loaded as **131 of
+534 characters**, losing every trigger phrase after *"cycle through all issues in epic"*, and
+`pane-handoff` silently lost `Requires HERDR_ENV=1.` Confirmed twice — `yaml.safe_load` over the
+tree, and a live session's own available-skills listing ending that entry mid-phrase at the same
+byte. Both are single-quoted now; `peer-consult` had been quoted all along, which is what made the
+fix's live behaviour *observable* rather than assumed.
+
+**Shipped:** `pane-handoff` 1,174 → 897 chars keeping every quoted phrasing, all four bare trigger
+verbs, both dictated variants (#732) and the unprompted-run directive; install notes out of
+`adversarial-review` (842→697) and `peer-consult` (690→557) into their bodies;
+`incident/SKILL.md` 537 → ~220 lines split into three flat `references/` files with zero substantive
+prose lost, while `<mandatory-verification>` and the destructive-action approval rule stayed in the
+always-loaded body on the argument that a reference read is prose-enforced, not enforcement.
+
+**Guards:** `tests/test_skill_description_budget.py` (present/string/non-empty, the 1,024 cap, and a
+truncation check length alone structurally cannot make — its fixture parses cleanly, sits far under
+the cap, and is half dead text); `tests/test_skill_reference_structure.py` (flat references, walked
+recursively because a flat glob would miss the nested file it exists to reject; no plugin-root token,
+over every file type). Both `incident` ordering pins rebuilt on a new provenance-preserving
+`corpus.skill_files()` — **not** `skill_corpus()`, whose joined string cannot express "same file" —
+and mutation-verified in both directions.
+
+**What the reviews caught, which is the durable lesson.** Four cross-model design passes (16
+findings) plus a code review and a refutation pass (8 more) found **four defects introduced by this
+change itself**: a behaviour change broadening the destructive-action rule to cover read-only
+diagnostics, which could stall a SEV-1; two bare triggers (`pass over`, `send work`) silently deleted
+by a compression while every quoted pin stayed green; a "bidirectional" link guard whose reverse
+direction was hard-coded; and a truncation detector blind to a quoted key and to duplicate keys. The
+recurring shape across all of them: **a fix applied in one place and missed in another**, which
+happened twice in the design document alone. That is the argument for mechanical guards over
+vigilance, made by the issue against itself.
+
+**Named residual (#928):** this repo has no behavioural gate proving a skill still gets *selected*
+after a description edit — no CI job invokes `evals.json`. Phrase coverage proves no mined phrasing
+was dropped and nothing more. The real gate needs an installed plugin build and live sessions, and
+reinstalling mid-session is prohibited, so it was unavailable rather than merely costly. The reviewer
+demanded it in all four design passes; the disposition held, and is the owner's to overturn.
+
+**Gates:** suite 5208 → 5249, 0 failed, exit 0 · both lint lanes 10.00/10 · security scan PASS
+(1 visible skip: iac not applicable) · design gate closed budget-exhausted over resolved ground
+(`design` 2/2, global 2/3) · no workflow-spine change → no diagram REV.
+
+---
+
 ## Epic #875 M1 — #761: a task class, resolved once and rendered inert · v3.128.0
 
 Round-11 session (mid-child handoff from round 10), full lane — `complex_feature`, `fast_path_eligible`

@@ -725,6 +725,24 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.128.1 (2026-08-05)
+- **Skill frontmatter descriptions brought under Anthropic's 1,024-char cap, two descriptions
+  un-truncated, and `incident/SKILL.md` split into `references/` (#909, epic #875).** The headline
+  find was not the cap: an unquoted YAML plain scalar treats ` #` as a comment, so `epic-run`'s
+  description loaded as 131 of 534 chars — losing every trigger phrase after "cycle through all
+  issues in epic" — and `pane-handoff` silently lost `Requires HERDR_ENV=1.`; both are now
+  single-quoted and load whole. `pane-handoff` 1,174 → 864 chars keeping every dictated variant
+  (#732) and the unprompted-run directive; backend install notes moved from `adversarial-review`
+  and `peer-consult` descriptions into their bodies. `incident/SKILL.md` 537 → 216 lines, with the
+  SEV-1/SEV-2 verification gate and the destructive-action approval rule deliberately kept in the
+  always-loaded body rather than a lazily-read reference. New `tests/test_skill_description_budget.py`
+  (present/string/non-empty, the 1,024 cap, and a truncation check that a length-only guard cannot
+  make) and `tests/test_skill_reference_structure.py` (flat references, walked recursively; no
+  plugin-root token); both `incident` ordering pins rebuilt on a new provenance-preserving
+  `corpus.skill_files()` because the joined corpus string cannot express "same file", and verified
+  by mutation. Follow-up #928 filed for the behavioural selection gate this repo still lacks.
+  No workflow-spine change → no diagram REV. Suite 5208→5249.
+
 ### v3.128.0 (2026-08-05)
 - **A task class (`disposable` | `internal` | `production`) is now resolved once from the issue body,
   snapshotted write-once, and rendered into every cross-model review and consult prompt (#761,
