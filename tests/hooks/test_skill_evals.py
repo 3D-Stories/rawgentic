@@ -354,3 +354,112 @@ def test_a_non_string_expected_output_does_not_crash_the_loader(tmp_path):
 def test_classify_intent_tolerates_a_non_string_argument():
     assert skill_evals.classify_intent(None) == "trigger"
     assert skill_evals.classify_intent({"a": 1}) == "trigger"
+
+
+# --- Step-11 cross-model review findings ---------------------------------------------
+# Seven findings from the gpt-5.6-sol pass. Each was reproduced against the code before
+# being fixed; these pin the fixes. The theme is that this is a GATE, so every
+# "nothing to see" path must be distinguishable from "looked and it was fine".
+
+def test_F1_discover_refuses_an_empty_or_missing_corpus(tmp_path, capsys):
+    """A mistyped --skills-root printed `total cases: 0` and exited 0.
+
+    For a coverage gate that is a vacuous success: the one command meant to establish
+    that a corpus exists reported fine when there was no corpus at all.
+    """
+    assert skill_evals._main(["discover", "--skills-root", str(tmp_path / "nope")]) == 1
+    assert "no eval files" in capsys.readouterr().out.lower()
+
+
+def test_F3_a_file_with_neither_case_key_is_refused(tmp_path):
+    """Truncation or a misspelled key silently produced a zero-case corpus."""
+    p = tmp_path / "evals.json"
+    _write(p, {"skill_name": "truncated"})
+    with pytest.raises(skill_evals.EvalError, match="neither"):
+        skill_evals.load_cases(p)
+
+
+def test_F3_an_explicit_empty_case_list_is_still_accepted(tmp_path):
+    """The peer-consult stub declares `cases: []`. Declared-empty != key-absent."""
+    p = tmp_path / "evals.json"
+    _write(p, {"skill": "peer-consult", "cases": []})
+    assert skill_evals.load_cases(p) == ("peer-consult", [])
+
+
+@pytest.mark.parametrize("selected, wanted, same", [
+    ("rawgentic:pane-handoff", "rawgentic:pane-handoff", True),
+    # F5: a same-named skill from ANOTHER plugin must not satisfy this gate.
+    ("other-plugin:pane-handoff", "rawgentic:pane-handoff", False),
+    # One side unqualified still matches — eval files spell the prefixed form while
+    # SKILL.md frontmatter carries the bare name (#552).
+    ("rawgentic:pane-handoff", "pane-handoff", True),
+    ("pane-handoff", "rawgentic:pane-handoff", True),
+    ("rawgentic:switch", "rawgentic:pane-handoff", False),
+])
+def test_F5_skill_matching_is_namespace_aware(selected, wanted, same):
+    assert skill_evals._same_skill(selected, wanted) is same
+
+
+def test_F6_a_negation_after_a_positive_invocation_is_not_a_refusal():
+    """`_REFUSE_LEAD` was not bound to the target skill, so a single sentence that both
+    invokes it and declines a DIFFERENT skill inverted the oracle."""
+    assert skill_evals.classify_intent(
+        "Invokes pane-handoff but does not invoke clear-prep.") == "trigger"
+
+
+def test_F6_a_leading_refusal_is_still_a_refusal():
+    assert skill_evals.classify_intent(
+        "Does NOT run the ad-hoc handoff, and does not invoke clear-prep.") == "refuse"
+
+
+def test_F2_a_refusal_does_not_pass_on_an_unusable_transcript():
+    """The sharpest finding: `passed = not fired` made a dead session look like correct
+    refusal — the exact silent-failure mode this gate exists to catch."""
+    v = skill_evals.judge({"id": 6, "intent": "refuse"}, [], "rawgentic:pane-handoff",
+                          responded=False)
+    assert v["passed"] is False
+    assert "no usable" in v["why"].lower() or "did not respond" in v["why"].lower()
+
+
+def test_F2_a_refusal_passes_when_the_session_responded_and_chose_otherwise():
+    v = skill_evals.judge({"id": 6, "intent": "refuse"}, ["rawgentic:switch"],
+                          "rawgentic:pane-handoff", responded=True)
+    assert v["passed"] is True
+
+
+def test_F2_a_refusal_that_names_a_redirect_requires_that_skill_to_fire():
+    """epic-run case 5 says "Invokes rawgentic:implement-feature instead". Absence of
+    epic-run is not enough — the correct route must actually be taken."""
+    case = {"id": 5, "intent": "refuse", "expect_skill": "rawgentic:implement-feature"}
+    assert skill_evals.judge(case, [], "rawgentic:epic-run", responded=True)["passed"] is False
+    ok = skill_evals.judge(case, ["rawgentic:implement-feature"], "rawgentic:epic-run",
+                           responded=True)
+    assert ok["passed"] is True
+
+
+def test_F2_the_redirect_is_derived_from_the_real_epic_run_corpus():
+    repo = Path(__file__).resolve().parents[2]
+    _, cases = skill_evals.load_cases(repo / "skills" / "epic-run" / "evals" / "evals.json")
+    by_id = {c["id"]: c for c in cases}
+    assert by_id[5]["expect_skill"] == "rawgentic:implement-feature"
+    assert by_id[6]["expect_skill"] == "rawgentic:create-issue"
+    # A plain trigger case carries no redirect.
+    assert by_id[1].get("expect_skill") is None
+
+
+def test_transcript_responded_distinguishes_dead_from_quiet():
+    assert skill_evals.transcript_responded(_transcript("dataviz")) is True
+    # An assistant turn that chose no skill is a real answer.
+    assert skill_evals.transcript_responded(
+        json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "I will not do that."}]}})) is True
+    # Nothing, or unparseable noise, is NOT.
+    assert skill_evals.transcript_responded("") is False
+    assert skill_evals.transcript_responded("not json\nalso not json") is False
+
+
+def test_run_passes_the_responded_signal_through():
+    """A submitter returning an empty transcript must fail a refusal case end-to-end."""
+    results = skill_evals.run([{"id": 6, "prompt": "x", "intent": "refuse"}], "s",
+                              lambda p: "")
+    assert results[0]["passed"] is False

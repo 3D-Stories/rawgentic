@@ -71,12 +71,43 @@ python3 hooks/skill_evals.py run --file skills/epic-run/evals/evals.json
 
 `run --live` deliberately **refuses** and points here, rather than pretending an automated verdict.
 
+### Containment first — the prompts are real requests
+
+**Read this before running anything.** The corpus prompts are not inert strings. They include
+"Implement issue #42 for me", "cycle through all issues in epic #906" and
+"Run /rawgentic:new-project my-app". Submitted to a real installed plugin inside a real checkout,
+a correct selection is followed by the skill *doing its job* — branching, committing, filing
+issues, standing up a campaign. Observing selection must not become performing the work.
+
+There is **no turn cap to lean on**: Claude Code as installed here (2.x) has no `--max-turns` flag
+(checked against `claude --help`), so "stop immediately after the `Skill` event" cannot be
+enforced by the CLI. Containment is therefore two things you must do yourself:
+
+1. **Run from a disposable scratch directory, never a real project checkout** — and one with no
+   reachable `.rawgentic_workspace.json`. Every rawgentic workflow skill loads config as its first
+   act and STOPS when the workspace file is missing, which is exactly the behaviour you want: the
+   skill is selected (the observation lands) and then declines to proceed.
+2. **Deny the mutating tools**, so a fired skill cannot change anything even if it tries:
+
+   ```bash
+   claude -p "<the case prompt, verbatim>" \
+     --disallowed-tools "Bash Edit Write NotebookEdit" \
+     --output-format stream-json
+   ```
+
+   `--disallowed-tools` takes a comma- or space-separated list of tool names to deny. Selection is
+   recorded before any denial matters, so the verdict survives the containment.
+
+Treat any case whose prompt names a real issue or epic number as the highest-risk case, and
+consider rewriting it to an obviously fictional number before running it live.
+
 ### The manual gate, step by step
 
 1. Exit every session using rawgentic hooks (`CLAUDE.md` §7 step 1).
 2. `claude plugin remove rawgentic@rawgentic && claude plugin install rawgentic@rawgentic`.
-3. Start a fresh session per case and submit the case's `prompt` verbatim, with no other context —
-   context contaminates selection, which is the behaviour under test.
+3. From the contained scratch directory above, start a fresh session per case and submit the case's
+   `prompt` verbatim, with no other context — context contaminates selection, which is the
+   behaviour under test.
 4. Read the verdict from the transcript, not from the reply. A selection appears as an `assistant`
    line carrying a `tool_use` block named `Skill`:
 
@@ -88,8 +119,17 @@ python3 hooks/skill_evals.py run --file skills/epic-run/evals/evals.json
    `skills_selected(transcript_text)` parses exactly that. The shape was verified on 2026-08-05
    against a real 1.5 MB transcript under `~/.claude/projects/<slug>/<session-id>.jsonl` — it is
    measured, not guessed.
-5. Judge with `judge(case, selected, skill_name)`. For a `refuse` case, the skill **firing** is the
-   failure.
+5. Judge with `judge(case, selected, skill_name, responded=transcript_responded(text))`. Three
+   rules that are easy to get backwards:
+   - For a `refuse` case, the skill **firing** is the failure.
+   - A `refuse` case does **not** pass on a dead session. `responded=False` fails it, because "the
+     skill was absent" and "nothing came back" are the same observation and only the first is
+     success.
+   - A `refuse` case that names the correct route instead (`expect_skill`) requires **that** skill
+     to fire. `epic-run` case 5 is not satisfied by epic-run merely being absent — the request must
+     actually reach `implement-feature`. Two such redirects are derived from the corpus today
+     (`epic-run` cases 5 and 6); a case may also state `expect_skill` explicitly, which wins over
+     inference.
 
 ## Why the `peer-consult` stub is skipped, and why discovery still reads it
 
@@ -101,10 +141,18 @@ spellings; reading a file is not the same as counting it.
 
 ## Deferred verification
 
-The live end-to-end run — steps 1-5 above against a freshly installed build — has **not** been
-executed for this change, and could not be: the epic #906 auto-run that shipped it is itself a
-long-lived session using these hooks, so the reinstall in step 2 was prohibited throughout. Every
-component below the spawn is covered by `tests/hooks/test_skill_evals.py`; the spawn boundary is
-covered only by that fake. The first person able to run step 2 on a quiet host should execute the
-gate for `epic-run` (its 403 restored description characters are the case with no prior selection
-evidence at all) and record the result here.
+**The live end-to-end run has NOT been executed for this change, and could not be.** The epic #906
+auto-run that shipped it is itself a long-lived session using these hooks, so the reinstall in step
+2 was prohibited throughout — the same prohibition that stopped #909.
+
+| | |
+|---|---|
+| **Deferred** | the live gate: steps 1-5 against a freshly installed build |
+| **Why** | `CLAUDE.md` §7 / mistake #5 — no reinstall while hook-using sessions are live |
+| **Local proxy that DID run** | all 49 tests in `tests/hooks/test_skill_evals.py`, plus `discover` over the real 44-case corpus, with the transcript parser pinned against a real 1.5 MB transcript |
+| **What the proxy cannot show** | that a real session, given a corpus prompt, selects the skill the case expects. Every component *below* the spawn is covered; the spawn itself is covered only by a fake |
+| **Target check** | run the gate for `rawgentic:epic-run` first — its 403 restored description characters have never been exercised for selection at all — then record the per-case verdicts in this section |
+
+Whoever runs it should also confirm the containment above behaves as described: that a workflow
+skill selected inside a workspace-less scratch directory really does stop at its config gate. That
+claim is reasoned from the skills' documented `<config-loading>` contract, **not** measured.

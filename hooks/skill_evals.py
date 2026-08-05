@@ -69,10 +69,24 @@ _REFUSE_LEAD = re.compile(
 _REFUSE_BARE = re.compile(r"^\s*(?:no\s+skill|nothing)\b.{0,40}?\b"
                           r"(?:fires?|runs?|invoked|selected)\b", re.I)
 
+# A positive invocation, used only to decide whether a refusal in the same clause comes
+# FIRST (review finding 6). Present participles and third-person forms both occur.
+_POSITIVE_LEAD = re.compile(
+    r"\b(?:invokes?|invoking|runs?|running|fires?|triggers?|uses?|calls?|"
+    r"offers\s+or\s+performs|performs)\b", re.I)
+
 # The leading clause: up to the first sentence break. `—` counts as a break because this
 # corpus routinely uses an em-dash to start the qualifying half of a sentence, which is
 # where the internal negations live.
 _LEAD_SPLIT = re.compile(r"(?<=[.!?])\s|\s+—\s+|\n")
+
+# A refusal often names where the request SHOULD go instead. Rather than parse English,
+# look for a NAMESPACE-QUALIFIED skill name — `rawgentic:create-issue`, optionally
+# slash-prefixed — because that spelling only appears in this corpus when a specific skill
+# is being named. The target skill itself is excluded by the caller. Deliberately narrow:
+# an unqualified bare word is NOT treated as a redirect, since inferring an assertion from
+# ordinary prose is how an oracle starts failing for reasons nobody can read.
+_QUALIFIED_SKILL = re.compile(r"/?\b([a-z0-9_-]+):([a-z0-9-]{3,})\b", re.I)
 
 
 class EvalError(ValueError):
@@ -109,11 +123,19 @@ def load_cases(path) -> tuple[str, list[dict]]:
     if not isinstance(name, str) or not name.strip():
         raise EvalError(f"{p}: no usable skill name (`skill_name` or `skill`)")
 
-    entries = raw.get("evals")
-    if entries is None:
-        entries = raw.get("cases")
-    if entries is None:
-        entries = []
+    # Cross-model review finding 3: absence of BOTH keys used to collapse to zero cases,
+    # so a truncated file or a misspelled key produced a silent empty corpus for that
+    # skill — indistinguishable from a deliberate stub. A DECLARED empty list is still
+    # fine (the `peer-consult` stub declares `cases: []`); an absent key is not.
+    if "evals" in raw:
+        entries = raw["evals"]
+    elif "cases" in raw:
+        entries = raw["cases"]
+    else:
+        raise EvalError(
+            f"{p}: neither `evals` nor `cases` is present. A file declaring no cases must "
+            f"say so explicitly (`\"cases\": []`); an absent key is indistinguishable from "
+            f"truncation or a misspelling, and this is a gate.")
     if not isinstance(entries, list):
         raise EvalError(f"{p}: `evals`/`cases` must be a list")
 
@@ -125,9 +147,17 @@ def load_cases(path) -> tuple[str, list[dict]]:
         if not isinstance(prompt, str) or not prompt.strip():
             raise EvalError(f"{p}: case {e.get('id', i)} has no prompt")
         expected = e.get("expected_output") or ""
-        cases.append({"id": e.get("id", i + 1), "prompt": prompt,
-                      "expected_output": expected,
-                      "intent": classify_intent(expected, prompt, name)})
+        intent = classify_intent(expected, prompt, name)
+        case = {"id": e.get("id", i + 1), "prompt": prompt,
+                "expected_output": expected, "intent": intent}
+        # A refusal that names the CORRECT route must require that route (review
+        # finding 2): epic-run case 5's absence of epic-run is not success if nothing
+        # fired at all. An explicit `expect_skill` in the data wins over inference.
+        redirect = e.get("expect_skill") or (
+            redirect_skill(expected, name) if intent == "refuse" else None)
+        if redirect:
+            case["expect_skill"] = redirect
+        cases.append(case)
     return name.strip(), cases
 
 
@@ -178,9 +208,18 @@ def classify_intent(expected_output: str, prompt: str = "", skill_name: str = ""
     if not text:
         return "trigger"
     lead = _LEAD_SPLIT.split(text)[0]
-    if _REFUSE_LEAD.search(lead) or _REFUSE_BARE.search(lead):
-        return "refuse"
-    return "trigger"
+    refusal = _REFUSE_LEAD.search(lead) or _REFUSE_BARE.search(lead)
+    if not refusal:
+        return "trigger"
+    # Cross-model review finding 6: the negation was never bound to the target skill, so
+    # a single sentence that BOTH invokes it and declines a different one — "Invokes
+    # pane-handoff but does not invoke clear-prep." — inverted the oracle. A real refusal
+    # leads with the negation; a positive invocation appearing FIRST means the skill is
+    # expected to fire and the negation is about something else.
+    positive = _POSITIVE_LEAD.search(lead)
+    if positive and positive.start() < refusal.start():
+        return "trigger"
+    return "refuse"
 
 
 def skills_selected(transcript_text: str) -> list[str]:
@@ -214,25 +253,91 @@ def skills_selected(transcript_text: str) -> list[str]:
 
 
 def _same_skill(selected: str, wanted: str) -> bool:
-    """`rawgentic:pane-handoff` and `pane-handoff` name the same skill.
+    """Do these name the same skill? NAMESPACE-AWARE (review finding 5).
 
-    Eval files spell the prefixed form; `SKILL.md` frontmatter carries the bare name
-    (#552), so a comparison keyed on either spelling alone would misjudge half the corpus.
+    `rawgentic:pane-handoff` and the bare `pane-handoff` are the same skill — eval files
+    spell the prefixed form while `SKILL.md` frontmatter carries the bare name (#552), so
+    a comparison keyed on either spelling alone misjudges half the corpus.
+
+    But comparing ONLY the bare tail made `other-plugin:pane-handoff` satisfy a gate on
+    `rawgentic:pane-handoff`, so a same-named skill from another plugin could hide a real
+    rawgentic selection failure. Namespaces are therefore compared whenever BOTH sides
+    carry one; the tail-only fallback applies only when one side is unqualified.
     """
-    return selected.split(":")[-1] == wanted.split(":")[-1]
+    sel, want = (selected or "").strip(), (wanted or "").strip()
+    if not sel or not want:
+        return False
+    sel_ns, _, sel_bare = sel.rpartition(":")
+    want_ns, _, want_bare = want.rpartition(":")
+    if sel_bare != want_bare:
+        return False
+    if sel_ns and want_ns:
+        return sel_ns.lower() == want_ns.lower()
+    return True
 
 
-def judge(case: dict, selected, skill_name: str) -> dict:
-    """Verdict for one case: did the RIGHT thing happen for this case's intent?"""
+def redirect_skill(expected_output: str, skill_name: str) -> str | None:
+    """The skill a refusal says should run INSTEAD, or None.
+
+    Only a namespace-qualified name counts (see `_QUALIFIED_SKILL`), and the target skill
+    itself never counts as its own redirect.
+    """
+    if not isinstance(expected_output, str):
+        return None
+    for m in _QUALIFIED_SKILL.finditer(expected_output):
+        candidate = f"{m.group(1)}:{m.group(2)}"
+        if not _same_skill(candidate, skill_name):
+            return candidate
+    return None
+
+
+def transcript_responded(transcript_text: str) -> bool:
+    """Did the session actually produce an assistant turn?
+
+    This is the difference between "it answered, and chose no skill" and "nothing came
+    back". Review finding 2: without it, a refusal case PASSED on a dead spawn or an
+    unparseable transcript — reporting the very silent-failure mode the gate exists to
+    catch as a success.
+    """
+    for line in (transcript_text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict) and rec.get("type") == "assistant":
+            return True
+    return False
+
+
+def judge(case: dict, selected, skill_name: str, responded: bool = True) -> dict:
+    """Verdict for one case: did the RIGHT thing happen for this case's intent?
+
+    `responded` says the session produced an assistant turn at all. It is required for a
+    refusal to pass, because "the skill was absent" and "nothing happened" are the same
+    observation and only the first is success.
+    """
     chosen = list(selected or [])
     fired = any(_same_skill(s, skill_name) for s in chosen)
     intent = case.get("intent", "trigger")
     cid = case.get("id")
+    redirect = case.get("expect_skill")
 
     if intent == "refuse":
-        passed = not fired
-        why = ("correctly did not invoke it" if passed
-               else f"{skill_name} fired, but this case requires it NOT to")
+        if not responded:
+            passed, why = False, ("no usable transcript — the session did not respond, so "
+                                  "absence of the skill is not evidence of refusal")
+        elif fired:
+            passed, why = False, f"{skill_name} fired, but this case requires it NOT to"
+        elif redirect and not any(_same_skill(s, redirect) for s in chosen):
+            passed, why = False, (f"{skill_name} correctly did not fire, but this case "
+                                  f"requires {redirect} instead and it did not fire "
+                                  f"(selected: {', '.join(chosen) or 'nothing'})")
+        else:
+            passed, why = True, ("correctly did not invoke it" if not redirect
+                                 else f"correctly routed to {redirect} instead")
     else:
         passed = fired
         if fired:
@@ -271,7 +376,8 @@ def run(cases, skill_name: str, submit) -> list[dict]:
         except Exception as e:  # noqa: BLE001 — any submitter failure is a case failure
             results.append(_fail(f"submitter failed: {e}"))
             continue
-        results.append(judge(case, skills_selected(transcript), skill_name))
+        results.append(judge(case, skills_selected(transcript), skill_name,
+                             responded=transcript_responded(transcript)))
     return results
 
 
@@ -298,8 +404,15 @@ def _main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     if args.cmd == "discover":
+        files = discover_eval_files(args.skills_root)
+        # Review finding 1: this used to print `total cases: 0` and exit 0, so a mistyped
+        # --skills-root read as a successful coverage check over an empty corpus.
+        if not files:
+            print(f"FAILED: no eval files under {args.skills_root!r}. A gate cannot report "
+                  f"success over a corpus it did not find — check the path.")
+            return 1
         total = 0
-        for f in discover_eval_files(args.skills_root):
+        for f in files:
             try:
                 name, cases = load_cases(f)
             except EvalError as e:
