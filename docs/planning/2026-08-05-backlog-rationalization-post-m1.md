@@ -172,6 +172,7 @@ This section replaced the pre-execution "what has NOT been done" note once the o
 
 - **46 issues closed** with citing comments; **3 duplicates folded** (#660→#363, #588+#355→#888, absorption comments posted on the survivors); **5 survivor comments** posted (#871, #363, #888, #568-rescope, #906-amendments); **3 decision tickets filed** (#931 sandboxing, #932 LLM-judged hooks, #933 sandbox-runtime). Open issues: **116 → 72**.
 - **One correction, made in the open:** #670 was first closed as fixed-in-successor on a probe that checked links/rules/code-spans. The cross-model diff review of this very PR surfaced fragmented lists; the sharper re-probe proved the wrapped-list-item defect persists in the claude-skills engine. The closing comment was corrected, the issue reopened and **transferred to 3D-Stories/claude-skills**. No other disposition changed.
+- **Follow-up, same day:** five milestone epics minted on owner approval — #935 (M2.5), #936 (M3), #937 (M5), #938 (M6), #939 (M7) — so every milestone in §5 has a GitHub tracking surface (M2 = #906, M4 = #871 already existed).
 - No issue **bodies** were edited anywhere — all context rides comments, per convention.
 - The roadmap doc was updated (phases block, M2 amendments, new M2.5–M7 sections, §6 statuses, §11) and redeployed to its existing URL; this doc and the roadmap ship together in one docs PR.
 
