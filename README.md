@@ -725,6 +725,25 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.127.1 (2026-08-05)
+- **herdr re-pinned to v0.8.0 against the migrated `herdrdev/herdr` org, with every value 0.8.0
+  changed re-measured from a probe rather than from the release notes (#886, epic #875).**
+  `hooks/herdr-pin.json` moves all upstream coordinates plus the asset size and digest, verified
+  bit-for-bit against the release API *before* any install. `api_schema.protocol` 17→19 — the release
+  notes never mention a protocol bump and it skips 18 — read by running the digest-verified asset from
+  a temp path, since `api schema` is served by the binary and not the server, so the new value was
+  readable while the live server was still 0.7.5/17. `settings_footprint.reformats_whole_file` and
+  `drops_trailing_newline` both true→false (upstream #2066), re-measured by running the shipped 0.8.0
+  installer against a sandboxed `$HOME` seeded with a byte copy of the live `settings.json`: key order
+  unchanged, trailing newline preserved, a 13-line diff where 0.7.5 produced ~300, and the live file's
+  sha256 identical before and after. Two value asserts in `tests/hooks/test_herdr_pin.py` move in the
+  same commit — the org/version pair, and the two footprint booleans the issue reported as unpinned
+  when a test did pin them. Probed and deliberately unchanged: the claude integration is still
+  current (v7) with a byte-identical hook script, and all seven pane/tab commands `launcher_lib`
+  drives exist in 0.8.0. Dated Apache-2.0 addenda (relicense verified three ways: API `spdx_id`,
+  `LICENSE` at the tag, `Cargo.toml`) on the supply-chain vet artifact and the console plan; no dated
+  artifact body rewritten. No workflow-spine change → no diagram REV. Suite 5079→5079.
+
 ### v3.127.0 (2026-08-05)
 - **A budget-exhausted design-gate close now requires a terminal disposition on every surviving
   Critical/High finding (#903, epic #875).** #798 let WF2's Step-4 gate self-close on budget
