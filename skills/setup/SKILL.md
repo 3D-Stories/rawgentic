@@ -146,10 +146,17 @@ skipped scanner is a real coverage gap, so setup installs whatever is missing.
    In an interactive setup, tell the user this is happening and that they can
    decline. If they decline, persist it: read `.rawgentic_workspace.json`, set
    top-level `"installScanners": false`, write it back (and skip the install).
-   When `RAWGENTIC_HEADLESS=1`, do NOT install — just record the gap. (The
-   headless orchestration retired in M0d #866, but this env var survives as the
-   bare "nobody is watching this session" signal — D184 — and unattended package
-   installs stay forbidden until epic #871 replaces the signal properly.)
+
+   **Check the declared supervision state first (#943).** Installing packages with
+   nobody watching stays forbidden:
+   ```bash
+   python3 hooks/supervision_lib.py installs-forbidden --workspace <workspace root>
+   ```
+   **exit 0 means FORBIDDEN** (1 = allowed, 2 = bad input). When it exits 0, do NOT
+   install — just record the gap. Ask this predicate rather than reading the state
+   word: an expired `away` declaration evaluates to `attended-overdue`, which reads as
+   attended and yet must still forbid the install, because a clock passing a stated
+   wake time is not evidence anybody came back. Only `/rawgentic:back` lifts it.
 
 3. **Report** which scanners are now present and which remain missing (so the
    user knows the WF2/WF9 scan will skip those). The installer's `--check` mode

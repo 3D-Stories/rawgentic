@@ -75,15 +75,20 @@ class TestHeadlessRetirement:
         spine = (SKILLS_DIR / "setup" / "SKILL.md").read_text()
         assert "headlessEnabled" not in spine and "Step 2c" not in spine
 
-    def test_setup_step_2e_keeps_unattended_install_guard(self):
-        """D184 (#866/#871): RAWGENTIC_HEADLESS survives ONLY as the bare
-        "nobody is watching this session" signal — and unattended package
-        installs stay forbidden. The guard leaves when epic #871 replaces the
-        signal, never before."""
+    def test_setup_step_2e_guards_on_the_supervision_predicate(self):
+        """#943 replaced D184's bare env-var signal with a DECLARED supervision state.
+
+        The guard itself is unchanged in force — unattended package installs stay
+        forbidden — but Step 2e must now ask the PREDICATE, not read a variable and not
+        read a bare state word: `attended-overdue` reads as attended while still
+        forbidding installs, so only `installs-forbidden` answers the question setup
+        actually has.
+        """
         spine = (SKILLS_DIR / "setup" / "SKILL.md").read_text()
-        assert "RAWGENTIC_HEADLESS=1" in spine
         norm = " ".join(spine.split())
+        assert "supervision_lib.py installs-forbidden" in norm
         assert "do NOT install — just record the gap" in norm
+        assert "exit 0" in norm, "the exit-code contract must be stated, not implied"
 
 
 class TestGoalGuardStep1b:
