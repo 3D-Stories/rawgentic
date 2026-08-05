@@ -98,8 +98,8 @@ PER_FILE_CEILING_BYTES = {
     # epic #204. The draft was compressed 1_365 -> 1_113 bytes over the old ceiling
     # before raising, and step-16.md's companion edit was trimmed to fit under its
     # existing ceiling rather than raised alongside.
-    #   references/step-14.md  actual 4_727 + headroom 256 -> ceiling 4_983
-    "references/step-14.md": 4_983,
+    #   references/step-14.md  actual 4_975 + headroom 256 -> ceiling 5_231
+    "references/step-14.md": 5_231,
     "references/step-15.md": 1_520,
     "references/step-16.md": 11_545,
     "references/whole-issue-delegation.md": 8_236,

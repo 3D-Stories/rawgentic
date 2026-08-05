@@ -736,11 +736,16 @@ For major changes, please open an issue first to discuss the approach.
   run fingerprint (`run_id`, else a digest excluding `generated_at`/`schema_version`/`timing` —
   `timing` because `_auto_embed_timing` recomputes it on a recovery re-run), no-ops with a
   one-line stderr notice at rc 0, and falls open to appending on an unreadable store since losing
-  a record beats duplicating one. Step 16 gains the `--no-persist` render-only path. 20 tests
-  added in `tests/hooks/test_work_summary.py` + `tests/test_wf2_clarity.py`; the existing
+  a record beats duplicating one — and the check plus the append now run under one `flock`, the
+  shape `decision_log.append_record` already uses, so two writers cannot both miss and both
+  append. Only a line that VALIDATES as a record can shadow a record, after review showed a
+  `{"run_id": …}` stub could otherwise suppress the real one. Step 16 gains the `--no-persist`
+  render-only path, and Step 14 proves this run's line landed with `git show --numstat` rather
+  than the issue-scoped `find`, which an earlier run's record satisfies. 26 tests added in
+  `tests/hooks/test_work_summary.py` + `tests/test_wf2_clarity.py`; the existing
   `test_each_line_is_independent_json` was repaired, as the guard would have left it passing on a
   single line while testing nothing it names; `references/step-14.md`'s prose ceiling was raised
-  trim-first (4_727 + 256) for the genuinely new gated sub-step. No workflow-spine change → no diagram REV. Suite 5340→5360.
+  trim-first (4_975 + 256) for the genuinely new gated sub-step. No workflow-spine change → no diagram REV. Suite 5340→5366.
 
 ### v3.129.1 (2026-08-05)
 - **Ad-hoc pane handoff failures now name their cause (#731, epic #906).** `perform_handoff`

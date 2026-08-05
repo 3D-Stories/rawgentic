@@ -27,6 +27,7 @@ their Step 16 output. main() exits 1 in that case so the skill surfaces the gap.
 """
 import argparse
 import copy
+import fcntl
 import hashlib
 import json
 import math
@@ -1076,6 +1077,15 @@ def load_record_file(path) -> dict:
 # it is stable across re-runs of the same file and belongs to identity.
 _FINGERPRINT_VOLATILE_KEYS = ("generated_at", "schema_version", "timing")
 
+# ...except for the two `usage` members `summarize` DERIVES after validation, which
+# is how volatile state reached identity anyway on the first cut of this guard:
+# `derive_wall_clock_s` copies `timing.total_s` into `usage.wall_clock_s`, so
+# excluding `timing` at the top level while keeping the value it feeds left the
+# recovery re-run fingerprinting differently. `worker_token_share` is config-derived
+# and joins it for the same reason — neither is supplied by the run, so neither
+# identifies it.
+_FINGERPRINT_VOLATILE_USAGE_KEYS = ("wall_clock_s", "worker_token_share")
+
 
 def record_fingerprint(record) -> str:
     """Stable identity for one RUN, used to keep its record from landing twice (#888).
@@ -1094,17 +1104,28 @@ def record_fingerprint(record) -> str:
     body = record
     if isinstance(record, dict):
         body = {k: v for k, v in record.items() if k not in _FINGERPRINT_VOLATILE_KEYS}
+        usage = body.get("usage")
+        if isinstance(usage, dict):
+            body["usage"] = {k: v for k, v in usage.items()
+                             if k not in _FINGERPRINT_VOLATILE_USAGE_KEYS}
     # sort_keys so a re-serialized record with reordered keys is the same run.
     blob = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
     return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def _store_fingerprints(store_path) -> set:
-    """Fingerprints of every record already in the store. Missing store -> empty set.
+    """Fingerprints of every VALID record already in the store. Missing -> empty set.
 
     A line that will not parse is SKIPPED, never fatal: it cannot be the duplicate of
     a valid record, and refusing the write over someone else's corrupt line would turn
     a cosmetic problem into the data loss this whole issue is about.
+
+    A line that parses but is not a RECORD is skipped too (Step-11 cross-model finding
+    1). Fingerprinting anything parseable let a stub like ``{"run_id": "..."}`` match a
+    complete record carrying that run id, so the real record was called a duplicate and
+    dropped while the CLI reported success. Only a record can shadow a record. The skip
+    direction is the safe one: an entry we cannot vouch for causes an append, never a
+    silent drop.
     """
     seen = set()
     p = Path(store_path)
@@ -1116,7 +1137,10 @@ def _store_fingerprints(store_path) -> set:
             if not line:
                 continue
             try:
-                seen.add(record_fingerprint(json.loads(line)))
+                obj = json.loads(line)
+                if validate_record(obj):        # non-empty == list of errors
+                    continue
+                seen.add(record_fingerprint(obj))
             except (ValueError, TypeError):
                 continue
     return seen
@@ -1136,14 +1160,41 @@ def persist_record(record, store_path) -> str:
     """
     p = Path(store_path)
     p.parent.mkdir(parents=True, exist_ok=True)
+    data = (json.dumps(record, separators=(",", ":")) + "\n").encode("utf-8")
+    # flock + O_APPEND + one write(), the shape `decision_log.append_record` already
+    # uses for this repo's other append-only JSONL store. The lock spans the CHECK and
+    # the APPEND together: without it two writers can both read a store missing the
+    # other's line and both append (Step-11 cross-model finding 4).
+    fd = os.open(str(p), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
     try:
-        if record_fingerprint(record) in _store_fingerprints(p):
-            return "duplicate"
-    except OSError as exc:
-        print(f"warning: could not read {p} to check for a duplicate run-record "
-              f"({exc}); appending rather than risk losing it", file=sys.stderr)
-    with open(p, "a", encoding="utf-8") as f:
-        f.write(json.dumps(record, separators=(",", ":")) + "\n")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            if record_fingerprint(record) in _store_fingerprints(p):
+                return "duplicate"
+        except (OSError, ValueError) as exc:
+            # ValueError covers UnicodeDecodeError: iterating a non-UTF-8 store
+            # raises during decode, outside the per-line guard, and would otherwise
+            # surface as a traceback instead of either documented behaviour.
+            print(f"warning: could not read {p} to check for a duplicate run-record "
+                  f"({exc}); appending rather than risk losing it — exactly-once is "
+                  f"degraded to at-least-once for this write", file=sys.stderr)
+        # A writer that died mid-record leaves no trailing newline; appending onto it
+        # would join the two and destroy both (decision_log.py's own reasoning).
+        if p.stat().st_size:
+            with open(p, "rb") as probe:
+                probe.seek(-1, os.SEEK_END)
+                if probe.read(1) != b"\n":
+                    os.write(fd, b"\n")
+        written = 0
+        while written < len(data):
+            n = os.write(fd, data[written:])
+            if n <= 0:
+                raise OSError(f"short write to {p}: {written}/{len(data)} bytes")
+            written += n
+        os.fsync(fd)
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
     return "appended"
 
 

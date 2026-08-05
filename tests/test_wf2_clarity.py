@@ -1931,10 +1931,25 @@ class TestRunRecordLandsExactlyOnce:
             "would otherwise read it as a failed merge")
 
     def test_step14_requires_the_record_landed_before_merging(self):
+        """The proof must be THIS run's line, not any line for the issue.
+
+        Step-11 cross-model finding 6: `find --issue` is issue-scoped, so an
+        earlier run's record on the same issue returns rc 0 while this run's is
+        missing — it cannot prove what the ordering needs proven.
+        """
         step14 = self._norm("step-14.md")
-        assert "hooks/work_summary.py find --issue <issue>" in step14, (
-            "the ordering needs a mechanical proof, not just prose order")
-        assert "**rc 1 means do not merge yet**" in step14
+        assert ("`git show --numstat HEAD -- docs/measurements/run_records.jsonl` "
+                "must show one added line") in step14, (
+            "the ordering needs a mechanical proof scoped to THIS run's line")
+        assert "**No added line means do not merge yet.**" in step14
+        assert "`find --issue` is issue-scoped" in step14, (
+            "say why the cheaper issue-scoped check is not the proof, or a later "
+            "editor will swap it back in")
+
+    def test_step14_flags_usage_as_pre_merge(self):
+        """Capturing usage before the merge omits the run's tail; a consumer that
+        reads it as full-run cost is measuring a systematically low number."""
+        assert "**`usage` is pre-merge too**" in self._norm("step-14.md")
 
     def test_step14_reverifies_ci_per_sha(self):
         assert ("Re-verify CI **on the new head, per-sha**") in self._norm("step-14.md"), (
