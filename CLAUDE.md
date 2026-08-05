@@ -275,7 +275,10 @@ load-bearing for resume. Never edit or truncate an existing entry.
 19. **Putting a `SKILL.md` in a workspace dir or a `version` on the marketplace plugin
     entry.** The org-marketplace validator walks ALL `skills/**/SKILL.md` and rejects
     both (`docs/skill-development.md:141-160`; snapshots use `SKILL.snapshot.md`).
-20. **Treating `estimate_agents` or lane thresholds as tunable prose.** Constants
+20. *(Retired — `git reset --hard` under auto-mode. It now lives ONLY at workspace mistake #7,
+    which owns it by its own argument. The number is held rather than reused so existing
+    citations to "project mistake #20" still resolve to the entry they meant.)*
+21. **Treating `estimate_agents` or lane thresholds as tunable prose.** Constants
     mirrored between `hooks/plan_lib.py` and SKILL.md `<constants>` have drift-guard
     tests asserting equality — change the Python source of truth and the mirror together.
 
