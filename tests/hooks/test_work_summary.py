@@ -756,12 +756,285 @@ class TestPersistRecord:
         assert [json.loads(l)["n"] for l in lines] == [1, 2]
 
     def test_each_line_is_independent_json(self, tmp_path):
+        # #888: the two records must be DISTINGUISHABLE. This test used to persist
+        # `_valid_record()` twice; once persist_record became idempotent that wrote a
+        # single line, and the loop below passed while testing nothing it names. Two
+        # different runs also make it a live check that the guard never collapses
+        # records that are genuinely distinct.
         from work_summary import persist_record
         store = tmp_path / "run_records.jsonl"
-        persist_record(_valid_record(), str(store))
-        persist_record(_valid_record(), str(store))
-        for line in store.read_text().splitlines():
+        first = _valid_record()
+        second = _valid_record()
+        second["issue"]["number"] = 92
+        persist_record(first, str(store))
+        persist_record(second, str(store))
+        lines = store.read_text().splitlines()
+        assert len(lines) == 2
+        for line in lines:
             json.loads(line)   # must not raise
+
+
+# --- #888: run-records land exactly once -----------------------------------
+
+class TestRecordFingerprint:
+    def test_ignores_writer_stamped_and_autocomputed_keys(self):
+        """`generated_at`, `schema_version` and `timing` must not enter identity.
+
+        `timing` is the one that matters most: `_auto_embed_timing` computes it at
+        persist time from the step-state history whenever the record file omits it,
+        so a crash-recovery re-run sees a GROWN history and a different value. A
+        fingerprint carrying it would differ on exactly the re-run the guard exists
+        to catch.
+        """
+        from work_summary import record_fingerprint
+        a = _valid_record()
+        b = _valid_record()
+        a.update({"generated_at": "2026-08-05T10:00:00Z", "schema_version": 1,
+                  "timing": {"status": "absent"}})
+        b.update({"generated_at": "2026-08-05T23:59:59Z", "schema_version": 2,
+                  "timing": {"status": "ok", "total_s": 1234}})
+        assert record_fingerprint(a) == record_fingerprint(b)
+
+    def test_substantive_difference_changes_the_fingerprint(self):
+        from work_summary import record_fingerprint
+        a = _valid_record()
+        b = _valid_record()
+        b["issue"]["number"] = 92
+        assert record_fingerprint(a) != record_fingerprint(b)
+
+    def test_usage_fields_derived_at_persist_time_are_excluded(self):
+        """The leak that excluding `timing` alone did not close.
+
+        `summarize` mutates the record after validation: `derive_wall_clock_s`
+        copies `timing.total_s` into `usage.wall_clock_s`, and `worker_token_share`
+        is computed from the project config. So on a recovery re-run the volatile
+        `timing` reaches identity THROUGH `usage` even though `timing` itself is
+        excluded — and the guard misses exactly the duplicate it exists to catch.
+        """
+        from work_summary import record_fingerprint
+        a = _valid_record()
+        b = _valid_record()
+        base_usage = {"capture_status": "captured", "input_tokens": 100,
+                      "output_tokens": 200, "model_mix": {"claude-fable-5": 300},
+                      "wall_clock_s": None}
+        a["usage"] = dict(base_usage)
+        b["usage"] = dict(base_usage)
+        a["usage"].update({"wall_clock_s": 900, "worker_token_share": 0.25})
+        b["usage"].update({"wall_clock_s": 4200, "worker_token_share": 0.31})
+        assert record_fingerprint(a) == record_fingerprint(b)
+
+    def test_usage_is_part_of_identity(self):
+        """`usage` is read from the record FILE, so it is stable across re-runs of
+        the same file — it stays in identity rather than being excluded."""
+        from work_summary import record_fingerprint
+        a = _valid_record()
+        b = _valid_record()
+        b["usage"] = {"capture_status": "unavailable", "input_tokens": None,
+                      "output_tokens": None, "model_mix": None, "wall_clock_s": None}
+        assert record_fingerprint(a) != record_fingerprint(b)
+
+    def test_run_id_takes_precedence_over_content(self):
+        from work_summary import record_fingerprint
+        a = _valid_record()
+        b = _valid_record()
+        a["run_id"] = "wf2-888-alpha"
+        b["run_id"] = "wf2-888-alpha"
+        b["changes"]["files_changed"] = 999          # content differs...
+        assert record_fingerprint(a) == record_fingerprint(b)   # ...run_id wins
+
+    def test_different_run_ids_never_collide(self):
+        from work_summary import record_fingerprint
+        a = _valid_record()
+        b = _valid_record()
+        a["run_id"] = "wf2-888-alpha"
+        b["run_id"] = "wf2-888-beta"
+        assert record_fingerprint(a) != record_fingerprint(b)
+
+    def test_key_order_does_not_matter(self):
+        from work_summary import record_fingerprint
+        a = {"workflow": "implement-feature", "issue": {"number": 1, "type": "feature"}}
+        b = {"issue": {"type": "feature", "number": 1}, "workflow": "implement-feature"}
+        assert record_fingerprint(a) == record_fingerprint(b)
+
+
+class TestPersistIdempotency:
+    def test_re_persisting_the_same_run_no_ops(self, tmp_path):
+        from work_summary import persist_record
+        store = tmp_path / "run_records.jsonl"
+        first = _valid_record()
+        first["generated_at"] = "2026-08-05T10:00:00Z"
+        again = _valid_record()
+        again["generated_at"] = "2026-08-05T10:07:00Z"    # a later re-summarize
+        assert persist_record(first, str(store)) == "appended"
+        assert persist_record(again, str(store)) == "duplicate"
+        assert len(store.read_text().splitlines()) == 1
+
+    def test_a_different_run_still_appends(self, tmp_path):
+        from work_summary import persist_record
+        store = tmp_path / "run_records.jsonl"
+        first = _valid_record()
+        second = _valid_record()
+        second["issue"]["number"] = 92
+        assert persist_record(first, str(store)) == "appended"
+        assert persist_record(second, str(store)) == "appended"
+        assert len(store.read_text().splitlines()) == 2
+
+    def test_corrupt_store_line_is_skipped_not_fatal(self, tmp_path):
+        from work_summary import persist_record
+        store = tmp_path / "run_records.jsonl"
+        store.write_text("{not json at all\n")
+        assert persist_record(_valid_record(), str(store)) == "appended"
+        assert len(store.read_text().splitlines()) == 2
+
+    def test_unreadable_store_falls_open_to_appending(self, tmp_path, monkeypatch):
+        """Losing a record is worse than duplicating one (#588's measured 1-in-6 drop
+        against #355's single hand-discarded duplicate), so a store the guard cannot
+        read must never swallow the write."""
+        import work_summary
+        store = tmp_path / "run_records.jsonl"
+        store.write_text("")
+        monkeypatch.setattr(work_summary, "_store_fingerprints",
+                            lambda _p: (_ for _ in ()).throw(OSError("boom")))
+        assert work_summary.persist_record(_valid_record(), str(store)) == "appended"
+        assert len(store.read_text().splitlines()) == 1
+
+    def test_a_junk_store_line_cannot_shadow_a_valid_record(self, tmp_path):
+        """Step-11 cross-model finding 1 (High).
+
+        A store line that merely PARSES was fingerprinted as if it were a record.
+        A stub like `{"run_id": "..."}` then matched a complete record carrying the
+        same run id, so the real record was classified duplicate and dropped while
+        the CLI reported success — the one outcome that would make this guard worse
+        than the defect it fixes.
+        """
+        from work_summary import persist_record
+        store = tmp_path / "run_records.jsonl"
+        store.write_text('{"run_id":"wf2-888-alpha"}\n')
+        record = _valid_record()
+        record["run_id"] = "wf2-888-alpha"
+        assert persist_record(record, str(store)) == "appended"
+        assert len(store.read_text().splitlines()) == 2
+
+    def test_an_undecodable_store_does_not_crash(self, tmp_path):
+        """Iterating the store decodes it, and UnicodeDecodeError is a ValueError,
+        not an OSError — so a non-UTF-8 store escaped the dedupe guard entirely and
+        reached the CLI as a traceback."""
+        from work_summary import persist_record
+        store = tmp_path / "run_records.jsonl"
+        store.write_bytes(b"\xff\xfe not utf-8 at all\n")
+        assert persist_record(_valid_record(), str(store)) == "appended"
+
+    def test_check_and_append_happen_under_one_exclusive_lock(self, tmp_path,
+                                                              monkeypatch):
+        """Step-11 cross-model finding 4 (High).
+
+        Read-check-append is only exactly-once if nothing can interleave between
+        the check and the append. Asserting the lock is HELD during the check is
+        deterministic, where racing two writers and hoping to observe the bug is
+        not. Same flock + O_APPEND + single-write shape `decision_log.append_record`
+        already uses for this repo's other append-only JSONL store.
+        """
+        import fcntl
+        import work_summary
+        store = tmp_path / "run_records.jsonl"
+        store.write_text("")
+        observed = {}
+        real = work_summary._store_fingerprints
+
+        def _probe(path):
+            with open(store, "a", encoding="utf-8") as other:
+                try:
+                    fcntl.flock(other.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    observed["locked"] = False      # nobody was holding it
+                    fcntl.flock(other.fileno(), fcntl.LOCK_UN)
+                except BlockingIOError:
+                    observed["locked"] = True
+            return real(path)
+
+        monkeypatch.setattr(work_summary, "_store_fingerprints", _probe)
+        work_summary.persist_record(_valid_record(), str(store))
+        assert observed.get("locked") is True, (
+            "persist_record must hold an exclusive lock across the duplicate check "
+            "and the append, or two writers can both miss and both append")
+
+    def test_missing_store_is_not_a_duplicate(self, tmp_path):
+        from work_summary import persist_record
+        store = tmp_path / "nested" / "run_records.jsonl"
+        assert persist_record(_valid_record(), str(store)) == "appended"
+        assert len(store.read_text().splitlines()) == 1
+
+
+class TestSummarizeIsIdempotent:
+    """Re-running Step 16 is the documented crash-recovery path (#888/#355)."""
+
+    def _run(self, tmp_path, store, capsys):
+        from work_summary import main
+        rc = main(["summarize", "--record-file", _write_record(tmp_path, _valid_record()),
+                   "--project-root", str(tmp_path), "--store", str(store)])
+        return rc, capsys.readouterr()
+
+    def test_second_summarize_does_not_duplicate_the_line(self, tmp_path, capsys):
+        store = tmp_path / "store.jsonl"
+        rc_one, _ = self._run(tmp_path, store, capsys)
+        rc_two, cap = self._run(tmp_path, store, capsys)
+        assert (rc_one, rc_two) == (0, 0)      # recovery re-run is not a failure
+        assert len(store.read_text().splitlines()) == 1
+        assert "WF2 COMPLETE" in cap.out       # the summary still renders
+
+    def test_duplicate_is_announced_on_stderr(self, tmp_path, capsys):
+        store = tmp_path / "store.jsonl"
+        self._run(tmp_path, store, capsys)
+        _, cap = self._run(tmp_path, store, capsys)
+        assert "already" in cap.err.lower()
+        assert "91" in cap.err                 # names the issue
+        assert str(store) in cap.err           # and where it already is
+
+    def test_drifting_autocomputed_timing_still_dedupes_end_to_end(
+            self, tmp_path, capsys, monkeypatch):
+        """The real chain, not just the fingerprint function.
+
+        A record file that omits `timing` gets one computed at persist time from a
+        step-state history that has GROWN by the time a recovery re-run happens.
+        That timing then feeds `usage.wall_clock_s`. Both hops have to be neutral
+        to identity or the guard misses the duplicate — this drives summarize twice
+        with different auto-computed timing and asserts one stored line.
+        """
+        import work_summary
+        record = _valid_record()
+        record["usage"] = {
+            "capture_status": "captured", "input_tokens": 100, "output_tokens": 200,
+            "model_mix": {"claude-fable-5": {"input_tokens": 100,
+                                             "output_tokens": 200}},
+            "cost_estimate_usd": None, "wall_clock_s": None}
+        path = _write_record(tmp_path, record)
+        store = tmp_path / "store.jsonl"
+        totals = iter((900, 4200))
+
+        def _drifting(raw, _project_root):
+            raw.setdefault("timing", {
+                "status": "complete", "total_s": next(totals),
+                "idle_gap_threshold_s": 1800, "steps": [], "phases": {}})
+
+        monkeypatch.setattr(work_summary, "_auto_embed_timing", _drifting)
+        rcs = [work_summary.main(["summarize", "--record-file", path,
+                                  "--project-root", str(tmp_path),
+                                  "--store", str(store)]) for _ in range(2)]
+        capsys.readouterr()
+        assert rcs == [0, 0]
+        stored = store.read_text().splitlines()
+        assert len(stored) == 1
+        # ...and the drift the guard had to ignore was genuinely present.
+        assert json.loads(stored[0])["timing"]["total_s"] == 900
+
+    def test_notice_does_not_echo_the_record_body(self, tmp_path, capsys):
+        """The notice is for a human reading a terminal, not a record dump."""
+        store = tmp_path / "store.jsonl"
+        self._run(tmp_path, store, capsys)
+        _, cap = self._run(tmp_path, store, capsys)
+        notice = [l for l in cap.err.splitlines() if "already" in l.lower()]
+        assert len(notice) == 1                                   # one line, not a dump
+        assert "wire work_summary into WF3 Step" not in notice[0]  # a follow_ups string
+        assert "insertions" not in notice[0]
 
 
 # --- main (CLI) ------------------------------------------------------------

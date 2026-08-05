@@ -725,6 +725,28 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.130.0 (2026-08-05)
+- **Run-records now land exactly once (#888, epic #871).** Closes both measured halves of the
+  telemetry-loss problem this issue absorbed. Dropped (#588): WF2 Step 14 gains the merge-grant
+  sub-step — assemble, `usage_capture`, `summarize`, commit the JSONL line as `chore(telemetry)`,
+  re-verify CI per-sha on the new head, prove it landed with `work_summary.py find --issue`, and
+  only then merge — because Step 16 ran after the merge and orphaned the record when anything
+  interrupted the gap (saystory epic #204 persisted 1 of 6 children). Duplicated (#355):
+  `persist_record` blind-appended, so a Step-16 re-run double-recorded; it is now idempotent on a
+  run fingerprint (`run_id`, else a digest excluding `generated_at`/`schema_version`/`timing` —
+  `timing` because `_auto_embed_timing` recomputes it on a recovery re-run), no-ops with a
+  one-line stderr notice at rc 0, and falls open to appending on an unreadable store since losing
+  a record beats duplicating one — and the check plus the append now run under one `flock`, the
+  shape `decision_log.append_record` already uses, so two writers cannot both miss and both
+  append. Only a line that VALIDATES as a record can shadow a record, after review showed a
+  `{"run_id": …}` stub could otherwise suppress the real one. Step 16 gains the `--no-persist`
+  render-only path, and Step 14 proves this run's line landed with `git show --numstat` rather
+  than the issue-scoped `find`, which an earlier run's record satisfies. 26 tests added in
+  `tests/hooks/test_work_summary.py` + `tests/test_wf2_clarity.py`; the existing
+  `test_each_line_is_independent_json` was repaired, as the guard would have left it passing on a
+  single line while testing nothing it names; `references/step-14.md`'s prose ceiling was raised
+  trim-first (4_975 + 256) for the genuinely new gated sub-step. No workflow-spine change → no diagram REV. Suite 5340→5366.
+
 ### v3.129.1 (2026-08-05)
 - **Ad-hoc pane handoff failures now name their cause (#731, epic #906).** `perform_handoff`
   derives `failure_detail` for every `failed_step` (`record()` auto-notes failed steps from the
