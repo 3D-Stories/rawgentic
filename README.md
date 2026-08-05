@@ -457,7 +457,7 @@ Tracks all registered projects. Created automatically by `/rawgentic:new-project
 
 ### Config-Loading Protocol
 
-All 8 config-driven skills (the active workflows plus `/rawgentic:scan`) share an identical config-loading block that runs before any workflow step:
+All 9 config-driven skills (the active workflows plus `/rawgentic:scan`) share an identical config-loading block that runs before any workflow step:
 
 1. Read `.rawgentic_workspace.json` → find active project (if multiple are active, stop and prompt user to `/rawgentic:switch`)
 2. Load + derive: `python3 hooks/capabilities_lib.py derive --config <project-path>/.rawgentic.json` validates the config and emits `{config, capabilities}`

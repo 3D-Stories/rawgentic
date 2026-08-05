@@ -218,8 +218,13 @@ load-bearing for resume. Never edit or truncate an existing entry.
    the evals fraction/membership are computed-checked; the plugin description's
    breakdown must sum to the disk count), so adding a skill means updating the
    whitelist, the README prose, AND the description breakdown — the guards tell
-   you which surface is stale. Still hand-pinned: "All 7 config-driven skills",
-   "6 workspace management". If the skill carries `<config-loading>`: also bump
+   you which surface is stale. Since #910 the last two are computed as well —
+   "All 9 config-driven skills" and "9 workspace management", pinned in this file
+   by `test_project_manual_count_strings_are_computed`, so NO count string here is
+   hand-maintained any more. (Both had rotted while unguarded: they read 7 and 6
+   against a real 9 and 9, booked as a follow-up on 2026-07-20 and still wrong
+   fifteen days later — which is the argument for a guard over another manual
+   correction.) If the skill carries `<config-loading>`: also bump
    `EXPECTED_CONFIG_LOADING_COUNT` (`tests/hooks/test_headless.py:1306`) and register the
    block in `scripts/sync_shared_blocks.py`'s MANIFEST + run the sync. Use the
    `add-skill` workspace skill — it executes this whole list.

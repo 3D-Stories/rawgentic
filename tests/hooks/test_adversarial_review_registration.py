@@ -16,6 +16,91 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SKILLS_DIR = REPO_ROOT / "skills"
 
 
+# --- computed count sources (#910) ---
+#
+# The last two hand-pinned count strings lived in CLAUDE.md §4 mistake #2 and
+# in README's config-loading section. Nothing read the manual's copies, so both
+# had rotted silently — "All 7 config-driven skills" and "6 workspace
+# management" against a real 9 and 9. These helpers finish the #271 conversion:
+# every count surface in the repo now derives from the tree or from config.
+
+def _normalize(text: str) -> str:
+    """Whitespace-flatten prose before pinning it (repo CLAUDE.md mistake #6).
+
+    A pinned sentence that wraps across lines does not match the raw text; two
+    of #909's own new tests failed exactly this way.
+    """
+    return " ".join(text.split())
+
+
+def _section(text: str, start: str, end: str) -> str:
+    """The normalised slice between two anchors — repo CLAUDE.md mistake #6.
+
+    A whole-FILE substring check is not a guard on these surfaces, and that is
+    measured rather than assumed: README's changelog quotes historical counts
+    verbatim (the #406 entry contains "9 workspace management"), so mutating
+    the headline to "8 workspace management" SURVIVED a whole-file assertion
+    during this change's own mutation pass. Slicing to the section that must
+    carry the count restores the kill while staying reflow-tolerant, which a
+    single-line anchor would not be.
+    """
+    i = text.find(start)
+    assert i != -1, f"section anchor not found: {start!r}"
+    j = text.find(end, i + len(start))
+    assert j != -1, f"section end anchor not found after {start!r}: {end!r}"
+    return _normalize(text[i:j])
+
+
+def _sole_line(text: str, *markers: str) -> str:
+    """The ONE normalised line carrying every marker; refuses 0 or 2+.
+
+    Used where the pinned text is a single short line with no enclosing
+    section to slice (README's headline breakdown).
+    """
+    hits = [_normalize(ln) for ln in text.splitlines()
+            if all(m in ln for m in markers)]
+    assert len(hits) == 1, (
+        f"expected exactly one line carrying all of {markers!r}, found {len(hits)}"
+    )
+    return hits[0]
+
+
+def _config_driven_skill_count() -> int:
+    """Skills carrying a line-anchored ``<config-loading>`` block.
+
+    Deliberately the SAME rule as the canary in
+    ``tests/hooks/test_headless.py::TestSkillCountCanary`` — corpus, not
+    SKILL.md alone, and line-anchored so a backtick mention in a reference doc
+    does not count. Sharing the rule is the point: two guards computing the
+    same quantity by different rules would drift apart silently.
+    """
+    return sum(
+        1 for p in sorted(SKILLS_DIR.glob("*/SKILL.md"))
+        if re.search(r"^<config-loading>", skill_corpus(p.parent.name), re.M)
+    )
+
+
+def _workspace_management_count() -> int:
+    """The workspace-management tally, read from the plugin description.
+
+    No per-skill category metadata exists in the tree, so the plugin
+    description's breakdown is the one tally — and it is already sum-guarded
+    against the on-disk skill count by ``test_readme_count_strings_updated``.
+    Parsed with its OWN anchored regex rather than by indexing the positional
+    breakdown list: a reordered description would otherwise silently move which
+    number this guard enforces, and the guard would keep passing.
+    """
+    desc = json.loads(
+        (REPO_ROOT / ".claude-plugin" / "plugin.json").read_text()
+    )["description"]
+    found = re.findall(r"(\d+) workspace management", desc)
+    assert len(found) == 1, (
+        f".claude-plugin/plugin.json description must state the "
+        f"workspace-management count exactly once, found {found}"
+    )
+    return int(found[0])
+
+
 # --- registration ---
 
 def test_skill_dir_and_frontmatter_exist():
@@ -332,7 +417,15 @@ def test_readme_count_strings_updated():
         f"plugin description breakdown {breakdown} must sum to the "
         f"{n_skills} skills on disk"
     )
-    assert "All 8 config-driven skills" in readme
+    # #910: computed, never a hand-updated integer. Section-anchored, not
+    # whole-file — see _section().
+    n_config = _config_driven_skill_count()
+    protocol = _section(readme, "### Config-Loading Protocol", "### Learning Config")
+    assert f"All {n_config} config-driven skills" in protocol, (
+        f"README.md '### Config-Loading Protocol' must say "
+        f"'All {n_config} config-driven skills' — {n_config} skills carry a "
+        f"<config-loading> block on disk"
+    )
     # #271: computed from disk, never a hand-maintained literal. A skill
     # "has evals" iff evals.json exists in its own evals/ dir or its
     # -workspace evals/ dir.
@@ -363,7 +456,48 @@ def test_readme_count_strings_updated():
         f"{sorted(set(skills) - have - {'peer-consult'})} (peer-consult is "
         f"called out separately as a stub)"
     )
-    assert "9 workspace management" in readme  # #113 — README count must match plugin/marketplace descriptions
+    # #113 — README count must match the plugin/marketplace descriptions.
+    # #910 — computed from that description rather than pinned as a literal.
+    n_ws = _workspace_management_count()
+    headline = _sole_line(readme, "SDLC workflow skills", "workspace management")
+    assert f"{n_ws} workspace management" in headline, (
+        f"README.md's headline breakdown must say '{n_ws} workspace "
+        f"management' to match the .claude-plugin/plugin.json description"
+    )
+
+
+def test_project_manual_count_strings_are_computed():
+    """#910 — the repo manual's own count strings, computed from the tree.
+
+    CLAUDE.md §4 mistake #2 carried the last two hand-pinned counts. Nothing
+    read them, so both had rotted: "All 7 config-driven skills" and "6
+    workspace management" against a real 9 and 9. The #528 run record booked
+    the rot as a follow-up on 2026-07-20 and it survived until #910, which is
+    the argument for the guard rather than for another manual correction.
+    """
+    raw = (REPO_ROOT / "CLAUDE.md").read_text()
+    # Sliced to mistake #2's entry, not the whole manual — see _section().
+    entry = _section(raw, "2. **Adding a skill by touching only",
+                     "3. **Claiming green from a scoped run")
+
+    n_config = _config_driven_skill_count()
+    assert f"All {n_config} config-driven skills" in entry, (
+        f"CLAUDE.md §4 mistake #2 must say 'All {n_config} config-driven "
+        f"skills' — {n_config} skills carry a <config-loading> block on disk"
+    )
+
+    n_ws = _workspace_management_count()
+    assert f"{n_ws} workspace management" in entry, (
+        f"CLAUDE.md §4 mistake #2 must say '{n_ws} workspace management' to "
+        f"match the .claude-plugin/plugin.json description breakdown"
+    )
+
+    # AC3: the manual must no longer advertise any count as hand-pinned.
+    # Whole-file on purpose here: the claim is false wherever it appears.
+    assert "Still hand-pinned" not in _normalize(raw), (
+        "CLAUDE.md must not claim a count string is still hand-pinned — "
+        "#910 converted the last two to the computed guards above"
+    )
 
 
 def test_readme_changelog_has_no_spliced_headings():
