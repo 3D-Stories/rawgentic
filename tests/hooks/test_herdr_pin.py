@@ -59,8 +59,11 @@ def test_pin_file_exists_and_parses(pin: dict) -> None:
 def test_pin_carries_the_upstream_identity(pin: dict) -> None:
     """A pin without its upstream coordinates cannot be re-verified by anyone else."""
     p = pin["pin"]
-    assert p["repo"] == "ogulcancelik/herdr"
-    assert p["version"] == "0.7.5"
+    # #886: the upstream repo MOVED to the herdrdev org at v0.8.0 ("Repository and
+    # installation links now use `herdrdev/herdr`", v0.8.0 Changed). Both of these are
+    # value asserts, so both move in the same commit as hooks/herdr-pin.json.
+    assert p["repo"] == "herdrdev/herdr"
+    assert p["version"] == "0.8.0"
     assert p["tag"] == f"v{p['version']}", "tag must be the v-prefixed version"
     assert p["prerelease"] is False, "never pin a prerelease build"
     assert p["repo"] in p["release_url"]
@@ -116,6 +119,34 @@ def test_api_schema_pin_recorded_for_issue_390(pin: dict) -> None:
     s = pin["pin"]["api_schema"]
     assert isinstance(s["protocol"], int) and s["protocol"] > 0
     assert isinstance(s["schema_version"], int) and s["schema_version"] > 0
+
+
+def test_cli_surface_qualification_is_recorded(pin: dict) -> None:
+    """#886: a subcommand EXISTING is not qualification for a load-bearing CLI upgrade.
+
+    The pin must record which launcher_lib-consumed commands were actually run against the
+    pinned binary and found to still return the shapes launcher_lib parses. This guards the
+    RECORD, never a live host: tests/hooks/test_launcher_lib.py runs against responses
+    captured from an older herdr, so it structurally cannot detect a live shape change —
+    the same limit already carried by api_schema and the integration digest.
+    """
+    q = pin["pin"]["cli_surface_qualified"]
+    assert re.match(r"^\d{4}-\d{2}-\d{2}$", q["at"])
+    assert isinstance(q["issue"], int) and q["issue"] > 0
+    cmds = q["commands"]
+    assert isinstance(cmds, list) and cmds
+    # Every command the pane machinery actually drives must appear, or the recorded
+    # qualification is narrower than the code's real dependency surface.
+    driven = {
+        "pane get", "pane list", "pane split",
+        "pane send-text", "pane send-keys", "tab list",
+    }
+    missing = sorted(driven - set(cmds))
+    assert not missing, f"driven but unqualified: {missing}"
+    assert q["_comment"].strip(), "record HOW each command was qualified"
+    assert q["not_qualified"].strip(), (
+        "state what was NOT re-captured, or the qualification record overclaims"
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -243,8 +274,14 @@ def test_claude_integration_records_the_measured_install_behaviours(
     assert idem["appends_on_path_mismatch"] is True
     assert idem["dedupes_on"].strip()
     fp = claude_integration["settings_footprint"]
-    assert fp["reformats_whole_file"] is True
-    assert fp["drops_trailing_newline"] is True
+    # #886: both flipped TRUE -> FALSE at herdr 0.8.0, which fixed the cosmetic rewrite
+    # (upstream #2066). Re-measured by running the shipped 0.8.0 installer against a
+    # sandboxed $HOME seeded with a byte copy of the live settings.json: key order
+    # unchanged, trailing newline preserved, 13-line diff instead of ~300. The values stay
+    # PINNED rather than relaxed to a type check, because the point of this guard is that
+    # a silent edit to the record gets caught.
+    assert fp["reformats_whole_file"] is False
+    assert fp["drops_trailing_newline"] is False
 
 
 def test_claude_integration_records_the_uninstall_path(claude_integration: dict) -> None:

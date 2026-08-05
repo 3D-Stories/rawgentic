@@ -236,3 +236,35 @@ platform_apis:
 `herdr server reload-config` is deliberately absent from the declaration above: #609 ships no code
 that invokes it. It is a documented manual step for the owner's apply moment, and §6 names it as
 this document's one unproven claim rather than dressing it as verified.
+
+---
+
+## Addendum — 2026-08-05 (#886): herdr relicensed to Apache-2.0, and the upstream org moved
+
+**Nothing above is rewritten.** This document records what was verified on 2026-07-27 against herdr
+`0.7.5` and the `ogulcancelik/herdr` repo. Both have since moved; the record of what was true on its
+date stays intact, and this addendum carries the delta.
+
+**Relicense, verified live 2026-08-05 three independent ways — not from the release notes:**
+
+- `gh api repos/herdrdev/herdr` → `license.spdx_id: "Apache-2.0"`
+- `LICENSE` at tag `v0.8.0` → the Apache License 2.0 text
+- `Cargo.toml` at tag `v0.8.0` → `license = "Apache-2.0"`
+
+**Effect on the AGPL posture recorded above: the conclusion HOLDS and gets strictly easier.** The
+separate-process reasoning (rawgentic invokes herdr over CLI/socket — no linking, no vendoring, no
+redistribution) is no longer load-bearing for the no-copyleft conclusion, because Apache-2.0 is
+permissive: no copyleft obligation can attach at all, including in the bundling scenario the original
+analysis explicitly flagged for re-verification. Apache-2.0 does carry its own attribution/NOTICE
+obligations *if herdr binaries are ever redistributed*; rawgentic does not redistribute herdr, so
+nothing is triggered today.
+
+**Two premises above are now historical rather than current:** the "dual-licensed AGPL-3.0-or-later +
+a commercial license" description, and the explanation that GitHub's API reported `NOASSERTION`
+*because of* that dual licensing — the API now resolves the license cleanly to `Apache-2.0`.
+
+**Upstream coordinates moved:** `ogulcancelik/herdr` → `herdrdev/herdr` (v0.8.0 "Changed":
+"Repository and installation links now use `herdrdev/herdr`"). Every `gh api repos/ogulcancelik/...`
+recipe quoted above therefore names a repo that no longer serves these releases. The current
+machine-readable coordinates are `hooks/herdr-pin.json`, re-pinned under #886 to `v0.8.0`
+(`herdr-linux-x86_64`, size 21776680, sha256 `b872ea7e40fa2cb17e857ac9b62b1bf26db7b403c622f5d2f3f5b35f6e9acd28`).
