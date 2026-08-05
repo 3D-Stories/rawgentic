@@ -14,6 +14,51 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #875 M1 — #902: reviewer confidence is a native number the band filter can consume · v3.126.0
+
+Round-8 session, small-standard lane (`standard_feature`, 5 impl files ≤ 7), plugin 3.125.7 cache.
+Ten consecutive cross-model review rounds returned `confidence` as a word ("high"/"medium") and
+every round needed a manual word→float step before `plan_lib.SEVERITY_BANDED_CONFIDENCE` could
+run. The root cause was not reviewer noncompliance: **the runner's own contract demanded words** —
+`FINDINGS_SCHEMA` declared `enum ["high","medium","low"]`, `validate_finding` enforced it, and the
+prompt instructed it. The reviewers were obeying the schema, which outranks the brief.
+
+Fix, end-to-end: the schema demands `{"type": "number"}` (live-probed on the exact
+`codex exec --output-schema` invocation before design — external session-notes evidence; range
+checked in `validate_finding` because `minimum`/`maximum` are strict-mode-rejected keywords);
+the prompt asks for 0.0–1.0; `coerce_confidence` maps legacy words and numeric strings through
+the ONE existing map `ADV_CONFIDENCE_TO_FLOAT` with per-finding `confidence_source` and top-level
+`confidence_mapped` provenance — flagged, never silently native; garbage (bool, out-of-range,
+non-finite, arbitrary-precision overflow ints) refuses the whole review. **AC1's literal
+0.8/0.6/0.3 triple was deliberately dropped** per the issue's authority comment — it collided
+with the pre-existing map. A non-native round gets one bounded re-roll with held-result
+protection: a valid, fully native, non-empty re-roll UNION-merges with the held findings (native
+copy wins an exact dedupe-key match; a deterministic merge note discloses retained findings); any
+other re-roll outcome accepts the held mapped result — a review validly in hand never becomes a
+failure, an empty pass, or a smaller finding set because its polish re-roll went sideways.
+
+The fix reviewed itself: all three review waves on this PR (Step 8a, Step 11, adversarial
+`always` layer) returned **all-native numeric confidence** — `confidence_mapped: false`, zero
+manual mapping — and the banded filter ran mechanically for the first time in the campaign.
+The waves also earned their cost in the classic way: the 8a wave caught the re-roll discarding
+held results (High, fixed), Step 11 caught the wholesale-replace variant of the same class plus
+an `OverflowError` crash on huge JSON integers (High + Medium, fixed), and the adversarial layer
+added the merge-note disclosure (Medium, fixed) while two of its recommendations were declined
+with recorded reasons (a severity-independent merge key can silently collapse distinct findings;
+validator-enforced severity-confidence coupling would refuse a whole review over one calibration
+miss).
+
+**Telemetry (run-record `wf2-902-f6d9a48f`):** gates — Design Critique pass (lane rubric-only;
+2 Low adopted as amendments), Plan Drift skipped (lane), Per-task Review pass (T1+T3 high-risk;
+1 High fixed), Implementation Drift 0/0 pass, Code Review pass (2 High adopted+fixed across
+Step 11 + 8a; 4 adversarial Mediums: 2 adopted, 2 declined with reasons; 0 findings dropped by
+bands), security scan PASS (0 blocking, 0 advisory, skipped: iac). Tests +72 added net, suite
+**4959→5031/0**. Loop-backs 2/3 minted, both spent on authorized in-place fix rounds, neither on
+a redesign. Two terminal dispositions persisted (both High, adopted). No workflow-spine change →
+no diagram REV.
+
+---
+
 ## Epic #875 M1 — #901: a negated "does not close #N" no longer closes #N · v3.125.8
 
 Round-7 session, small-standard lane (`simple_change`, 5 impl files ≤ 7), plugin 3.125.7 cache.
