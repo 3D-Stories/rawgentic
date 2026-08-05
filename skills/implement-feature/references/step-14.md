@@ -6,6 +6,29 @@
 
 **Quarantine × protection contradiction check (#139):** before attempting the merge, call `plan_lib.quarantine_protection_contradiction(capabilities.ci_quarantined, <protection state from Step 1 item 9>, <required_checks>)`. A non-None message means CI is quarantined (WF2 non-gating) but branch protection REQUIRES a status check — the squash-merge below would hit a server-side wall. Surface the message to the user and STOP rather than merging into the wall.
 
+**Merge-grant path — persist the run-record BEFORE the merge (#888).** When this run holds a
+merge grant, it is the run that will merge its own PR, and Step 16 comes *after* that merge — so a
+crash, compaction, or context exhaustion in between orphans the record. Measured: saystory epic
+#204 persisted 1 of 6 children, and #879 needed the separate #882 backfill PR. **The run-record is
+therefore persisted, committed and CI-re-verified before the merge is attempted, in this order:**
+
+1. Assemble the run-record per `references/run-record.md`, then populate `usage` FIRST via
+   `python3 hooks/usage_capture.py capture --session-id "$CLAUDE_CODE_SESSION_ID"`.
+2. Persist it with `python3 hooks/work_summary.py summarize --record-file <f> --project-root .`
+   (rc 0 = persisted).
+3. Commit the appended `docs/measurements/run_records.jsonl` line into the PR as a
+   `chore(telemetry):` commit, staged BY NAME.
+4. Re-verify CI **on the new head, per-sha** — a rollup queried by PR number can still show the
+   previous head's green.
+5. Confirm the record actually landed: `python3 hooks/work_summary.py find --issue <issue>`
+   (rc 0 = landed, rc 1 = missing). **rc 1 means do not merge yet** — fix the persist first.
+6. Only now perform the merge in item 1 below.
+
+On this path the record is written before the merge exists, so its shape is
+`outcome.merged: null` with a `follow_ups` entry naming the ordering — `null` here means "not yet
+merged when the record was written", never "the merge failed". Step 16 then renders from the
+already-persisted record instead of summarizing a second time (§16 item 3a).
+
 1. **Merge PR (squash merge):**
    ```bash
    gh pr merge <pr_number> --repo ${capabilities.repo} --squash --delete-branch

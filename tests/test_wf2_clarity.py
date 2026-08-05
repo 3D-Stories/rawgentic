@@ -1893,3 +1893,62 @@ class TestClosingKeywordGuardWF2:
         assert "only the LAST PR declares `--closes`" in sec, (
             "the multi-PR convention (earlier PRs are Part of) must ride with "
             "the gate, since that is exactly when the defect fires")
+
+
+class TestRunRecordLandsExactlyOnce:
+    """#888: a run-record must land exactly ONCE.
+
+    Two measured failure modes, one contract. It could land zero times — Step 16
+    persists after Step 14 merges, so a run that merges its own PR orphans its
+    record (saystory epic #204: 1 of 6 children persisted, #879 needed the #882
+    backfill). It could land twice — `persist_record` blind-appended, so a Step-16
+    re-run double-recorded (WF2 #340, hand-discarded from `git diff`).
+
+    Location pins, whitespace-normalized: the ordering sentence belongs in Step 14
+    (where the merge happens) and the render-only sentence in Step 16 (where the
+    second summarize would have been). A corpus-wide search would pass on either
+    one being in the wrong file, which is exactly the drift worth catching.
+    """
+
+    REFS = (Path(__file__).resolve().parent.parent
+            / "skills" / "implement-feature" / "references")
+
+    def _norm(self, name: str) -> str:
+        return " ".join((self.REFS / name).read_text().split())
+
+    def test_step14_orders_persist_before_merge(self):
+        """The canonical sentence. If this ordering is ever softened, #588 reopens."""
+        assert ("The run-record is therefore persisted, committed and CI-re-verified "
+                "before the merge is attempted") in self._norm("step-14.md")
+
+    def test_step14_names_the_merged_null_shape(self):
+        step14 = self._norm("step-14.md")
+        assert "`outcome.merged: null`" in step14, (
+            "the merge-grant record shape must be documented where the ordering is")
+        assert ('`null` here means "not yet merged when the record was written", '
+                'never "the merge failed"') in step14, (
+            "null is ambiguous without this gloss — a reader repairing telemetry "
+            "would otherwise read it as a failed merge")
+
+    def test_step14_requires_the_record_landed_before_merging(self):
+        step14 = self._norm("step-14.md")
+        assert "hooks/work_summary.py find --issue <issue>" in step14, (
+            "the ordering needs a mechanical proof, not just prose order")
+        assert "**rc 1 means do not merge yet**" in step14
+
+    def test_step14_reverifies_ci_per_sha(self):
+        assert ("Re-verify CI **on the new head, per-sha**") in self._norm("step-14.md"), (
+            "the telemetry commit moves the head; a rollup queried by PR number "
+            "can still report the previous head's green")
+
+    def test_step16_renders_only_when_already_persisted(self):
+        step16 = self._norm("step-16.md")
+        assert ("On the merge-grant path, Step 14 assembled, persisted, committed "
+                "and CI-re-verified the record before merging") in step16
+        assert "--no-persist" in step16, (
+            "the render-only path is what keeps summarize from running twice")
+
+    def test_step16_calls_the_idempotency_guard_a_backstop(self):
+        """The guard must not be presented as the plan — prose that leans on it
+        would restore the blind double-summarize this issue removed."""
+        assert "that guard is the BACKSTOP, not the plan" in self._norm("step-16.md")
