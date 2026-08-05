@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>#909 — Skill description diet + incident references/ split</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-design{background:radial-gradient(1200px 600px at 50% -10%,rgba(124,156,255,.10),transparent 60%),var(--bg)}
+.tpl-design .wrap{max-width:1080px;padding:0 clamp(16px,4vw,32px) 64px}
+.tpl-design header{padding:clamp(24px,4vw,56px) 0 12px;border-bottom:none;margin-bottom:18px}
+.tpl-design h1{font-size:clamp(26px,3.4vw,40px)}
+.tpl-design h2{font-size:20.8px;margin:1.9em 0 .6em}
+
+/* #76 — the frame's companions only. Two rules, deliberately few.
+   An earlier draft of this PR also added a two-column `.dz-options` grid "so the wide measure
+   pays for itself". Both wrong: the grid was DEAD (the `.dz-options` rule further down sets
+   `display:block` at equal specificity and later source order), and it contradicted a decision
+   this file already records — cards stack FULL WIDTH because "a trade-off you have to READ is
+   not a 220px tile". The width pays for itself inside each card, where the for/against grid is
+   two columns and needs the room. Deleted rather than reconciled. */
+.tpl-design h1{line-height:1.2;max-width:22ch}
+.tpl-design header .eyebrow{font-size:11px;letter-spacing:.14em}
+.tpl-design .dz-lead{background:var(--surface);border:1px solid var(--line);
+border-left:4px solid var(--accent);border-radius:12px;padding:4px 20px 14px;margin:6px 0 26px}
+.tpl-design .dz-lead>p:first-child{font-size:17.5px;line-height:1.55;color:var(--ink);font-weight:550}
+/* Option cards. Stacked full-width, because a trade-off you have to READ is not a 220px tile;
+   the shared layer's flex row is overridden here at higher specificity. */
+.tpl-design .dz-options{margin:22px 0;display:block;counter-reset:dz-opt}
+.tpl-design .dz-options .blk-opt{counter-increment:dz-opt;display:grid;gap:10px 14px;
+grid-template-columns:1fr 1fr;grid-template-areas:"head head" "pro con";
+background:var(--surface);border:1px solid var(--line);border-radius:14px;
+padding:16px 18px;margin:0 0 16px;flex:none}
+.tpl-design .dz-options .blk-opt>.blk-title{grid-area:head;display:flex;gap:12px;
+align-items:baseline;font-size:19px;letter-spacing:-.01em;margin:0}
+.tpl-design .dz-options .blk-opt>.blk-title::before{content:counter(dz-opt,decimal-leading-zero);
+font:700 22px/1.1 ui-monospace,Menlo,Consolas,monospace;color:var(--accent);flex:none}
+.tpl-design .dz-options .blk-for{grid-area:pro;background:var(--req-c-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+.tpl-design .dz-options .blk-against{grid-area:con;background:var(--sev-high-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+/* #134 SETTLED THE FOLLOW-UP THIS COMMENT USED TO NAME. It said these labels were CSS-generated
+   content, so not dependable semantic markup, that the reference uses real DOM text
+   (`<h4>Pros</h4>`), and that making it semantic "means changing the renderer, which moves every
+   style's bytes and so cannot ride in a per-template PR". That is exactly what #134 did: `_options`
+   now emits a real `.blk-lbl` element, every rich style's bytes moved, and `plain` did not.
+   So this is no longer a `::before` at all — it RESTYLES the markup label the renderer emits.
+   Only the typography is set here; the colours come from the shared layer, which reaches this
+   template because the wrapper carries both `blk-options` and `dz-options`. `text-transform`
+   keeps the visible form FOR/AGAINST while the accessible name stays the emitted "For"/"Against".
+   The space the renderer emits after the label collapses harmlessly against a block. */
+.tpl-design .dz-options .blk-lbl{display:block;font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;text-transform:uppercase}
+/* Restated at (0,4,0): the card rule above is (0,3,0) and was silently beating the shared
+   `.blk-options .is-chosen` (0,2,0), so the chosen card lost its accent border. Measured. */
+.tpl-design .dz-options .blk-opt.is-chosen{border-color:var(--accent);border-width:2px}
+.tpl-design .dz-options .blk-opt.is-rejected{opacity:.72}
+.tpl-design .dz-options .is-chosen>.blk-title::after{content:"CHOSEN";font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent);
+border:1px solid var(--accent);border-radius:999px;padding:1px 8px;margin-left:auto;flex:none}
+@media(max-width:640px){.tpl-design .dz-options .blk-opt{grid-template-columns:1fr;
+grid-template-areas:"head" "pro" "con"}}
+/* A today/proposed pair is TWO ROOTS in one `nodes compare` block, so the
+   grid goes on the top-level list. Two separate fences cannot pair — each is
+   its own wrapper with a single child. */
+@media(min-width:720px){.tpl-design .dz-compare>ul{grid-template-columns:1fr 1fr}}
+.tpl-design .dz-compare{background:var(--code);border-radius:12px;padding:10px 14px}
+/* The verdict band — `.recommend` in the reference. A gradient wash rather than a flat fill, so
+   the decision reads as the page's conclusion and not as one more callout. */
+.tpl-design .dz-decision{margin:24px 0 8px}
+.tpl-design .dz-decision>.blk-callout{border:1px solid var(--accent);border-left-width:1px;
+border-radius:14px;padding:16px 18px;
+background:linear-gradient(180deg,var(--accent-soft),transparent)}
+.tpl-design .dz-decision>.blk-callout>.blk-title::before{content:"DECISION";display:block;
+font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent)}
+/* Trade-off table. Styled, deliberately NOT markered: a markdown table emits a bare <table> with
+   no hook, and `section_class` is not a table marker — using it would flip `design` into
+   sectioned rendering and demote its h2s. */
+.tpl-design table{border-collapse:collapse;width:100%;margin:14px 0}
+.tpl-design thead th{font:700 11px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);
+border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
+.tpl-design tbody td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.tpl-design tbody tr:nth-child(even){background:var(--code)}
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+
+:root{--accent:#f2a65e;}
+:root[data-theme=dark]{--accent:#f2a65e;}
+:root[data-theme=light]{--accent:#a26211;}
+@media print{:root,:root[data-theme=dark]{--accent:#a26211;}}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-05 03:13 MDT</div>
+<h1>#909 — Skill description diet + incident references/ split</h1>
+
+</header>
+<main>
+<div class="dz-lead"><p><strong>Issue:</strong> <a href="https://github.com/3D-Stories/rawgentic/issues/909">#909</a> — <code>chore(skills):</code> · epic <a href="https://github.com/3D-Stories/rawgentic/issues/875">#875</a> (M1 — STAY SMALL) <strong>Date:</strong> 2026-08-05 · <strong>Base:</strong> <code>1a03b9cb</code> · <strong>Complexity:</strong> standard_feature · <strong>Lane:</strong> full spine (9 impl files &gt; 7) <strong>Task class:</strong> production (provenance=default)</p>
+<hr></div>
+<h2>1. Problem, as measured</h2>
+<p>All figures are first-hand at <code>1a03b9cb</code>, by exact <code>yaml.safe_load</code> over <code>skills/*/SKILL.md</code>.</p>
+<table>
+<thead><tr><th>measure</th><th>value</th></tr></thead>
+<tbody>
+<tr><td>skills</td><td>21</td></tr>
+<tr><td>total description chars, <strong>as the harness loads them</strong></td><td>10,784</td></tr>
+<tr><td>descriptions over Anthropic&#x27;s documented 1,024-char cap</td><td><strong>1</strong> (<code>pane-handoff</code>, 1,174)</td></tr>
+<tr><td>next largest</td><td>revalidate-children 991 · adversarial-review 842 · create-issue 811 · peer-consult 690</td></tr>
+<tr><td><code>incident/SKILL.md</code></td><td><strong>537 lines</strong>, 25,416 bytes, <strong>0</strong> <code>references/</code> files</td></tr>
+</tbody>
+</table>
+<p>Two Anthropic-published limits are in play: the <code>description</code> maximum of 1,024 characters (skill-authoring best practices, platform.claude.com, fetched 2026-08-04 per the issue) and the &quot;keep SKILL.md under 500 lines&quot; guidance. Claude Code does not enforce the former client-side, so <code>pane-handoff</code> works today by luck, not by contract.</p>
+<h3>1a. A defect the issue does not name, found while measuring</h3>
+<p>In an <strong>unquoted YAML plain scalar, <code> #</code> opens a comment.</strong> Two descriptions therefore lose their tail in what the harness actually loads:</p>
+<table>
+<thead><tr><th>skill</th><th>true chars</th><th>loaded chars</th><th>lost</th><th>cut at</th></tr></thead>
+<tbody>
+<tr><td><code>epic-run</code></td><td>534</td><td><strong>131</strong></td><td><strong>403 (75%)</strong></td><td><code>epic #N&quot;</code></td></tr>
+<tr><td><code>pane-handoff</code></td><td>1,203</td><td>1,174</td><td>29</td><td><code> #713)</code></td></tr>
+</tbody>
+</table>
+<p><code>epic-run</code> loses every trigger phrase after <em>&quot;cycle through all issues in epic&quot;</em> — including <em>&quot;write me a goal for the epic&quot;</em>, <em>&quot;auto-run these children&quot;</em>, and the whole <code>Do NOT use</code> clause. <code>pane-handoff</code> loses <code>Requires HERDR_ENV=1.</code>, its own gating precondition.</p>
+<p><strong>Confirmed twice, independently:</strong> (a) <code>yaml.safe_load</code> over the repo tree; (b) the available-skills listing injected into a live Claude Code session on 2026-08-05, which ends <code>epic-run</code>&#x27;s entry mid-phrase at exactly that byte. <code>peer-consult</code> is <strong>not</strong> affected — it is single-quoted; an initial 2-char discrepancy was the measuring regex counting its own quote characters, and is retracted.</p>
+<p>Owner authorized folding the fix into this issue on 2026-08-05 (&quot;fix that&quot;).</p>
+<hr>
+<h2>2. Scope decision (owner, 2026-08-05 — D211)</h2>
+<p>Asked while the owner was present, before the run went unattended. Chosen: <strong>cut only what is broken.</strong> Rejected: rewriting all 21 descriptions to shrink the 10,784-char total; and a per-skill-cap-plus-total-budget variant.</p>
+<p>Rationale for the rejection, in the owner&#x27;s terms: every rewrite is a chance a skill stops firing on the words that used to trigger it, and the evals do not cover every phrasing. The context-per-session win is therefore <strong>smaller than the issue&#x27;s problem statement implies</strong>, and that is a deliberate, recorded trade.</p>
+<p>So AC1 here means: the one over-cap description, plus body-material that is objectively misfiled — not a stylistic pass over descriptions that are merely long.</p>
+<hr>
+<h2>3. Design</h2>
+<h3>AC1 — descriptions</h3>
+<table>
+<thead><tr><th>skill</th><th>change</th><th>why</th></tr></thead>
+<tbody>
+<tr><td><code>pane-handoff</code></td><td><strong>the exact cut, named:</strong> remove the opening workflow-summary clause (<code>— spawn it, bind it, give it the prompt, arm its goal, each step verified against the successor&#x27;s own artifacts</code>) and the trailing rationale/provenance (<code>because that is when the pass-off is expected to happen and there may be nobody awake to answer (owner decision 2026-07-29, #713)</code>). Target <strong>≤ 900 loaded chars</strong>, not merely ≤ 1,024, for regrowth headroom.</td></tr>
+</tbody>
+</table>
+<p><strong>The arithmetic, stated because it did not previously add up:</strong> true length 1,203; the two fragments above are 111 and 129 chars, so removing both lands at <strong>963</strong> — under the cap but 63 over the 900 target. Three further compressions close the gap, none of which touches a pinned phrase: <code>Use whenever the user asks to pass off, pass over, hand off or send work to another pane or session, however phrased</code> → <code>Use when the user asks to hand work to another pane or session, however phrased</code> (−38); <code>Dictated variants are the same request — &quot;herder&quot; means herdr and &quot;pain&quot; means pane.</code> → <code>&quot;herder&quot; = herdr, &quot;pain&quot; = pane (dictated variants).</code> (−33); and <code>do not offer, do not ask &quot;say the word&quot;</code> → <code>do not offer</code> (−26). That reaches ≈ 866. The <strong>guard</strong> enforces 1,024 (repository policy); 900 is the working target, and the final char count is recorded in the PR body. <strong>KEEP</strong> every dictated variant, the <code>ALSO RUN it unprompted … (#732)</code> <strong>directive</strong>, and <code>Requires HERDR_ENV=1.</code> | the only skill over the cap. The two cut fragments are exactly what the bar excludes — a workflow summary and a rationale. The directive is NOT cut even though <code>skills/pane-handoff/SKILL.md:27-28</code> repeats the rule in the body, because the body loads only once the skill is invoked and this directive exists to fire when nobody invoked it | | <code>epic-run</code> | single-quote the scalar so the 403 lost chars load | 75% of the description is dead text today | | <code>adversarial-review</code> | move <code>pip install &quot;zhipuai&gt;=2.1.5&quot;</code> + the Codex-CLI/API-key install notes to the body | install instructions are body material by the repo&#x27;s own bar; the description keeps <em>when to use it</em> | | <code>peer-consult</code> | same install-note move | identical defect, identical fix; already quoted so no scalar change | | everything else | untouched | not broken (§2) |</p>
+<p><code>revalidate-children</code> (991) and <code>create-issue</code> (811) are <strong>left alone deliberately</strong>: both are under the cap and both are trigger-phrase text, not workflow summary or install notes.</p>
+<p><strong>Quoting style — single quotes, not a block scalar.</strong> Both are YAML-spec fixes. Single-quoting is the one whose live behavior is <em>confirmed</em>: <code>peer-consult</code> is single-quoted in this repo today and its description renders complete in a live session&#x27;s available-skills listing. Block-scalar (<code>&gt;-</code>) precedent exists (<code>~/.claude/skills/local-llm-recommender</code>, Anthropic&#x27;s own firecrawl plugin) but <strong>no</strong> block-scalar skill&#x27;s description is displayed in that listing, so its rendering by Claude Code&#x27;s loader could not be confirmed either way. Choosing the confirmed mechanism. Cost: internal apostrophes double (<code>epic&#x27;s</code> → <code>epic&#x27;&#x27;s</code>). The AC3 guard verifies the parsed result, so a mis-escape fails CI rather than shipping.</p>
+<h3>AC2 — incident split</h3>
+<p><code>incident/SKILL.md</code> 537 lines → SKILL.md keeps the contract and the spine; procedure detail moves to a <strong>flat</strong> <code>references/</code> (no subdirectories — #874 lesson 2, because <code>tests/corpus.py</code> reads a flat <code>references/*.md</code> glob and a subdirectory would silently un-pin every content guard).</p>
+<table>
+<thead><tr><th>file</th><th>content</th></tr></thead>
+<tbody>
+<tr><td><code>skills/incident/SKILL.md</code></td><td>frontmatter · <code>&lt;role&gt;</code> · <code>&lt;constants&gt;</code> · <code>&lt;phase-step-mapping&gt;</code> · <code>&lt;config-loading&gt;</code> · <code>&lt;learning-config&gt;</code> · <code>&lt;environment-setup&gt;</code> · <code>&lt;step-marker-enforcement&gt;</code> · <code>&lt;termination-rule&gt;</code> · <code>&lt;ambiguity-circuit-breaker&gt;</code> · <code>&lt;context-compaction&gt;</code> · <code>&lt;principle-relaxations&gt;</code> · <strong><code>&lt;mandatory-verification&gt;</code> (SEV-1/SEV-2)</strong> · <strong>the destructive-action approval rule</strong> · <code>&lt;references&gt;</code> · one-line-per-step spine with read pointers · <code>&lt;mandatory-rule&gt;</code> · <code>&lt;completion-gate&gt;</code> · Workflow Resumption</td></tr>
+<tr><td><code>references/quick-diagnostic-playbook.md</code></td><td>the three playbooks (service / database / service-specific)</td></tr>
+<tr><td><code>references/phase-a-stabilize.md</code></td><td>Steps 1–6 instructions + failure modes — <strong>elaboration only</strong>; the two safety rules above are NOT moved here</td></tr>
+<tr><td><code>references/phase-b-analyze.md</code></td><td>Steps 7–14 instructions + failure modes</td></tr>
+</tbody>
+</table>
+<p><strong>Why the two safety rules stay in SKILL.md — a self-contradiction in this design&#x27;s first draft, caught at the Step-4 gate.</strong> That draft asserted &quot;a split that relocated a safety gate into a lazily-read file would be the real hazard here&quot; and then moved <code>&lt;mandatory-verification&gt;</code> into <code>phase-a-stabilize.md</code>, doing precisely that. A read condition is <strong>prose-enforced, not loader-enforced</strong>: references <em>are</em> read in practice — <code>implement-feature</code> runs entirely on 23 of them, and this very issue was executed by reading <code>references/step-01.md</code> … <code>step-05.md</code> on the spine&#x27;s instruction, which is direct live evidence that the mechanism works — but &quot;the model complied with an instruction&quot; is not &quot;the requirement cannot be bypassed&quot;. For ordinary procedure detail that is an acceptable trade. For <strong>SEV-1/SEV-2 restoration verification</strong> and <strong>approval before a destructive rollback or DB operation</strong>, it is not: an incident response could skip either and produce no test failure and no runtime error. So both rules stay in the always-loaded body, and Phase A&#x27;s reference carries only their elaboration.</p>
+<p><strong><code>${CLAUDE_PLUGIN_ROOT}</code> does not constrain this split:</strong> it occurs <strong>zero</strong> times in <code>incident/SKILL.md</code> (grep, <code>1a03b9cb</code>), so the CLAUDE.md §1 rule that it is not substituted inside <code>references/*.md</code> has nothing to bind here.</p>
+<p><strong>Two location pins must be handled — this is the split&#x27;s only real hazard.</strong> Both read <code>SKILL.md</code> directly rather than via <code>skill_corpus</code>, and both assert <strong>ordering</strong>:</p>
+<table>
+<thead><tr><th>guard</th><th>asserts</th><th>lives in</th></tr></thead>
+<tbody>
+<tr><td><code>tests/test_incident_skill.py:16-30</code></td><td><code>gh label create incident</code> precedes <code>gh issue create … --label incident</code></td><td>both on SKILL.md:150 (Step 1 item 5)</td></tr>
+<tr><td><code>tests/test_wf2_clarity.py:424-431</code></td><td><code>git fetch origin</code> precedes <code>git checkout -b hotfix/</code></td><td>both on SKILL.md:369 (Step 10 item 1)</td></tr>
+</tbody>
+</table>
+<p>Handling: each pinned pair stays <strong>inside one destination file</strong> (pair 1 → <code>phase-a-stabilize.md</code>, pair 2 → <code>phase-b-analyze.md</code>), so relative order survives, and both guards are <strong>rebuilt on a <code>{path: text}</code> mapping</strong> (see the next two paragraphs for why <em>not</em> <code>skill_corpus()</code>). Rebuilding them is <em>not</em> weakening them: neither pin has any reason to require SKILL.md specifically; what they protect is &quot;the bootstrap comes first&quot;, wherever the prose lives.</p>
+<p><strong>But a naive corpus migration WOULD weaken them, so it is not what ships.</strong> In a joined corpus, <code>git fetch origin</code> occurring anywhere earlier — in a different file, for a different purpose — satisfies a bare &quot;fetch appears before checkout&quot; assertion vacuously.</p>
+<p><strong>And <code>skill_corpus()</code> cannot express the fix, which is a fact about it, not a guess.</strong> <code>tests/corpus.py:19-26</code> returns <code>&quot;\n&quot;.join(parts)</code> — a plain string with <strong>no</strong> file provenance, so no assertion over that value can prove two matches came from the same file. A &quot;same-file&quot; claim built on the joined string would be another vacuous assertion wearing a stronger label. Therefore the migrated guards do <strong>not</strong> consume <code>skill_corpus()</code>; they build a <code>{path: text}</code> mapping of <code>SKILL.md</code> plus each <code>references/*.md</code> and assert, over that mapping:</p>
+<ol>
+<li>each protected command occurs <strong>exactly once</strong> across the whole mapping (a duplicate fails, so a</li>
+</ol>
+<p>   reference file cannot clone a canonical pair and make ordering ambiguous);</p>
+<ol start="2">
+<li>both members of a pair live in the <strong>same, named</strong> file; and</li>
+<li>within that one file, the required command precedes the other by offset.</li>
+</ol>
+<p><code>skill_corpus()</code> remains the right tool for ordinary <em>content</em> pins, which only ask whether prose still exists somewhere; it is the wrong tool for an <em>ordering</em> pin, which needs provenance it does not carry. This is strictly stronger than today&#x27;s single-file <code>find()</code> pair.</p>
+<p><strong>Discoverability (the split&#x27;s other real risk).</strong> References load lazily, so prose that moves out of SKILL.md is prose Claude may never read. Every extracted file therefore gets an explicit link <strong>and a read condition</strong> in its spine step — the <code>implement-feature</code> pattern, e.g. <em>&quot;(read references/phase-a-stabilize.md before executing Steps 1–6)&quot;</em>. A split without read conditions would trade a too-long SKILL.md for silently-skipped procedure, which is worse.</p>
+<p><strong>Line target: ≤ 400 lines</strong> (from 537), not the tightest possible number. The 500-line guidance is about SKILL.md, not the corpus, and leaving ~100 lines of headroom keeps the file from re-crossing the line on the next operative edit — while an over-aggressive strip is what makes detail undiscoverable.</p>
+<p>Three additional structural guards, all cheap and all protecting constraints the ACs state but nothing currently enforces: <code>references/</code> is <strong>flat</strong>, spine links and reference files are in <strong>bijection with a read condition each</strong>, and no reference file contains <code>${CLAUDE_PLUGIN_ROOT}</code>.</p>
+<p><strong>The link guard runs in BOTH directions, plus the read condition</strong> — a one-way &quot;every link resolves&quot; check would pass an <strong>orphan</strong> reference file that nothing links to, and would equally pass a bare link with no <code>read … before executing</code> clause, so the discoverability requirement would be satisfied on paper while the file stays unreachable in practice. It therefore asserts: every <code>references/*.md</code> is linked from the spine, every spine link resolves to a file that exists, and each such link carries its read condition. The last is safe to apply repo-wide: measured <strong>zero</strong> occurrences across all <code>skills/*/references/*.md</code> today, while three SKILL.md bodies use it legitimately and are untouched.</p>
+<p><strong>The flat-layout guard must traverse RECURSIVELY, or it is the bug it exists to catch.</strong> Written with the same <code>references/*.md</code> glob the content pins use, it would inspect only direct children and therefore <em>silently ignore</em> a nested reference — the exact un-pinning failure it is meant to prevent. It is specified as a <strong>recursive</strong> walk below <code>references/</code> that fails when any discovered descendant is not a direct <code>.md</code> child (i.e. its path relative to <code>references/</code> has more than one component), with a synthetic nested-reference fixture that must fail. This is the same asymmetry <code>tests/test_wf2_prose_budget.py</code> already documents — its corpus glob is recursive precisely so it does not share the flat glob&#x27;s blind spot — so the pattern is established here, not invented.</p>
+<h3>AC3 — the guard</h3>
+<p>New <code>tests/test_skill_description_budget.py</code>, mirroring <code>tests/test_wf2_prose_budget.py</code>&#x27;s shape (a pure violation collector + unit tests over it with synthetic inputs, then tests over the real tree, every message naming the skill, the character count, and the character overage — characters, not bytes, matching the unit the cap is measured in). No existing guard covers this surface — grep for <code>1024</code> / <code>len(desc</code> / <code>DESCRIPTION</code> across <code>tests/</code> returns nothing.</p>
+<p><strong>Parser, named and cited:</strong> the guard uses <strong>PyYAML</strong> (<code>import yaml</code>, <code>yaml.safe_load</code>), which is declared in the test lane&#x27;s dependency line — <code>.github/workflows/ci.yml:47</code>, <code>pip install pytest jsonschema pyyaml</code>, Python 3.12 — and already has an exact existing CI call site in <code>tests/test_lint_workflow.py</code>, which imports <code>yaml</code> and passes in that lane today. So the guard cannot fail at import time in CI, and it parses with the same library used for every measurement in this document. The lint lane installs only <code>pylint</code> and runs with <code>--disable=import-error</code>, so the import is a non-issue there.</p>
+<p>Three checks:</p>
+<ol>
+<li><strong>Present, a string, and non-empty</strong> — in that order, as three distinct diagnoses. The type</li>
+</ol>
+<p>   assertion is separate on purpose: <code>description: [foo]</code> is a YAML <strong>sequence</strong> that is non-empty,    under the cap, and free of <code> #</code>, so a length-only guard accepts frontmatter the loader cannot    use. Sequence / mapping / numeric / boolean fixtures must all fail with the <strong>parsed type named</strong>;    an absent key or explicit <code>description:</code> null reports MISSING rather than a type error, because    &quot;there is no description&quot; is the more accurate diagnosis.</p>
+<ol start="2">
+<li><strong>Per-skill cap:</strong> loaded description ≤ 1,024 chars, measured in Unicode characters on the</li>
+</ol>
+<p>   <strong>loaded</strong> value (not the raw bytes). Names skill, chars, overage.</p>
+<ol start="3">
+<li><strong>No silent truncation:</strong> compliant iff the scalar is quoted/block — first non-space character</li>
+</ol>
+<p>   after <code>description:</code> ∈ <code>&#x27;</code>, <code>&quot;</code>, <code>&gt;</code>, <code>|</code> — <strong>or</strong> its scalar source contains no <code> #</code>. Two clean    primitives, <strong>no length arithmetic</strong>: a prototype that compared parsed length against raw length    produced a false positive by counting a quoted scalar&#x27;s own quote characters, so that approach is    rejected on evidence. Intent-free — it detects the <em>hazard</em>, never a guess at authorial intent.    Block scalars are exempt because <code>#</code> is literal inside them, which is why the check tests the    scalar style rather than the text alone.</p>
+<p>   <strong>&quot;Scalar source&quot; is defined exactly, because a vague boundary makes check 3 two different    checks.</strong> The span runs from immediately after <code>description:</code> to the start of the <strong>next    top-level frontmatter key</strong> (<code>^[A-Za-z][A-Za-z0-9_-]*:</code>), or to the end of the frontmatter if    there is none. That boundary is what makes the check scalar-<em>local</em>: inspecting only the    <code>description:</code> line would miss a <code> #</code> on a <strong>continuation line</strong> of a multi-line plain scalar,    while scanning the whole frontmatter would wrongly reject a legitimate comment belonging to    <code>argument-hint:</code> or <code>name:</code>. A multi-line plain scalar whose <code> #</code> sits on a continuation line is    therefore a required fixture alongside the four style fixtures — it is the case both naive    implementations get wrong.</p>
+<p><strong>Fixture set (why the guard is trustworthy, not just present).</strong> Check 3 is only credible if it demonstrably fires, so the unit tests run it over synthetic <strong>plain / single-quoted / double-quoted / folded-block</strong> frontmatter, and include the regression fixture <code>description: trigger A # trigger B</code> — which <strong>parses cleanly and lands far under the cap</strong>, so a length-only guard passes it while half the triggers are silently dead. That fixture is the precise reason length alone is the wrong surface.</p>
+<p>Deliberately <strong>no</strong> per-skill budget dict and <strong>no</strong> total budget. Unlike the prose-budget guard, the population is discovered by glob and every member is covered by one constant, so a new skill cannot evade the guard and there is no stale-entry class to maintain. The total budget is the option §2 rejected.</p>
+<h3>Not in scope</h3>
+<p>Trimming the remaining 17 descriptions; a total-char ceiling; <code>implement-feature</code>&#x27;s 549 lines (that is #899).</p>
+<h3>Security implications</h3>
+<p><strong>None material, and the reason is structural, not a shrug:</strong> this change adds no code path, takes no input, constructs no subprocess, touches no credential, secret, auth, or network surface, and changes no file outside <code>skills/**/*.md</code>, <code>tests/</code>, two <code>plugin.json</code> version strings, and <code>README.md</code>. The one new executable artifact is a test that parses <strong>this repo&#x27;s own committed</strong> frontmatter — in-repo, authored here, not untrusted input — so the YAML-deserialization risk criterion does not apply. No task path matches <code>DEFAULT_HIGH_RISK_PATH_PATTERNS</code>.</p>
+<p>The one security-adjacent property worth naming: <strong><code>&lt;mandatory-verification&gt;</code> and the destructive-action approval rule remain in <code>skills/incident/SKILL.md</code>; <code>references/phase-a-stabilize.md</code> contains elaboration only. Read conditions are not relied on to enforce either safety gate.</strong> The <code>&lt;termination-rule&gt;</code>, <code>&lt;ambiguity-circuit-breaker&gt;</code> and <code>&lt;completion-gate&gt;</code> that enforce the workflow&#x27;s floor likewise stay in SKILL.md.</p>
+<p>(This sentence previously said <code>&lt;mandatory-verification&gt;</code> &quot;moves with Phase A&quot;, contradicting AC2 after AC2 was corrected — caught by the pass-2 gate review as its highest-severity finding. An implementer following the old text would have moved a SEV-1/SEV-2 verification gate into a lazily read file, which is precisely the hazard this design names. Recorded rather than silently patched, because a fix applied in one place and missed in another is the defect pattern here.)</p>
+<h3>Error handling and failure modes</h3>
+<table>
+<thead><tr><th>failure mode</th><th>how it shows up</th><th>defense</th></tr></thead>
+<tbody>
+<tr><td>a description edit silently stops a skill triggering</td><td>no error at all — the skill just never fires, which is how #700 went unnoticed for 36 hours</td><td>phrase-coverage test over every eval prompt; every dictated variant kept verbatim</td></tr>
+<tr><td>a mis-escaped apostrophe in a single-quoted scalar</td><td>frontmatter fails to parse → the skill may not load</td><td>the guard parses <strong>every</strong> <code>skills/*/SKILL.md</code>, so a broken scalar fails CI immediately</td></tr>
+<tr><td>the split makes procedure undiscoverable</td><td>Claude executes a step without its detail; silent quality loss</td><td>explicit link + read condition per spine step; ≤ 400-line target keeps the spine readable</td></tr>
+<tr><td>an ordering guard goes vacuous after the move</td><td>CI stays green while the protected invariant is unprotected</td><td>exactly-once + same-file + offset assertions, duplicates fail</td></tr>
+<tr><td>a reference file re-crosses into a subdirectory later</td><td>flat-glob content pins silently un-pin (#874 lesson 2)</td><td>flat-layout guard</td></tr>
+<tr><td>regrowth past the cap</td><td>nothing locally — see the note below on what is and is not proven</td><td>the cap guard, at 1,024 with a 900-char working target</td></tr>
+</tbody>
+</table>
+<p>All are <strong>fail-loud by construction</strong> — each is a CI test failure, not a runtime surprise. The one that cannot be made fail-loud in this repo is &quot;the loaded description is subtly worse at triggering&quot;, which is a judgment surface; phrase coverage bounds it but does not eliminate it, and that residual is stated rather than papered over.</p>
+<p><strong>What the 1,024 cap is, precisely.</strong> It is the maximum published in Anthropic&#x27;s skill-authoring documentation, adopted here as a <strong>repository policy limit</strong>. The earlier draft went further and claimed an over-cap description &quot;would fail API-side validation&quot; — that claim is <strong>withdrawn</strong>, because the only evidence for it is documentation, and this repo&#x27;s own bar explicitly rejects docs as feasibility evidence (docs prove an API exists, not that a given path enforces it). Not proven, and deliberately not asserted: that any request path this project uses rejects a 1,025-character description, and that the platform counts Unicode code points rather than bytes or grapheme clusters. The guard measures Python <code>len()</code> on the loaded string, which is code points. If the real boundary later turns out to be bytes, the cap is conservative for ASCII and would need revisiting for multi-byte text — recorded here so a future reader does not re-derive it as settled.</p>
+<hr>
+<h2>4. platform_apis (feasibility declaration, #226/#490)</h2>
+<table>
+<thead><tr><th>API / behavior</th><th>claim</th><th>evidence</th></tr></thead>
+<tbody>
+<tr><td>YAML plain scalar treats <code> #</code> as a comment start</td><td><strong>confirmed</strong></td><td><code>yaml.safe_load</code> over the two affected files reproduces the exact truncation point; corroborated by a live session&#x27;s own available-skills listing ending <code>epic-run</code> mid-phrase at that byte</td></tr>
+<tr><td>A single-quoted description loads complete, through Claude Code&#x27;s own loader</td><td><strong>confirmed, live, exact mechanism</strong></td><td><code>skills/peer-consult/SKILL.md</code> is single-quoted today and its full description — including internal double quotes and a trailing <code>ZHIPUAI_API_KEY.</code> — appears complete in the available-skills listing of the session that wrote this doc. Not a proxy composition: same repo, same loader, same frontmatter field</td></tr>
+<tr><td>A block-scalar (<code>&gt;-</code>) description loads complete</td><td><strong>NOT confirmed — and therefore not used</strong></td><td>precedent files exist but none of their descriptions is displayed in the listing, so nothing could be observed either way</td></tr>
+<tr><td><code>tests/corpus.py::skill_corpus</code> = SKILL.md + sorted flat <code>references/*.md</code></td><td><strong>confirmed</strong></td><td><code>tests/corpus.py:19-26</code>, read directly</td></tr>
+<tr><td><code>plan_lib.lane_decision</code> with <code>laneImplExtensions=[&quot;.md&quot;]</code></td><td><strong>confirmed</strong></td><td>run: <code>count_impl_files</code> = 9 → <code>tier=full</code>, reason &quot;9 impl files &gt; 7 — full spine&quot;</td></tr>
+<tr><td><code>tests/corpus.py::skill_corpus</code> carries file provenance</td><td><strong>confirmed FALSE</strong> — which is why the ordering guards do not use it</td><td><code>tests/corpus.py:19-26</code> returns <code>&quot;\n&quot;.join(parts)</code>, a plain string. Read directly, not inferred</td></tr>
+<tr><td>A <code>references/*.md</code> file is actually read at run time</td><td><strong>confirmed by working precedent, but prose-enforced</strong></td><td><code>implement-feature</code> runs on 23 reference files, and this issue&#x27;s own execution read <code>references/step-01.md</code>…<code>step-05.md</code> on the spine&#x27;s instruction. Enough for procedure detail; deliberately NOT relied on for the two <code>incident</code> safety rules, which stay in the always-loaded body</td></tr>
+<tr><td>The 1,024 cap is enforced by an API this project calls</td><td><strong>NOT confirmed — claim withdrawn, adopted as repo policy instead</strong></td><td>only documentation supports it, and docs are not accepted feasibility evidence by this repo&#x27;s own bar. No over-cap rejection was observed through any configured path, and the platform&#x27;s counting unit is unverified</td></tr>
+</tbody>
+</table>
+<p><strong>Likeliest-wrong claim</strong> (named per #226): that Claude Code&#x27;s loader is YAML-spec-compliant in <em>both</em> directions — i.e. that single-quoting fixes it and not merely that plain scalars break it. The break direction is directly observed; the fix direction rests on <code>peer-consult</code> rendering complete, which is strong but is one instance. If it were wrong, the fallback is to reword the two descriptions so no bare <code> #</code> appears at all, which needs no parser cooperation.</p>
+<hr>
+<h2>4a. Step-4 gate, pass 1 — findings and dispositions</h2>
+<p>Cross-model design review, backend <code>gpt</code>, reviewer <code>gpt-5.6-sol</code>, author <code>claude-opus-5[1m]</code>, 158.8s, <code>status: success</code>, <code>diagnostic: true</code>, freshness verified (result <code>input_sha256</code> matched the reviewed file byte-for-byte). Raw result: <code>claude_docs/.wf2-state/909/step4-design-review.json</code>. Every finding was checked against its cited evidence before disposition; <strong>all five were confirmed real</strong> and are applied above.</p>
+<table>
+<thead><tr><th>#</th><th>sev</th><th>category</th><th>finding, compressed</th><th>disposition</th></tr></thead>
+<tbody>
+<tr><td>F1</td><td>High</td><td>correctness</td><td>phrase coverage cannot replace the triggering gate — containment does not exercise skill <em>selection</em>, so CI stays green while the skill silently stops firing</td><td><strong>applied, scoped.</strong> Diagnosis accepted in full and the overclaim withdrawn; phrase coverage is now stated as a preservation check, necessary-not-sufficient, with the residual named. The recommendation&#x27;s behavioral release gate is <strong>declined for this issue</strong> — no such harness exists here and building one means installing a plugin build and observing live sessions, a new feature outside these ACs. Filed as a follow-up</td></tr>
+<tr><td>F2</td><td>High</td><td>security</td><td>the design called relocating a safety gate into a lazily-read file the real hazard, then moved <code>&lt;mandatory-verification&gt;</code> into <code>phase-a-stabilize.md</code> — doing exactly that</td><td><strong>applied in full.</strong> <code>&lt;mandatory-verification&gt;</code> and the destructive-action approval rule now stay in SKILL.md; Phase A&#x27;s reference carries elaboration only. A genuine self-contradiction, and the most valuable finding of the pass</td></tr>
+<tr><td>F3</td><td>Medium</td><td>ambiguity</td><td>&quot;its raw text&quot; was undefined for a multi-line plain scalar — line-only inspection misses a continuation-line <code> #</code>, whole-frontmatter scanning wrongly rejects other fields&#x27; comments</td><td><strong>applied.</strong> The span is now defined exactly (after <code>description:</code> → next top-level key), and a multi-line-plain-scalar continuation fixture is required. Already the implemented behavior; the defect was the doc&#x27;s silence</td></tr>
+<tr><td>F4</td><td>Medium</td><td>feasibility</td><td>&quot;would fail API-side validation&quot; rests on documentation only, and the platform&#x27;s counting unit is unverified</td><td><strong>applied in full.</strong> Claim withdrawn; 1,024 is stated as a repository policy limit, with the counting-unit caveat recorded</td></tr>
+<tr><td>F5</td><td>Medium</td><td>feasibility</td><td><code>skill_corpus()</code> is a joined string with no file provenance, so the promised &quot;same-file&quot; ordering assertion is not implementable on it</td><td><strong>applied in full.</strong> Verified against <code>tests/corpus.py:19-26</code> — the reviewer is factually right. Ordering guards now use a <code>{path: text}</code> mapping; <code>skill_corpus()</code> keeps only the content pins</td></tr>
+</tbody>
+</table>
+<p><strong>Loop-back:</strong> two Critical/High findings, one of them <code>category: security</code> (which contributes <code>untagged</code> unconditionally), so the fold returned <code>design</code>, not the cheap <code>spec_tighten</code> path. One <code>design</code> loop-back consumed — state <code>{design: 1, total: 1}</code> against caps 2 and 3 — and the design was revised and re-gated rather than waved through.</p>
+<h3>Pass 2 — findings and dispositions</h3>
+<p>Same reviewer and shape, run against the pass-1-revised document; freshness verified. Raw result: <code>claude_docs/.wf2-state/909/step4-design-review-pass3.json</code> is pass 3; <code>…-pass2.json</code> is this one. 6 findings (3 High, 2 Medium, 1 Low).</p>
+<table>
+<thead><tr><th>#</th><th>sev</th><th>category</th><th>finding, compressed</th><th>disposition</th></tr></thead>
+<tbody>
+<tr><td>P2-F3</td><td>High</td><td>security</td><td>the <strong>Security implications</strong> section still said <code>&lt;mandatory-verification&gt;</code> &quot;moves with Phase A&quot;, directly contradicting the AC2 fix from pass 1</td><td><strong>applied verbatim</strong> as the reviewer worded it. A genuine live contradiction: pass 1&#x27;s fix was applied in AC2 and missed in the Security section — a fix in one place and not the other, which is the exact defect pattern this issue is about. Highest-value finding of the pass</td></tr>
+<tr><td>P2-F4</td><td>Medium</td><td>ambiguity</td><td>&quot;distinctive trigger phrase&quot; had no deterministic rule, so the preservation test was not reproducible</td><td><strong>applied.</strong> The doc now states what the code already does: an explicit enumerated 17-phrase tuple, not a runtime-derived substring, plus why <code>say the word</code> is deliberately excluded</td></tr>
+<tr><td>P2-F5</td><td>Medium</td><td>feasibility</td><td>the guard&#x27;s parser was unnamed and its CI availability uncited, so the test could fail at import time</td><td><strong>applied.</strong> Named PyYAML and cited <code>.github/workflows/ci.yml:47</code> (<code>pip install pytest jsonschema pyyaml</code>, Python 3.12) plus the existing passing call site <code>tests/test_lint_workflow.py</code>. Verified, not assumed</td></tr>
+<tr><td>P2-F6</td><td>Low</td><td>internal-consistency</td><td>AC3 said &quot;byte delta&quot; while the cap is measured in characters</td><td><strong>applied.</strong> Now &quot;character count and character overage&quot;</td></tr>
+<tr><td>P2-F1</td><td>High</td><td>correctness</td><td>AC1 should be <strong>release-blocking</strong> on a live selection spike; &quot;if that cannot be done, do not ship&quot;</td><td><strong>declined — re-litigation of a disposed finding, plus a blocked mechanism.</strong> This is pass-1 F1 re-raised with no new evidence after its diagnosis was accepted and its behavioral-gate recommendation declined with a recorded reason. The mechanism is additionally <strong>unavailable in this environment</strong>: testing selection requires the <em>installed plugin cache</em>, not the repo (this repo ≠ the running plugin), and reinstalling the plugin while sessions using its hooks are live is a documented prohibition — the run cannot satisfy it without violating a safety rule. Residual named, follow-up filed. <strong>Surfaced to the owner as a ship/no-ship flag rather than silently absorbed</strong></td></tr>
+<tr><td>P2-F2</td><td>High</td><td>feasibility</td><td>require a loader-enforced eager include or an execution-time assertion; failing that, keep ALL load-bearing instructions in SKILL.md and extract only optional examples</td><td><strong>partially applied; absolutist form declined.</strong> The part that matters was already applied in pass 1 — both safety gates stay in SKILL.md. The stronger form proves too much: it would forbid AC2&#x27;s split as the issue specifies it, and would equally condemn <code>implement-feature</code>&#x27;s own 23-reference structure that this repo ships and that this very issue was executed by reading. No such loader-enforced mechanism exists on this platform to adopt instead</td></tr>
+</tbody>
+</table>
+<h3>Pass 3 — findings and dispositions</h3>
+<p>5 findings (2 High, 3 Medium). <strong>This result arrived STALE</strong> — the pass-2 disposition table above was appended after the review launched, so the result&#x27;s <code>input_sha256</code> no longer matched the file. Per the freshness rule a result whose subject moved is rejected for disposition, so its findings were <em>read and applied</em> but the <strong>verdict was re-obtained</strong> against a frozen document rather than consumed stale. Recorded because a stale verdict quietly consumed at a terminal gate is exactly the failure the rule exists to stop.</p>
+<table>
+<thead><tr><th>#</th><th>sev</th><th>category</th><th>finding, compressed</th><th>disposition</th></tr></thead>
+<tbody>
+<tr><td>P3-F5</td><td>Medium</td><td>correctness</td><td>none of the three checks requires <code>description</code> to be a <strong>string</strong> — <code>description: [foo]</code> is a YAML sequence that is non-empty, under the cap and <code> #</code>-free, so &quot;CI can accept frontmatter the loader rejects&quot;</td><td><strong>applied — but the claimed hole does not exist in the implementation.</strong> Verified by running the guard against sequence / mapping / numeric / boolean / null frontmatter: all five already fail, via <code>not isinstance(desc, str)</code>. The defect was the <em>design text</em> omitting the type requirement, and the <em>message</em> naming neither the type. Both fixed, five fixtures added, and the null case now reports MISSING rather than a type error. The finding&#x27;s premise about CI is <strong>declined as false</strong>, on evidence</td></tr>
+<tr><td>P3-F3</td><td>Medium</td><td>ambiguity</td><td>the flat-layout guard&#x27;s traversal was unspecified; written with a flat <code>references/*.md</code> glob it would ignore a nested reference — the very failure it guards</td><td><strong>applied in full.</strong> Specified as a recursive walk failing on any descendant with more than one path component, with a nested-reference fixture. Correct and well-precedented: <code>test_wf2_prose_budget.py</code> uses a recursive glob for exactly this reason</td></tr>
+<tr><td>P3-F4</td><td>Medium</td><td>completeness</td><td>a phrase tuple is pinned only for <code>pane-handoff</code>, though <code>adversarial-review</code> is also touched</td><td><strong>applied by narrowing, with per-skill reasons.</strong> <code>epic-run</code>/<code>pane-handoff</code> quoting only <em>adds</em> currently-dead text; <code>adversarial-review</code>/<code>peer-consult</code> lose only install-note text containing no trigger phrasing; and <code>adversarial-review</code>&#x27;s 3 eval cases are explicit <code>/rawgentic:adversarial-review &lt;path&gt;</code> invocations that never exercise description-based selection. Its invoke key is now pinned. Narrowing was the reviewer&#x27;s own alternative, chosen because inventing a tuple for an unexercised surface would be ceremony</td></tr>
+<tr><td>P3-F1</td><td>High</td><td>completeness</td><td>(third raising) make AC1 release-blocking on a live selection smoke test</td><td><strong>declined — third re-litigation, unchanged grounds.</strong> No new evidence across three passes; the mechanism remains blocked (selection runs from the <em>installed plugin cache</em>, and reinstalling mid-session is prohibited while hook-using sessions are live). Residual named, follow-up filed, surfaced to the owner</td></tr>
+<tr><td>P3-F2</td><td>High</td><td>feasibility</td><td>(third raising) keep every normative action in SKILL.md; extract only optional examples</td><td><strong>declined in its absolutist form, already applied in substance.</strong> Both safety gates stay in SKILL.md (pass 1). The stronger form would forbid the split the issue&#x27;s own AC2 mandates and would equally condemn <code>implement-feature</code>&#x27;s shipped 23-reference structure</td></tr>
+</tbody>
+</table>
+<h3>Pass 3b — the verdict the close rests on</h3>
+<p>Pass 3 was re-run against a <strong>frozen</strong> document (sha256 <code>13b1dd48…</code>), no edits in flight. <code>status: success</code>, freshness <strong>verified</strong>, 5 findings (4 High, 1 Medium), and — decisively — <strong>zero carrying <code>ambiguity_flag</code></strong>, so the ambiguity circuit breaker returns <strong>clear</strong> and the <code>design</code>-source exhaustion close is legitimately available rather than forced.</p>
+<table>
+<thead><tr><th>#</th><th>sev</th><th>category</th><th>finding, compressed</th><th>disposition</th></tr></thead>
+<tbody>
+<tr><td>P3b-F3</td><td>High</td><td>internal-consistency</td><td><strong>the pane-handoff cut arithmetic does not work.</strong> The two named fragments total ~240 chars against a 1,203-char description, landing at ~963 — under the cap but over this design&#x27;s own ≤900 target</td><td><strong>applied.</strong> Verified exactly: 1,203 − 111 − 129 = <strong>963</strong>, 63 over target. The reviewer did arithmetic this design had simply never done. Three further compressions are now named (−38, −33, −26 → ≈866), none touching a pinned phrase</td></tr>
+<tr><td>P3b-F4</td><td>High</td><td>internal-consistency</td><td><strong>contradictory instruction:</strong> the &quot;Two location pins&quot; paragraph still said both guards migrate to <code>skill_corpus()</code>, while the following paragraphs prohibit exactly that and require a <code>{path: text}</code> mapping</td><td><strong>applied.</strong> The stale sentence is corrected. Same defect pattern as P2-F3 — a fix applied in one place and missed in another, twice in one document. That recurrence is itself the strongest argument for this issue&#x27;s mechanical guards</td></tr>
+<tr><td>P3b-F5</td><td>Medium</td><td>completeness</td><td>the link guard was one-directional: an <strong>orphan</strong> reference nothing links to, or a link lacking its read condition, would pass all three structural guards</td><td><strong>applied.</strong> Now a bijection plus a read-condition assertion, in both directions</td></tr>
+<tr><td>P3b-F1</td><td>High</td><td>feasibility</td><td>(fourth raising) lazy reference reads are prose-enforced with no execution-time assertion</td><td><strong>refuted.</strong> The absolutist remedy would forbid the split AC2 mandates and would equally condemn <code>implement-feature</code>&#x27;s shipped 23-reference structure. The safety-critical subset — <code>&lt;mandatory-verification&gt;</code> and destructive-action approval — is already kept in the always-loaded body, so the risk the finding names is addressed where it actually bites</td></tr>
+<tr><td>P3b-F2</td><td>High</td><td>feasibility</td><td>(fourth raising) do not ship without a candidate-build selection test</td><td><strong>deferred to #928.</strong> The mechanism needs an installed plugin build and live sessions; reinstalling the plugin while hook-using sessions run is prohibited, so it is unavailable to this run rather than merely costly. Residual named in §5; follow-up filed</td></tr>
+</tbody>
+</table>
+<p><strong>On the two recurring Highs.</strong> They were raised in all passes with identical grounds and no new evidence. Both are genuinely out of this issue&#x27;s scope — one needs a harness that cannot be built without violating a documented prohibition, the other contradicts the issue&#x27;s own AC. Their persistence is not treated as escalating severity, but it <em>is</em> reported to the owner rather than buried, because &quot;the reviewer asked three times&quot; is information even when the answer is unchanged. Follow-up filed for the behavioral selection gate.</p>
+<p><strong>Ambiguity circuit breaker:</strong> three pass-1 findings carried <code>ambiguity_flag: true</code>, which normally stops the workflow for the owner. It did not stop here, and that call is recorded as <strong>D213</strong> with its undo: each flagged ambiguity was under-specified text in <em>this document</em> with a determinate resolution obtainable from the repo itself (F3 already implemented, F4 resolved by withdrawing the claim, F5 resolved by reading <code>corpus.py</code>), none was a judgment call only the owner could make, no two findings conflicted, and all five were applied together in one pass rather than piecemeal. A genuine product, risk or scope fork would have stopped the run.</p>
+<hr>
+<h2>5. Verification strategy</h2>
+<ul>
+<li><strong>TDD, red first:</strong> AC3&#x27;s guard is written and run <strong>before</strong> the AC1 edits, so it must FAIL</li>
+</ul>
+<p>  naming <code>pane-handoff</code> (over cap) and <code>epic-run</code> + <code>pane-handoff</code> (truncated). A guard that   passes on the unfixed tree would be worthless.</p>
+<ul>
+<li><strong>The evals gate, honestly.</strong> AC1 says &quot;touched skills&#x27; evals re-run as the triggering gate&quot;, but</li>
+</ul>
+<p>  <strong>this repo has no eval runner</strong>: no CI job and no test invokes <code>evals.json</code> (grep across   <code>tests/</code>, <code>.github/workflows/</code>, <code>scripts/</code> — the only match is an unrelated string in   <code>test_retirement_tripwire.py</code>). The <code>evals.json</code> files are data for a manual/LLM harness. So   &quot;re-run the evals&quot; is not an executable claim here, and asserting it would be a false   verification claim. What ships instead is <strong>mechanical phrase coverage</strong>: every eval prompt&#x27;s   distinctive trigger phrase must still appear verbatim in the touched skill&#x27;s description, as a   test. Evals present for adversarial-review, create-issue, incident, new-project, pane-handoff,   setup, switch, fix-bug, implement-feature; <code>epic-run</code> and <code>peer-consult</code> have <strong>no</strong> evals dir.</p>
+<p>  <strong>Phrase coverage is a PRESERVATION check, not the triggering gate — necessary, not sufficient.</strong>   The first draft of this design called it &quot;stronger than an unrunnable eval pass&quot;, and that   overclaimed: containment of a phrase does not exercise skill <em>selection</em>. A description can retain   every pinned phrase and still trigger worse, because selection depends on the surrounding   semantics and on loader/model behavior that no string assertion touches — and that failure is   silent, which is exactly the #700 failure mode. So the honest statement of what ships: phrase   coverage proves <strong>no mined phrasing was dropped</strong>, and nothing more.   <strong>Named residual:</strong> this repo has no behavioral triggering gate, and #909 does not build one —   that would mean installing a plugin build and observing real sessions select the skill, a new   harness well outside these ACs. The residual is therefore accepted and recorded rather than   hidden, and a follow-up issue is filed for a behavioral eval harness (which would also let   <code>epic-run</code>&#x27;s 403 restored characters be regression-tested for selection, not just presence).   Because <code>pane-handoff</code>&#x27;s evals exist precisely because seven sessions failed to fire it in 36   hours (#700), the diet keeps every mined phrasing <strong>verbatim</strong> rather than relying on the check.</p>
+<p>  <strong>&quot;Distinctive trigger phrase&quot; is not left to the implementer&#x27;s judgement</strong> — it is an explicit,   enumerated tuple in the test (<code>PANE_HANDOFF_REQUIRED_PHRASES</code>), not a substring derived at   runtime, so the check is reproducible and cannot be satisfied by picking a trivially short   fragment. The 17 pinned phrases are the complete quoted-variant set extracted from the   pre-change description: the 15 quoted trigger phrasings plus the two dictated mappings   (<code>herder</code>, <code>pain</code>). <code>say the word</code> is deliberately <strong>not</strong> pinned — it belongs to the ALSO-RUN   directive&#x27;s phrasing rather than to a trigger, so pinning it would convert a legitimate future   reword into a CI failure.</p>
+<p>  <strong>Why only <code>pane-handoff</code> gets a phrase tuple — narrowed deliberately, with the reason per   skill.</strong> It is the only skill whose description <em>loses</em> trigger-bearing text. <code>epic-run</code> and   <code>pane-handoff</code>&#x27;s quoting change only <strong>adds</strong> text that is currently dead, which cannot reduce   triggering. <code>adversarial-review</code> and <code>peer-consult</code> lose only their install-note tail   (<code>pip install &quot;zhipuai&gt;=2.1.5&quot;</code>, Codex-CLI-authenticated, <code>ZHIPUAI_API_KEY</code>), which contains no   trigger phrasing — and <code>adversarial-review</code>&#x27;s three eval cases are all explicit   <code>/rawgentic:adversarial-review &lt;path&gt;</code> invocations testing path containment and the egress   notice, so they do not exercise description-based selection at all. The one thing pinned for it   is that <code>/rawgentic:adversarial-review</code> itself survives in the description, since that is the key   its evals actually use.</p>
+<ul>
+<li>Whole suite at Step 9 vs the recorded baseline <strong>5208 passed / 0 failed / exit 0</strong> at</li>
+</ul>
+<p>  <code>1a03b9cb</code> (measured first-hand, not inherited).</p>
+<ul>
+<li>Both lint lanes verbatim from <code>.github/workflows/lint.yml</code>.</li>
+<li>Version 3.128.0 → <strong>3.128.1</strong> (patch: <code>chore</code>) across all three surfaces; README changelog entry</li>
+</ul>
+<p>  carrying both mandatory tail tokens on one line.</p>
+<ul>
+<li>Diagram: <strong>no WF1/WF2/WF3/WF5 spine change</strong> — WF11&#x27;s step count, gates and loop-backs are</li>
+</ul>
+<p>  untouched and only prose location moves → no diagram REV (recorded either way, per the repo   rule).</p>
+<h2>6. PR shape</h2>
+<p><strong>One PR</strong>, not two. The issue allows two (&quot;descriptions / incident split&quot;), but the repo rule is <em>one PR = one issue = one bump = one changelog entry</em>, and splitting would force either two bumps for one issue or a bump-less first PR. <code>Closes #909</code>.</p>
+<hr>
+<h2>7. Peer consult provenance (WF13 sub-step, opt-in)</h2>
+<p>Independent cross-model proposal obtained <strong>blind both ways</strong> — my own design was on disk before any result was read. Backend <code>gpt</code>, reviewer <code>gpt-5.6-sol</code>, author <code>claude-opus-5[1m]</code>, 159.7s, <code>status: success</code>, <code>diagnostic: true</code> (a proposal never authorizes a fix round). Result: <code>.rawgentic-peer-result-909.json</code>, input sha256 <code>07fdcbcf…a30aae</code>, head <code>1a03b9cb</code>.</p>
+<p><strong>Converged independently</strong> (arrived at separately, which raises confidence): single-quoted scalars for the two truncated descriptions with apostrophe doubling; install notes to the body; no broad rewrite of the other descriptions; flat references; length alone being an insufficient guard; and — notably — the peer independently warned against claiming an aggregate 10.8 KB reduction this shipment does not deliver, which is the §2 trade already recorded.</p>
+<p><strong>Adopted from the peer, changing this design:</strong></p>
+<ol>
+<li><strong>Ordering guards hardened against a vacuous pass</strong> — exactly-once + same-file + offset, and</li>
+</ol>
+<p>   duplicates fail. My original plan (a plain corpus migration) would have let an unrelated earlier    <code>git fetch origin</code> satisfy the assertion. This is the most valuable single contribution.</p>
+<ol start="2">
+<li><strong>The <code>description: trigger A # trigger B</code> regression fixture</strong>, plus plain/quoted/folded fixture</li>
+</ol>
+<p>   coverage — a case that parses cleanly and passes a length-only guard while half its triggers are    dead. It is the proof that check 3 earns its place.</p>
+<ol start="3">
+<li><strong>≤ 900-char working target</strong> for pane-handoff rather than &quot;just under 1,024&quot;, and **~100 lines</li>
+</ol>
+<p>   of headroom** on the incident split rather than the tightest strip.</p>
+<ol start="4">
+<li><strong>Read conditions per extracted reference</strong>, because references load lazily.</li>
+<li><strong>Flat-layout, link-closure, and no-<code>${CLAUDE_PLUGIN_ROOT}</code>-in-references guards</strong> — verified</li>
+</ol>
+<p>   safe repo-wide first (zero current occurrences).</p>
+<p><strong>Declined, with reason:</strong></p>
+<ul>
+<li><em>&quot;Add an epic-run eval case exercising a formerly-truncated phrase.&quot;</em> <code>epic-run</code> has <strong>no</strong></li>
+</ul>
+<p>  <code>evals</code> dir, so this creates a new evals surface — and since #271 the evals fraction/membership   are computed-checked count guards, making it a registration change outside #909&#x27;s ACs. Phrase   coverage covers the skills that do have evals; a new eval surface for <code>epic-run</code> is a clean   follow-up, not this PR.</p>
+<ul>
+<li><em>&quot;Keep both canonical command pairs as normative blocks in SKILL.md.&quot;</em> AC2 says procedure detail</li>
+</ul>
+<p>  moves to <code>references/</code>; keeping Step 10&#x27;s hotfix commands in the spine would partly defeat that.   The peer&#x27;s underlying concern — that the pins must not weaken — is <strong>fully adopted</strong> via item 1   instead, which is stronger than either original.</p>
+<ul>
+<li><em>&quot;Implement the integrity check from YAML node source marks rather than regexes.&quot;</em> The stated</li>
+</ul>
+<p>  hazard (line regexes mishandling block scalars) is real, but the shipped detector tests the   <strong>scalar style</strong> and exempts block scalars by construction, so node marks would add a PyYAML   <code>compose()</code> dependency for no additional coverage. The peer&#x27;s fixture set (item 2) is what   actually validates this, and it is adopted.</p>
+
+</main>
+<footer>Last updated: 2026-08-05 03:13 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
