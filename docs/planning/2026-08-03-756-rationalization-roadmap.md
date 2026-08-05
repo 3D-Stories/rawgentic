@@ -13,39 +13,61 @@
 ```
 
 ```callout
-warn | rawgentic is broken on main today — M0 unbreaks it
-Implementation routes through a build seat that has **never run in a real issue**; all three
-mandatory review gates **fail on a missing flag** (#863); and the workflow prose is ~4× past the
-measured instruction-compliance cliff. Milestone 0 fixes all three at once, mostly by deletion.
+ok | Updated 2026-08-05 — M0 and M1 are SHIPPED; M2 is the active milestone
+M0 (the retreat, PRs #867/#868/#870/#872) and M1 (#856/#761/#822, epic #875) are merged. The
+2026-08-05 backlog rationalization closed 47 issues, folded 3 duplicates, filed 3 decision
+tickets, and reordered everything below M2 by impact — full evidence in the companion doc
+`2026-08-05-backlog-rationalization-post-m1.md` (§11 has the summary). The original 2026-08-03
+text below M0/M1 is kept as history; M2-and-beyond reflects the new ordering.
 ```
 
 ## The roadmap
 
 ```phases
-M0 — UNBREAK: the retreat | 4 PRs · do first | crit
-  M0a | Review runner lands (unused): codex+GLM, pinned reviewer identity, reopen-token choke point (#855), error classes (#857), freshness binding | note
-  M0b | Behavioral cutover: WF2/WF3 inline again; runner at Steps 4/8a/11; WF5/WF13 cut over; ceremony + [Headless:] cuts; run-record relaxation + prose-pin rewrites ride along — **WF2 runnable the day this merges** | crit
-  M0c | Config contraction, with shims: setup/config surfaces, agents replaced, ~20 workspace entries | note
-  M0d | Delete ~33k lines: phase_executor, 5 coupled hooks, the old review engine, headless machinery; tripwire + smoke guards; plugin-reinstall cutover | ok
-M1 — STAY SMALL | 2–3 PRs | warn
-  #856 | CI byte ceilings (post-retreat baseline) + steps.md split into step-local files | note
-  #761 | WF2-lite lane for disposable-class work | note
-  #822 | Version-surface + changelog check folded into the existing pin test | note
-M2 — THE PANE-HANDOFF CHAIN | 4–5 PRs · now load-bearing | warn
-  LB | Launcher robustness first (#731+#800+#835) — the observed flakiness lives here | crit
-  MR | Meter rework (D177): two-threshold pane-handoff driving, never-latch, mid-turn delivery, 55/75, rolling summary, code shrink | note
-  #726 | In-flight-work gate + durable-path check + abandoned-work named to the successor | note
-  ER | Epic-run rework (D176): children continue via pane-handoff; #769 boundary sweep; receipt machinery retires | note
-  GR | Trusted goal reader (#864+#772): LIVE / CLEARED / NEVER_ARMED / AMBIGUOUS | note
-  #806 | Goal cap read from the constant + exact-text display; no auto-arm | note
-M3 — SMALL TAIL | 3–4 PRs | note
-  #750 | Registry append helper (kills #800's variance at the source) | note
-  #759 | Owner deferral registry, lite | note
-  #808 | WF3's own budget-exhausted close | note
-  #860 | Wire consult-on-exhaustion into the gates | note
-LATER — owner-call, unscheduled | watch list | note
-  #792 | Fail-open quota preflight from statusline rate_limits | note
-  WL | 10-item future watch list (§6): native sandboxing, subagent-death fix, usage API… | note
+M0 — UNBREAK: the retreat | SHIPPED 2026-08-04 · PRs #867 #868 #870 #872 + #869 | ok
+  M0a | Review runner landed: codex+GLM, pinned reviewer identity, reopen-token choke point (#855), error classes | ok
+  M0b | Behavioral cutover: WF2/WF3 inline; runner at Steps 4/8a/11; WF5/WF13 cut over — WF2 runnable again same day | ok
+  M0c | Config contraction, with shims | ok
+  M0d | ~33k lines deleted; tripwire + smoke guards; cutover done | ok
+M1 — STAY SMALL | SHIPPED 2026-08-05 · epic #875 | ok
+  #856 | CI byte ceilings + steps.md split into step-local files (#874) | ok
+  #761 | Task-class field through drafting + review gates (lane split to #923) | ok
+  #822 | Version-surface + changelog check folded into the pin test | ok
+M2 — THE PANE-HANDOFF CHAIN | epic #906 · active | crit
+  QW | Quick wins: #916 stale-page redeploy · #928 wire the 9 evals.json into the shipped skill-creator harness | note
+  1 | Launcher robustness: #731 + #835 — #800 already shipped (PR #912) | crit
+  2 | Meter rework (D177): #797 55/75 + rolling summary · #729 residual (ack-tracking) · #734 blind-start | note
+  3 | #726 in-flight-work gate + durable-path check + abandoned work named to the successor | note
+  4 | Epic-run rework (D176): #927 fresh-session default · #769 boundary sweep · close-or-fold owed: #845 #846 #848 #849 #850 #851 | note
+  5 | Trusted goal reader: #864 + #772 + #878 | note
+  6 | #806 goal cap from the constant + exact-text display; no auto-arm | note
+  SP | M1 spillover: #923 WF2-lite lane · #899 word budget | note
+M2.5 — MINIMUM TELEMETRY TRUTH | gates away mode | warn
+  #888 | One transactional persistence contract (absorbs #588 + #355) | note
+  #363 | Per-run usage attribution (absorbs #660) | note
+  #356 | Dispatch entries that survive session seams | note
+M3 — TRUST THE NEW MACHINERY | runner · review loop · config | warn
+  RH | Runner hardening (siblings, not merged): #876 trusted --brief · #894 death/OOM evidence · #365 contaminated returns · #893 engagement evidence | note
+  RL | Review loop: #889 clean-round token refund · #892 re-litigation flag · #891 retire fail-open riskLevel default · #895 blindness guard | note
+  CFG | #884 + #883 config pair · roadmap tail: #860 consult-on-exhaustion · #808 WF3 close · #750 registry helper · #759 deferral registry | note
+M4 — AWAY MODE, BOUNDED | epic #871 · gated on M2 + M2.5 | warn
+  #871 | A narrow first slice: explicit duration, cancel, recovery limits | note
+  #586 | Resume launcher that survives /clear | note
+M5 — IDENTITY & CONCURRENCY + WF HYGIENE | grouped pairs | note
+  P1 | #345 + #346 one keying design, two migrations · #593 + #594 concurrent same-project sessions | note
+  P2 | #372 WF14-vs-guard · #364 doc-only resume state · #370 + #379 ambiguity-breaker pair | note
+  P3 | #395 authored-blind checklist · #658 call-site inventory · #890 consumer-project hook invocation | note
+M6 — TAIL | small, independent | note
+  #361 | Step-16 assembly cross-checks | note
+  #380 | wal-context internal deadline | note
+M7 — SKILLS & TOOLING | convenience tier | note
+  T1 | #400 usage auditor · #390 workspace-doctor · #391 session-index v2 | note
+  T2 | #534 retire epic-run-analysis (unblocked, #508 shipped) · #536 deploy-verify · #537 security-vet · #399 group inference · #350 CodeGuard | note
+LATER — with reopen triggers, not vibes | watch list §6 refreshed | note
+  #792 | Quota preflight — still statusline-based; no usage API exists (verified 2026-08-05) | note
+  WF | #358 + #359 (#360) WF15/16 codex design workflows | note
+  DT | Decision tickets from fired triggers: #931 native sandboxing · #932 LLM-judged hooks · #933 sandbox-runtime | note
+  PK | #738 parked (trigger: project reactivates) · #568 Hermes substrate (trigger: a consumer beyond ask/notify-owner) | note
 ```
 
 ```legend
@@ -186,6 +208,10 @@ outside explicitly archival dirs) and an import/CLI smoke test for surviving hoo
 - The **issue throttle** (D179) lands in the workspace manual.
 
 ### M2 — THE PANE-HANDOFF CHAIN: now load-bearing, so make it boring
+*(Amended 2026-08-05: #800 shipped in PR #912 so item 1 shrinks; item 4 gains #927; quick wins
+#916 + #928 and M1 spillover #923 + #899 ride this milestone's tail. Epic #906 is the tracking
+surface. The 2026-08-03 text below is otherwise unchanged.)*
+
 Priority order (epic-run depends on this chain per D176):
 1. **Launcher robustness** (#731+#800+#835): error text on every `failed_step` + capture-before-
    cleanup + name preflight; path-equivalent `project_switched` compare; goal-send Enter-nudge
@@ -211,16 +237,60 @@ Priority order (epic-run depends on this chain per D176):
    AMBIGUOUS) behind the CLI and both destructive paths.
 6. **#806** rescoped: goal cap read from the constant + exact-text display; no auto-arm.
 
-### M3 — SMALL TAIL
-#750 (registry append helper — also removes #800's variance at the source) · #759-lite (owner
-deferral registry, driver + WF2 Step 1 check) · #808 (WF3's own budget-exhausted close) ·
-#860 (wire consult-on-exhaustion into the WF2/WF3 gates — the runner's consult verb itself ships
-in M0a).
+### M2.5 — MINIMUM TELEMETRY TRUTH *(added 2026-08-05, consult-driven)*
+Before any unattended expansion, records must be trustworthy: **#888** — one transactional
+persistence contract (absorbs #588's dropped-on-compaction evidence and #355's blind-append
+duplicates): run-records that land exactly once, with the persist-before-merge ordering codified ·
+**#363** — per-run usage attribution instead of session-cumulative snapshots (absorbs #660) ·
+**#356** — dispatch entries that survive session seams. Rationale (gpt-5.6-sol, adopted): away
+mode before durable records produces unattended runs that cannot be reconstructed.
 
-### LATER / watch
-Rescoped #792 (fail-open quota preflight from statusline `rate_limits` — the
-pareshrnayak/quota-guard architecture) · PreCompact auto-dump backstop (Sonovore/thepushkarp
-patterns) if handoffs ever miss · the 10-item future watch list in §6.
+### M3 — TRUST THE NEW MACHINERY *(reordered 2026-08-05; absorbs the old "small tail")*
+The retreat's replacement machinery earns trust here. Kept as **linked siblings, not merged** —
+different trust boundaries need independent tests (consult finding, adopted):
+- **Runner hardening:** #876 (trusted `--brief` for review-artifact) · #894 (exit/signal + OOM
+  evidence on a no-END death) · #365 (contaminated/fabricated-citation returns get named handling)
+  · #893 (Step 8a engagement-evidence rule for runner passes).
+- **Review-loop economics:** #889 (refund an unused reopen token on a clean round) · #892 (fuzzy
+  re-litigation flag, never auto-dissolve) · #891 (retire the fail-open absence-based riskLevel
+  default) · #895 (blindness guard: reserved artifact prefix + pre-draft search exclusion).
+- **Config + old tail:** #884 + #883 (resolver distinguishes project-absent from field-absent;
+  setup offers diffReviewMode) · #860 (consult-on-exhaustion into the gates) · #808 (WF3's own
+  budget-exhausted close) · #750 (registry append helper) · #759-lite (owner deferral registry).
+
+### M4 — AWAY MODE, AS A BOUNDED SLICE *(added 2026-08-05)*
+**#871** (the epic — replace the retired headless stopgaps with a proper "nobody is watching"
+mode; first slice with explicit duration, cancellation, artifact and recovery limits) + **#586**
+(durable resume that survives /clear). Gated on M2 reliability + M2.5 records. #654's unattended
+remainder (keystroke-free restart) lands here. Decision ticket #931 (native Bash sandboxing)
+feeds this epic's design.
+
+### M5 — PROJECT IDENTITY & CONCURRENCY + WF HYGIENE *(2026-08-05)*
+#345 + #346 (one project-scoped keying design; two migration tickets — .wf2-state collisions and
+WF14 store routing) · #593 + #594 (concurrent same-project sessions: canonical notes home +
+auto-worktree on second bind — grouped siblings) · #372 (WF14 report path vs wal-bind-guard) ·
+#364 (doc-only-commits resume state) · #370 + #379 (ambiguity-breaker pair: determinable-finding
+exemptions + visible inspection) · #395 (authored-blind pre-push checklist) · #658 (call-site
+inventory for class-of-defect fixes) · #890 (consumer-project hook invocation — measure first).
+
+### M6 — TAIL *(2026-08-05)*
+#361 (Step-16 assembly cross-checks against session-note ground truth) · #380 (wal-context
+internal execution deadline).
+
+### M7 — SKILLS & TOOLING *(2026-08-05)*
+#400 (WF17 invoked-vs-should-have-fired auditor — conceptual pair of #928, which ships in M2) ·
+#390 (workspace-doctor) · #391 (session-index v2) · #534 (retire epic-run-analysis — unblocked,
+#508 shipped) · #536 (deploy-verify skill) · #537 (security-vet skill) · #399 (runner-group
+inference) · #350 (CodeGuard rules).
+
+### LATER / watch *(refreshed 2026-08-05)*
+#792 (quota preflight — still statusline-based; **no programmatic usage API exists**, verified) ·
+#358 + #359 under #360 (WF15/16 codex design workflows — the runner's consult verb makes them
+cheaper now) · #738 (parked; trigger: a listed project reactivates) · #568 (Hermes substrate,
+rescoped; trigger: a consumer beyond ask-owner/notify-owner) · the three fired-trigger decision
+tickets **#931/#932/#933** (native sandboxing → #871, LLM-judged hooks → prose-gate replacement,
+sandbox-runtime → codex containment) · PreCompact auto-dump backstop if handoffs ever miss · the
+§6 watch list (three items fired 2026-08-05, seven standing).
 
 ## 5. Research this plan stands on (so we stop guessing)
 - **Anthropic (primary sources):** SKILL.md <500 lines, progressive disclosure, scripts over prose
@@ -241,17 +311,18 @@ patterns) if handoffs ever miss · the 10-item future watch list in §6.
 - **Subagent silent-death rates 14–30%** (claude-code#47936): the artifact gate + proof-token
   pattern is the cheap mitigation until the SDK surfaces termination status.
 
-## 6. Future watch list (not now; revisit on trigger)
-1. Claude Code native Bash sandboxing (replaces prose "don't touch X" for unattended runs)
-2. anthropic-experimental/sandbox-runtime (sandboxing the codex CLI itself)
-3. Async-subagent reliability fix (#47936 — shrinks our artifact-gate machinery when fixed)
-4. Agent teams (only if parallel implementation ever returns)
-5. Background agents / agent-view (if epic-run outgrows panes)
-6. prompt/agent-type hooks (LLM-judged Stop gates, ~$0.001/fire — for subjective gates)
-7. Codex CLI hooks (same guards on the review side)
-8. codex --output-schema maturity (adopt-now; watch for changes)
-9. Native usage API (retires statusline-tee quota reading)
-10. Plugin marketplace (only if rawgentic is ever shared)
+## 6. Future watch list (not now; revisit on trigger) — *statuses verified 2026-08-05*
+1. Claude Code native Bash sandboxing — **FIRED: shipped** (`/sandbox`, Seatbelt/bubblewrap) → decision ticket **#931**
+2. anthropic-experimental/sandbox-runtime — **FIRED: shipped** (npm, wraps arbitrary CLIs) → decision ticket **#933**
+3. Async-subagent reliability fix (#47936) — still open upstream; artifact-gate machinery stays
+4. Agent teams — shipped experimental (v2.1.178+, env-flag-gated); trigger unchanged: only if parallel implementation returns
+5. Background agents / agent-view — shipped (`claude agents`, v2.1.139+); trigger unchanged: if epic-run outgrows panes
+6. prompt/agent-type hooks — **FIRED: shipped** (type:prompt / type:agent, official hooks docs) → decision ticket **#932**
+7. Codex CLI hooks — partial (UserPromptSubmit exists; PostToolUse "soon")
+8. codex --output-schema — mature (incl. `exec resume --output-schema` since 0.132.0); adopted
+9. Native usage API — still absent (only `/usage` + OTel export); #792 stays statusline-based
+10. Plugin marketplace — shipped; trigger unchanged: only if rawgentic is ever shared
+11. *(added 2026-08-05)* Anthropic skill-evals harness — **shipped** (skill-creator 2.0: evals.json, benchmark, trigger tuning); adopted via #928 in M2
 
 ## 7. What we deliberately do NOT do
 - No wholesale revert of the last 4 days — good fixes stay; dead weight deletes forward.
@@ -369,3 +440,33 @@ in `docs/measurements/run_records.jsonl` (`workflow: "plain-session"`).
   routing is expected until then.
 - `docs/reviews/` is gitignored by design — the M0 review verdicts live in the PR bodies;
   the raw result JSONs exist only on this host.
+
+## 11. M1 shipped + the 2026-08-05 backlog rationalization (written 2026-08-05)
+
+**M1 shipped whole** (epic #875, closed): #856 (CI byte ceilings + `steps.md` split into
+step-local files, PR #874's successor), #761 (task-class field through drafting and review
+gates — the lite-lane half split to #923 by owner decision after pass 4 of its design gate
+returned 8 new High findings), #822 (version surfaces + changelog tail folded into the pin
+test). M1 doubled as the test that the retreat worked: WF2 ran real issues again (#879, #880
+run-records are in the store).
+
+**The backlog rationalization** (owner-approved this session, consult: gpt-5.6-sol via the
+runner's own `consult` verb — the M0a machinery reviewing its own backlog):
+
+- **47 issues closed** with citing comments: the roadmap §3 closures that were never executed
+  (D174/D178 leftovers), work M0a had already delivered (#855, #793, #357), subjects the retreat
+  deleted (the HD2 herdr-executor epic #621 + children, bake-off #484, seats #549, build-seat
+  issues #666/#671, driver-bench #624/#681, #371, #661), five superseded tracking epics
+  (#590/#595/#596/#597/#598) plus #599, #626, #685, #722 — and **#756 itself**, closed with its
+  final summary as §8 directed. #670 verified fixed in claude-skills#16 by probe before closing.
+- **3 duplicates folded:** #660→#363, #588+#355→#888.
+- **3 decision tickets filed** (owner-approved under the D179 throttle): #931 native sandboxing,
+  #932 LLM-judged hooks, #933 sandbox-runtime — the three §6 triggers that fired.
+- **Open issues: 116 → 72.** Epic #906 (M2) and this roadmap are the only tracking surfaces.
+- **Ordering changes** (consult-driven, adopted): #928 to the front (Anthropic's skill-evals
+  harness shipped and our nine `evals.json` files already match its schema); a minimum
+  telemetry-truth layer (M2.5) gates away mode; away mode runs as a bounded slice (M4), not a
+  wholesale deferral; sibling pairs stay linked-but-separate rather than merged.
+
+Full evidence, per-issue: `2026-08-05-backlog-rationalization-post-m1.md`
+(hosted: https://rawgentic-analysis-backlog-post-m1.vercel.app).

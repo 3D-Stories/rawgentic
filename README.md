@@ -725,6 +725,20 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.128.3 (2026-08-05)
+- **Post-M1 backlog rationalization: 116 open issues dispositioned, the roadmap reordered M2-and-
+  beyond (#756 follow-through).** 47 issues closed with citing comments (never-executed D174/D178
+  rulings, work M0a had already shipped, subjects the retreat deleted, five superseded tracking
+  epics, and epic #756 itself with its final summary); 3 duplicates folded (#660→#363,
+  #588+#355→#888); 3 owner-approved decision tickets filed for fired watch-list triggers
+  (#931/#932/#933). The roadmap doc gains an updated phases block (M2 amended: #800 shipped;
+  #927/#916/#928/#923/#899 placed), new M2.5–M7 milestone sections ordered by impact, a
+  refreshed §6 watch list (three triggers fired, statuses verified), and §11 recording the
+  rationalization; the per-issue evidence ships as
+  `docs/planning/2026-08-05-backlog-rationalization-post-m1.md` + `.html` (hosted). Consult:
+  gpt-5.6-sol via the runner's own `consult` verb. Docs + issue hygiene only — no behavior
+  change; no workflow-spine change → no diagram REV. Suite 5254→5254.
+
 ### v3.128.2 (2026-08-05)
 - **The last two hand-pinned skill-count strings are now computed, finishing the #271 conversion
   (#910, epic #875).** `CLAUDE.md` §4 mistake #2 named "All 7 config-driven skills" and "6 workspace

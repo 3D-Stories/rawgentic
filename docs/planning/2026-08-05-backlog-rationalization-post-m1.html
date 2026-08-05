@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>Post-M1 backlog rationalization — the full 116-issue disposition</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-analysis{background:radial-gradient(1100px 560px at 82% -12%,#1a243f 0%,transparent 60%),radial-gradient(900px 500px at -12% 8%,#17203a 0%,transparent 55%),var(--bg)}
+.tpl-analysis .wrap{max-width:880px;padding:0 24px 96px}
+.tpl-analysis header{padding:48px 0 10px;border-bottom:none;margin-bottom:26px}
+.tpl-analysis h1{font-size:clamp(28px,5vw,42px)}
+.tpl-analysis h2{font-size:22px;margin:40px 0 14px}
+
+/* #76 — the frame's companions. The FRAME slots above own ground, measure and type scale; these
+   are the treatments that only make sense once those exist.
+
+   THE EYEBROW, as the reference has it: an inline-block pill in accent over a tint of itself,
+   not a bare line of small caps. `--req-c-bg` rather than a new value — it is the accent hue's
+   own tint, already in the token layer and already contrast-scored there. */
+.tpl-analysis header .eyebrow{display:inline-block;color:var(--accent);
+background:var(--req-c-bg);border:1px solid var(--line);border-radius:999px;padding:5px 13px;
+font-size:11.5px;letter-spacing:.14em}
+/* The headline gets the reference's tight leading and a measure of its own: a display line that
+   runs the full 880px reads as a paragraph, not a title. */
+.tpl-analysis h1{line-height:1.12;max-width:20ch}
+/* The lede — the reference's `.lead`. This type's first-read element is the headline ANSWER, and
+   the subtitle is where it lands. */
+.tpl-analysis header .sub{font-size:17.5px;line-height:1.6;color:var(--ink-2);max-width:62ch}
+.tpl-analysis .an-index{background:var(--surface);border:1px solid var(--line);
+border-radius:12px;padding:10px 18px;margin:18px 0}
+.tpl-analysis .an-index ol{margin:.2em 0;padding-left:1.2em}
+.tpl-analysis .an-index li{margin:.25em 0}
+.tpl-analysis .an-index a{color:var(--ink-2);text-decoration:none;border-bottom:1px solid var(--line)}
+.tpl-analysis .an-index a:hover{color:var(--accent);border-bottom-color:var(--accent)}
+.tpl-analysis .an-q{border-top:1px solid var(--line);padding-top:14px;margin-top:24px}
+/* #76/D70: the reference's 22px section scale and 40px rhythm, applied where the page can
+   actually read them. The FRAME's h2 slots cannot reach a sectioned style. */
+.tpl-analysis .an-q>h3{font-size:22px;margin:40px 0 14px}
+.tpl-analysis .an-q h3{font-size:17px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.tpl-analysis .an-answer{font-size:16.5px;line-height:1.55;color:var(--ink);font-weight:550;
+border-left:3px solid var(--accent);padding-left:14px;margin:.5em 0 .9em}
+/* The base .chip shape lives in _ROADMAP_STYLE, which only roadmap and
+   dashboard inject — so an analysis chip needs its own shape, not just a
+   colour, or it renders as tight coloured text. */
+.tpl-analysis .an-conf{font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;
+text-transform:uppercase;white-space:nowrap}
+.tpl-analysis .c-measured{color:var(--req-c);background:var(--req-c-bg)}
+.tpl-analysis .c-confirmed{color:var(--req-c);background:var(--req-c-bg)}
+.tpl-analysis .c-inferred{color:var(--sev-med);background:var(--sev-med-bg)}
+.tpl-analysis .c-unstated{color:var(--ink-3);background:var(--code)}
+/* Stepped figure — the reference's `<ol class="steps">`: the number is the quiet index, the lead
+   sentence carries the weight, and the detail drops to the note voice underneath it. Static, so
+   there is nothing to open; see the docstring for why this is `steps` and not `steprail`. */
+.tpl-analysis .an-figure{background:var(--surface);border:1px solid var(--line);
+border-radius:12px;padding:14px 18px;margin:18px 0}
+.tpl-analysis .an-figure ol{display:grid;gap:12px;margin:0;padding:0}
+.tpl-analysis .an-figure .blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px}
+.tpl-analysis .an-figure .blk-n{grid-row:1/3;font:700 13px/1.5 ui-monospace,Menlo,Consolas,
+monospace;color:var(--accent);align-self:start}
+.tpl-analysis .an-figure .blk-title{font-weight:650;color:var(--ink)}
+.tpl-analysis .an-figure .blk-text{color:var(--ink-3);font-size:13.5px;line-height:1.55}
+/* Measurement callout — the reference's `.note` voice, promoted to a panel because in this type
+   a measurement is the evidence the answer rests on. */
+.tpl-analysis .an-measure>.blk-callout{background:var(--code);border-left-color:var(--accent);
+border-radius:10px;padding:10px 15px}
+.tpl-analysis .an-measure .blk-title{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+/* Comparison table — the reference's `<table class="compare">`. No marker: a markdown table gets
+   no CLASS or wrapper hook from the renderer (its structural hooks — table/thead/tbody/td — are
+   all it has), so this styles the bare element scoped to this template, exactly as `review` and
+   `dashboard` do for their zebra rows.
+   `:not(.telemetry):not(.gates)` is NOT defensive dressing. The renderer appends its own
+   `table.gates` and `table.telemetry` inside `<main>`, so an unqualified `.tpl-analysis table`
+   restyled them too — a leak the cross-style gate CANNOT see, because it stays inside `analysis`.
+   Found by review, reproduced, then excluded.
+   The row-header column is `tbody td:first-child`, NOT `tbody th`: markdown emits every body
+   cell as `<td>`, so the `th` form was a dead selector that styled nothing. Also review's. */
+.tpl-analysis table:not(.telemetry):not(.gates){border:1px solid var(--line);border-radius:12px;
+border-collapse:separate;border-spacing:0;overflow:hidden;margin:18px 0}
+.tpl-analysis table:not(.telemetry):not(.gates) thead th{background:var(--code);
+font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.06em;text-transform:uppercase;
+color:var(--ink-3);text-align:left}
+.tpl-analysis table:not(.telemetry):not(.gates) tbody td:first-child{font-weight:650;
+color:var(--ink)}
+.tpl-analysis table:not(.telemetry):not(.gates) tbody tr:nth-child(even){background:var(--code)}
+
+:root{--accent:#f2a65e;}
+:root[data-theme=dark]{--accent:#f2a65e;}
+:root[data-theme=light]{--accent:#a26211;}
+@media print{:root,:root[data-theme=dark]{--accent:#a26211;}}
+</style>
+</head>
+<body class="tpl-analysis">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-05 06:58 MDT</div>
+<h1>Post-M1 backlog rationalization — the full 116-issue disposition</h1>
+
+</header>
+<main>
+<p><strong>Date:</strong> 2026-08-05 · <strong>Author:</strong> Fable 5, with gpt-5.6-sol as consultant (runner <code>consult</code> verb, repo-verified) <strong>Follows:</strong> the 2026-08-03 rationalization roadmap (<code>2026-08-03-756-rationalization-roadmap.md</code>). M0 and M1 are merged; this doc dispositions everything that remains.</p>
+<p>Of the 116 open issues, <strong>40 can close today on evidence</strong> (owner rulings that were never executed, work that already shipped, or subjects the M0 retreat deleted), <strong>6 are gray-zone calls</strong>, <strong>1 transfers</strong> to the repo its code moved to, and <strong>69 stay open</strong> — reordered into six milestones plus a LATER shelf, most impactful first. Nothing has been closed, filed, or edited yet; this document is the evidence, and four owner questions follow it.</p>
+<div class="blk blk-chips"><span class="blk-chip is-note">116 open issues, all dispositioned</span><span class="blk-chip is-ok">40 close today, with evidence</span><span class="blk-chip is-warn">6 gray-zone owner calls</span><span class="blk-chip is-note">1 transfer (code moved repos)</span><span class="blk-chip is-note">69 stay open across 6 milestones</span><span class="blk-chip is-warn">3 watch-list triggers fired</span></div>
+<div class="blk blk-callout"><div class="blk-callout is-info"><div class="blk-title">How to read this</div><p>Every row names its evidence. &quot;Ruled&quot; = you already decided it (D174/D178/roadmap §3) and the closure was simply never executed. &quot;Verified&quot; = I checked the code on main (ce9eba67) today. A closed issue is one click to reopen — nothing here is destructive.</p></div></div>
+<nav class="an-index"><ol><li><a href="#s1">1. Where we are</a></li><li><a href="#s2">2. The 40 closures, with evidence</a></li><li><a href="#s3">3. The six gray-zone calls</a></li><li><a href="#s4">4. The transfer</a></li><li><a href="#s5">5. What stays open — M2 and beyond, most impactful first</a></li><li><a href="#s6">6. What the external research changed (verified today)</a></li><li><a href="#s7">7. Consult provenance</a></li><li><a href="#s8">8. What has NOT been done</a></li></ol></nav>
+<section class="an-q" id="s1"><h3>1. Where we are <span class="chip c-confirmed an-conf">VERIFIED</span></h3><p class="an-answer">M0 (the executor retreat, PRs #867/#868/#870/#872) and M1 (prose ceilings + lite lane: #856, #761, #822, epic #875) are <strong>merged, verified via the GitHub API today</strong>. The roadmap&#x27;s §3 issue cleanup, however, was only partly executed: 14 of the 28 ruled closures happened; the rest are still open. On top of that, the retreat deleted the subject matter of ~17 older issues nobody re-triaged, and five things shipped without their issues being closed. That is most of what &quot;close today&quot; is.</p>
+<p>M2 epic <strong>#906</strong> exists and is sound. One update: its item 1 listed #731+#800+#835, but <strong>#800 was fixed and closed by PR #912</strong> — item 1 is now #731+#835 only.</p></section>
+<section class="an-q" id="s2"><h3>2. The 40 closures, with evidence <span class="chip c-confirmed an-conf">VERIFIED</span></h3><h3>Group 1 — you already ruled these (7)</h3>
+<table>
+<thead><tr><th>Issue</th><th>Ruling</th><th>Note</th></tr></thead>
+<tbody>
+<tr><td>#749</td><td>D178 kill</td><td>headless mode itself was deleted in M0d — the subject no longer exists</td></tr>
+<tr><td>#760</td><td>D178 kill</td><td>stop-hook circuit breaker, killed by name</td></tr>
+<tr><td>#763</td><td>D178 kill</td><td>its one surviving residual (visible both-projects confirmation) already rides #906 item 4</td></tr>
+<tr><td>#764</td><td>D178 kill</td><td>different-model done-verifier, killed by name</td></tr>
+<tr><td>#775</td><td>D174 retreat</td><td>Step-3 bake-off hardening; the bake-off is gone (zero matches in skills/ or hooks/)</td></tr>
+<tr><td>#815</td><td>roadmap §7</td><td>closed-parked with #777 &quot;until a producer boundary exists again&quot; — the closing comment will carry that reopen trigger verbatim</td></tr>
+<tr><td>#861</td><td>D174/M0d</td><td>the <code>--gate-file</code> binding it reports left with <code>complexity_gate</code> (plan_lib.py:3271 records the removal)</td></tr>
+</tbody>
+</table>
+<h3>Group 2 — shipped or superseded, verified in code (5)</h3>
+<table>
+<thead><tr><th>Issue</th><th>Verified evidence</th></tr></thead>
+<tbody>
+<tr><td>#855</td><td>the reopen-token choke point IS the M0a runner: <code>review_runner.py</code> requires <code>--reopen-token</code>, minted by <code>plan_lib review-reopen</code></td></tr>
+<tr><td>#793</td><td><code>NOISE_STRIP_PATHS</code> + refuse-oversize + bounded truncation retry live at <code>review_runner.py:59-63,116</code></td></tr>
+<tr><td>#357</td><td>the runner always pins an explicit <code>-m</code> (review_runner.py:327-339); model choice is per-dispatch prose now; codex CLI 0.146.0 installed</td></tr>
+<tr><td>#654</td><td>the spike&#x27;s ask (&quot;nothing can see context fullness&quot;) shipped: <code>context_meter.py</code> + the #687 trigger (closed). The unattended-restart remainder is named into #871 by comment</td></tr>
+<tr><td>#362</td><td>superseded by #874&#x27;s step-local files — marker discipline now travels inside each step file. Refile with fresh post-M1 evidence if drops recur</td></tr>
+</tbody>
+</table>
+<h3>Group 3 — the M0 retreat deleted their subject (17)</h3>
+<table>
+<thead><tr><th>Issues</th><th>Deleted subject</th></tr></thead>
+<tbody>
+<tr><td>#616 #617 #618 #619 #620 #621</td><td>HD2 &quot;herdr executor runtime&quot; epic + children — <code>phase_executor/</code> is gone</td></tr>
+<tr><td>#624 #681</td><td>driver-bench cell / driver-bench anomaly — <code>driver_bench_lib</code> deleted (#681 additionally: severity-low, never reproduced)</td></tr>
+<tr><td>#484</td><td>bake-off candidate config — bake-off retired</td></tr>
+<tr><td>#549</td><td>per-seat response-token budgets — seats deleted</td></tr>
+<tr><td>#659</td><td>executor AC1 herdr-drift gate — gone; <code>herdr-pin.json</code> is self-authoritative and test-guarded now</td></tr>
+<tr><td>#666 #671</td><td>build-seat impossibility issues — the build seat is deleted</td></tr>
+<tr><td>#371</td><td>implementer worktree spawn collision — the <code>rawgentic-implementer</code> agent is deleted; <code>probe-parallelism</code> is no longer called by any prose</td></tr>
+<tr><td>#661</td><td><code>park_and_reset</code> at the design loop-back seam — the primitive itself no longer exists in hooks/</td></tr>
+<tr><td>#450</td><td>ultracode interop as written targets the deleted model-routing + Agent-tool dispatch; the idea moves to the LATER shelf with a trigger criterion</td></tr>
+<tr><td>#599</td><td>executor-economics epic — every child above</td></tr>
+</tbody>
+</table>
+<h3>Group 4 — tracking epics the plan supersedes (8)</h3>
+<p>Per gpt-5.6-sol&#x27;s condition: each closes <strong>only with every live child&#x27;s destination named in the closing comment</strong>. Destinations below.</p>
+<table>
+<thead><tr><th>Epic</th><th>Live children → new home</th></tr></thead>
+<tbody>
+<tr><td>#590 telemetry</td><td>#355→fold #888 · #356, #363→M2.5 · #361→M6 · #588→fold #888</td></tr>
+<tr><td>#595 autonomy-safety</td><td>#364, #370, #379→M5 · #365→M3 · #362, #371 close above</td></tr>
+<tr><td>#596 concurrency</td><td>#345, #346, #593, #594, #372→M5</td></tr>
+<tr><td>#597 unattended</td><td>#380→M6 · #586→M4 · #568→LATER (rescoped)</td></tr>
+<tr><td>#598 skill hygiene</td><td>#350, #390, #391, #399, #400, #534, #536, #537→M7</td></tr>
+<tr><td>#685 UAT backlog</td><td>#390→M7 · #670→transfer · #654, #659, #666(#671), #681 close above · #680→gray zone</td></tr>
+<tr><td>#722 context diet</td><td>#738→LATER (parked by its own text) · #745→gray zone</td></tr>
+<tr><td>#756 the origin epic</td><td>closes with a final honest summary; #906 + this plan are the tracking surface (roadmap §8 sanctioned this)</td></tr>
+</tbody>
+</table>
+<h3>Merges — true duplicates fold into survivors (3)</h3>
+<table>
+<thead><tr><th>Folds</th><th>Into</th><th>Why one issue</th></tr></thead>
+<tbody>
+<tr><td>#660</td><td><strong>#363</strong></td><td>the same defect (run-record usage is session-cumulative), two evidence sets; one attribution fix satisfies both</td></tr>
+<tr><td>#588, #355</td><td><strong>#888</strong></td><td>one transactional persistence contract: cannot-be-dropped (#588), cannot-be-duplicated (#355), codified pre-merge path (#888)</td></tr>
+</tbody>
+</table></section>
+<section class="an-q" id="s3"><h3>3. The six gray-zone calls <span class="chip c-unstated an-conf">—</span></h3><p class="an-answer">My recommendation is <strong>close all six</strong>; gpt-5.6-sol dissents on two (marked).</p>
+<table>
+<thead><tr><th>Issue</th><th>Recommendation</th><th>The call</th></tr></thead>
+<tbody>
+<tr><td>#622</td><td>close</td><td>plugin-native herdr skill — a user-level copy exists at <code>~/.claude/skills/herdr</code> (HERDR_ENV-gated). Codex dissent: a user-local install isn&#x27;t a product decision; closing must SAY it&#x27;s a non-product decision, which the comment will</td></tr>
+<tr><td>#745</td><td>close</td><td>&quot;review rawgentic&#x27;s own CLAUDE.md&quot; — the 2026-08-04 doctor-plus audit + #908 (§5 trim, cross-tier dedup) did this work; the foreign-project names its body flags (kukakuka, sentinel) are already gone from the manual. Codex dissent: map each AC before closing</td></tr>
+<tr><td>#623</td><td>close</td><td>stall-triage console recipes — tiny docs chore from the dissolved console epic; goes to the LATER shelf as prose</td></tr>
+<tr><td>#625</td><td>close</td><td>dashboard polish placeholder whose ACs literally read &quot;TBD&quot;</td></tr>
+<tr><td>#626</td><td>close</td><td>herdr Phase C epic — every child is done, dead, or closing (#622, #623, #624, #625)</td></tr>
+<tr><td>#680</td><td>close</td><td>herdr detection-manifest bug reported against an old herdr; we now pin 0.8.0, and the defect belongs upstream (herdrdev/herdr). Comment: retest on 0.8.0, file upstream if it persists</td></tr>
+</tbody>
+</table></section>
+<section class="an-q" id="s4"><h3>4. The transfer <span class="chip c-unstated an-conf">—</span></h3><p class="an-answer"><strong>#670</strong> (render_artifact.py mangles inline links/rules/wrapped list items): that script left this repo in #807; the render engine lives in the <strong>claude-skills</strong> repo&#x27;s design-doc-publish add-on. <code>gh issue transfer 670 3D-Stories/claude-skills</code> moves it with history; reversible by transferring back.</p></section>
+<section class="an-q" id="s5"><h3>5. What stays open — M2 and beyond, most impactful first <span class="chip c-confirmed an-conf">VERIFIED</span></h3><p class="an-answer">Ordering logic (mine + codex&#x27;s two corrections, adopted): <strong>evals baseline early</strong> (cheapest guard over the whole skill surface), <strong>a minimum telemetry-truth layer before away mode</strong> (unattended runs you cannot reconstruct are worse than none), and <strong>away mode as a bounded slice, not a wholesale deferral</strong>.</p>
+<h3>M2 — the pane-handoff chain, made boring (epic #906, order unchanged) + spillover</h3>
+<table>
+<thead><tr><th>Item</th><th>Issues</th><th>Why first</th></tr></thead>
+<tbody>
+<tr><td>Quick wins, do-anytime</td><td>#916 (redeploy stale UAT page) · <strong>#928</strong> (wire our 9 existing <code>evals.json</code> files into Anthropic&#x27;s now-shipped skill-creator eval harness — trigger regressions are silent today)</td><td>both cheap; #928 guards every later skill edit</td></tr>
+<tr><td>1. Launcher robustness</td><td>#731 #835 (#800 shipped via PR #912)</td><td>the observed flakiness lives here</td></tr>
+<tr><td>2. Meter rework (D177)</td><td>#797 · #729-residual (ack-tracking) · #734</td><td>two-threshold pane-handoff driving</td></tr>
+<tr><td>3. In-flight-work gate</td><td>#726</td><td>refuse handoff over live background work + durable-path check</td></tr>
+<tr><td>4. Epic-run rework (D176)</td><td>#927 (fresh-session default) · #769 (boundary sweep) · explicit close-or-fold owed to #845 #846 #848 #849 #850 #851</td><td>children continue via pane-handoff; receipts retire</td></tr>
+<tr><td>5. Trusted goal reader</td><td>#864 #772 #878</td><td>one origin-bound reader behind both destructive paths</td></tr>
+<tr><td>6. Goal cap</td><td>#806</td><td>cap from the constant + exact-text display</td></tr>
+<tr><td>M1 spillover</td><td>#923 (WF2-lite lane) · #899 (word budget)</td><td>#923 unlocks cheap disposable-class work</td></tr>
+</tbody>
+</table>
+<h3>M2.5 — minimum telemetry truth (gates away mode)</h3>
+<table>
+<thead><tr><th>Issues</th><th>What it buys</th></tr></thead>
+<tbody>
+<tr><td>#888 (+#588 +#355 folded)</td><td>run-records that land exactly once, even when the run merges its own PR</td></tr>
+<tr><td>#363 (+#660 folded)</td><td>per-run usage attribution instead of session-cumulative guesses</td></tr>
+<tr><td>#356</td><td>dispatch entries that survive session seams</td></tr>
+</tbody>
+</table>
+<h3>M3 — trust the new machinery (runner + review loop + config)</h3>
+<p>Kept as <strong>linked siblings, not merged</strong> (codex: different trust boundaries need independent tests): #876 (trusted <code>--brief</code>) · #894 (death/OOM evidence) · #365 (contaminated reviewer returns) · #893 (Step 8a engagement evidence) · #891 (retire fail-open riskLevel default) · #895 (blindness guard) · #889 (reopen-token refund) · #892 (re-litigation flag) · #884 + #883 (config-surface pair) · plus roadmap M3: #860 (consult-on-exhaustion) · #808 (WF3 budget-exhausted close) · #750 (registry append helper) · #759 (deferral registry, lite).</p>
+<h3>M4 — away mode, as a bounded slice</h3>
+<p>#871 (the epic; a narrow first slice with explicit duration/cancel/recovery limits) + #586 (resume launcher survives /clear). Gated on M2 reliability + M2.5 records, per consult.</p>
+<h3>M5 — project identity &amp; concurrency + WF hygiene</h3>
+<p>#345 + #346 (one keying design, two migration tickets) · #593 + #594 (grouped siblings: canonical notes home; auto-worktree on second bind) · #372 (WF14 vs wal-bind-guard) · #364 (doc-only resume state) · #370 + #379 (ambiguity-breaker pair) · #395 (authored-blind checklist) · #658 (call-site inventory) · #890 (consumer-project hook invocation — unblocked now #874 shipped).</p>
+<h3>M6 — telemetry &amp; hygiene tail</h3>
+<p>#361 (Step-16 cross-checks) · #380 (wal-context internal deadline).</p>
+<h3>M7 — skills &amp; tooling</h3>
+<p>#400 (WF17 usage auditor — pairs conceptually with #928) · #390 (workspace-doctor) · #391 (session-index v2) · #534 (retire epic-run-analysis — actionable now #508 shipped) · #536 (deploy-verify skill) · #537 (security-vet skill) · #399 (runner-group inference) · #350 (CodeGuard rules).</p>
+<h3>LATER — with reopen triggers, not vibes</h3>
+<p>#792 (quota preflight — still statusline-based; <strong>no programmatic usage API exists</strong>, verified) · #358 #359 #360 (WF15/16 codex design workflows) · #738 (parked by its own text until projects reactivate) · #568 (Hermes — phases 1–2 merged, offload seat died with the executor; keep, rescoped to the surviving bridge/policy substrate, comment says so).</p></section>
+<section class="an-q" id="s6"><h3>6. What the external research changed (verified today) <span class="chip c-confirmed an-conf">VERIFIED</span></h3><table>
+<thead><tr><th>Finding</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><strong>Anthropic shipped a skill-evals harness</strong> (skill-creator 2.0, official blog 2026-03-03 + code.claude.com docs): <code>evals/evals.json</code> schema — which our 9 eval files already match — plus benchmark mode and trigger/description tuning, CI-integrable</td><td>#928 shrinks from &quot;build a harness&quot; to &quot;wire ours in&quot;; moved to the front of the queue</td></tr>
+<tr><td>Claude Code <strong>native Bash sandboxing</strong> shipped (<code>/sandbox</code>); <strong>sandbox-runtime</strong> shipped (npm, wraps arbitrary CLIs); <strong>prompt/agent-type hooks</strong> shipped (LLM-judged Stop gates, official hooks docs)</td><td>three watch-list triggers fired → three decision tickets proposed (owner call, D179)</td></tr>
+<tr><td>Subagent silent-death (claude-code#47936) still <strong>open, unfixed</strong></td><td>the artifact-gate machinery stays; no simplification available</td></tr>
+<tr><td>No programmatic usage/quota API (only <code>/usage</code> + OTel export)</td><td>#792 stays statusline-based, stays LATER</td></tr>
+<tr><td>Codex CLI: <code>UserPromptSubmit</code> hook exists, PostToolUse &quot;soon&quot;; <code>--output-schema</code> mature incl. resume</td><td>runner architecture unaffected; watch item stays</td></tr>
+</tbody>
+</table></section>
+<section class="an-q" id="s7"><h3>7. Consult provenance <span class="chip c-unstated an-conf">—</span></h3><p class="an-answer">gpt-5.6-sol reviewed the full disposition table via <code>review_runner.py consult</code> (result JSON in this session&#x27;s <code>docs/reviews/</code> sink, gitignored by design). Adopted from its verdict: don&#x27;t collapse the sibling pairs (#593/#594, #345/#346, #370/#379, #876/#894/#365, #884/#883, #889/#892) — group, don&#x27;t merge; #928 to the earliest tranche; minimum telemetry before away mode; away mode as a bounded slice; every epic closure names child destinations; #815/#450 closures carry machine-searchable reopen triggers; #568 kept-rescoped rather than closed. Its two gray-zone dissents (#622, #745) are shown in §3 rather than resolved silently.</p></section>
+<section class="an-q" id="s8"><h3>8. What has NOT been done <span class="chip c-unstated an-conf">—</span></h3><p class="an-answer">No issue closed, no issue filed, no body edited, nothing transferred, plan doc not yet rewritten. Every action above waits on the owner&#x27;s answers to four questions: (1) execute the 40 closures, (2) the six gray-zone calls, (3) the #670 transfer, (4) whether the three fired watch-list triggers become decision tickets or stay plan prose.</p>
+<div class="blk blk-provenance"><dl><dt>Code state</dt><dd>main @ ce9eba67, checked 2026-08-05</dd><dt>Issue states</dt><dd>GitHub API, live 2026-08-05</dd><dt>Cross-model consult</dt><dd>review_runner.py consult, gpt-5.6-sol, result in docs/reviews/ (gitignored sink)</dd><dt>External docs</dt><dd>code.claude.com docs + claude.com/blog (skill-creator 2.0) + anthropics/skills schema + exa cross-check</dd><dt>Author</dt><dd>Claude Fable 5, session e6a60533</dd></dl></div></section>
+
+</main>
+<footer>Last updated: 2026-08-05 06:58 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
