@@ -747,8 +747,8 @@ For major changes, please open an issue first to discuss the approach.
   re-run against the installed 0.8.0 and checked for the argv shape, parsed response fields and exit
   status the code actually consumes — recorded at `pin.cli_surface_qualified` with an explicit
   `not_qualified` note, and guarded by a new test, because `test_launcher_lib.py` runs on
-  0.7.5-captured fixtures and so cannot detect a live shape change. No workflow-spine change → no
-  diagram REV. Suite 5079→5080.
+  0.7.5-captured fixtures and so cannot detect a live shape change.
+  No workflow-spine change → no diagram REV. Suite 5079→5080.
 
 ### v3.127.0 (2026-08-05)
 - **A budget-exhausted design-gate close now requires a terminal disposition on every surviving
