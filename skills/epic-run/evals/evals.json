@@ -1,0 +1,36 @@
+{
+  "skill_name": "rawgentic:epic-run",
+  "_note": "#928. These cases exist for one reason: the 403 characters #909 restored to this skill's description were DEAD TEXT before that PR and had never been exercised for selection. Every prompt below is one of the description's own trigger phrasings, so a future description edit that drops one fails here instead of failing silently in a live session. Cases 5 and 6 are the description's two explicit NOT-for-this-skill boundaries; they matter because a single-issue request routed to the epic driver would set up a whole campaign for one issue. Selection only — none of these starts a campaign, drafts a real /goal, or touches .driver-state.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "cycle through all issues in epic #906",
+      "expected_output": "Invokes the rawgentic:epic-run skill. This is the dominant real phrasing for an epic auto-run and appears verbatim in the skill's description. The skill derives the queue from the epic's task-list checkboxes, asks for the merge policy, and drafts the /goal condition — it does not implement any child itself."
+    },
+    {
+      "id": 2,
+      "prompt": "write me a goal for the epic",
+      "expected_output": "Invokes the rawgentic:epic-run skill, whose Step 3 owns drafting the campaign /goal condition. A goal request scoped to an EPIC belongs here rather than to a per-issue workflow, because a per-issue goal lets the session quit after any single child."
+    },
+    {
+      "id": 3,
+      "prompt": "auto-run these children",
+      "expected_output": "Invokes the rawgentic:epic-run skill. A terse request naming 'children' is still an epic-run request; the skill establishes the queue order and the per-child contract before anything executes."
+    },
+    {
+      "id": 4,
+      "prompt": "Sequence WF2 across the epic's task list, one child at a time.",
+      "expected_output": "Invokes the rawgentic:epic-run skill. Sequencing WF2 over an epic's task list is this skill's subject, and it terminates each child at that child's own Step 16 rather than reaching into a WF2 step."
+    },
+    {
+      "id": 5,
+      "prompt": "Implement issue #731 for me.",
+      "expected_output": "Does NOT invoke the rawgentic:epic-run skill. The description excludes a single issue explicitly, and routing one issue through the epic driver would stand up a campaign, a driver-state file and a revalidation gate for work that /rawgentic:implement-feature handles directly. Invokes rawgentic:implement-feature instead."
+    },
+    {
+      "id": 6,
+      "prompt": "Help me define epic #906 and write out what its children should be.",
+      "expected_output": "Does NOT invoke the rawgentic:epic-run skill. Defining or planning the epic itself is /rawgentic:create-issue's job per this skill's own description; epic-run consumes an epic that already has a task list and would find no queue to derive."
+    }
+  ]
+}
