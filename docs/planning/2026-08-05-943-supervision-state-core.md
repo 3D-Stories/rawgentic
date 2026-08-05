@@ -11,6 +11,20 @@
 0 | external APIs used by Part A
 ```
 
+The one change that makes this work: **who is watching becomes a declared, revisioned file the
+session can write, instead of an inherited environment variable it cannot clear.** Everything
+else follows from that. The four forks below were the ones actually weighed, and §12 records the
+gate provenance for each.
+
+```options
+Split into Part A + Part B (#947) | Ships the read/write core and the retirement now; the routing machinery that no consumer is ready for waits | #943 stays open until #947 lands, so the issue's own ACs are satisfied in two PRs | chosen
+Expand #943 to the whole slice | One issue, one merge, no follow-up to track | Duplicates #927's broker and builds the second authorization system the M4 design forbids | rejected
+Two predicates (nobody-to-ask, installs-forbidden) | Each consumer gets its own safe default on expiry; an expired away still refuses installs | Two names to keep straight, and a test that exists only to stop them collapsing | chosen
+One is_watched boolean | Simplest possible surface | attended-overdue would authorize unattended package installs — the exact failure the split exists to prevent | rejected
+Two modules (supervision_lib read, supervision_admin write) | context_meter runs per tool call and never imports plan_lib; stdlib-only is test-enforced | A reader and a writer for one file, which looks like ceremony until you check the import cost | chosen
+One skills/supervision command with a subcommand | One skill to register instead of three | The epic design names three commands, and a wake time belongs in the command the owner types when going to bed |
+```
+
 ## 1. The problem, in plain words
 
 Three places in the code ask "is anybody watching this session?" by reading one environment

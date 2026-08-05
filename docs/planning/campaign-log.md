@@ -14,6 +14,94 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #871 M4 — #943 Part A: supervision is declared, not guessed · v3.131.0
+
+**Issue:** [#943](https://github.com/3D-Stories/rawgentic/issues/943) — Part A only; Part B is
+[#947](https://github.com/3D-Stories/rawgentic/issues/947), and #943 stays OPEN until that lands ·
+**Design:** [`2026-08-05-943-supervision-state-core.md`](2026-08-05-943-supervision-state-core.md)
+
+Three code paths asked "is anybody watching?" by reading one environment variable.
+`RAWGENTIC_HEADLESS` could say only present-or-absent, so it could not tell the owner stepping out —
+reachable by phone — from the owner asleep, and no session could clear it, because a process cannot
+un-export its parent's environment. It is now a declared workspace state at
+`claude_docs/.supervision.json`, written by three new commands (`/rawgentic:away`,
+`/rawgentic:sleeping`, `/rawgentic:back`) and read through two predicates. The modules are split for
+a measured reason: `supervision_lib` is read-only and **stdlib-imports-only**, test-enforced, because
+`context_meter` consumes it on a hook that runs every tool call, while `supervision_admin` holds
+`plan_lib.file_lock` across the whole read-validate-increment-write cycle.
+
+**Two predicates rather than one flag, because the consumers need opposite safe defaults.**
+`nobody-to-ask` relaxes when a declaration expires — it only picks which advice a context-pressure
+nag prints. `installs-forbidden` does not: installing packages is an outward act, and a clock passing
+a stated wake time is not evidence anybody came back. An asymmetry test fails if the two are ever
+collapsed, and an inert-feature regression proves a bare `/rawgentic:away` still guards both hook
+sites.
+
+**The design gate ran three adversarial passes and did not close cleanly.** Findings went 10 → 9 → 8,
+each pass surfacing genuinely new depth, several items introduced by the previous pass's own fixes.
+The design loop-back budget hit its cap at 2/2 and the #798 budget-exhausted close was unavailable,
+because two of the eight findings carried ambiguity markers and that close requires the breaker
+clear. So the contract escalated instead of iterating silently, and the owner — present — chose the
+split (D226, verbatim: "split it, do part a and and part b after"). Five findings plus the
+AskUserQuestion capability question moved wholesale to #947 with the machinery they belong to; two
+landed here. Part A therefore ships **no routing, no claims, no authority logic and no external
+calls** — `platform_apis` went from two blocks plus a release gate to `none`, which is the honest
+reading once the transport and consult paths left.
+
+**What the pre-PR reviews caught, and it was the strongest round of the wave.** Two cross-model waves
+(Step 8a over the two high-risk modules, Step 11 over the whole diff) plus an inline pass returned 14
+findings; 8 were real defects in shipped code. Four were the same class — a failure path that quietly
+*permitted* installs while a declaration was in force: a dangling symlink read as absence, a delete
+racing between `stat` and `open` read as absence, a schema-incomplete record such as
+`{"state":"attended"}` was accepted as valid, and `validate_campaign_id` accepted `.` and `..`. Two
+were availability: invalid UTF-8 raised out of a function whose contract is never-raises, and a FIFO
+at the state path would have blocked `open()` on a hook that runs on every tool call. The eighth is
+the one worth naming: `declare --state attended` offered an **unfenced** route to clear a newer
+absence, because `declare`'s `--expected-revision` is optional while `mark-attended`'s is mandatory —
+directly contradicting the documented "only `/rawgentic:back` lifts it". Both waves found that
+independently, and `declare` now refuses `attended` outright.
+
+**Declined, with reasons, rather than dropped.** Deleting the state file *between* hook invocations
+still reads as a genuine absence: telling "never declared" from "record removed" needs a durable
+marker outside the file being protected, which is a design change belonging to #947. And the
+reviewer's inability to verify `plan_lib.file_lock` from the brief is an artifact-scope limit, not a
+defect — it has been public since #665 and `launcher_lib` composes it identically.
+
+**Gates:** suite 5366 → 5487, 0 failed, exit 0 · both lint lanes 10.00/10 · Step 4: 3 passes, closed
+by owner resolution of the ambiguity breaker — explicitly not a clean round and not the #798
+budget-exhausted close · Step 8a: 8 findings (5 High) · Step 11: 6 findings (3 High) · security scan
+PASS (1 visible skip: iac not applicable) · loop-backs 2/3 with the design source exhausted at 2/2 ·
+skills 21 → 24 · 121 tests added · no workflow-spine change → no diagram REV. *(PR #, CI, merge SHA:
+filled by the next slot's pass.)*
+
+---
+
+## Epic #871 M4 — #888: run-records land exactly once · v3.130.0
+
+**Issue:** [#888](https://github.com/3D-Stories/rawgentic/issues/888) ·
+**Design:** brief note, small-standard lane (no separate design doc) ·
+**Slot added late:** #888's own PR omitted its campaign-log section. This entry was reconstructed at
+the next slot's pass from the child's persisted run-record, so every figure below is the recorded
+one rather than a retelling.
+
+The telemetry store is append-only, so re-running `summarize` to attach late usage numbers appended
+a second line for the same run instead of amending the first. #888 made the persist transactional —
+idempotent by content fingerprint — and codified the ordering that matters: the record is persisted
+BEFORE the merge, so a run that dies between the two leaves a record rather than a hole. Absorbed
+#588 and #355.
+
+**Gates:** suite 5340 → 5366, 0 failed, exit 0 · Step 4: 3 findings, all resolved · Step 9: 1
+finding, resolved · Step 11: 7 findings, 5 resolved — the 2 residuals (an `usage.capture_cutoff`
+schema field, and a content-fingerprint collision for two blocked runs on one issue with null usage
+and zero counts) are deliberately UNFILED pending owner confirmation under the D179 throttle, and
+are recorded in the child's `follow_ups` · security scan PASS (1 visible skip: iac not applicable) ·
+loop-backs 1/3 · no workflow-spine change → no diagram REV. PR
+[#946](https://github.com/3D-Stories/rawgentic/pull/946) · CI passed · merged as `b7d3f258`.
+`outcome.merged` is null in its own record on purpose: the record was written pre-merge by the very
+ordering this issue codifies, which is not a failed merge.
+
+---
+
 ## Epic #906 M2 — #731: a failed handoff now says why · v3.129.1
 
 **Issue:** [#731](https://github.com/3D-Stories/rawgentic/issues/731) ·
@@ -49,10 +137,12 @@ identical #611 honest bound) and a herdr integration test (CI has no herdr; inje
 black-box is this repo's testing philosophy).
 
 **Gates:** suite 5303 → 5340, 0 failed, exit 0 · Step 8a: 3 findings, both Highs fixed ·
-Step 11: 9 findings (7 unique post-merge), 5 fixed, 2 declined with rationale, 0 deferred ·
-security scan PASS (1 visible skip: iac not applicable) · loop-backs: 2 mints spent, 0 returns to
-Step 3 · no workflow-spine change → no diagram REV. *(PR #, CI, merge SHA: filled by the next
-slot's pass.)*
+Step 11: 9 raw findings, **6 unique** after 3 identity merges, 5 fixed, 2 declined with rationale,
+0 deferred · security scan PASS (1 visible skip: iac not applicable) · loop-backs: 2 mints spent,
+0 returns to Step 3 · no workflow-spine change → no diagram REV. PR
+[#942](https://github.com/3D-Stories/rawgentic/pull/942) · CI passed · merged as `acffe3ed`.
+*(Corrected at the next slot's pass, as this child's own run-record instructed: the line previously
+read "7 unique post-merge", which was one too many.)*
 
 ---
 
