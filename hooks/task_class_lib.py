@@ -88,6 +88,14 @@ def _classify_lines(body: str):
     eligible: list[tuple[int, str]] = []
     excluded: list[tuple[int, str, str]] = []
     open_fence = None
+    # Step 11 DIFF-6: block-quote membership is NOT line-local. CommonMark LAZY CONTINUATION
+    # keeps an unprefixed line inside the quote when it directly continues a quoted paragraph,
+    # so `> guidance` followed by `**Task class:** disposable` is all one block quote — and the
+    # line-prefix test alone let that quoted documentation set the class, which is precisely
+    # what this walk exists to prevent (this issue's own body is that shape). Only a blank line
+    # is treated as ending the quote. Conservative on purpose: like the unclosed fence, this can
+    # only ever exclude MORE, never less.
+    in_quote = False
     for n, raw in enumerate(body.splitlines(), start=1):
         expanded = raw.expandtabs(4)
         stripped = expanded.strip()
@@ -97,6 +105,7 @@ def _classify_lines(body: str):
         if open_fence is None:
             if delim is not None:
                 open_fence = (delim[0], delim[1])
+                in_quote = False
                 excluded.append((n, raw, "fence delimiter"))
                 continue
         else:
@@ -109,11 +118,22 @@ def _classify_lines(body: str):
             excluded.append((n, raw, "fenced"))
             continue
 
+        if not stripped:
+            # A blank line closes a block quote (CommonMark): lazy continuation only carries
+            # through unbroken paragraph content. Blank lines can never be candidates, so they
+            # stay eligible exactly as before.
+            in_quote = False
+            eligible.append((n, raw))
+            continue
         if indent >= _INDENTED_CODE_INDENT:
             excluded.append((n, raw, "indented (4+ spaces reads as code)"))
             continue
         if stripped.startswith(">"):
+            in_quote = True
             excluded.append((n, raw, "block quote"))
+            continue
+        if in_quote:
+            excluded.append((n, raw, "block quote (lazy continuation)"))
             continue
         eligible.append((n, raw))
     # An unclosed fence excludes everything to the end of the body, which the walk above already
@@ -159,11 +179,16 @@ def resolve_class(body: str, config_default: str | None = None):
     if not candidates:
         cls, prov, diag = _config_outcome(config_default)
         hidden = [(n, why) for n, raw, why in excluded if _looks_like_candidate(raw)]
-        if hidden and diag is None:
+        if hidden:
+            # Step 11 R2-5: this was guarded by `diag is None`, so an invalid `defaultTaskClass`
+            # took the slot and the author was never told their apparent class line had been
+            # ignored. The two notices are about DIFFERENT mistakes — one is the project's
+            # config, one is this issue's body — so they accumulate rather than compete.
             where = "; ".join(f"line {n} ({why})" for n, why in hidden)
-            diag = (f"no task-class line found, but a candidate-looking line was EXCLUDED: {where}. "
+            note = (f"no task-class line found, but a candidate-looking line was EXCLUDED: {where}. "
                     f"The line must sit at indent 0-3, outside code fences and block quotes. "
                     f"Using {cls}.")
+            diag = f"{diag} {note}" if diag else note
         return cls, prov, diag
 
     problems: list[str] = []
@@ -245,6 +270,19 @@ def write_snapshot(path: str, payload: dict) -> str:
     snapshot a completed run had already used and the next run would re-resolve a mutated body.
     """
     directory = os.path.dirname(path) or "."
+    # Step 11 DIFF-1: fsyncing `directory` makes the SNAPSHOT's entry durable, but when
+    # `directory` is itself new its OWN entry lives in the parent and was never synced — so a
+    # crash could lose the whole issue directory despite its contents being safe, and the next
+    # run would re-resolve a possibly-mutated body. Record the ancestors we are about to create
+    # so each one's parent can be synced too.
+    _created: list[str] = []
+    _probe = os.path.abspath(directory)
+    while not os.path.isdir(_probe):
+        _created.append(_probe)
+        _parent = os.path.dirname(_probe)
+        if _parent == _probe:
+            break
+        _probe = _parent
     pathlib.Path(directory).mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".task_class-", suffix=".tmp")
     try:
@@ -264,11 +302,15 @@ def write_snapshot(path: str, payload: dict) -> str:
                 f"could not create the task-class snapshot at {path}: "
                 f"{exc.strerror} (errno {exc.errno}). The filesystem may not support hard links."
             ) from exc
-        dfd = os.open(directory, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        # The issue directory first (the snapshot's own entry), then the parent of every
+        # directory this call created (each new directory's entry). Deduplicated and ordered
+        # deepest-first; a failure here is a real durability failure and propagates.
+        for _dir in dict.fromkeys([directory] + [os.path.dirname(c) for c in _created]):
+            dfd = os.open(_dir, os.O_RDONLY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
         return outcome
     finally:
         if os.path.exists(tmp):

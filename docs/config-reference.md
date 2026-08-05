@@ -92,6 +92,11 @@ project information during execution:
 **Optional** top-level string — the project's fallback task class when an issue body does not set
 one. Valid values: `disposable`, `internal`, `production`. Unset (or invalid) → `production`.
 
+Three states, kept distinct on purpose: **absent** (or explicit `null`, which is a legitimate
+spelling of "not set") resolves to `production` **silently**; a **present but invalid** value —
+whatever its JSON type, `"bogus"` and `42` alike — resolves to `production` **with a visible
+diagnostic**; a **valid** value is used as written.
+
 ```json
 {
   "defaultTaskClass": "internal"

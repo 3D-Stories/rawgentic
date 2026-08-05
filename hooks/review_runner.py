@@ -597,16 +597,37 @@ def run_review(*, verb: str, artifact=None, artifact_type: str = "generic",
     # it is a fail-loud condition, exactly as `read_snapshot` treats it, so a
     # corrupt or wrong-issue record refuses instead of being silently skipped.
     if issue is not None:
+        # Step 11, inline L1: the CLI declares `--issue type=int`, but `run_review` is a
+        # library entry point, and a non-int made `str(issue)` build a path that simply
+        # does not exist — silently switching the whole check off. A guarantee a type
+        # error can disable is weaker than it reads, so refuse instead.
+        if not isinstance(issue, int) or isinstance(issue, bool):
+            return _finish("refused", error_class="invalid_input",
+                           error_detail=(f"--issue must be an integer, got {issue!r}"))
         snapshot_path = os.path.join(project_root, "claude_docs", ".wf2-state",
                                      str(issue), "task_class.json")
-        if os.path.exists(snapshot_path):
-            try:
-                snapshotted = tcl.read_snapshot(snapshot_path, issue)["task_class"]
-            except tcl.TaskClassError as exc:
+        # Step 11 R2-2/DIFF-2 (both passes converged): this probed `os.path.exists`, which
+        # FOLLOWS symlinks — so a DANGLING symlink and an unreadable file both reported
+        # "absent" and took the trust-the-caller branch. That contradicts D207's own terms,
+        # which treat an existing-but-unusable snapshot as fail-loud. So: attempt the read,
+        # and classify a failure as "absent" ONLY when nothing is at that path at all
+        # (`lexists`, which does NOT follow the link). Everything else — dangling link,
+        # EACCES on the file, EISDIR, corrupt JSON, wrong issue — refuses before egress.
+        #
+        # Residual bound, stated rather than hidden: if the containing directory itself is
+        # unreadable, `lexists` is also False and this proceeds. Narrowing that further would
+        # mean refusing reviews in trees this runner cannot stat, which is a bigger change
+        # than the hole justifies.
+        snapshotted = None
+        try:
+            snapshotted = tcl.read_snapshot(snapshot_path, issue)["task_class"]
+        except tcl.TaskClassError as exc:
+            if os.path.lexists(snapshot_path):
                 return _finish("refused", error_class="invalid_input",
                                error_detail=(
                                    f"issue {issue}'s task-class snapshot is unusable: "
                                    f"{exc}"))
+        if snapshotted is not None:
             if snapshotted != task_class:
                 return _finish("refused", error_class="invalid_input",
                                error_detail=(

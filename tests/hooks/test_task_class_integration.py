@@ -173,6 +173,41 @@ class TestSnapshotReachesTheRealPrompt:
         assert arl.TASK_CLASSES == tcl.TASK_CLASSES
         assert arl.DEFAULT_TASK_CLASS == tcl.DEFAULT_CLASS
 
+    def test_every_builder_call_site_threads_the_task_class(self):
+        """Step 11 R2-4 (Medium, cross-model, flagged ambiguous): make the call-site
+        claim MECHANICAL rather than a claim.
+
+        The reviewer could not verify from a diff alone that every builder caller was
+        wired, and was right that a future unwired caller would silently render
+        `production`. A grep I ran once proves today; this proves it on every run. Any
+        NEW call site that forgets `task_class=` fails here.
+        """
+        import re
+        offenders = []
+        for path in sorted((REPO_ROOT / "hooks").glob("*.py")):
+            if path.name == "adversarial_review_lib.py":
+                continue  # the definitions themselves, not call sites
+            src = path.read_text()
+            for m in re.finditer(r"\b(?:arl\.)?build_(?:consult_)?prompt\s*\(", src):
+                # the call's argument list, up to the balanced close paren
+                depth, i = 0, m.end() - 1
+                while i < len(src):
+                    if src[i] == "(":
+                        depth += 1
+                    elif src[i] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    i += 1
+                call = src[m.start():i + 1]
+                if "task_class" not in call:
+                    line = src[:m.start()].count("\n") + 1
+                    offenders.append(f"{path.name}:{line}")
+        assert not offenders, (
+            "these prompt-builder call sites do not pass task_class, so they would "
+            "render the default regardless of the issue's snapshot: "
+            + ", ".join(offenders))
+
 
 # ===========================================================================
 # 2. The prose half (C1) — the handoff markdown must actually be there
@@ -216,6 +251,38 @@ class TestProseHandoffExists:
         assert text.count("gh issue view") == 1, (
             f"Step 1 should fetch the issue ONCE, found {text.count('gh issue view')} "
             f"— reuse the captured JSON instead of re-fetching for the task class")
+
+    @pytest.mark.parametrize("skill", ["adversarial-review", "peer-consult"])
+    def test_the_checklist_does_not_contradict_the_instruction(self, skill):
+        """Step 11 R2-3/DIFF-3 (High, both passes converged) — a regression I introduced.
+
+        The F4 fix corrected the operative instruction to keep `--task-class` on the
+        issue-less path but left completion-checklist item 5 still saying to omit BOTH
+        flags. A checklist-driven executor would follow the checklist and silently
+        render `production`, undoing the fix. Two statements of one rule in one file is
+        how they drift, so the contradictory phrasing is banned by name.
+        """
+        text = (REPO_ROOT / "skills" / skill / "SKILL.md").read_text()
+        assert "both omitted when none is" not in text, (
+            f"{skill}'s checklist contradicts its own instruction: it says to omit "
+            f"--task-class along with --issue, which discards the resolved class")
+
+    def test_wf2_step_01_gates_the_body_extraction_too(self):
+        """Step 11 R2-1 (High, cross-model): the F2 fix moved the hole, not closed it.
+
+        Gating only the fetch left the `jq` extraction unguarded, and `>` truncates its
+        target before jq runs — so a missing jq or a corrupt capture still handed
+        `resolve` an empty body, which then got snapshotted permanently. The extraction
+        must write to a temp file and rename only on success, and must stop on failure.
+        """
+        text = (REPO_ROOT / "skills" / "implement-feature" / "references"
+                / "step-01.md").read_text()
+        assert "body.md.tmp" in text, (
+            "the body extraction must write to a temp file and rename on success, so a "
+            "failed jq cannot leave a truncated body file behind")
+        assert "rm -f" in text, (
+            "Step 1 must clean up the captured issue body — it holds the issue verbatim "
+            "in the project root as untracked residue (R2-6)")
 
     @pytest.mark.parametrize("skill", ["adversarial-review", "peer-consult"])
     def test_standalone_path_still_passes_the_resolved_class(self, skill):

@@ -47,21 +47,28 @@ SKILL_DIR = REPO_ROOT / "skills" / "implement-feature"
 # actual + max(1 KiB, 10%) that shipped with the split. AC7's STALE CEILING check
 # is what forced the recalibration: it condemned all 22 provisional rows, which is
 # the guard doing its job rather than a regression.
-# #761 raised `references/step-01.md` (and the total with it): Step 1 gained the
-# task-class resolve-and-snapshot instruction, which is operative prose — the step
-# had 256 bytes of headroom and the instruction needs ~1.4 KB. Step 8a's F2 fix then
-# added ~700 bytes more: the fetch now captures to a file with an exit-status gate and
-# the resolver reuses it, because an unguarded second fetch silently snapshotted an
-# EMPTY body. Both rows are set to actual + allowed_headroom(), not padded, so the
-# STALE CEILING check stays honest in the other direction.
-TOTAL_CEILING_BYTES = 251_459
+# #761 raised `references/step-01.md` (and the total with it) across three rounds, all
+# operative prose rather than commentary: the task-class resolve-and-snapshot instruction
+# (the step had only 256 bytes of headroom); Step 8a's F2 fix, which made the fetch a
+# single captured call with an exit-status gate because an unguarded second fetch could
+# snapshot an EMPTY body permanently; and Step 11's R2-1/R2-6 fixes, which gate the `jq`
+# extraction through a temp-file rename and clean up the captured body.
+#
+# Measured at the time of writing (Step 11 DIFF-4 asked for the numbers to be recorded
+# beside the constants — the finding's premise that they are unverifiable is declined,
+# since the STALE CEILING check below MECHANICALLY enforces
+# `ceiling <= actual + allowed_headroom()` on every run, which is stronger than a
+# comment; the numbers are recorded anyway because they help a human reader):
+#   references/step-01.md  actual 7_074 + headroom   354 -> ceiling   7_428
+#   corpus total           actual 247_398 + headroom 4_948 -> ceiling 252_346
+TOTAL_CEILING_BYTES = 252_346
 PER_FILE_CEILING_BYTES = {
     "SKILL.md": 46_099,
     "references/quality-bar.md": 3_616,
     "references/run-record.md": 23_202,
     "references/state-and-resume.md": 6_476,
     "references/step-00-preamble.md": 18_925,
-    "references/step-01.md": 6_515,
+    "references/step-01.md": 7_428,
     "references/step-01b.md": 3_444,
     "references/step-02.md": 9_676,
     "references/step-03.md": 8_831,

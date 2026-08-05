@@ -31,14 +31,27 @@
 6. **Resolve and snapshot the task class (#761).** With the body in hand, decide the class ONCE for this issue and persist it **write-once**. Every later gate reads the SNAPSHOT, never the body, so a body edited mid-run cannot change the class under a running gate:
    **Reuse item 3's captured issue — do NOT fetch again.** A second fetch would be a second chance
    to fail, and an unguarded one silently resolves an EMPTY body to the project default and then
-   snapshots that decision permanently. You only reach this item because item 3's fetch succeeded:
+   snapshots that decision permanently. You only reach this item because item 3's fetch succeeded.
+   **The extraction needs its own gate for the same reason** — `jq` can be absent, or the capture
+   can be corrupt, and `>` truncates the target before `jq` runs, so an unchecked failure hands
+   `resolve` an empty body:
    ```bash
-   jq -r '.body // ""' .rawgentic-<number>-issue.json > .rawgentic-<number>-body.md
+   jq -r '.body // ""' .rawgentic-<number>-issue.json > .rawgentic-<number>-body.md.tmp \
+     && mv .rawgentic-<number>-body.md.tmp .rawgentic-<number>-body.md
+   ```
+   Write to a `.tmp` and rename ONLY on success, so the body file is never a half-written or
+   truncated artifact. **If either command fails, STOP and abort Step 1** — do not run `resolve`.
+   Then, and only then:
+   ```bash
    python3 hooks/task_class_lib.py resolve --issue <number> \
      --body-file .rawgentic-<number>-body.md \
      --out claude_docs/.wf2-state/<number>/task_class.json \
      --project-root .
    ```
+   **Clean up both scratch files on every path, success or failure** —
+   `rm -f .rawgentic-<number>-issue.json .rawgentic-<number>-body.md.tmp .rawgentic-<number>-body.md`.
+   They hold the issue body verbatim in the project root, where they would otherwise sit as
+   untracked residue that a later blanket `git add` could commit.
    The body may carry the canonical line `**Task class:** disposable|internal|production`. Absent → the project's `defaultTaskClass`, else `production`. Malformed, unrecognized, or duplicated → `production` **with a DIAGNOSTIC**, config default bypassed. **rc 1 = FAIL LOUD, abort Step 1** — a later gate must never read an absent or invalid snapshot, and it is never re-resolved silently. Carry the printed `task-class:` line into the Step-1 session-note marker as the tail `task_class=<class> provenance=<p>[ diagnostic=<reason>]`. The snapshot is keyed by ISSUE and immutable: to force a re-resolve, delete the file, and only when no run on that issue is live. **Never route the diagnostic into a prompt** — it carries body-derived text and the class line sits outside the nonce fence.
 
 7. Display to user:

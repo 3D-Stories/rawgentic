@@ -298,7 +298,7 @@ Before declaring WF5 complete, verify ALL of the following. Print the checklist 
 2. [ ] Artifact validated (exists, under project root, type resolved)
 3. [ ] Selected backend's prerequisite satisfied (gpt: codex installed+authenticated; glm: zhipuai>=2.1.5 + key; both: >=1 ready, degradation warned)
 4. [ ] Egress notice printed (warn-only)
-5. [ ] Review invoked through `hooks/review_runner.py` with the resolved backend, the backend-appropriate identity (`--reviewer gpt-5.6-sol` for gpt; flag omitted for glm — the runner resolves `glm-5.2`), `--author-model`, and the task class resolved via `task_class_lib.py read` (`--task-class` AND `--issue` together whenever an issue is in scope, both omitted when none is); exit code interpreted (fail-closed on 2/3/4; both-mode partial presented with the failure named)
+5. [ ] Review invoked through `hooks/review_runner.py` with the resolved backend, the backend-appropriate identity (`--reviewer gpt-5.6-sol` for gpt; flag omitted for glm — the runner resolves `glm-5.2`), `--author-model`, and the task class resolved via `task_class_lib.py read` (`--task-class` is ALWAYS passed; `--issue` is additionally passed whenever an issue is in scope, and ONLY `--issue` is omitted when none is); exit code interpreted (fail-closed on 2/3/4; both-mode partial presented with the failure named)
 6. [ ] On success: report(s) written to <project>/docs/reviews/ and presented (both files under `both`)
 7. [ ] Artifact NOT modified (report-only invariant)
 

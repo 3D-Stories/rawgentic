@@ -394,3 +394,84 @@ def test_a_failed_SNAPSHOT_WRITE_reports_the_contract_line(tmp_path):
     assert proc.returncode == 1
     assert "task-class: FAILED" in proc.stderr, proc.stderr
     assert "Traceback" not in proc.stderr, proc.stderr
+
+
+# ======================================================================================
+# Step 11 findings (#761): DIFF-1, R2-5, DIFF-6
+# ======================================================================================
+
+def test_a_newly_created_issue_dir_has_its_PARENT_fsynced_too(tmp_path, monkeypatch):
+    """DIFF-1 (High, cross-model): fsyncing the issue dir is not enough when that dir
+    is itself new.
+
+    `mkdir(parents=True)` creates `.wf2-state/<issue>/`, and the existing C2 fsync makes
+    the snapshot's entry *inside* that directory durable. But the entry for the
+    DIRECTORY, which lives in its parent, was never fsynced — so a crash can lose the
+    whole issue directory even though its contents were synced, and the next run
+    re-resolves a possibly-mutated body. That defeats the same exactly-once claim C2
+    exists to protect, one level up.
+    """
+    parent = tmp_path / "wf2-state"
+    parent.mkdir()
+    target = parent / "761" / "task_class.json"       # the 761 dir does NOT exist yet
+    synced = []
+    real_fsync = os.fsync
+
+    def spy(fd):
+        try:
+            st = os.fstat(fd)
+            if st.st_mode & 0o170000 == 0o040000:
+                synced.append((st.st_dev, st.st_ino))
+        except OSError:
+            pass
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", spy)
+    tcl.write_snapshot(str(target), _payload())
+    pst = os.stat(parent)
+    assert (pst.st_dev, pst.st_ino) in synced, (
+        "the PARENT of a newly-created issue directory must be fsynced, or the "
+        "directory entry itself is not durable")
+
+
+def test_an_excluded_candidate_diagnoses_EVEN_WITH_an_invalid_config(tmp_path):
+    """R2-5 (Medium, cross-model): the exclusion notice was suppressed by `diag is None`.
+
+    An author whose task-class line landed inside a fence got told about it only when
+    the config default happened to be clean. With an invalid `defaultTaskClass` the
+    config diagnostic won the slot and the author never learned their line was ignored
+    — the two diagnostics are about different mistakes and both need to surface.
+    """
+    body = "```\n**Task class:** disposable\n```\n"
+    cls, prov, diag = tcl.resolve_class(body, "bogus")
+    assert cls == tcl.DEFAULT_CLASS
+    assert diag is not None
+    assert "EXCLUDED" in diag, f"the exclusion notice was swallowed: {diag!r}"
+    assert tcl.CONFIG_KEY in diag, f"the invalid-config notice was swallowed: {diag!r}"
+
+
+def test_a_lazy_continuation_of_a_block_quote_is_excluded():
+    """DIFF-6 (Medium, cross-model): CommonMark lazy continuation.
+
+    A line with no `>` prefix that immediately follows a quoted paragraph is STILL part
+    of that block quote in CommonMark. The line-local prefix test marked it eligible, so
+    an issue that *quotes* documentation of this field could set the class — the exact
+    outcome the fence/quote walk exists to prevent, and #761's own body is that shape.
+    """
+    body = "> Some quoted guidance about the field:\n**Task class:** disposable\n"
+    cls, prov, diag = tcl.resolve_class(body, None)
+    assert cls == tcl.DEFAULT_CLASS, "a lazily-continued quoted line must not set the class"
+    assert prov == "default"
+    assert diag is not None and "EXCLUDED" in diag
+
+
+def test_a_blank_line_ENDS_the_quote_so_the_next_candidate_counts():
+    """The other side of DIFF-6: the narrow rule must not over-exclude.
+
+    A blank line terminates the block quote, so a candidate after it is genuinely
+    eligible. Without this, the lazy-continuation fix would swallow legitimate lines.
+    """
+    body = "> quoted guidance\n\n**Task class:** disposable\n"
+    cls, prov, diag = tcl.resolve_class(body, None)
+    assert (cls, prov) == ("disposable", "issue_body")
+    assert diag is None

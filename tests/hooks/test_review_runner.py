@@ -1305,3 +1305,49 @@ class TestTaskClassFlags:
                                                      "--issue", "761")), stub.env)
         assert result.returncode == 2
         assert stub.calls == 0
+
+    # --- Step 11 R2-2 / DIFF-2 (High, both passes converged) + inline L1 ---
+    # D207's verify-if-present is the owner's decision and stands: an ABSENT snapshot
+    # proceeds. But `os.path.exists` FOLLOWS symlinks, so a dangling symlink and an
+    # unreadable file both read as "absent" and took the trust-the-caller branch —
+    # which contradicts D207's own words ("a snapshot that EXISTS and fails to
+    # validate is NOT treated as absent"). Absent must mean nothing is there at all.
+
+    def test_a_dangling_symlink_snapshot_refuses_rather_than_reading_as_absent(
+            self, stub, project):
+        snap = (project / "claude_docs" / ".wf2-state" / "761" / "task_class.json")
+        snap.parent.mkdir(parents=True, exist_ok=True)
+        snap.symlink_to(project / "does-not-exist.json")
+        assert not os.path.exists(snap) and os.path.lexists(snap), "fixture premise"
+        result = _cli(_artifact_args(project, extra=("--task-class", "production",
+                                                     "--issue", "761")), stub.env)
+        assert result.returncode == 2
+        assert stub.calls == 0
+        assert _result(project)["error_class"] == "invalid_input"
+
+    def test_a_snapshot_that_is_a_directory_refuses(self, stub, project):
+        """EISDIR is 'unusable', not 'absent'."""
+        snap = (project / "claude_docs" / ".wf2-state" / "761" / "task_class.json")
+        snap.mkdir(parents=True)
+        result = _cli(_artifact_args(project, extra=("--task-class", "production",
+                                                     "--issue", "761")), stub.env)
+        assert result.returncode == 2
+        assert stub.calls == 0
+
+    def test_a_non_int_issue_refuses_instead_of_skipping_the_check(self, project):
+        """Inline L1: a library caller with a non-int issue silently disabled F1.
+
+        The CLI declares `--issue type=int`, so this is reachable only in-process — but
+        a guarantee a TYPE ERROR can quietly switch off is weaker than it reads, and it
+        also let a non-int land in the receipt's `issue` field.
+        """
+        def explode(*a, **k):
+            raise AssertionError("egress must not be reached")
+        res = rr.run_review(
+            verb="review-artifact", artifact=str(project / "artifact.md"),
+            artifact_type="design", author_model="claude-fable-5",
+            reviewer="gpt-5.5-codex", project_root=str(project),
+            out_path=str(project / "r.json"),
+            task_class="production", issue="../../../../etc/passwd", runner=explode)
+        assert res["status"] == "refused"
+        assert res["error_class"] == "invalid_input"
