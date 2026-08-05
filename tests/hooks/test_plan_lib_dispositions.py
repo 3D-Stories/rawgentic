@@ -469,9 +469,24 @@ def _counters(tmp_path, design=2, total=2, **rest):
 
 
 def _findings_file(tmp_path):
+    # #903: a High must declare a terminal disposition for the close to be permitted, so
+    # the shared fixture models a DISPOSED High — the shape a legitimate close carries.
+    # Before #903 this fixture was an undisposed High that closed rc 0, i.e. the suite
+    # actively pinned the defect. Red-before-green for the new rule uses its own fixture
+    # (`_undisposed_findings_file`) so these tests keep proving their own properties.
     p = tmp_path / "f.json"
     p.write_text(json.dumps([{"severity": "High", "category": "correctness",
-                              "description": "a flaw", "location": "d.md:1"}]))
+                              "description": "a flaw", "location": "d.md:1",
+                              "terminal_disposition": "applied"}]))
+    return p
+
+
+def _undisposed_findings_file(tmp_path, **over):
+    finding = {"severity": "High", "category": "correctness",
+               "description": "rollback path missing", "location": "design.md:12"}
+    finding.update(over)
+    p = tmp_path / "f_undisposed.json"
+    p.write_text(json.dumps([finding]))
     return p
 
 
@@ -952,3 +967,108 @@ class TestSevereFindingsAreDisposed:
         mod = _reload_plan_lib()
         doc = (mod.severe_findings_are_disposed.__doc__ or "").lower()
         assert "omit" in doc
+
+
+class TestCloseDesignGateRequiresDisposition:
+    """AC1-AC4 at the executable boundary — the close is only for exhaustion over
+    RESOLVED ground. Provable by running the real adapter, not by pinning prose."""
+
+    def _run(self, tmp_path, findings_path):
+        ledger = tmp_path / "dispositions.jsonl"
+        note = tmp_path / "notes.md"
+        rec = tmp_path / "extra.json"
+        proc = subprocess.run(
+            [sys.executable, CLI, "close-design-gate",
+             "--issue", "903", "--gate", "4",
+             "--findings-file", str(findings_path),
+             "--counters", str(_counters(tmp_path)),
+             "--breaker-result", "clear",
+             "--ledger", str(ledger), "--record-out", str(rec), "--note-out", str(note),
+             "--date", "2026-08-05", "--project-root", str(tmp_path)],
+            capture_output=True, text=True)
+        return proc, ledger, rec, note
+
+    def test_an_undisposed_high_refuses_and_writes_nothing(self, tmp_path):
+        # AC1 + AC3 (red direction). Observed live on #874: caps reached and breaker clear
+        # while a High was unresolved, so the close was available for a design nobody
+        # accepted. Writing nothing matters as much as refusing — a partial close is worse.
+        proc, ledger, rec, note = self._run(
+            tmp_path, _undisposed_findings_file(tmp_path))
+        assert proc.returncode == 3, proc.stderr
+        assert not ledger.exists() and not rec.exists() and not note.exists()
+
+    def test_the_refusal_names_the_finding(self, tmp_path):
+        # AC2: "the refusal message names the undisposed findings".
+        proc, *_ = self._run(tmp_path, _undisposed_findings_file(tmp_path))
+        assert "rollback path missing" in proc.stderr
+        assert "design.md:12" in proc.stderr
+
+    def test_the_refusal_is_self_repairing(self, tmp_path):
+        # Step-4 amendment A1: naming the field and its values is what keeps a stale
+        # caller from escalating to the owner — the #798 regression AC4 forbids.
+        proc, *_ = self._run(tmp_path, _undisposed_findings_file(tmp_path))
+        assert "terminal_disposition" in proc.stderr
+        for value in ("applied", "refuted", "deferred"):
+            assert value in proc.stderr
+        assert "disposition_reason" in proc.stderr
+
+    def test_a_disposed_high_still_closes(self, tmp_path):
+        # AC3 (green direction) + AC4: #798's intent is preserved — exhaustion with
+        # everything disposed closes with no escalation, all three artifacts written.
+        proc, ledger, rec, note = self._run(tmp_path, _findings_file(tmp_path))
+        assert proc.returncode == 0, proc.stderr
+        assert ledger.exists() and rec.exists() and note.exists()
+        assert json.loads(rec.read_text())["label"] == "design_gate_close"
+
+    def test_a_refuted_high_needs_its_evidence(self, tmp_path):
+        proc, ledger, *_ = self._run(
+            tmp_path, _undisposed_findings_file(tmp_path, terminal_disposition="refuted"))
+        assert proc.returncode == 3
+        assert not ledger.exists()
+        proc2, ledger2, *_ = self._run(
+            tmp_path,
+            _undisposed_findings_file(tmp_path, terminal_disposition="refuted",
+                                      disposition_reason="the cited call site is gone"))
+        assert proc2.returncode == 0, proc2.stderr
+        assert ledger2.exists()
+
+    def test_a_medium_needs_no_disposition(self, tmp_path):
+        proc, ledger, *_ = self._run(
+            tmp_path, _undisposed_findings_file(tmp_path, severity="Medium"))
+        assert proc.returncode == 0, proc.stderr
+        assert ledger.exists()
+
+    def test_the_disposition_check_runs_after_the_ambiguity_check(self, tmp_path):
+        # Ordering is load-bearing, not incidental: the pre-existing ambiguity test's
+        # fixture is an undisposed ambiguous High. If this check ran first, that test
+        # would still see rc != 0 while silently no longer proving what it claims.
+        proc, ledger, *_ = self._run(
+            tmp_path,
+            _undisposed_findings_file(tmp_path, ambiguity_flag="ambiguous"))
+        assert proc.returncode == 3
+        assert not ledger.exists()
+        assert "must STOP and escalate" in proc.stderr, (
+            "an ambiguous finding must still refuse for AMBIGUITY, not for disposition")
+
+    def test_the_disposed_finding_rides_into_the_ledger(self, tmp_path):
+        # A2: the entry's top-level `disposition` is always "adopted"; the caller's real
+        # per-finding outcome must therefore survive inside `finding`, or the ledger
+        # cannot distinguish an applied High from a refuted one.
+        proc, ledger, *_ = self._run(
+            tmp_path,
+            _undisposed_findings_file(tmp_path, terminal_disposition="deferred",
+                                      disposition_reason="tracked in #123"))
+        assert proc.returncode == 0, proc.stderr
+        entry = json.loads(ledger.read_text().strip().splitlines()[0])
+        assert entry["disposition"] == "adopted"
+        assert entry["finding"]["terminal_disposition"] == "deferred"
+        assert entry["finding"]["disposition_reason"] == "tracked in #123"
+
+    def test_the_finding_key_is_unchanged_by_the_new_fields(self, tmp_path):
+        # compute_finding_key hashes [severity, location, description] only, so the new
+        # fields must not shift identity — otherwise every ledger recompute breaks.
+        mod = _reload_plan_lib()
+        bare = {"severity": "High", "category": "correctness",
+                "description": "rollback path missing", "location": "design.md:12"}
+        assert mod.compute_finding_key(bare) == mod.compute_finding_key(
+            dict(bare, terminal_disposition="applied", disposition_reason="x"))

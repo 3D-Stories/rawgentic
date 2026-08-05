@@ -3107,6 +3107,13 @@ def _cmd_close_design_gate(args) -> int:
     if not unambiguous:
         sys.stderr.write(f"close-design-gate: REFUSED — {why}\n")
         return 3
+    # #903: exhaustion alone is not enough — the close is only for exhaustion over
+    # RESOLVED ground. Deliberately AFTER the ambiguity check: an ambiguous finding must
+    # keep refusing for AMBIGUITY, or that guard silently stops proving what it claims.
+    disposed, why = severe_findings_are_disposed(findings)
+    if not disposed:
+        sys.stderr.write(f"close-design-gate: REFUSED — {why}\n")
+        return 3
     try:
         result = budget_exhausted_close(
             issue=args.issue, gate=args.gate, passes=derived, findings=findings,
