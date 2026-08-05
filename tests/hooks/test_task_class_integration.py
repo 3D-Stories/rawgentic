@@ -202,3 +202,18 @@ class TestProseHandoffExists:
         assert "Task class:" in text
         for value in tcl.TASK_CLASSES:
             assert value in text, f"the draft contract must document {value!r}"
+
+    def test_step_14_cleanup_stays_directory_wide(self):
+        """C7: the snapshot's post-merge removal is STRUCTURAL, not a file list.
+
+        `task_class.json` is never named in any cleanup step — it is removed because
+        it lives inside `claude_docs/.wf2-state/<issue>/`, which Step 14 deletes
+        whole. That is deliberate (nothing to keep in sync), but it means narrowing
+        the cleanup to an explicit file list would silently strand snapshots and
+        leave a later re-run adopting a class from a merged issue. So pin the path.
+        """
+        text = (REPO_ROOT / "skills" / "implement-feature" / "references"
+                / "step-14.md").read_text()
+        assert "claude_docs/.wf2-state/<issue>/" in text, (
+            "Step 14 no longer names the whole .wf2-state/<issue>/ directory — if "
+            "cleanup became a file list, add task_class.json to it explicitly")
