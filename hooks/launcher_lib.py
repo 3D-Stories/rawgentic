@@ -191,6 +191,9 @@ PANE_READY_DELAY_S = 2.0
 # same-name retry is structurally guaranteed to fail. It gets a name-specific `failed_step`
 # instead, on both the pre-split preflight and the start-time race path.
 NAME_TAKEN_ERROR_CODE = "agent_name_taken"
+# The preflight list's own runner timeout (seconds): an optional check must not hold every
+# handoff for the 180 s default runner bound when herdr hangs (#731 Step-11).
+NAME_PREFLIGHT_TIMEOUT_S = 5
 
 # Order is CAUSAL, and #694 REORDERED it: `spawned -> project_switched -> goal_armed`, matching the
 # order the sends now happen in. Each rung is the durable artifact produced by the send before it.
@@ -1938,8 +1941,13 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     # `agent list` must not become a new way for handoffs to fail.
     list_argv = build_agent_list_argv()
     try:
-        proc = runner(list_argv)
-    except (OSError, subprocess.SubprocessError) as exc:
+        try:
+            proc = runner(list_argv, timeout=NAME_PREFLIGHT_TIMEOUT_S)
+        except TypeError:
+            # A legacy caller-supplied runner without a timeout parameter — the preflight
+            # matters more than its bound (#731 Step-11).
+            proc = runner(list_argv)
+    except (OSError, subprocess.SubprocessError, LauncherError) as exc:
         # Fail-open on transport trouble too: this runs BEFORE the ownership try/finally, so
         # an uncaught raise here would crash the whole handoff over an optional preflight.
         proc = None
@@ -2312,6 +2320,17 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         if out.get("pane_capture") is None:
             out["pane_capture"] = pane_capture(out)
 
+    def _finalize():
+        # #731 Step-11 (merged Medium): teardown-phase exits fill the derived fields at the
+        # LIBRARY level too — not just the CLI serialization. `predecessor_guard`, when set,
+        # IS this phase's failure narrative, so it wins over a step note that would name the
+        # step without its cause (e.g. teardown_predecessor's note is the ALLOWED reason).
+        if out.get("failed_step") and not out.get("failure_detail"):
+            guard = out.get("predecessor_guard")
+            out["failure_detail"] = (guard if isinstance(guard, str) and guard
+                                     else failure_detail(out))
+        return out
+
     # Teardown LAST, only when authorized, and its result is NOT ignored (Step-11 Medium 5).
     allowed, reason = teardown_allowed(out["results"], steps=gate_steps)
     if teardown and allowed:
@@ -2333,7 +2352,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     f"the predecessor pane {anchor_pane} is ALIVE and STILL GUARDED — its "
                     f"transcript could not be baselined, so {_CLEAR_COMMAND!r} was never sent. Run "
                     f"{_CLEAR_COMMAND!r} in it by hand, then close it")
-                return out
+                return _finalize()
             # #707 — THREE states, not two. The first revision sent the clear unconditionally and
             # then required a NEW receipt row, so "no guard was ever armed" produced no receipt and
             # was reported as "the clear may not have landed": the pane was stranded with an
@@ -2358,7 +2377,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     f"the predecessor pane {anchor_pane} is ALIVE and may still be GUARDED — its "
                     f"transcript could not be read ({exc}), and an unreadable transcript is not "
                     f"evidence that nothing is armed. Run {_CLEAR_COMMAND!r} in it by hand")
-                return out
+                return _finalize()
 
             # #758 strict goal binding (D18). The validated snapshot — the sentinel-only live
             # goal the caller's verbatim-carry check ran against, INCLUDING the explicit
@@ -2380,7 +2399,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     out["predecessor_guard"] = (
                         f"the predecessor pane {anchor_pane} is LEFT OPEN and its guard "
                         f"untouched — {exc}")
-                    return out
+                    return _finalize()
                 if live_now != expected_goal_snapshot:
                     def _shape(v):
                         return "none" if v is None else f"{len(v)} chars"
@@ -2402,7 +2421,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                         f"underneath the handoff is exactly what #758 forbids. The successor "
                         f"is armed with the VALIDATED goal and keeps running. Inspect the "
                         f"pane; clear and close it by hand only after reading its goal")
-                    return out
+                    return _finalize()
 
             if strict_goal_binding:
                 # Step-8a wave Critical (#758): under strict binding the #707 three-state
@@ -2456,7 +2475,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                         f"{kind} failed, so aborting BEFORE the close. If the text landed but the "
                         f"Enter did not, {_CLEAR_COMMAND!r} is staged unsubmitted in its input. "
                         f"Check the pane and run {_CLEAR_COMMAND!r} by hand")
-                    return out
+                    return _finalize()
 
             # Bound to `live_condition` — the guard actually in force — and NOT to the caller's
             # supplied one. #665 Step-11 pass-3 proved the binding is necessary at all: with ANY
@@ -2477,7 +2496,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     f"{_CLEAR_COMMAND!r} was transported but never confirmed by a met:true "
                     f"sentinel row. Its guard state is AMBIGUOUS — verify the pane and run "
                     f"{_CLEAR_COMMAND!r} by hand before closing it")
-                return out
+                return _finalize()
         else:
             # The campaign launcher does not know the predecessor's session id, so the clear could
             # not be confirmed even if it were sent. Its behaviour is therefore UNCHANGED —
@@ -2497,7 +2516,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                 f"the predecessor pane {anchor_pane} could NOT be closed (rc="
                 f"{getattr(proc, 'returncode', None)}). If its goal was cleared it will stop "
                 f"normally; otherwise run {_CLEAR_COMMAND!r} in it by hand")
-            return out
+            return _finalize()
     elif not teardown:
         # #700 field defect 3, and the one that actually bit: the default path left the guard armed
         # and said NOTHING, so the owner met a pane that looped its Stop hook with no idea why.
@@ -2541,7 +2560,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                 f"re-prompting itself at every Stop until you run {_CLEAR_COMMAND!r} in it. "
                 "That is deliberate (teardown is opt-in), but it is not automatic")
     out["ok"] = True
-    return out
+    return _finalize()
 
 
 def _is_pane_busy(proc, body: str) -> bool:
@@ -2789,8 +2808,14 @@ def _close_tentative_pane(pane: str, runner, record, expected_session: str | Non
         # cleanup for a best-effort read.
         read_argv = build_pane_read_argv(pane)
         try:
-            read_proc = runner(read_argv, timeout=PANE_CAPTURE_TIMEOUT_S)
-        except (OSError, subprocess.SubprocessError) as exc:
+            try:
+                read_proc = runner(read_argv, timeout=PANE_CAPTURE_TIMEOUT_S)
+            except TypeError:
+                # A legacy caller-supplied runner without a timeout parameter (#731 Step-11:
+                # this module never passed a runner kwarg before — losing the capture AND the
+                # close to a TypeError would orphan the pane).
+                read_proc = runner(read_argv)
+        except (OSError, subprocess.SubprocessError, LauncherError) as exc:
             read_proc = None
             record("cleanup_pane_capture", read_argv, None,
                    note=f"pane read raised {exc} — capture skipped")

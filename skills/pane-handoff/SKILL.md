@@ -209,9 +209,11 @@ that is the gating working, not a hang.
 Exit codes: `0` handed off · `2` a refused input (the message names which) · `4` the sequence ran
 and a gate did not pass.
 
-The JSON on stdout carries `results`, `failed_step`, and since #731 `failure_detail` (the
-underlying herdr error text) plus `pane_capture` (the tentative pane's last visible output,
-read before cleanup closed it). Report what it says, not what you hoped — and read
+The JSON on stdout carries `results`, `failed_step`, and since #731 `failure_detail` (a
+human-readable diagnostic: the underlying herdr error text when available, otherwise an
+explicit missing-detail fallback naming the step) plus `pane_capture` (the tentative pane's
+last visible output, read before cleanup closed it — only when the pane provably still
+hosts our session). Report what it says, not what you hoped — and read
 `failure_detail` FIRST; it names the cause a bare `failed_step` used to hide:
 
 | `failed_step` | What it means | What to do |

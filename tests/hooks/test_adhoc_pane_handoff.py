@@ -1849,3 +1849,80 @@ class TestCliFailureDetailInvariant:
         payload = json.loads(capsys.readouterr().out)
         assert payload["failure_detail"] == \
             "step 'some_legacy_step' failed with no recorded detail"
+
+
+# ---------------------------------------------------------------------------
+# #731 — Step 11 wave fixes: preflight timeout (S11-1), legacy-runner TypeError
+# fallback + LauncherError containment (ADV-1), teardown-phase failure_detail
+# at the library level (S11-4/ADV-4)
+# ---------------------------------------------------------------------------
+
+class TestStep11WaveFixes:
+    BOOM = json.dumps({"error": {"code": "kaboom", "message": "agent exploded"}})
+
+    def test_preflight_list_carries_a_short_timeout(self) -> None:
+        seen = {}
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+
+        def runner(argv, timeout=180):
+            if Runner.key(argv) == "herdr agent list":
+                seen["timeout"] = timeout
+            return base(argv, timeout)
+
+        out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert out["ok"] is True, out["failed_step"]
+        assert seen.get("timeout") == ll.NAME_PREFLIGHT_TIMEOUT_S
+        assert ll.NAME_PREFLIGHT_TIMEOUT_S <= 10
+
+    def test_a_legacy_runner_without_timeout_kwarg_still_captures_and_closes(self) -> None:
+        """The timeout kwarg is the FIRST one this module ever passes a runner — a legacy
+        caller-supplied runner without the parameter must not lose capture or the close."""
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+        boom = self.BOOM
+
+        def legacy(argv):                       # NO timeout parameter, deliberately
+            if Runner.key(argv) == "herdr agent start":
+                base.calls.append(list(argv))
+                return FakeProc(returncode=1, stdout=boom)
+            return base(argv)
+
+        out = ll.perform_handoff(**_handoff(legacy, read_text=Artifacts(base)))
+        assert out["failed_step"] == "agent_start"
+        assert out["pane_capture"] == PANE_PASTE_WAITING.strip()
+        assert any(c[:3] == ["herdr", "pane", "close"] for c in base.calls)
+
+    def test_a_capture_raising_launcher_error_still_closes(self) -> None:
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+        boom = self.BOOM
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "read"]:
+                base.calls.append(list(argv))
+                raise ll.LauncherError("synthetic refusal")
+            if Runner.key(argv) == "herdr agent start":
+                base.calls.append(list(argv))
+                return FakeProc(returncode=1, stdout=boom)
+            return base(argv, timeout)
+
+        out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert any(c[:3] == ["herdr", "pane", "close"] for c in base.calls), \
+            "a capture exception must never cost the close"
+        assert out["pane_capture"] is None
+        assert "closed tentative pane" in out["cleanup"]
+
+    def test_teardown_phase_failure_fills_failure_detail_at_the_library_level(self) -> None:
+        """S11-4/ADV-4: the LIBRARY result carries the detail too — not only the CLI
+        serialization; predecessor_guard is the narrative for this phase."""
+        r = Runner(_responses())
+        art = Artifacts(r)
+
+        def read_text(path):
+            if path.endswith("pred-sess.jsonl"):
+                raise OSError("pred transcript unreadable")
+            return art(path)
+
+        out = ll.perform_handoff(**_handoff(r, read_text=read_text, teardown=True,
+                                            predecessor_session="pred-sess"))
+        assert out["failed_step"] == "predecessor_goal_clear"
+        assert out["failure_detail"], "a teardown-phase exit must not be bare at the library level"
+        assert out["failure_detail"] == out["predecessor_guard"]

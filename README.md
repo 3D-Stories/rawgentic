@@ -734,7 +734,7 @@ For major changes, please open an issue first to discuss the approach.
   to the same name-specific step, never retried); the pane-handoff skill's failure table routes
   operators to `failure_detail` and a fresh `--name`. Tests: injected-runner coverage for the
   preflight, the race, capture-before-close ordering, tail truncation, and every note-less
-  failure exit. No workflow-spine change → no diagram REV. Suite 5303→5336.
+  failure exit. No workflow-spine change → no diagram REV. Suite 5303→5340.
 
 ### v3.129.0 (2026-08-05)
 - **Behavioural selection gate for skill evals (#928, epic #906).** `hooks/skill_evals.py` turns
