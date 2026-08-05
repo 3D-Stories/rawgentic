@@ -4,10 +4,13 @@ Supervision is **declared**, never inferred. A session cannot tell whether a hum
 the keyboard, so it is told, and the answer lives in one workspace-level file that every
 hook can read.
 
-This replaces the bare `RAWGENTIC_HEADLESS` environment variable, retired in #943. That
-variable could only say present-or-absent: it could not distinguish the owner stepping out
-for twenty minutes from the owner asleep until morning, and a *session* could not clear it,
-because a process cannot un-export its parent's environment.
+This replaces the bare unattended-session environment variable retired in #943 (the last
+remnant of the headless orchestration deleted in #866). That variable could only say
+present-or-absent: it could not distinguish the owner stepping out for twenty minutes from
+the owner asleep until morning, and a *session* could not clear it, because a process cannot
+un-export its parent's environment. It is named nowhere in the active tree now — the
+retirement tripwire fails the suite if it reappears, which is how this very sentence got
+reworded.
 
 ## The three commands
 
@@ -16,6 +19,10 @@ because a process cannot un-export its parent's environment.
 | `/rawgentic:away [until]` | absent, still reachable by phone | optional |
 | `/rawgentic:sleeping <wake time>` | unreachable until a stated time | **required** |
 | `/rawgentic:back` | watching again | cleared |
+
+`declare` deliberately **cannot** set `attended`: its revision fence is optional, while
+`mark_attended`'s is mandatory, so allowing it there offered an unfenced way to clear a newer
+absence.
 
 `/rawgentic:back` is the **only** thing that lifts the unattended guards. That is
 deliberate — see the expiry rule below.
@@ -85,6 +92,12 @@ other consumer. That is the whole reason for the asymmetry, and a test pins it: 
 | valid, `away` / `sleeping` | `valid` | **nobody** | **FORBIDDEN** |
 | valid, expired (`attended-overdue`) | `valid` | allowed | **FORBIDDEN** |
 | unreadable / oversized / malformed / off-vocabulary | `invalid` | allowed | **FORBIDDEN** |
+| not valid UTF-8 | `invalid` | allowed | **FORBIDDEN** |
+| a FIFO, device or directory at the path | `invalid` | allowed | **FORBIDDEN** |
+| a dangling symlink | `invalid` | allowed | **FORBIDDEN** |
+| present but missing declared schema fields | `invalid` | allowed | **FORBIDDEN** |
+| vanished between `stat` and `open` | `invalid` | allowed | **FORBIDDEN** |
+| workspace root is not a path string | `invalid` | allowed | **FORBIDDEN** |
 
 Two lines carry the safety property:
 
@@ -94,6 +107,17 @@ Two lines carry the safety property:
 2. **A supplied-but-unresolvable root is invalid, not absent.** Otherwise a path-resolution
    or caller-misconfiguration bug would ALLOW installs while the real workspace held an
    active away declaration, inverting the fail-safe property via a config error.
+
+Non-regular files are refused **before** opening, because `open()` on a FIFO with no writer
+blocks — and this read rides a hook that fires on every tool call, so one bad filesystem
+entry would hang the session rather than degrade it.
+
+**Known gap, deliberately left to #947:** if the state file is *deleted* between two hook
+invocations, the next read sees a genuine absence and installs are permitted again.
+Distinguishing "never declared" from "declared, then the record was removed" needs a durable
+marker outside the file being protected, which is a design change beyond this issue. The
+narrower races — a dangling symlink, and a delete between `stat` and `open` — ARE closed
+above.
 
 ## Two modules, and why they are separate
 

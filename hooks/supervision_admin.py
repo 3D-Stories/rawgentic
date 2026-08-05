@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 
 from atomic_write_lib import atomic_write_text
@@ -63,13 +64,22 @@ def _current(workspace_root):
     invalid `installs_forbidden` is True, so refusing to write would leave the workspace
     stuck refusing installs with no way back. An unresolvable ROOT is a different thing
     and was already refused by `_require_workspace`.
+
+    **A recovery JUMPS the revision counter to wall-clock seconds.** Restarting it at 0
+    would make the next write revision 1 again, and a delayed event still carrying
+    `expected_revision=1` from the PREVIOUS lineage would then satisfy the fence and clear
+    a newer absence — the exact stale-event hole the fence exists to close (pre-PR review
+    finding). An unreadable record cannot tell us its own revision, so the counter is
+    advanced past any plausible prior value instead of reset.
     """
     loaded = sl.read_state(workspace_root)
     if loaded.load_status == "valid":
         return loaded.record, int(loaded.record.get("revision", 0))
     if loaded.load_status == "invalid":
-        print("supervision: replacing an unreadable supervision state file",
-              file=sys.stderr)
+        print("supervision: replacing an unreadable supervision state file; the revision "
+              "counter jumps forward so no stale fence from the previous lineage can "
+              "match", file=sys.stderr)
+        return {}, int(time.time())
     return {}, 0
 
 
@@ -93,9 +103,22 @@ def _persist(workspace_root, record):
 
 def declare(workspace_root, *, state, until, session_id, campaign_ids,
             consult_providers, consult_granted, expected_revision=None, now=None):
-    """Declare a supervision state. Raises `DeclarationRefused` on any refusal."""
+    """Declare an ABSENCE (`away` or `sleeping`). Raises `DeclarationRefused` on refusal.
+
+    Deliberately CANNOT declare `attended`. That transition belongs to `mark_attended`,
+    which makes `expected_revision` mandatory — routing it through here, where the fence is
+    optional, was a way to clear a newer absence unfenced and re-enable unattended installs,
+    contradicting the documented "only /rawgentic:back lifts it" (pre-PR review finding,
+    raised independently by both review waves).
+    """
     _require_workspace(workspace_root)
     stamp = _now(now)
+
+    if state == "attended":
+        raise DeclarationRefused(
+            "declare cannot set `attended` — use mark_attended (or /rawgentic:back), "
+            "which requires --expected-revision so a stale event cannot clear a newer "
+            "absence")
 
     ok, err = sl.validate_declaration(state, until, stamp)
     if not ok:
@@ -207,7 +230,10 @@ def main(argv=None) -> int:
 
     p_dec = sub.add_parser("declare", help="declare attended/away/sleeping")
     p_dec.add_argument("--workspace", required=True)
-    p_dec.add_argument("--state", required=True, choices=list(sl.STATES))
+    # `attended` is deliberately NOT offered here — mark-attended owns that
+    # transition because its revision fence is mandatory.
+    p_dec.add_argument("--state", required=True,
+                       choices=[s for s in sl.STATES if s != "attended"])
     p_dec.add_argument("--until", default=None,
                        help="ISO-8601 UTC return/wake time; required for sleeping")
     p_dec.add_argument("--session-id", required=True, dest="session_id")

@@ -123,6 +123,68 @@ def test_oversized_file_is_invalid(tmp_path):
     assert sl.read_state(str(tmp_path)).load_status == "invalid"
 
 
+def test_a_fifo_in_place_of_the_state_file_is_invalid_and_does_not_block(tmp_path):
+    """Found by this change's own pre-PR self-review.
+
+    `open()` on a FIFO with no writer BLOCKS. This read rides a hook that runs on every
+    tool call, so a FIFO at that path would hang the session rather than degrade. Refuse
+    non-regular files before opening — the same guard `context_meter._read_capped` has.
+    """
+    p = Path(sl.supervision_path(str(tmp_path)))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    os.mkfifo(p)
+    try:
+        loaded = sl.read_state(str(tmp_path))     # must return, not hang
+    finally:
+        p.unlink()
+    assert loaded.load_status == "invalid"
+
+
+def test_a_directory_in_place_of_the_state_file_is_invalid(tmp_path):
+    p = Path(sl.supervision_path(str(tmp_path)))
+    p.mkdir(parents=True)
+    assert sl.read_state(str(tmp_path)).load_status == "invalid"
+
+
+def test_invalid_utf8_is_invalid_and_does_not_raise(tmp_path):
+    """UnicodeDecodeError is a ValueError, NOT an OSError — it escaped the never-raises
+    contract and would have aborted a per-tool-call hook (pre-PR review finding,
+    reproduced live before the fix)."""
+    p = Path(sl.supervision_path(str(tmp_path)))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b'{"state": "\xff\xfe not utf-8"}')
+    assert sl.read_state(str(tmp_path)).load_status == "invalid"
+
+
+@pytest.mark.parametrize("bad_root", [["a", "list"], {"a": 1}, 7, object()])
+def test_a_non_string_workspace_root_is_invalid_and_does_not_raise(bad_root):
+    """`os.path.isdir([])` raises TypeError, which would escape read_state."""
+    assert sl.read_state(bad_root).load_status == "invalid"
+
+
+def test_a_dangling_symlink_is_invalid_not_absent(tmp_path):
+    """Something was put there deliberately and no longer resolves. Reading that as
+    absence would permit installs while a declaration was in force."""
+    p = Path(sl.supervision_path(str(tmp_path)))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.symlink_to(tmp_path / "gone.json")
+    assert sl.read_state(str(tmp_path)).load_status == "invalid"
+
+
+@pytest.mark.parametrize("partial", [
+    {"state": "attended"},
+    {"state": "away"},
+    {"schema_version": 1, "state": "attended"},
+])
+def test_a_schema_incomplete_record_is_invalid_not_permissive(tmp_path, partial):
+    """A record missing declared fields must fail SAFE (invalid forbids installs), never
+    read as a permissive `attended` (pre-PR review finding)."""
+    _write(tmp_path, partial)
+    view = _view(tmp_path)
+    assert view.load_status == "invalid"
+    assert sl.installs_forbidden(view) is True
+
+
 def test_a_valid_file_reads_as_valid(tmp_path):
     _write(tmp_path, _record(state="away"))
     loaded = sl.read_state(str(tmp_path))
@@ -301,6 +363,9 @@ def test_validate_declaration_refuses_an_unparseable_until():
 
 @pytest.mark.parametrize("bad", [
     "../escape", "a/b", "a\\b", "", "   ", "x" * 200, None, 7,
+    # `.` and `..` MATCH the charset but are path navigation — the regex alone let them
+    # through (pre-PR review finding, confirmed live).
+    ".", "..", "...",
 ])
 def test_validate_campaign_id_rejects_unsafe_values(bad):
     assert sl.validate_campaign_id(bad) is False
@@ -341,8 +406,8 @@ def test_supervision_lib_imports_stdlib_only():
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             imported.add(node.module.split(".")[0])
     allowed = {
-        "argparse", "dataclasses", "datetime", "json", "os", "re", "sys",
-        "collections", "typing", "__future__",
+        "argparse", "collections", "dataclasses", "datetime", "json", "os", "re",
+        "stat", "sys", "typing", "__future__",
     }
     assert imported <= allowed, f"non-stdlib or heavy import(s): {sorted(imported - allowed)}"
 

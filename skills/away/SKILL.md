@@ -43,9 +43,11 @@ is absent but reachable. AWAY means **absent, still reachable by phone** — as 
 ## What this does and does not change
 
 **Does:** unattended package installs are refused, and the context-pressure meter routes
-to a handoff rather than asking a human. Both stay in force after the stated return time
-passes — a clock passing a timestamp is not evidence anybody came back. Only
-`/rawgentic:back` lifts them.
+to a handoff rather than asking a human. These two do NOT expire together, and the
+difference is deliberate: past the stated return time the meter goes back to addressing a
+human (its only stake is which advice it prints), while the install refusal STAYS in
+force, because installing packages is an outward act and a clock passing a timestamp is
+not evidence anybody came back. Only `/rawgentic:back` lifts the install refusal.
 
 **Does not, yet:** it does not text the owner about blockers, decide anything on their
 behalf, or park a running campaign. That behaviour is #947; until it ships, an

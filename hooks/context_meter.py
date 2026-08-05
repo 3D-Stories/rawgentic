@@ -62,8 +62,6 @@ import sys
 import time
 from datetime import datetime, timezone
 
-import supervision_lib
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # The three fields that make up the in-context total. output_tokens is
@@ -1444,6 +1442,10 @@ def cmd_hook(argv) -> int:
     # #943: the DECLARED supervision state, not an env var. `workspace` was already
     # resolved above, so this costs one capped read and no second walk — and it lands
     # here, on the emit path, so the common no-nag tool call still pays nothing.
+    # The import is function-local for that same reason: at module scope every tool
+    # call would pay it before the early returns (pre-PR review finding), which is
+    # the precedent `subprocess` above already follows.
+    import supervision_lib  # pylint: disable=import-outside-toplevel
     unattended = supervision_lib.nobody_to_ask(
         supervision_lib.evaluate_workspace(
             supervision_lib.read_state(workspace),

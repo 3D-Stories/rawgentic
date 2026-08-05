@@ -74,7 +74,34 @@ def test_the_written_file_reads_back_as_valid(tmp_path):
 def test_revision_increments_on_every_write(tmp_path):
     assert _declare(tmp_path)["revision"] == 1
     assert _declare(tmp_path)["revision"] == 2
-    assert _declare(tmp_path, state="attended")["revision"] == 3
+    assert _declare(tmp_path, state="sleeping", until=_iso(LATER))["revision"] == 3
+
+
+def test_declare_cannot_set_attended(tmp_path):
+    """Raised independently by both pre-PR review waves.
+
+    `declare`'s fence is OPTIONAL, `mark_attended`'s is mandatory. Allowing
+    `declare --state attended` therefore offered an unfenced way to clear a newer absence
+    and re-enable unattended installs, contradicting the documented "only /back lifts it".
+    """
+    _declare(tmp_path, state="away")
+    with pytest.raises(sa.DeclarationRefused) as exc:
+        _declare(tmp_path, state="attended")
+    assert "mark_attended" in str(exc.value)
+    assert _read(tmp_path)["state"] == "away", "the absence must survive"
+
+
+def test_recovering_a_corrupt_file_jumps_the_revision_counter(tmp_path):
+    """Restarting the counter at 1 after a recovery would let a delayed event still
+    carrying expected_revision=1 from the PREVIOUS lineage satisfy the fence and clear a
+    newer absence — the very hole the fence exists to close."""
+    _declare(tmp_path)                                   # revision 1
+    Path(sl.supervision_path(str(tmp_path))).write_text("{corrupt")
+    rec = _declare(tmp_path, state="away")
+    assert rec["revision"] > 1000, rec["revision"]
+    with pytest.raises(sa.RevisionMismatch):
+        sa.mark_attended(str(tmp_path), session_id="s", reason="stale",
+                         expected_revision=1, now=NOW)
 
 
 def test_mark_attended_clears_the_absence_and_the_grant(tmp_path):

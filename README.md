@@ -780,11 +780,11 @@ For major changes, please open an issue first to discuss the approach.
   routing while unsupervised — texting, consulting, action claims, `authority_permits`, the
   departure preflight, and any behavioural consumer of `campaign_wait` — is split out to #947 and
   gated off, so an absent owner currently gets an honest park rather than an autonomous decision;
-  `docs/supervision.md` says so plainly. 105 tests added across
+  `docs/supervision.md` says so plainly. 121 tests added across
   `tests/hooks/test_supervision_lib.py`, `test_supervision_admin.py` and
   `test_supervision_campaign_wait.py`, including the asymmetry test that fails if the two
   predicates are ever collapsed and the inert-feature regression proving a bare `/rawgentic:away`
-  still guards the hook sites. No workflow-spine change → no diagram REV. Suite 5366→5471.
+  still guards the hook sites. No workflow-spine change → no diagram REV. Suite 5366→5487.
 
 ### v3.130.0 (2026-08-05)
 - **Run-records now land exactly once (#888, epic #871).** Closes both measured halves of the

@@ -45,9 +45,10 @@ is unreachable until a stated time. SLEEPING means **cannot be asked** — as op
 ## What this does and does not change
 
 **Does:** unattended package installs are refused, and the context-pressure meter routes
-to a handoff instead of asking a human. Both stay in force after the wake time passes —
-the clock reaching morning is not evidence the owner woke up. Only `/rawgentic:back`
-lifts them.
+to a handoff instead of asking a human. These two do NOT expire together, deliberately:
+past the wake time the meter goes back to addressing a human, while the install refusal
+STAYS in force, because the clock reaching morning is not evidence the owner woke up.
+Only `/rawgentic:back` lifts the install refusal.
 
 **Does not, yet:** it does not consult, decide, notify, or park a campaign on the owner's
 behalf. That behaviour is #947. Until it ships, a run that hits a blocker while the owner

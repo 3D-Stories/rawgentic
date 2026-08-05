@@ -39,6 +39,7 @@ import argparse
 import json
 import os
 import re
+import stat
 import sys
 from collections import namedtuple
 from dataclasses import dataclass
@@ -117,17 +118,34 @@ def supervision_path(workspace_root: str) -> str:
     return os.path.join(workspace_root, *_REL_PATH)
 
 
+#: Every key the writer emits. A record missing any of them is INVALID rather than
+#: partially-honoured: a schema-incomplete file must fail SAFE (invalid forbids installs),
+#: never read as a permissive `attended` (pre-PR review finding). `until` may be null but
+#: the KEY must be present, so "no return time" is distinguishable from "field lost".
+_REQUIRED_KEYS = (
+    "schema_version", "revision", "state", "until",
+    "declared_at", "declared_by_session",
+)
+
+
 def _record_is_sane(record) -> bool:
     if not isinstance(record, dict):
+        return False
+    if any(key not in record for key in _REQUIRED_KEYS):
         return False
     if record.get("state") not in STATES:
         return False
     until = record.get("until")
     if until is not None and _parse_ts(until) is None:
         return False
-    revision = record.get("revision", 0)
-    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
-        return False
+    for key in ("schema_version", "revision"):
+        value = record.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            return False
+    for key in ("declared_at", "declared_by_session"):
+        value = record.get(key)
+        if not isinstance(value, str) or not value.strip():
+            return False
     grant = record.get("consult_grant", {})
     if grant is not None and not isinstance(grant, dict):
         return False
@@ -144,6 +162,11 @@ def read_state(workspace_root) -> Loaded:
     if not workspace_root:
         # Genuinely no rawgentic workspace context — today's unset-env default.
         return Loaded({}, "absent")
+    if not isinstance(workspace_root, str):
+        # `os.path.isdir([])` raises TypeError, which would escape the never-raises
+        # contract on a per-tool-call hook (pre-PR review finding).
+        _warn(f"workspace root is not a path string: {type(workspace_root).__name__}")
+        return Loaded({}, "invalid")
     if not os.path.isdir(workspace_root):
         # Supplied but unresolvable: a caller/config failure, NOT an absence. Treating
         # it as absence would let a config bug unlock installs.
@@ -151,16 +174,56 @@ def read_state(workspace_root) -> Loaded:
         return Loaded({}, "invalid")
 
     path = supervision_path(workspace_root)
+    # A DANGLING symlink is not an absence — something was put there deliberately and now
+    # does not resolve. `os.stat` follows the link and would report FileNotFoundError,
+    # which would read as "nobody declared anything" and permit installs (pre-PR review
+    # finding). `lstat` sees the link itself.
     try:
-        if os.path.getsize(path) > READ_CAP_BYTES:
-            _warn(f"state file exceeds {READ_CAP_BYTES} bytes; treating as invalid")
+        if os.path.islink(path) and not os.path.exists(path):
+            _warn("state file is a dangling symlink; treating as invalid")
             return Loaded({}, "invalid")
-        with open(path, "r", encoding="utf-8") as fh:
-            raw = fh.read(READ_CAP_BYTES + 1)
+    except OSError:
+        return Loaded({}, "invalid")
+
+    try:
+        st = os.stat(path)
     except FileNotFoundError:
         return Loaded({}, "absent")
     except OSError as exc:
         _warn(f"state file unreadable ({exc}); treating as invalid")
+        return Loaded({}, "invalid")
+
+    # Refuse non-regular files BEFORE opening. A FIFO here would block `open` and hang a
+    # hook that runs on every tool call; a device or directory would misbehave in its own
+    # way. `context_meter._read_capped` refuses non-regular files for the same reason.
+    if not stat.S_ISREG(st.st_mode):
+        _warn("state file is not a regular file; treating as invalid")
+        return Loaded({}, "invalid")
+    if st.st_size > READ_CAP_BYTES:
+        _warn(f"state file exceeds {READ_CAP_BYTES} bytes; treating as invalid")
+        return Loaded({}, "invalid")
+
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = fh.read(READ_CAP_BYTES + 1)
+    except FileNotFoundError:
+        # `stat` succeeded a moment ago, so the file EXISTED and then vanished. That is a
+        # race, not an absence: reporting absent here would let a delete-during-read
+        # permit installs while a declaration was in force (pre-PR review finding).
+        _warn("state file vanished while being read; treating as invalid")
+        return Loaded({}, "invalid")
+    # ValueError catches UnicodeDecodeError, which is NOT an OSError: invalid UTF-8 in
+    # the file would otherwise raise straight out of a hook that runs on every tool call
+    # and break the never-raises contract (pre-PR review finding, confirmed live).
+    except (OSError, ValueError) as exc:
+        _warn(f"state file unreadable ({exc}); treating as invalid")
+        return Loaded({}, "invalid")
+
+    # The size check above and this read are not atomic, so re-check what actually
+    # arrived: a file that grew past the cap in between must not slip through just
+    # because it still happens to parse.
+    if len(raw) > READ_CAP_BYTES:
+        _warn(f"state file exceeds {READ_CAP_BYTES} bytes; treating as invalid")
         return Loaded({}, "invalid")
 
     try:
@@ -273,6 +336,11 @@ def validate_campaign_id(value) -> bool:
     if not isinstance(value, str):
         return False
     if not value or len(value) > _MAX_CAMPAIGN_ID:
+        return False
+    # `.` and `..` match the charset but ARE path navigation. The charset alone let them
+    # through (pre-PR review finding, confirmed live: `validate_campaign_id("..")` was
+    # True), so reject any all-dots value explicitly.
+    if set(value) == {"."}:
         return False
     return bool(_CAMPAIGN_ID_RE.match(value))
 
