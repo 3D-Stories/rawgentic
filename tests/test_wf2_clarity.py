@@ -1563,7 +1563,7 @@ class TestStep4BudgetExhaustedClose:
         # mean STOP/escalate, so a NEW refusal class left out of that taxonomy could pull
         # a model toward escalating — reintroducing what #798 removed (#903 AC4).
         s4 = " ".join(self._step4().split())
-        assert "self-repairable and is NOT an escalation condition" in s4
+        assert "self-repairable and are NOT escalation conditions" in s4
 
     def test_ledger_adopted_does_not_mean_implemented(self):
         # The close writes top-level `disposition: "adopted"` for EVERY finding, so a

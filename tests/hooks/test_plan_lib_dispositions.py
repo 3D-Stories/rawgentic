@@ -1072,3 +1072,75 @@ class TestCloseDesignGateRequiresDisposition:
                 "description": "rollback path missing", "location": "design.md:12"}
         assert mod.compute_finding_key(bare) == mod.compute_finding_key(
             dict(bare, terminal_disposition="applied", disposition_reason="x"))
+
+
+class TestSevereFindingsDisposedHardening:
+    """Step 8a review fixes (#903). Each test reproduces one defect the first
+    implementation shipped — a predicate whose docstring claimed fail-CLOSED while
+    several inputs quietly satisfied it."""
+
+    def test_a_non_string_reason_is_not_a_reason(self):
+        # R1 (High): `str(finding.get("disposition_reason", ""))` turned null/false/0/[]/{}
+        # into the non-empty strings "None"/"False"/"0"/"[]"/"{}", so a refuted Critical/High
+        # closed the gate with no rationale at all — the exact assert-without-checking defect
+        # this whole feature exists to remove.
+        mod = _reload_plan_lib()
+        for bad in (None, False, 0, [], {}, 3.5):
+            ok, _ = mod.severe_findings_are_disposed(
+                [_disposed(disp="refuted", reason=bad)])
+            assert ok is False, f"disposition_reason={bad!r} must not satisfy the rationale"
+
+    def test_an_off_vocab_severity_refuses_rather_than_skipping(self):
+        # R2 (High): unknown severities were silently treated as non-severe, so a finding a
+        # human reads as severe ("Blocker") rode through undisposed. Fail CLOSED means an
+        # unclassifiable finding refuses, not that it is waved past.
+        mod = _reload_plan_lib()
+        for sev in ("Blocker", "Sev1", "critical!", ""):
+            ok, why = mod.severe_findings_are_disposed([_disposed(sev=sev, disp=None)])
+            assert ok is False, f"severity={sev!r} must refuse, not skip"
+            assert "severity" in why
+
+    def test_a_non_string_severity_refuses(self):
+        mod = _reload_plan_lib()
+        for sev in (["High"], None, {"x": 1}, 1):
+            ok, _ = mod.severe_findings_are_disposed([_disposed(sev=sev, disp=None)])
+            assert ok is False, f"severity={sev!r} must refuse"
+
+    def test_the_four_known_bands_are_still_accepted(self):
+        # The refusal must not swallow the ordinary path: Medium/Low still need nothing,
+        # Critical/High still only need their disposition.
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed(
+            [_disposed(sev="Medium", disp=None), _disposed(sev="low", disp=None),
+             _disposed(sev="CRITICAL", disp="applied"), _disposed(sev="High", disp="applied")])
+        assert ok is True, why
+
+    def test_control_and_bidi_characters_are_stripped(self):
+        # R4 (Medium) + the inline pass's own M1, found independently by both reviewers:
+        # collapsing whitespace does not remove ANSI escapes, C0/C1 controls, or bidi
+        # overrides, so caller-controlled text could recolor, reorder or conceal parts of the
+        # operator-facing refusal.
+        mod = _reload_plan_lib()
+        nasty = "red\x1b[31mESC\x00NUL‮THGIR-OT-TFEL‬"
+        _, why = mod.severe_findings_are_disposed(
+            [_disposed(disp=None, desc=nasty, loc=nasty)])
+        for ch in ("\x1b", "\x00", "‮", "‬"):
+            assert ch not in why, f"{ch!r} must not reach operator-facing output"
+
+    def test_offenders_past_the_cap_are_counted_not_rendered(self):
+        # R3 (Medium): the loop formatted every offender and only then sliced to 10, so a
+        # large findings file paid full rendering cost for output nobody sees.
+        mod = _reload_plan_lib()
+        findings = [_disposed(disp=None, desc=f"flaw number {i}") for i in range(25)]
+        _, why = mod.severe_findings_are_disposed(findings)
+        assert why.startswith("25 Critical/High finding(s)")
+        assert "15 more" in why
+        rendered = [i for i in range(25) if f"flaw number {i}'" in why]
+        assert len(rendered) == 10, f"expected 10 rendered offenders, got {rendered}"
+
+    def test_a_giant_field_is_bounded_before_normalization(self):
+        # R3: `str(value).split()` allocated over the WHOLE value before the cap applied.
+        mod = _reload_plan_lib()
+        _, why = mod.severe_findings_are_disposed(
+            [_disposed(disp=None, desc="x " * 500_000)])
+        assert len(why) < 2000, "the refusal message must stay bounded"

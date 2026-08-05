@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -2938,6 +2939,7 @@ def findings_are_unambiguous(findings: list) -> tuple[bool, str]:
     return (True, "clear")
 
 
+_KNOWN_SEVERITIES: Final[tuple[str, ...]] = ("critical", "high", "medium", "low")
 _SEVERE_SEVERITIES: Final[frozenset[str]] = frozenset({"critical", "high"})
 _TERMINAL_DISPOSITIONS: Final[tuple[str, ...]] = ("applied", "refuted", "deferred")
 _DISPOSITION_NEEDS_REASON: Final[frozenset[str]] = frozenset({"refuted", "deferred"})
@@ -2945,20 +2947,34 @@ _MAX_LISTED_OFFENDERS: Final[int] = 10
 _MAX_OFFENDER_DESC_CHARS: Final[int] = 60
 # The refusal must be SELF-REPAIRING, not merely correct: a caller still emitting the
 # pre-#903 findings-file shape would otherwise escalate to the owner, which is exactly the
-# six-consecutive-escalations problem #798 removed (#903 AC4).
+# six-consecutive-escalations problem #798 removed (#903 AC4). Derived from the vocabulary
+# constants rather than restated, so a new token cannot leave the hint quietly stale.
 _DISPOSITION_FIX_HINT: Final[str] = (
-    "add `terminal_disposition` (applied|refuted|deferred) to each; refuted and deferred "
-    "also require a non-empty `disposition_reason`"
+    f"add `terminal_disposition` ({'|'.join(_TERMINAL_DISPOSITIONS)}) to each; "
+    f"{' and '.join(t for t in _TERMINAL_DISPOSITIONS if t in _DISPOSITION_NEEDS_REASON)}"
+    " also require a non-empty `disposition_reason`"
 )
 
 
 def _one_line(value, limit: int) -> str:
-    """Collapse to a single line and cap the length.
+    """Render caller-controlled text as one bounded, control-free display line.
 
-    Refusal text is built from caller-controlled finding fields, so a newline-bearing
-    description would otherwise forge extra lines in an operator's log.
+    Three separate hazards, all from the same source — the refusal message is built from
+    fields an upstream model wrote:
+
+    * newlines would forge extra lines in an operator's log;
+    * `str.split()` removes only WHITESPACE controls, so ANSI escapes, other C0/C1
+      controls and bidi overrides survive it and can recolor, reorder or conceal part of
+      the message (Step 8a R4). Every Cc/Cf character is dropped.
+    * a multi-megabyte field would be fully materialized before any cap applied, so the
+      raw value is sliced FIRST. Collapsing only ever shrinks, so a generous prefix still
+      fills `limit`.
     """
-    return " ".join(str(value).split())[:limit]
+    raw = value if isinstance(value, str) else str(value)
+    text = " ".join(raw[:limit * 4].split())
+    return "".join(
+        c for c in text if unicodedata.category(c) not in ("Cc", "Cf")
+    )[:limit]
 
 
 def severe_findings_are_disposed(findings: list) -> tuple[bool, str]:
@@ -2984,31 +3000,55 @@ def severe_findings_are_disposed(findings: list) -> tuple[bool, str]:
     auto-dissolve at the #393 join backstop (only `declined` does), so a refuted finding
     stays re-raisable, which is the safe direction.
 
-    Fail CLOSED: a non-dict finding, an absent disposition, or an off-vocab one all refuse.
-    Removing an owner escalation is the dangerous direction.
+    Fail CLOSED, and note where that bites (Step 8a R1/R2 — the first implementation
+    claimed fail-closed while several inputs quietly satisfied it):
+
+    * a non-dict finding refuses;
+    * `severity` must BE a string naming one of the four known bands. An unclassifiable
+      severity ("Blocker", a list, `None`) REFUSES rather than being skipped as
+      non-severe — a finding nobody can classify must never license a close;
+    * `disposition_reason` must BE a non-empty string. Coercing with `str()` turned
+      `null`/`false`/`0`/`[]` into the non-empty text "None"/"False"/"0"/"[]", so a
+      refuted High closed the gate with no rationale at all.
 
     Bounded limitation, stated rather than assumed: this validates the findings it is
     GIVEN. It cannot detect a Critical/High finding the caller omitted from the file, nor
     verify that an `applied` was truly applied — #798's known limitation ("a prose guard
-    can still pass while a model skips the adapter command") is unchanged. Severities
-    outside the four known bands are not treated as severe, matching every other severity
-    consumer in this module.
+    can still pass while a model skips the adapter command") is unchanged.
     """
     offenders: list[str] = []
+    beyond_cap = 0
     for i, finding in enumerate(findings):
         if not isinstance(finding, dict):
             return (False, f"finding {i} is not an object")
-        severity = _one_line(finding.get("severity", ""), 40)
+        raw_severity = finding.get("severity")
+        if (not isinstance(raw_severity, str)
+                or raw_severity.strip().lower() not in _KNOWN_SEVERITIES):
+            return (False, f"finding {i} has an unclassifiable severity "
+                           f"{_one_line(raw_severity, 40)!r} — expected one of "
+                           f"{'|'.join(_KNOWN_SEVERITIES)}; refusing to close")
+        severity = raw_severity.strip()
         if severity.lower() not in _SEVERE_SEVERITIES:
             continue
-        disposition = _one_line(finding.get("terminal_disposition", ""), 40).lower()
+
+        raw_disposition = finding.get("terminal_disposition")
+        disposition = (raw_disposition.strip().lower()
+                       if isinstance(raw_disposition, str) else "")
+        problem = None
         if disposition not in _TERMINAL_DISPOSITIONS:
-            problem = (f"terminal_disposition {disposition!r}" if disposition
-                       else "no terminal_disposition")
-        elif (disposition in _DISPOSITION_NEEDS_REASON
-                and not str(finding.get("disposition_reason", "")).strip()):
-            problem = f"{disposition} without a non-empty disposition_reason"
-        else:
+            problem = ("no terminal_disposition" if raw_disposition is None
+                       else f"terminal_disposition {_one_line(raw_disposition, 40)!r}")
+        elif disposition in _DISPOSITION_NEEDS_REASON:
+            reason = finding.get("disposition_reason")
+            if not isinstance(reason, str) or not reason.strip():
+                problem = f"{disposition} without a non-empty disposition_reason"
+        if problem is None:
+            continue
+
+        # Render only what is shown; a large findings file must not pay to format
+        # offenders nobody will read.
+        if len(offenders) >= _MAX_LISTED_OFFENDERS:
+            beyond_cap += 1
             continue
         location = _one_line(finding.get("location") or "", 60)
         description = _one_line(finding.get("description", ""), _MAX_OFFENDER_DESC_CHARS)
@@ -3017,11 +3057,10 @@ def severe_findings_are_disposed(findings: list) -> tuple[bool, str]:
 
     if not offenders:
         return (True, "every Critical/High finding carries a terminal disposition")
-    shown = offenders[:_MAX_LISTED_OFFENDERS]
-    tail = (f"; and {len(offenders) - len(shown)} more"
-            if len(offenders) > len(shown) else "")
-    return (False, f"{len(offenders)} Critical/High finding(s) lack a terminal "
-                   f"disposition: {'; '.join(shown)}{tail} — {_DISPOSITION_FIX_HINT}")
+    tail = f"; and {beyond_cap} more" if beyond_cap else ""
+    return (False, f"{len(offenders) + beyond_cap} Critical/High finding(s) lack a "
+                   f"terminal disposition: {'; '.join(offenders)}{tail} — "
+                   f"{_DISPOSITION_FIX_HINT}")
 
 
 def _contained(path: str, root: str) -> bool:
