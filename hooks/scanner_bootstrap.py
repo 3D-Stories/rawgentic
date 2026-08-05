@@ -27,8 +27,12 @@ This module is idempotent and SELF-HEALING instead:
     rather than masquerading as success.
 
 Opt-outs (unchanged contract): RAWGENTIC_SKIP_SCANNER_INSTALL=1, or
-"installScanners": false in .rawgentic_workspace.json. Skipped in headless
-(RAWGENTIC_HEADLESS=1). Every skip is recorded in the status file with its reason.
+"installScanners": false in .rawgentic_workspace.json. Also skipped whenever the
+declared supervision state forbids unattended installs (#943) — an away or sleeping
+declaration, an EXPIRED one, or a state file we cannot parse. Installing packages with
+nobody watching is the thing being prevented, so this guard fails SAFE: only an
+explicit /rawgentic:back lifts it. Every skip is recorded in the status file with its
+reason.
 """
 import argparse
 import json
@@ -39,6 +43,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from atomic_write_lib import atomic_write_text
+
+import supervision_lib
 
 STATUS_SCHEMA = 1
 ALL_TOOLS = ["gitleaks", "semgrep", "osv-scanner", "trivy", "pip-audit"]
@@ -107,15 +113,21 @@ def _parse_ts(s):
         return None
 
 
-def decide(*, optout_env, optout_ws, headless, missing, status, now, throttle_s):
+def decide(*, optout_env, optout_ws, installs_forbidden, missing, status, now,
+           throttle_s):
     """Pure decision. Returns one of:
-    skip-headless | skip-optout-env | skip-optout-ws | ok | throttled | install.
+    skip-unattended | skip-optout-env | skip-optout-ws | ok | throttled | install.
 
-    Precedence mirrors the original bootstrap: headless first, then the env
-    opt-out, then the workspace opt-out, then presence, then the throttle.
+    Precedence is unchanged: the unattended guard first, then the env opt-out, then
+    the workspace opt-out, then presence, then the throttle.
+
+    `installs_forbidden` came from a bare environment variable until #943; it is now
+    derived from the DECLARED supervision state, and stays True after a declaration expires
+    — a clock passing a stated wake time is not evidence a human came back, and this
+    guard authorizes a real package install.
     """
-    if headless:
-        return "skip-headless"
+    if installs_forbidden:
+        return "skip-unattended"
     if optout_env:
         return "skip-optout-env"
     if optout_ws:
@@ -230,7 +242,7 @@ def _build_status(event, outcome, present, missing, now, log_path,
 
 
 _OUTCOME = {
-    "skip-headless": "skipped-headless",
+    "skip-unattended": "skipped-unattended",
     "skip-optout-env": "skipped-optout-env",
     "skip-optout-ws": "skipped-optout-ws",
     "ok": "ok",
@@ -266,7 +278,17 @@ def main(argv=None):
     throttle_s = _int_env("RAWGENTIC_SCANNER_RETRY_SECONDS", DEFAULT_THROTTLE_S)
     now = _now_iso()
 
-    headless = os.environ.get("RAWGENTIC_HEADLESS") == "1"
+    # #943: the DECLARED supervision state replaces the old env-var read. The workspace
+    # ROOT is the directory holding the workspace file this hook is already given; with
+    # no --workspace there is no rawgentic workspace context, which reads as absent and
+    # permits installs exactly as before. Note the outcome does not depend on `now`:
+    # installs_forbidden reads the DECLARED state, so expiry cannot unlock an install.
+    ws_root = (os.path.dirname(os.path.abspath(args.workspace))
+               if args.workspace else None)
+    forbidden = supervision_lib.installs_forbidden(
+        supervision_lib.evaluate_workspace(
+            supervision_lib.read_state(ws_root),
+            now=datetime.now(timezone.utc)))
     optout_env = os.environ.get("RAWGENTIC_SKIP_SCANNER_INSTALL") == "1"
     # #576: never launch a real background install from inside the test suite.
     if _pytest_install_optout(os.environ):
@@ -276,7 +298,7 @@ def main(argv=None):
 
     present, missing = [], []
     # Only spend the (cheap) --check subprocess when we might act on it.
-    if not (headless or optout_env or optout_ws):
+    if not (forbidden or optout_env or optout_ws):
         try:
             present, missing = check_presence(installer)
         except Exception as e:  # subprocess failed — record, don't guess
@@ -286,7 +308,8 @@ def main(argv=None):
                   f"See {status_path}.")
             return 0
 
-    action = decide(optout_env=optout_env, optout_ws=optout_ws, headless=headless,
+    action = decide(optout_env=optout_env, optout_ws=optout_ws,
+                    installs_forbidden=forbidden,
                     missing=missing, status=prev, now=now, throttle_s=throttle_s)
     outcome = _OUTCOME[action]
     last_attempt = now if action == "install" else prev.get("last_install_attempt")
