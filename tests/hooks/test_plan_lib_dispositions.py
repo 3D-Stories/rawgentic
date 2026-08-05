@@ -1190,3 +1190,44 @@ class TestSevereFindingsDisposedStep11Fixes:
         ok, why = mod.severe_findings_are_disposed([_disposed(sev=["High"], disp=None)])
         assert ok is False
         assert "<list>" in why
+
+
+class TestRationaleSubstance:
+    """Adversarial diff-review fix (#903 A3). Escapes only — pylint E2502 is an ENABLED
+    check on a HARD CI lane, and half these characters are exactly what it hunts."""
+
+    INVISIBLE = (
+        "\u3164",      # HANGUL FILLER — category Lo, i.e. a *letter* that renders as nothing
+        "\u115f",      # HANGUL CHOSEONG FILLER
+        "\u034f",      # COMBINING GRAPHEME JOINER — Mn
+        "\ufe0f",      # VARIATION SELECTOR-16 — Mn
+        "\u2800",      # BRAILLE PATTERN BLANK — So
+        "\u200b",      # ZERO WIDTH SPACE — Cf (already covered; kept as a regression pin)
+        " \u3164\t\ufe0f ",
+    )
+
+    def test_invisible_only_rationales_are_refused(self):
+        # Dropping Cc/Cf was not enough: an invisible character can be a letter (Lo), a
+        # mark (Mn) or a symbol (So). A rationale made only of those is still no rationale,
+        # and a refuted Critical/High would close the gate behind it.
+        mod = _reload_plan_lib()
+        for reason in self.INVISIBLE:
+            ok, why = mod.severe_findings_are_disposed(
+                [_disposed(disp="refuted", reason=reason)])
+            assert ok is False, f"invisible rationale {reason!r} must be refused"
+            assert "disposition_reason" in why
+
+    def test_visible_rationales_survive_including_non_ascii(self):
+        # The substance check must not become a latin-only filter.
+        mod = _reload_plan_lib()
+        for reason in ("the cited logger is disabled", "见 #123", "refuté — voir #123",
+                       "3", "#123", "→ tracked upstream"):
+            ok, why = mod.severe_findings_are_disposed(
+                [_disposed(disp="refuted", reason=reason)])
+            assert ok is True, f"{reason!r} is substantive: {why}"
+
+    def test_a_visible_character_beside_invisibles_is_enough(self):
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed(
+            [_disposed(disp="refuted", reason="\u3164x\ufe0f")])
+        assert ok is True, why

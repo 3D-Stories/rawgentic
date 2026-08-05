@@ -2989,6 +2989,33 @@ def _one_line(value, limit: int) -> str:
     return " ".join(kept.split())[:limit]
 
 
+# Characters that ARE letters/symbols by Unicode category but render as nothing. The
+# category test alone cannot catch these, and an adversarial review closed a gate behind a
+# rationale made only of U+3164 (#903 A3).
+_INVISIBLE_GLYPHS: Final[frozenset[str]] = frozenset(
+    "ㅤᅟᅠﾠ⠀͏឴឵"
+)
+
+
+def _has_substance(text: str) -> bool:
+    """Does this hold a character a reader would actually SEE?
+
+    A different question from "non-empty", and from `_one_line`'s rendering job. Removing
+    Cc/Cf is not sufficient: U+3164 HANGUL FILLER is a LETTER (Lo), U+034F COMBINING
+    GRAPHEME JOINER and U+FE0F VARIATION SELECTOR-16 are marks (Mn), and U+2800 BRAILLE
+    PATTERN BLANK is a symbol (So) — all invisible, none Cc/Cf. A `disposition_reason` made
+    only of those is no rationale, and a refuted Critical/High would close the gate behind
+    it. Deliberately NOT a latin-only filter: any letter, number, punctuation or symbol
+    that renders counts, so "见 #123" and "→ tracked upstream" are substantive.
+    """
+    for char in text:
+        if char.isspace() or char in _INVISIBLE_GLYPHS:
+            continue
+        if unicodedata.category(char)[0] in ("L", "N", "P", "S"):
+            return True
+    return False
+
+
 def severe_findings_are_disposed(findings: list) -> tuple[bool, str]:
     """Every Critical/High finding must carry a terminal disposition (#903).
 
@@ -3052,11 +3079,10 @@ def severe_findings_are_disposed(findings: list) -> tuple[bool, str]:
                        else f"terminal_disposition {_one_line(raw_disposition, 40)!r}")
         elif disposition in _DISPOSITION_NEEDS_REASON:
             reason = finding.get("disposition_reason")
-            # `.strip()` alone is NOT substance: it removes whitespace only, so a reason
-            # made solely of a zero-width space, ESC, NUL or a bidi override read as
-            # non-empty and an invisible "rationale" satisfied the gate (Step 11 S2).
-            # `_one_line` drops every Cc/Cf character, so what survives is real text.
-            if not isinstance(reason, str) or not _one_line(reason, 200):
+            # Substance, not mere non-emptiness: `.strip()` removes whitespace only, and
+            # even dropping Cc/Cf leaves invisibles in other categories. `_has_substance`
+            # owns that question so the display helper is not overloaded with validation.
+            if not isinstance(reason, str) or not _has_substance(reason):
                 problem = f"{disposition} without a non-empty disposition_reason"
         if problem is None:
             continue
