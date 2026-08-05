@@ -14,6 +14,67 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #875 M1 — #903: a budget-exhausted design-gate close requires resolved ground · v3.127.0
+
+Round-9 session, small-standard lane (`standard_feature`, 4 impl files ≤ 7), plugin 3.125.8 cache.
+#798 let WF2's Step-4 gate self-close the moment the design loop-back budget ran out. Exhaustion
+alone was the whole test. Observed live on #874: the design source cap was reached with the
+breaker clear, so the close was available **while a High design finding was unresolved and an AC
+was known unmet** — the run refused it by hand and escalated. A second instance is on record
+(epic #667 child #665: budget exhausted with two findings still open, run proceeded, logged as a
+deviation), and #798's own review pass had independently flagged the gap: "no disposition or owner
+acceptance is required, so the workflow can knowingly implement a design with [surviving
+findings]".
+
+The fix is a pure predicate at the executable boundary, mirroring the sibling
+`findings_are_unambiguous`: every Critical/High finding in `--findings-file` must declare
+`terminal_disposition` (`applied|refuted|deferred`), and `refuted`/`deferred` each need a real
+`disposition_reason`. It sits AFTER the ambiguity check deliberately — running it first would
+leave the older ambiguity guard still returning non-zero while silently no longer proving what it
+claims. The refusal is **self-repairing**: it names the field and its values, and the prose says
+explicitly that this refusal is not an escalation condition. That mattered more than it sounds —
+the Step-4 gate's own review caught that a merely-correct refusal would have escalated every
+caller still emitting the old findings-file shape, recreating the six-consecutive-escalations
+problem #798 was built to delete.
+
+**Three review waves found three separate fail-opens in the fix itself, each one the same defect
+the feature exists to remove — a property asserted and never checked.** Step 8a: `str()` coercion
+turned `null`/`false`/`0`/`[]` into the non-empty text "None"/"False"/"0"/"[]", so a refuted High
+closed the gate with no rationale; and an unclassifiable severity ("Blocker", a list) was silently
+skipped as non-severe rather than refused. Step 11: a `disposition_reason` made only of invisible
+characters — zero-width space, ESC, a bidi override — read as substance. The adversarial layer:
+the same hole one category over, because an invisible character can be a **letter** (U+3164 HANGUL
+FILLER), a mark (U+034F, U+FE0F) or a symbol (U+2800), none of them `Cc`/`Cf`. Notably the
+reviewer's own recommendation there ("require a letter or number") would not have caught its own
+example. It also caught a regression in the new prose: an enumerated finding shape that omitted
+`ambiguity_flag`, which `findings_are_unambiguous` defaults to "clear" — a caller rebuilding
+findings from that list would have disarmed the older guard.
+
+Two High recommendations were **declined with reasons**: removing `deferred`, and removing
+`applied`, from the accepted dispositions. Both are fair internal-consistency critiques — the
+feature condemns bare asserted tokens and then permits two — but AC1 names all three, and
+narrowing an owner-authored spec is not an implementation decision. Filed as a follow-up instead,
+alongside a second one: Step 8a's per-sha acknowledgment requirement is structurally
+unsatisfiable through the runner, whose `FINDINGS_SCHEMA` has no field to carry it.
+
+**Telemetry (run-record `wf2-903-82947d55`):** gates — Design Critique pass (lane rubric-only,
+deep pass; 1 High spec-tightened in-gate and verified RESOLVED, 1 sub-band Low adopted anyway),
+Plan Drift skipped (lane), Per-task Review pass (T1+T2 high-risk; 2 High + 2 Medium fixed),
+Implementation Drift pass (one real gate failure found and fixed — see below), Code Review pass
+(3 High adopted+fixed across Step 11 and the adversarial layer; 2 High + 1 Medium declined with
+recorded reasons; 1 Medium dropped by its confidence band and refuted on the merits), security
+scan PASS (0 blocking, 0 advisory, skipped: iac). Tests **+48**, suite **5031→5079/0**.
+Loop-backs **3/3** — one spec-tighten, one 8a, one Step-11 — every one spent on an authorized
+in-place fix round, none on a redesign. Eight terminal dispositions persisted (4 adopted,
+4 declined). WF2 diagram REV 3.127.0 (station 04 delta).
+
+Step 9 also caught something the epic itself cares about: the new prose pushed
+`references/step-04.md` 797 bytes past its byte ceiling. The guard offers "trim it, or raise the
+ceiling" — trimmed, twice, because raising a size ceiling inside a milestone named STAY SMALL
+would contradict the milestone. The file ships at 23712 of 23727 bytes.
+
+---
+
 ## Epic #875 M1 — #902: reviewer confidence is a native number the band filter can consume · v3.126.0
 
 Round-8 session, small-standard lane (`standard_feature`, 5 impl files ≤ 7), plugin 3.125.7 cache.

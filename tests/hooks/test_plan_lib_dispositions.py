@@ -469,9 +469,24 @@ def _counters(tmp_path, design=2, total=2, **rest):
 
 
 def _findings_file(tmp_path):
+    # #903: a High must declare a terminal disposition for the close to be permitted, so
+    # the shared fixture models a DISPOSED High — the shape a legitimate close carries.
+    # Before #903 this fixture was an undisposed High that closed rc 0, i.e. the suite
+    # actively pinned the defect. Red-before-green for the new rule uses its own fixture
+    # (`_undisposed_findings_file`) so these tests keep proving their own properties.
     p = tmp_path / "f.json"
     p.write_text(json.dumps([{"severity": "High", "category": "correctness",
-                              "description": "a flaw", "location": "d.md:1"}]))
+                              "description": "a flaw", "location": "d.md:1",
+                              "terminal_disposition": "applied"}]))
+    return p
+
+
+def _undisposed_findings_file(tmp_path, **over):
+    finding = {"severity": "High", "category": "correctness",
+               "description": "rollback path missing", "location": "design.md:12"}
+    finding.update(over)
+    p = tmp_path / "f_undisposed.json"
+    p.write_text(json.dumps([finding]))
     return p
 
 
@@ -790,3 +805,429 @@ class TestAssertPrBodyAdapter:
         # discriminating: before the verb existed this passed because argparse rejected an
         # unknown subcommand with rc 2 (the #730 review trap). Require the real diagnosis.
         assert "cannot read --plan-file" in r.stderr
+
+
+# --- #903: a budget-exhausted close requires disposed Critical/High findings ---
+#
+# #798 let the gate close on budget exhaustion alone. Observed live on #874: the design
+# source cap was reached with the breaker clear, so the close was available while a High
+# design finding was unresolved and an AC was known unmet — the run refused it by hand.
+# A second instance is on record (epic #667 child #665: budget exhausted with two findings
+# still open, run proceeded). The close is only for exhaustion over RESOLVED ground.
+
+
+def _disposed(sev="High", disp="applied", reason=None, desc="a flaw", loc="d.md:1"):
+    f = {"severity": sev, "category": "correctness", "description": desc, "location": loc}
+    if disp is not None:
+        f["terminal_disposition"] = disp
+    if reason is not None:
+        f["disposition_reason"] = reason
+    return f
+
+
+class TestSevereFindingsAreDisposed:
+    """AC1: the predicate that makes 'exhaustion over RESOLVED ground' checkable."""
+
+    def test_an_undisposed_high_is_refused(self):
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed([_disposed(disp=None)])
+        assert ok is False
+        assert "terminal disposition" in why
+
+    def test_an_undisposed_critical_is_refused(self):
+        mod = _reload_plan_lib()
+        ok, _ = mod.severe_findings_are_disposed([_disposed(sev="Critical", disp=None)])
+        assert ok is False
+
+    def test_applied_needs_no_reason(self):
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed([_disposed(disp="applied")])
+        assert ok is True, why
+
+    def test_refuted_without_evidence_is_refused(self):
+        # AC1 spells the disposition "refuted-with-evidence" — the evidence is the point,
+        # so a bare token must not satisfy it (the findings_are_unambiguous lesson:
+        # an executable boundary must not assert a property it never checks).
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed([_disposed(disp="refuted")])
+        assert ok is False
+        assert "disposition_reason" in why
+
+    def test_refuted_with_evidence_passes(self):
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed(
+            [_disposed(disp="refuted", reason="the cited call site does not exist")])
+        assert ok is True, why
+
+    def test_deferred_without_rationale_is_refused(self):
+        mod = _reload_plan_lib()
+        ok, _ = mod.severe_findings_are_disposed([_disposed(disp="deferred")])
+        assert ok is False
+
+    def test_deferred_with_rationale_passes(self):
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed(
+            [_disposed(disp="deferred", reason="target-only surface, tracked in #123")])
+        assert ok is True, why
+
+    def test_a_whitespace_only_reason_is_not_a_reason(self):
+        mod = _reload_plan_lib()
+        ok, _ = mod.severe_findings_are_disposed([_disposed(disp="refuted", reason="   ")])
+        assert ok is False
+
+    def test_medium_and_low_need_no_disposition(self):
+        # Scope is exactly Critical/High (AC1); lower severities are advisory and must not
+        # be able to block a legitimate close.
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed(
+            [_disposed(sev="Medium", disp=None), _disposed(sev="Low", disp=None)])
+        assert ok is True, why
+
+    def test_severity_match_is_case_insensitive(self):
+        mod = _reload_plan_lib()
+        ok, _ = mod.severe_findings_are_disposed([_disposed(sev="HIGH", disp=None)])
+        assert ok is False, "a shouted severity must not slip past the gate"
+
+    def test_disposition_match_is_case_insensitive(self):
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed([_disposed(disp="Applied")])
+        assert ok is True, why
+
+    def test_an_off_vocab_disposition_is_refused(self):
+        mod = _reload_plan_lib()
+        ok, _ = mod.severe_findings_are_disposed([_disposed(disp="ignored")])
+        assert ok is False
+
+    def test_a_non_dict_finding_is_refused(self):
+        # Fail CLOSED: removing an owner escalation is the dangerous direction, so an
+        # unreadable finding must never license a close.
+        mod = _reload_plan_lib()
+        ok, _ = mod.severe_findings_are_disposed(["not a dict"])
+        assert ok is False
+
+    def test_an_empty_list_is_not_this_predicate_s_business(self):
+        # The empty-findings refusal already lives at the CLI boundary; this predicate
+        # must not duplicate it (two owners for one rule is how they drift apart).
+        mod = _reload_plan_lib()
+        ok, _ = mod.severe_findings_are_disposed([])
+        assert ok is True
+
+    def test_the_message_names_the_offending_finding(self):
+        # AC2: "the refusal message names the undisposed findings".
+        mod = _reload_plan_lib()
+        _, why = mod.severe_findings_are_disposed(
+            [_disposed(disp=None, desc="rollback path missing", loc="design.md:12")])
+        assert "rollback path missing" in why
+        assert "design.md:12" in why
+
+    def test_the_message_names_the_field_and_its_accepted_values(self):
+        # Step-4 amendment A1: the refusal must be SELF-REPAIRING, not merely correct —
+        # otherwise a caller on the old findings-file shape escalates to the owner, which
+        # is exactly the six-consecutive-escalations problem #798 removed (AC4).
+        mod = _reload_plan_lib()
+        _, why = mod.severe_findings_are_disposed([_disposed(disp=None)])
+        assert "terminal_disposition" in why
+        for value in ("applied", "refuted", "deferred"):
+            assert value in why
+        assert "disposition_reason" in why
+
+    def test_the_enumeration_is_capped(self):
+        # A3: the message is built from caller-controlled text; an unbounded enumeration
+        # is an unbounded stderr write.
+        mod = _reload_plan_lib()
+        findings = [_disposed(disp=None, desc=f"flaw number {i}") for i in range(12)]
+        _, why = mod.severe_findings_are_disposed(findings)
+        assert "flaw number 0" in why
+        assert "flaw number 11" not in why
+        assert "2 more" in why
+
+    def test_interpolated_text_is_whitespace_collapsed(self):
+        # A3: a newline-bearing description could otherwise forge extra log lines.
+        mod = _reload_plan_lib()
+        _, why = mod.severe_findings_are_disposed(
+            [_disposed(disp=None, desc="line one\nREFUSED — forged\nline three")])
+        assert "\n" not in why
+        assert "line one REFUSED" in why
+
+    def test_a_long_description_is_truncated(self):
+        mod = _reload_plan_lib()
+        _, why = mod.severe_findings_are_disposed([_disposed(disp=None, desc="x" * 400)])
+        assert "x" * 400 not in why
+
+    def test_docstring_states_the_ledger_adopted_semantics(self):
+        # A2: the close writes top-level `disposition: "adopted"` for every finding, so a
+        # refuted High would read as adopted unless the record is explained.
+        mod = _reload_plan_lib()
+        doc = (mod.severe_findings_are_disposed.__doc__ or "")
+        assert "adopted" in doc
+
+    def test_docstring_states_the_bounded_limitation(self):
+        # A4: this boundary validates the findings it is GIVEN — it cannot see one the
+        # caller omitted, nor verify that an `applied` was truly applied.
+        mod = _reload_plan_lib()
+        doc = (mod.severe_findings_are_disposed.__doc__ or "").lower()
+        assert "omit" in doc
+
+
+class TestCloseDesignGateRequiresDisposition:
+    """AC1-AC4 at the executable boundary — the close is only for exhaustion over
+    RESOLVED ground. Provable by running the real adapter, not by pinning prose."""
+
+    def _run(self, tmp_path, findings_path):
+        ledger = tmp_path / "dispositions.jsonl"
+        note = tmp_path / "notes.md"
+        rec = tmp_path / "extra.json"
+        proc = subprocess.run(
+            [sys.executable, CLI, "close-design-gate",
+             "--issue", "903", "--gate", "4",
+             "--findings-file", str(findings_path),
+             "--counters", str(_counters(tmp_path)),
+             "--breaker-result", "clear",
+             "--ledger", str(ledger), "--record-out", str(rec), "--note-out", str(note),
+             "--date", "2026-08-05", "--project-root", str(tmp_path)],
+            capture_output=True, text=True)
+        return proc, ledger, rec, note
+
+    def test_an_undisposed_high_refuses_and_writes_nothing(self, tmp_path):
+        # AC1 + AC3 (red direction). Observed live on #874: caps reached and breaker clear
+        # while a High was unresolved, so the close was available for a design nobody
+        # accepted. Writing nothing matters as much as refusing — a partial close is worse.
+        proc, ledger, rec, note = self._run(
+            tmp_path, _undisposed_findings_file(tmp_path))
+        assert proc.returncode == 3, proc.stderr
+        assert not ledger.exists() and not rec.exists() and not note.exists()
+
+    def test_the_refusal_names_the_finding(self, tmp_path):
+        # AC2: "the refusal message names the undisposed findings".
+        proc, *_ = self._run(tmp_path, _undisposed_findings_file(tmp_path))
+        assert "rollback path missing" in proc.stderr
+        assert "design.md:12" in proc.stderr
+
+    def test_the_refusal_is_self_repairing(self, tmp_path):
+        # Step-4 amendment A1: naming the field and its values is what keeps a stale
+        # caller from escalating to the owner — the #798 regression AC4 forbids.
+        proc, *_ = self._run(tmp_path, _undisposed_findings_file(tmp_path))
+        assert "terminal_disposition" in proc.stderr
+        for value in ("applied", "refuted", "deferred"):
+            assert value in proc.stderr
+        assert "disposition_reason" in proc.stderr
+
+    def test_a_disposed_high_still_closes(self, tmp_path):
+        # AC3 (green direction) + AC4: #798's intent is preserved — exhaustion with
+        # everything disposed closes with no escalation, all three artifacts written.
+        proc, ledger, rec, note = self._run(tmp_path, _findings_file(tmp_path))
+        assert proc.returncode == 0, proc.stderr
+        assert ledger.exists() and rec.exists() and note.exists()
+        assert json.loads(rec.read_text())["label"] == "design_gate_close"
+
+    def test_a_refuted_high_needs_its_evidence(self, tmp_path):
+        proc, ledger, *_ = self._run(
+            tmp_path, _undisposed_findings_file(tmp_path, terminal_disposition="refuted"))
+        assert proc.returncode == 3
+        assert not ledger.exists()
+        proc2, ledger2, *_ = self._run(
+            tmp_path,
+            _undisposed_findings_file(tmp_path, terminal_disposition="refuted",
+                                      disposition_reason="the cited call site is gone"))
+        assert proc2.returncode == 0, proc2.stderr
+        assert ledger2.exists()
+
+    def test_a_medium_needs_no_disposition(self, tmp_path):
+        proc, ledger, *_ = self._run(
+            tmp_path, _undisposed_findings_file(tmp_path, severity="Medium"))
+        assert proc.returncode == 0, proc.stderr
+        assert ledger.exists()
+
+    def test_the_disposition_check_runs_after_the_ambiguity_check(self, tmp_path):
+        # Ordering is load-bearing, not incidental: the pre-existing ambiguity test's
+        # fixture is an undisposed ambiguous High. If this check ran first, that test
+        # would still see rc != 0 while silently no longer proving what it claims.
+        proc, ledger, *_ = self._run(
+            tmp_path,
+            _undisposed_findings_file(tmp_path, ambiguity_flag="ambiguous"))
+        assert proc.returncode == 3
+        assert not ledger.exists()
+        assert "must STOP and escalate" in proc.stderr, (
+            "an ambiguous finding must still refuse for AMBIGUITY, not for disposition")
+
+    def test_the_disposed_finding_rides_into_the_ledger(self, tmp_path):
+        # A2: the entry's top-level `disposition` is always "adopted"; the caller's real
+        # per-finding outcome must therefore survive inside `finding`, or the ledger
+        # cannot distinguish an applied High from a refuted one.
+        proc, ledger, *_ = self._run(
+            tmp_path,
+            _undisposed_findings_file(tmp_path, terminal_disposition="deferred",
+                                      disposition_reason="tracked in #123"))
+        assert proc.returncode == 0, proc.stderr
+        entry = json.loads(ledger.read_text().strip().splitlines()[0])
+        assert entry["disposition"] == "adopted"
+        assert entry["finding"]["terminal_disposition"] == "deferred"
+        assert entry["finding"]["disposition_reason"] == "tracked in #123"
+
+    def test_the_finding_key_is_unchanged_by_the_new_fields(self, tmp_path):
+        # compute_finding_key hashes [severity, location, description] only, so the new
+        # fields must not shift identity — otherwise every ledger recompute breaks.
+        mod = _reload_plan_lib()
+        bare = {"severity": "High", "category": "correctness",
+                "description": "rollback path missing", "location": "design.md:12"}
+        assert mod.compute_finding_key(bare) == mod.compute_finding_key(
+            dict(bare, terminal_disposition="applied", disposition_reason="x"))
+
+
+class TestSevereFindingsDisposedHardening:
+    """Step 8a review fixes (#903). Each test reproduces one defect the first
+    implementation shipped — a predicate whose docstring claimed fail-CLOSED while
+    several inputs quietly satisfied it."""
+
+    def test_a_non_string_reason_is_not_a_reason(self):
+        # R1 (High): `str(finding.get("disposition_reason", ""))` turned null/false/0/[]/{}
+        # into the non-empty strings "None"/"False"/"0"/"[]"/"{}", so a refuted Critical/High
+        # closed the gate with no rationale at all — the exact assert-without-checking defect
+        # this whole feature exists to remove.
+        mod = _reload_plan_lib()
+        for bad in (None, False, 0, [], {}, 3.5):
+            ok, _ = mod.severe_findings_are_disposed(
+                [_disposed(disp="refuted", reason=bad)])
+            assert ok is False, f"disposition_reason={bad!r} must not satisfy the rationale"
+
+    def test_an_off_vocab_severity_refuses_rather_than_skipping(self):
+        # R2 (High): unknown severities were silently treated as non-severe, so a finding a
+        # human reads as severe ("Blocker") rode through undisposed. Fail CLOSED means an
+        # unclassifiable finding refuses, not that it is waved past.
+        mod = _reload_plan_lib()
+        for sev in ("Blocker", "Sev1", "critical!", ""):
+            ok, why = mod.severe_findings_are_disposed([_disposed(sev=sev, disp=None)])
+            assert ok is False, f"severity={sev!r} must refuse, not skip"
+            assert "severity" in why
+
+    def test_a_non_string_severity_refuses(self):
+        mod = _reload_plan_lib()
+        for sev in (["High"], None, {"x": 1}, 1):
+            ok, _ = mod.severe_findings_are_disposed([_disposed(sev=sev, disp=None)])
+            assert ok is False, f"severity={sev!r} must refuse"
+
+    def test_the_four_known_bands_are_still_accepted(self):
+        # The refusal must not swallow the ordinary path: Medium/Low still need nothing,
+        # Critical/High still only need their disposition.
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed(
+            [_disposed(sev="Medium", disp=None), _disposed(sev="low", disp=None),
+             _disposed(sev="CRITICAL", disp="applied"), _disposed(sev="High", disp="applied")])
+        assert ok is True, why
+
+    def test_control_and_bidi_characters_are_stripped(self):
+        # R4 (Medium) + the inline pass's own M1, found independently by both reviewers:
+        # collapsing whitespace does not remove ANSI escapes, C0/C1 controls, or bidi
+        # overrides, so caller-controlled text could recolor, reorder or conceal parts of the
+        # operator-facing refusal.
+        mod = _reload_plan_lib()
+        # The bidi overrides are written as escapes, never as literal characters: pylint's
+        # E2502 (bidirectional-unicode) is an ENABLED check on a HARD CI lane, so a literal
+        # U+202E here fails the lint that this very test exists to justify.
+        nasty = "red\x1b[31mESC\x00NUL\u202eTHGIR-OT-TFEL\u202c"
+        _, why = mod.severe_findings_are_disposed(
+            [_disposed(disp=None, desc=nasty, loc=nasty)])
+        for ch in ("\x1b", "\x00", "\u202e", "\u202c"):
+            assert ch not in why, f"{ch!r} must not reach operator-facing output"
+
+    def test_offenders_past_the_cap_are_counted_not_rendered(self):
+        # R3 (Medium): the loop formatted every offender and only then sliced to 10, so a
+        # large findings file paid full rendering cost for output nobody sees.
+        mod = _reload_plan_lib()
+        findings = [_disposed(disp=None, desc=f"flaw number {i}") for i in range(25)]
+        _, why = mod.severe_findings_are_disposed(findings)
+        assert why.startswith("25 Critical/High finding(s)")
+        assert "15 more" in why
+        rendered = [i for i in range(25) if f"flaw number {i}'" in why]
+        assert len(rendered) == 10, f"expected 10 rendered offenders, got {rendered}"
+
+    def test_a_giant_field_is_bounded_before_normalization(self):
+        # R3: `str(value).split()` allocated over the WHOLE value before the cap applied.
+        mod = _reload_plan_lib()
+        _, why = mod.severe_findings_are_disposed(
+            [_disposed(disp=None, desc="x " * 500_000)])
+        assert len(why) < 2000, "the refusal message must stay bounded"
+
+
+class TestSevereFindingsDisposedStep11Fixes:
+    """Step 11 pre-PR review fixes (#903). Escapes, never literal characters — pylint
+    E2502 (bidirectional-unicode) is an ENABLED check on a HARD CI lane."""
+
+    def test_an_invisible_rationale_is_not_a_rationale(self):
+        # S11-2 (High): `str.strip()` removes whitespace only. A reason made solely of a
+        # zero-width space, ESC, NUL, soft hyphen or a bidi override survived it and read
+        # as non-empty, so a refuted Critical/High passed the gate with no visible
+        # rationale at all — the fail-open this boundary exists to prevent.
+        mod = _reload_plan_lib()
+        for reason in ("\u200b", "\x1b", "\x00", "\u00ad", "\u202e", " \u200b\t\u200d "):
+            ok, why = mod.severe_findings_are_disposed(
+                [_disposed(disp="refuted", reason=reason)])
+            assert ok is False, f"invisible reason {reason!r} must not satisfy the gate"
+            assert "disposition_reason" in why
+
+    def test_a_visible_rationale_still_passes(self):
+        # The fix must not reject legitimate text, including non-ASCII.
+        mod = _reload_plan_lib()
+        for reason in ("the cited logger is disabled", "refuté — voir #123", "见 #123"):
+            ok, why = mod.severe_findings_are_disposed(
+                [_disposed(disp="refuted", reason=reason)])
+            assert ok is True, f"{reason!r} is a real rationale: {why}"
+
+    def test_a_container_is_never_stringified_in_full(self):
+        # S11-3 (Medium): the pre-normalization bound applied only to str. A huge list or
+        # dict in a display field was materialized in full by `str(value)` before any
+        # slice — the bounded-refusal claim did not hold for non-strings.
+        mod = _reload_plan_lib()
+        huge = ["x" * 100] * 20000
+        _, why = mod.severe_findings_are_disposed(
+            [_disposed(disp=None, desc=huge, loc={"a": huge})])
+        assert len(why) < 2000
+        assert "<list>" in why and "<dict>" in why
+        assert "xxxxxxxxxx" not in why, "the container contents must never be rendered"
+
+    def test_a_container_severity_reports_its_type(self):
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed([_disposed(sev=["High"], disp=None)])
+        assert ok is False
+        assert "<list>" in why
+
+
+class TestRationaleSubstance:
+    """Adversarial diff-review fix (#903 A3). Escapes only — pylint E2502 is an ENABLED
+    check on a HARD CI lane, and half these characters are exactly what it hunts."""
+
+    INVISIBLE = (
+        "\u3164",      # HANGUL FILLER — category Lo, i.e. a *letter* that renders as nothing
+        "\u115f",      # HANGUL CHOSEONG FILLER
+        "\u034f",      # COMBINING GRAPHEME JOINER — Mn
+        "\ufe0f",      # VARIATION SELECTOR-16 — Mn
+        "\u2800",      # BRAILLE PATTERN BLANK — So
+        "\u200b",      # ZERO WIDTH SPACE — Cf (already covered; kept as a regression pin)
+        " \u3164\t\ufe0f ",
+    )
+
+    def test_invisible_only_rationales_are_refused(self):
+        # Dropping Cc/Cf was not enough: an invisible character can be a letter (Lo), a
+        # mark (Mn) or a symbol (So). A rationale made only of those is still no rationale,
+        # and a refuted Critical/High would close the gate behind it.
+        mod = _reload_plan_lib()
+        for reason in self.INVISIBLE:
+            ok, why = mod.severe_findings_are_disposed(
+                [_disposed(disp="refuted", reason=reason)])
+            assert ok is False, f"invisible rationale {reason!r} must be refused"
+            assert "disposition_reason" in why
+
+    def test_visible_rationales_survive_including_non_ascii(self):
+        # The substance check must not become a latin-only filter.
+        mod = _reload_plan_lib()
+        for reason in ("the cited logger is disabled", "见 #123", "refuté — voir #123",
+                       "3", "#123", "→ tracked upstream"):
+            ok, why = mod.severe_findings_are_disposed(
+                [_disposed(disp="refuted", reason=reason)])
+            assert ok is True, f"{reason!r} is substantive: {why}"
+
+    def test_a_visible_character_beside_invisibles_is_enough(self):
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed(
+            [_disposed(disp="refuted", reason="\u3164x\ufe0f")])
+        assert ok is True, why

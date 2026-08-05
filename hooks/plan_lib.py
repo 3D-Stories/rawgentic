@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -2938,6 +2939,172 @@ def findings_are_unambiguous(findings: list) -> tuple[bool, str]:
     return (True, "clear")
 
 
+_KNOWN_SEVERITIES: Final[tuple[str, ...]] = ("critical", "high", "medium", "low")
+_SEVERE_SEVERITIES: Final[frozenset[str]] = frozenset({"critical", "high"})
+_TERMINAL_DISPOSITIONS: Final[tuple[str, ...]] = ("applied", "refuted", "deferred")
+_DISPOSITION_NEEDS_REASON: Final[frozenset[str]] = frozenset({"refuted", "deferred"})
+_MAX_LISTED_OFFENDERS: Final[int] = 10
+_MAX_OFFENDER_DESC_CHARS: Final[int] = 60
+# The refusal must be SELF-REPAIRING, not merely correct: a caller still emitting the
+# pre-#903 findings-file shape would otherwise escalate to the owner, which is exactly the
+# six-consecutive-escalations problem #798 removed (#903 AC4). Derived from the vocabulary
+# constants rather than restated, so a new token cannot leave the hint quietly stale.
+_DISPOSITION_FIX_HINT: Final[str] = (
+    f"add `terminal_disposition` ({'|'.join(_TERMINAL_DISPOSITIONS)}) to each; "
+    f"{' and '.join(t for t in _TERMINAL_DISPOSITIONS if t in _DISPOSITION_NEEDS_REASON)}"
+    " also require a non-empty `disposition_reason`"
+)
+
+
+def _one_line(value, limit: int) -> str:
+    """Render caller-controlled text as one bounded, control-free display line.
+
+    Three separate hazards, all from the same source — the refusal message is built from
+    fields an upstream model wrote:
+
+    * newlines would forge extra lines in an operator's log;
+    * `str.split()` removes only WHITESPACE controls, so ANSI escapes, other C0/C1
+      controls and bidi overrides survive it and can recolor, reorder or conceal part of
+      the message (Step 8a R4). Every Cc/Cf character is dropped.
+    * a multi-megabyte field would be fully materialized before any cap applied, so the
+      raw value is sliced FIRST. Collapsing only ever shrinks, so a generous prefix still
+      fills `limit`.
+
+    A NON-STRING renders as a bounded type marker and is never stringified: `str()` on a
+    large list or dict materializes the whole representation before any slice could apply,
+    so the bound did not actually hold for containers (Step 11 S3). The message only needs
+    to say the type was wrong.
+    """
+    if not isinstance(value, str):
+        return f"<{type(value).__name__}>"[:limit]
+    # Order is load-bearing. Collapsing FIRST inserts a joining space between tokens, so
+    # " <ZWSP>\t<ZWJ> " survived as " " — non-empty, and an all-invisible string passed a
+    # substance check. Drop the non-whitespace controls first, THEN collapse. The
+    # `isspace()` clause keeps \t and \n (both Cc) alive long enough for `split()` to turn
+    # them into separators rather than deleting them and welding words together.
+    kept = "".join(
+        c for c in value[:limit * 4]
+        if c.isspace() or unicodedata.category(c) not in ("Cc", "Cf")
+    )
+    return " ".join(kept.split())[:limit]
+
+
+# Characters that ARE letters/symbols by Unicode category but render as nothing. The
+# category test alone cannot catch these, and an adversarial review closed a gate behind a
+# rationale made only of U+3164 (#903 A3).
+_INVISIBLE_GLYPHS: Final[frozenset[str]] = frozenset(
+    "ㅤᅟᅠﾠ⠀͏឴឵"
+)
+
+
+def _has_substance(text: str) -> bool:
+    """Does this hold a character a reader would actually SEE?
+
+    A different question from "non-empty", and from `_one_line`'s rendering job. Removing
+    Cc/Cf is not sufficient: U+3164 HANGUL FILLER is a LETTER (Lo), U+034F COMBINING
+    GRAPHEME JOINER and U+FE0F VARIATION SELECTOR-16 are marks (Mn), and U+2800 BRAILLE
+    PATTERN BLANK is a symbol (So) — all invisible, none Cc/Cf. A `disposition_reason` made
+    only of those is no rationale, and a refuted Critical/High would close the gate behind
+    it. Deliberately NOT a latin-only filter: any letter, number, punctuation or symbol
+    that renders counts, so "见 #123" and "→ tracked upstream" are substantive.
+    """
+    for char in text:
+        if char.isspace() or char in _INVISIBLE_GLYPHS:
+            continue
+        if unicodedata.category(char)[0] in ("L", "N", "P", "S"):
+            return True
+    return False
+
+
+def severe_findings_are_disposed(findings: list) -> tuple[bool, str]:
+    """Every Critical/High finding must carry a terminal disposition (#903).
+
+    A budget-exhausted close (#798) is only for exhaustion over RESOLVED ground. Before
+    this check the gate closed on exhaustion alone: observed live on #874, the design cap
+    was reached with the breaker clear while a High finding was unresolved and an AC was
+    known unmet, so the close was available for a design the owner never accepted.
+
+    Each Critical/High finding declares `terminal_disposition` in applied | refuted |
+    deferred; `refuted` and `deferred` additionally require a non-empty
+    `disposition_reason`, because AC1's own vocabulary ("refuted-with-evidence",
+    "deferred-with-rationale") makes the evidence the substance of the disposition. A bare
+    token would be a property asserted and never checked — the exact defect
+    `findings_are_unambiguous` exists to fix. Medium/Low are advisory and need nothing.
+
+    The field is `terminal_disposition`, NOT `disposition`: `budget_exhausted_close` copies
+    the finding into the ledger entry's `finding` while the entry carries its own top-level
+    `disposition`. Note what that top-level value means — the close records `adopted` for
+    EVERY finding, meaning adopted INTO THE CLOSE RECORD, not that the recommendation was
+    implemented. The per-finding outcome is this field. `adopted` deliberately does not
+    auto-dissolve at the #393 join backstop (only `declined` does), so a refuted finding
+    stays re-raisable, which is the safe direction.
+
+    Fail CLOSED, and note where that bites (Step 8a R1/R2 — the first implementation
+    claimed fail-closed while several inputs quietly satisfied it):
+
+    * a non-dict finding refuses;
+    * `severity` must BE a string naming one of the four known bands. An unclassifiable
+      severity ("Blocker", a list, `None`) REFUSES rather than being skipped as
+      non-severe — a finding nobody can classify must never license a close;
+    * `disposition_reason` must BE a non-empty string. Coercing with `str()` turned
+      `null`/`false`/`0`/`[]` into the non-empty text "None"/"False"/"0"/"[]", so a
+      refuted High closed the gate with no rationale at all.
+
+    Bounded limitation, stated rather than assumed: this validates the findings it is
+    GIVEN. It cannot detect a Critical/High finding the caller omitted from the file, nor
+    verify that an `applied` was truly applied — #798's known limitation ("a prose guard
+    can still pass while a model skips the adapter command") is unchanged.
+    """
+    offenders: list[str] = []
+    beyond_cap = 0
+    for i, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            return (False, f"finding {i} is not an object")
+        raw_severity = finding.get("severity")
+        if (not isinstance(raw_severity, str)
+                or raw_severity.strip().lower() not in _KNOWN_SEVERITIES):
+            return (False, f"finding {i} has an unclassifiable severity "
+                           f"{_one_line(raw_severity, 40)!r} — expected one of "
+                           f"{'|'.join(_KNOWN_SEVERITIES)}; refusing to close")
+        severity = raw_severity.strip()
+        if severity.lower() not in _SEVERE_SEVERITIES:
+            continue
+
+        raw_disposition = finding.get("terminal_disposition")
+        disposition = (raw_disposition.strip().lower()
+                       if isinstance(raw_disposition, str) else "")
+        problem = None
+        if disposition not in _TERMINAL_DISPOSITIONS:
+            problem = ("no terminal_disposition" if raw_disposition is None
+                       else f"terminal_disposition {_one_line(raw_disposition, 40)!r}")
+        elif disposition in _DISPOSITION_NEEDS_REASON:
+            reason = finding.get("disposition_reason")
+            # Substance, not mere non-emptiness: `.strip()` removes whitespace only, and
+            # even dropping Cc/Cf leaves invisibles in other categories. `_has_substance`
+            # owns that question so the display helper is not overloaded with validation.
+            if not isinstance(reason, str) or not _has_substance(reason):
+                problem = f"{disposition} without a non-empty disposition_reason"
+        if problem is None:
+            continue
+
+        # Render only what is shown; a large findings file must not pay to format
+        # offenders nobody will read.
+        if len(offenders) >= _MAX_LISTED_OFFENDERS:
+            beyond_cap += 1
+            continue
+        location = _one_line(finding.get("location") or "", 60)
+        description = _one_line(finding.get("description", ""), _MAX_OFFENDER_DESC_CHARS)
+        where = f" {location}" if location else ""
+        offenders.append(f"[{i}] {severity}{where}: {description!r} — {problem}")
+
+    if not offenders:
+        return (True, "every Critical/High finding carries a terminal disposition")
+    tail = f"; and {beyond_cap} more" if beyond_cap else ""
+    return (False, f"{len(offenders) + beyond_cap} Critical/High finding(s) lack a "
+                   f"terminal disposition: {'; '.join(offenders)}{tail} — "
+                   f"{_DISPOSITION_FIX_HINT}")
+
+
 def _contained(path: str, root: str) -> bool:
     """Is `path` inside `root` after full symlink resolution? (R2-H4)"""
     rp = os.path.realpath(root)
@@ -3019,6 +3186,13 @@ def _cmd_close_design_gate(args) -> int:
         return 3
     unambiguous, why = findings_are_unambiguous(findings)
     if not unambiguous:
+        sys.stderr.write(f"close-design-gate: REFUSED — {why}\n")
+        return 3
+    # #903: exhaustion alone is not enough — the close is only for exhaustion over
+    # RESOLVED ground. Deliberately AFTER the ambiguity check: an ambiguous finding must
+    # keep refusing for AMBIGUITY, or that guard silently stops proving what it claims.
+    disposed, why = severe_findings_are_disposed(findings)
+    if not disposed:
         sys.stderr.write(f"close-design-gate: REFUSED — {why}\n")
         return 3
     try:

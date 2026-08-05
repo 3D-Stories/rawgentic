@@ -725,6 +725,31 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.127.0 (2026-08-05)
+- **A budget-exhausted design-gate close now requires a terminal disposition on every surviving
+  Critical/High finding (#903, epic #875).** #798 let WF2's Step-4 gate self-close on budget
+  exhaustion alone. Observed live on #874: the design source cap was reached with the breaker
+  clear, so the close was available while a High design finding was unresolved and an AC was known
+  unmet — the run refused it by hand and escalated. A second instance is on record (epic #667 child
+  #665: budget exhausted with two findings still open, run proceeded, recorded as a deviation).
+  New `plan_lib.severe_findings_are_disposed` makes "exhaustion over RESOLVED ground" checkable —
+  each Critical/High finding in `--findings-file` declares `terminal_disposition`
+  (`applied|refuted|deferred`), and `refuted`/`deferred` each need a non-empty
+  `disposition_reason`, because a bare token would be a property asserted and never checked, the
+  exact defect `findings_are_unambiguous` exists to fix. It is wired into `close-design-gate`
+  AFTER the ambiguity check deliberately: an ambiguous finding must keep refusing for AMBIGUITY,
+  or that older guard silently stops proving what it claims. The refusal is **self-repairing** —
+  it names the field and its accepted values and is explicitly NOT an escalation condition —
+  because a merely-correct refusal would have escalated every caller still emitting the old
+  findings-file shape, reintroducing the six-consecutive-escalations problem #798 removed (AC4).
+  Medium/Low need no disposition. The field is `terminal_disposition`, not `disposition`, because
+  the ledger entry already carries its own top-level `disposition: "adopted"` — which means
+  adopted INTO THE CLOSE RECORD, not that the recommendation was implemented; `adopted`
+  deliberately does not auto-dissolve at the #393 join, so a refuted finding stays re-raisable.
+  Bounded limitation stated rather than assumed: this boundary validates the findings it is GIVEN
+  and cannot detect a Critical/High the caller omitted, nor verify an `applied` was truly applied.
+  WF2 diagram REV 3.127.0 (station 04 delta). Suite 5031→5079.
+
 ### v3.126.0 (2026-08-04)
 - **Reviewer confidence is now a native number the severity band filter can consume mechanically
   (#902, epic #875).** Ten consecutive cross-model review rounds returned `confidence` as a word

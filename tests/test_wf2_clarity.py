@@ -1543,6 +1543,34 @@ class TestStep4BudgetExhaustedClose:
         text = " ".join(_text().split())
         assert "The carve-out is deliberately narrow and does NOT generalize" in text
 
+    # --- #903: the close requires disposed Critical/High findings ---
+
+    def test_close_requires_resolved_ground(self):
+        # #903 AC2: the prose states the rule. Observed live on #874 — caps reached and
+        # breaker clear while a High was unresolved, so the close was available for a
+        # design nobody accepted.
+        s4 = " ".join(self._step4().split())
+        assert "the close is only for exhaustion over RESOLVED ground" in s4
+
+    def test_close_names_the_disposition_vocabulary(self):
+        s4 = " ".join(self._step4().split())
+        assert "terminal_disposition" in s4
+        assert "applied | refuted | deferred" in s4
+        assert "disposition_reason" in s4
+
+    def test_the_disposition_refusal_is_not_an_escalation(self):
+        # The Step-4 verifier's finding: step-04.md already enumerates which refusals
+        # mean STOP/escalate, so a NEW refusal class left out of that taxonomy could pull
+        # a model toward escalating — reintroducing what #798 removed (#903 AC4).
+        s4 = " ".join(self._step4().split())
+        assert "self-repairable and are NOT escalation conditions" in s4
+
+    def test_ledger_adopted_does_not_mean_implemented(self):
+        # The close writes top-level `disposition: "adopted"` for EVERY finding, so a
+        # refuted High reads as adopted unless the record's meaning is stated.
+        s4 = " ".join(self._step4().split())
+        assert "adopted INTO THE CLOSE RECORD" in s4
+
 
 class TestPlanFormatContractIdRule:
     """#880 Defect E AC-(v): Step 5's contract states the id grammar, the
