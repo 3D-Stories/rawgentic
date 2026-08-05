@@ -189,11 +189,10 @@ load-bearing for resume. Never edit or truncate an existing entry.
   `model_routing_lib.py`); data you can't classify → fail-safe KEEP
   (`registry_prune.py:6-8`); repeated user-facing nag → record-before-emit
   (`security-guard-check.sh:49-55`).
-- **One helper, one home.** Before writing any new script, check `hooks/` — `plan_lib`,
-  `work_summary`, `capabilities_lib`, `security_scan`,
-  `registry_prune`, `driver_lib`, `resume_lib`, `review_runner` cover most needs.
-- **Timeout ≠ failure for mutating calls** (gh/API): check the resource's real state
-  before retrying — the write may have landed; a blind retry double-creates.
+- **One helper, one home** — the rule is workspace §3's; this is the repo's helper list.
+  Before writing any new script check `hooks/`: `plan_lib`, `work_summary`,
+  `capabilities_lib`, `security_scan`, `registry_prune`, `driver_lib`, `resume_lib`,
+  `review_runner`.
 - **`quality-bar.md` is single-sourced (since #276).** The one source is
   `shared/blocks/quality-bar.md`; `sync_shared_blocks.py`'s `FILE_MANIFEST` copies it
   into the three references/ dirs and `--check` (CI-run) flags drift. Edit the source,
@@ -241,9 +240,10 @@ load-bearing for resume. Never edit or truncate an existing entry.
    Critical vulnerabilities on a run judged "too simple to review"
    (`skills/implement-feature/SKILL.md:80`). Rule: Steps 1–5, 7–9, 11, 11.5, 12, 16
    never get skipped; low context → checkpoint per the skill's protocol and resume.
-9. **Trusting a subagent's "COMPLETE".** Agents die on session limits and return
-   vacuous results (`confirmedCount: 0`, empty body). Rule: check `<failures>`/content;
-   re-run the gate yourself for anything load-bearing.
+9. **The vacuous-result signature, which is repo-specific:** an agent killed by a session
+   limit returns `confirmedCount: 0` with an empty body. That is a FAILED dispatch, never a
+   clean pass — check `<failures>`/content and re-run the gate yourself. (That a subagent's
+   verdict is only a hypothesis until confirmed is universal-tier.)
 10. **Misreading CI lanes** — treating advisory red as a blocker or hard red as noise.
     Rule: lane doctrine + OAuth signature in §2; read the failed log before theorizing.
 11. **Guessing a hook's behavior from its name.** Rule: §3 fail-mode convention — read
@@ -275,76 +275,22 @@ load-bearing for resume. Never edit or truncate an existing entry.
 19. **Putting a `SKILL.md` in a workspace dir or a `version` on the marketplace plugin
     entry.** The org-marketplace validator walks ALL `skills/**/SKILL.md` and rejects
     both (`docs/skill-development.md:141-160`; snapshots use `SKILL.snapshot.md`).
-20. **`git reset --hard` under auto-mode** — the permission classifier denies it (no
-    rawgentic hook is involved — wal-guard deliberately does not block destructive local
-    commands). Rule: inspect `git status` / `git diff` first — `git checkout -- <path>` also
-    discards uncommitted changes; run it only against named files whose state you've checked.
+20. *(Retired — `git reset --hard` under auto-mode. It now lives ONLY at workspace mistake #7,
+    which owns it by its own argument. The number is held rather than reused so existing
+    citations to "project mistake #20" still resolve to the entry they meant.)*
 21. **Treating `estimate_agents` or lane thresholds as tunable prose.** Constants
     mirrored between `hooks/plan_lib.py` and SKILL.md `<constants>` have drift-guard
     tests asserting equality — change the Python source of truth and the mirror together.
 
-## 5. Quality bar per deliverable — checkable criteria
+## 5. Quality bar per deliverable
 
-**A merged-ready PR** (all boxes; the `pr-preflight` workspace skill executes this):
-- [ ] Branch from fresh `origin/main`; conventional title matching branch prefix
-- [ ] Red-before-green evidence for any behavior change (the new test failed first)
-- [ ] Full suite exit 0; delta vs recorded baseline stated ("<old> → <new>, 0 failing")
-- [ ] Both pylint lanes green (§2 commands, verbatim)
-- [ ] `python3 hooks/security_scan.py scan --project-root . --project-type library
-      --base-ref origin/main` — findings fixed or user-decided; absent scanners noted as
-      a visible skip in the PR body
-- [ ] Version ×3 surfaces; `test_plugin_version_bumped` passes
-- [ ] README updated INCLUDING a changelog entry in the exact §2 shape (diagram decision
-      + `Suite old→new` tail); count strings still true
-- [ ] Relevant `docs/*.md` updated for the area touched
-- [ ] Diagram decision recorded (REV appended per §2 recipe, or explicit no-change line)
-- [ ] Only task files staged; `.claude/` and `.rawgentic/review-state/` untracked
-
-**A new/changed hook (`hooks/*.py`):**
-- [ ] Pure core + thin CLI (`registry_prune.py` is the exemplar): logic in pure
-      functions returning values; all I/O, exit codes, clock, and subprocess runner
-      injected or confined to `main(argv)`
-- [ ] Failure mode chosen per §3 decision guide, stated in the docstring, asserted by a test
-- [ ] Shared-file writes atomic: `tempfile.mkstemp(dir=target)` → `os.replace`; temp
-      unlinked on exception; a test asserts no stray `*.tmp` survives
-- [ ] Env-var config fail-safe: strict parse, clamp, safe default, stderr warning
-- [ ] Any path/name from config hardened against traversal (canonicalize + containment)
-- [ ] Tests: happy path, malformed input, boundary, AND the CLI via
-      `subprocess.run([sys.executable, CLI, ...])`
-- [ ] Bash hooks: loggers = `set -euo pipefail` inside a function + `|| true; exit 0`;
-      guards deny via JSON `permissionDecision`, still exit 0; jq resolved
-      `~/.local/bin/jq` then PATH
-
-**A new/changed skill:** the mistake-#2 surface list complete; description = triggering
-symptoms not workflow summary; every command in the body executed once against this
-repo; step markers for resumability; evals (if any) in
-`skills/<name>-workspace/evals/evals.json` shaped
-`{skill_name, evals:[{id,prompt,expected_output}]}` with ≥3 cases.
-
-**A drift-guard test:** anchors ONE canonical sentence in ONE file; section isolated by
-header-index slicing; whitespace-normalized if prose can wrap; corpus vs direct-file
-choice matches pin kind (content vs location); exact `==` count only where the count IS
-the contract, `>=` where multi-site presence is the point.
-
-**A bug fix:** reported symptom reproduced FIRST via the reporter's entry path; root
-cause named with file:line; fix where all callers route through (grep the callers); the
-failing case is a committed red-before-green test; parallel paths to the same effect
-enumerated and checked.
-
-**An investigation:** verdict first (confirmed/refuted/inconclusive) from PRIMARY
-sources; every load-bearing claim marked confirmed-with-evidence or
-inferred-with-what-would-confirm; a drift-guard added when the verdict pins external
-behavior; what was NOT checked, named.
-
-**A diagram REV** (spine change): new key in `revs` newest-first + `versions` entry;
-full `steps` snapshot (or `steps:null` + `overrides` for small deltas); changed stations
-carry `rev:{delta, refs}`; prior rev `superseded`; provenance footer `@ plugin X.Y.Z`;
-snapshots regenerated (serve over `python3 -m http.server` — headless browsers block
-`file:`; **FULL-PAGE** screenshot light+dark at 1440px-wide viewport, device scale →
-`docs/assets/` — a viewport-only 1440×1200 capture clips the sheet to ~6 of 19
-stations and passes CI, #337 review catch);
-`pytest tests/test_workflow_diagram.py` green —
-`test_diagram_newest_rev_matches_plugin_version` guards the version linkage.
+The checkable acceptance criteria for the six deliverable kinds shipped here — a PR in
+this repo, a bug fix, a design/architecture doc, an investigation, a new skill, a deploy —
+live in the **`quality-bar` workspace skill** (`.claude/skills/quality-bar/`), which loads
+when a deliverable is being finished instead of in every session. Invoke it when finishing
+any of them. `pr-preflight` is the executable runner for the PR gate; `quality-bar` is the
+bar. The repo-specific hook, drift-guard-test and workflow-diagram-REV checklists that used
+to be inlined here now live in that skill too — relocated, not dropped.
 
 ## 6. When uncertain — exact escalation rules
 

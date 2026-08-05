@@ -10,7 +10,8 @@ weak spots, the dispatches[] consume-when-present rule, the mempalace tri-state
 surface line, the artifact-publish failure line, the marker-acceptance boundaries,
 and the rubric version stamp every report must quote.
 
-House pattern (repo mistake #6 / CLAUDE.md §5): section- or file-sliced, ONE
+House pattern (repo CLAUDE.md §4 mistake #6, plus the drift-guard-test checklist in the
+`quality-bar` workspace skill): section- or file-sliced, ONE
 canonical sentence per guard, whitespace-normalized — never whole-corpus regex,
 never substring counts. Companion to tests/test_wf3_clarity.py.
 """
