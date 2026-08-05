@@ -209,11 +209,16 @@ that is the gating working, not a hang.
 Exit codes: `0` handed off · `2` a refused input (the message names which) · `4` the sequence ran
 and a gate did not pass.
 
-The JSON on stdout carries `results` and `failed_step`. Report what it says, not what you hoped:
+The JSON on stdout carries `results`, `failed_step`, and since #731 `failure_detail` (the
+underlying herdr error text) plus `pane_capture` (the tentative pane's last visible output,
+read before cleanup closed it). Report what it says, not what you hoped — and read
+`failure_detail` FIRST; it names the cause a bare `failed_step` used to hide:
 
 | `failed_step` | What it means | What to do |
 |---|---|---|
-| `split` / `agent_start` / `spawned` | the successor never really came up | check `herdr pane list`; nothing was handed over |
+| `split` / `spawned` | the successor never really came up | check `herdr pane list`; nothing was handed over |
+| `name_taken` | the requested `--name` is already bound to a pane (`failure_detail` names it) — refused BEFORE any split, so nothing was created | check `herdr agent list` and pick a fresh `--name`; a same-name retry cannot succeed while the name stays bound |
+| `agent_start` | herdr refused to start the agent for some other reason — `failure_detail` carries the error, `pane_capture` what the pane showed | read both before theorizing; the tentative pane was cleaned up |
 | `project_switched` | the successor never bound the project | most often a permission-blocked successor — it cannot be fixed from here |
 | `prompt_landed` | the work never reached it | the recovery already tried; do NOT re-send the text by hand |
 | `goal_armed` | the guard never armed | the successor is working but unguarded |
