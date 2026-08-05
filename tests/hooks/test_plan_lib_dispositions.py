@@ -790,3 +790,165 @@ class TestAssertPrBodyAdapter:
         # discriminating: before the verb existed this passed because argparse rejected an
         # unknown subcommand with rc 2 (the #730 review trap). Require the real diagnosis.
         assert "cannot read --plan-file" in r.stderr
+
+
+# --- #903: a budget-exhausted close requires disposed Critical/High findings ---
+#
+# #798 let the gate close on budget exhaustion alone. Observed live on #874: the design
+# source cap was reached with the breaker clear, so the close was available while a High
+# design finding was unresolved and an AC was known unmet — the run refused it by hand.
+# A second instance is on record (epic #667 child #665: budget exhausted with two findings
+# still open, run proceeded). The close is only for exhaustion over RESOLVED ground.
+
+
+def _disposed(sev="High", disp="applied", reason=None, desc="a flaw", loc="d.md:1"):
+    f = {"severity": sev, "category": "correctness", "description": desc, "location": loc}
+    if disp is not None:
+        f["terminal_disposition"] = disp
+    if reason is not None:
+        f["disposition_reason"] = reason
+    return f
+
+
+class TestSevereFindingsAreDisposed:
+    """AC1: the predicate that makes 'exhaustion over RESOLVED ground' checkable."""
+
+    def test_an_undisposed_high_is_refused(self):
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed([_disposed(disp=None)])
+        assert ok is False
+        assert "terminal disposition" in why
+
+    def test_an_undisposed_critical_is_refused(self):
+        mod = _reload_plan_lib()
+        ok, _ = mod.severe_findings_are_disposed([_disposed(sev="Critical", disp=None)])
+        assert ok is False
+
+    def test_applied_needs_no_reason(self):
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed([_disposed(disp="applied")])
+        assert ok is True, why
+
+    def test_refuted_without_evidence_is_refused(self):
+        # AC1 spells the disposition "refuted-with-evidence" — the evidence is the point,
+        # so a bare token must not satisfy it (the findings_are_unambiguous lesson:
+        # an executable boundary must not assert a property it never checks).
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed([_disposed(disp="refuted")])
+        assert ok is False
+        assert "disposition_reason" in why
+
+    def test_refuted_with_evidence_passes(self):
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed(
+            [_disposed(disp="refuted", reason="the cited call site does not exist")])
+        assert ok is True, why
+
+    def test_deferred_without_rationale_is_refused(self):
+        mod = _reload_plan_lib()
+        ok, _ = mod.severe_findings_are_disposed([_disposed(disp="deferred")])
+        assert ok is False
+
+    def test_deferred_with_rationale_passes(self):
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed(
+            [_disposed(disp="deferred", reason="target-only surface, tracked in #123")])
+        assert ok is True, why
+
+    def test_a_whitespace_only_reason_is_not_a_reason(self):
+        mod = _reload_plan_lib()
+        ok, _ = mod.severe_findings_are_disposed([_disposed(disp="refuted", reason="   ")])
+        assert ok is False
+
+    def test_medium_and_low_need_no_disposition(self):
+        # Scope is exactly Critical/High (AC1); lower severities are advisory and must not
+        # be able to block a legitimate close.
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed(
+            [_disposed(sev="Medium", disp=None), _disposed(sev="Low", disp=None)])
+        assert ok is True, why
+
+    def test_severity_match_is_case_insensitive(self):
+        mod = _reload_plan_lib()
+        ok, _ = mod.severe_findings_are_disposed([_disposed(sev="HIGH", disp=None)])
+        assert ok is False, "a shouted severity must not slip past the gate"
+
+    def test_disposition_match_is_case_insensitive(self):
+        mod = _reload_plan_lib()
+        ok, why = mod.severe_findings_are_disposed([_disposed(disp="Applied")])
+        assert ok is True, why
+
+    def test_an_off_vocab_disposition_is_refused(self):
+        mod = _reload_plan_lib()
+        ok, _ = mod.severe_findings_are_disposed([_disposed(disp="ignored")])
+        assert ok is False
+
+    def test_a_non_dict_finding_is_refused(self):
+        # Fail CLOSED: removing an owner escalation is the dangerous direction, so an
+        # unreadable finding must never license a close.
+        mod = _reload_plan_lib()
+        ok, _ = mod.severe_findings_are_disposed(["not a dict"])
+        assert ok is False
+
+    def test_an_empty_list_is_not_this_predicate_s_business(self):
+        # The empty-findings refusal already lives at the CLI boundary; this predicate
+        # must not duplicate it (two owners for one rule is how they drift apart).
+        mod = _reload_plan_lib()
+        ok, _ = mod.severe_findings_are_disposed([])
+        assert ok is True
+
+    def test_the_message_names_the_offending_finding(self):
+        # AC2: "the refusal message names the undisposed findings".
+        mod = _reload_plan_lib()
+        _, why = mod.severe_findings_are_disposed(
+            [_disposed(disp=None, desc="rollback path missing", loc="design.md:12")])
+        assert "rollback path missing" in why
+        assert "design.md:12" in why
+
+    def test_the_message_names_the_field_and_its_accepted_values(self):
+        # Step-4 amendment A1: the refusal must be SELF-REPAIRING, not merely correct —
+        # otherwise a caller on the old findings-file shape escalates to the owner, which
+        # is exactly the six-consecutive-escalations problem #798 removed (AC4).
+        mod = _reload_plan_lib()
+        _, why = mod.severe_findings_are_disposed([_disposed(disp=None)])
+        assert "terminal_disposition" in why
+        for value in ("applied", "refuted", "deferred"):
+            assert value in why
+        assert "disposition_reason" in why
+
+    def test_the_enumeration_is_capped(self):
+        # A3: the message is built from caller-controlled text; an unbounded enumeration
+        # is an unbounded stderr write.
+        mod = _reload_plan_lib()
+        findings = [_disposed(disp=None, desc=f"flaw number {i}") for i in range(12)]
+        _, why = mod.severe_findings_are_disposed(findings)
+        assert "flaw number 0" in why
+        assert "flaw number 11" not in why
+        assert "2 more" in why
+
+    def test_interpolated_text_is_whitespace_collapsed(self):
+        # A3: a newline-bearing description could otherwise forge extra log lines.
+        mod = _reload_plan_lib()
+        _, why = mod.severe_findings_are_disposed(
+            [_disposed(disp=None, desc="line one\nREFUSED — forged\nline three")])
+        assert "\n" not in why
+        assert "line one REFUSED" in why
+
+    def test_a_long_description_is_truncated(self):
+        mod = _reload_plan_lib()
+        _, why = mod.severe_findings_are_disposed([_disposed(disp=None, desc="x" * 400)])
+        assert "x" * 400 not in why
+
+    def test_docstring_states_the_ledger_adopted_semantics(self):
+        # A2: the close writes top-level `disposition: "adopted"` for every finding, so a
+        # refuted High would read as adopted unless the record is explained.
+        mod = _reload_plan_lib()
+        doc = (mod.severe_findings_are_disposed.__doc__ or "")
+        assert "adopted" in doc
+
+    def test_docstring_states_the_bounded_limitation(self):
+        # A4: this boundary validates the findings it is GIVEN — it cannot see one the
+        # caller omitted, nor verify that an `applied` was truly applied.
+        mod = _reload_plan_lib()
+        doc = (mod.severe_findings_are_disposed.__doc__ or "").lower()
+        assert "omit" in doc

@@ -2938,6 +2938,92 @@ def findings_are_unambiguous(findings: list) -> tuple[bool, str]:
     return (True, "clear")
 
 
+_SEVERE_SEVERITIES: Final[frozenset[str]] = frozenset({"critical", "high"})
+_TERMINAL_DISPOSITIONS: Final[tuple[str, ...]] = ("applied", "refuted", "deferred")
+_DISPOSITION_NEEDS_REASON: Final[frozenset[str]] = frozenset({"refuted", "deferred"})
+_MAX_LISTED_OFFENDERS: Final[int] = 10
+_MAX_OFFENDER_DESC_CHARS: Final[int] = 60
+# The refusal must be SELF-REPAIRING, not merely correct: a caller still emitting the
+# pre-#903 findings-file shape would otherwise escalate to the owner, which is exactly the
+# six-consecutive-escalations problem #798 removed (#903 AC4).
+_DISPOSITION_FIX_HINT: Final[str] = (
+    "add `terminal_disposition` (applied|refuted|deferred) to each; refuted and deferred "
+    "also require a non-empty `disposition_reason`"
+)
+
+
+def _one_line(value, limit: int) -> str:
+    """Collapse to a single line and cap the length.
+
+    Refusal text is built from caller-controlled finding fields, so a newline-bearing
+    description would otherwise forge extra lines in an operator's log.
+    """
+    return " ".join(str(value).split())[:limit]
+
+
+def severe_findings_are_disposed(findings: list) -> tuple[bool, str]:
+    """Every Critical/High finding must carry a terminal disposition (#903).
+
+    A budget-exhausted close (#798) is only for exhaustion over RESOLVED ground. Before
+    this check the gate closed on exhaustion alone: observed live on #874, the design cap
+    was reached with the breaker clear while a High finding was unresolved and an AC was
+    known unmet, so the close was available for a design the owner never accepted.
+
+    Each Critical/High finding declares `terminal_disposition` in applied | refuted |
+    deferred; `refuted` and `deferred` additionally require a non-empty
+    `disposition_reason`, because AC1's own vocabulary ("refuted-with-evidence",
+    "deferred-with-rationale") makes the evidence the substance of the disposition. A bare
+    token would be a property asserted and never checked — the exact defect
+    `findings_are_unambiguous` exists to fix. Medium/Low are advisory and need nothing.
+
+    The field is `terminal_disposition`, NOT `disposition`: `budget_exhausted_close` copies
+    the finding into the ledger entry's `finding` while the entry carries its own top-level
+    `disposition`. Note what that top-level value means — the close records `adopted` for
+    EVERY finding, meaning adopted INTO THE CLOSE RECORD, not that the recommendation was
+    implemented. The per-finding outcome is this field. `adopted` deliberately does not
+    auto-dissolve at the #393 join backstop (only `declined` does), so a refuted finding
+    stays re-raisable, which is the safe direction.
+
+    Fail CLOSED: a non-dict finding, an absent disposition, or an off-vocab one all refuse.
+    Removing an owner escalation is the dangerous direction.
+
+    Bounded limitation, stated rather than assumed: this validates the findings it is
+    GIVEN. It cannot detect a Critical/High finding the caller omitted from the file, nor
+    verify that an `applied` was truly applied — #798's known limitation ("a prose guard
+    can still pass while a model skips the adapter command") is unchanged. Severities
+    outside the four known bands are not treated as severe, matching every other severity
+    consumer in this module.
+    """
+    offenders: list[str] = []
+    for i, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            return (False, f"finding {i} is not an object")
+        severity = _one_line(finding.get("severity", ""), 40)
+        if severity.lower() not in _SEVERE_SEVERITIES:
+            continue
+        disposition = _one_line(finding.get("terminal_disposition", ""), 40).lower()
+        if disposition not in _TERMINAL_DISPOSITIONS:
+            problem = (f"terminal_disposition {disposition!r}" if disposition
+                       else "no terminal_disposition")
+        elif (disposition in _DISPOSITION_NEEDS_REASON
+                and not str(finding.get("disposition_reason", "")).strip()):
+            problem = f"{disposition} without a non-empty disposition_reason"
+        else:
+            continue
+        location = _one_line(finding.get("location") or "", 60)
+        description = _one_line(finding.get("description", ""), _MAX_OFFENDER_DESC_CHARS)
+        where = f" {location}" if location else ""
+        offenders.append(f"[{i}] {severity}{where}: {description!r} — {problem}")
+
+    if not offenders:
+        return (True, "every Critical/High finding carries a terminal disposition")
+    shown = offenders[:_MAX_LISTED_OFFENDERS]
+    tail = (f"; and {len(offenders) - len(shown)} more"
+            if len(offenders) > len(shown) else "")
+    return (False, f"{len(offenders)} Critical/High finding(s) lack a terminal "
+                   f"disposition: {'; '.join(shown)}{tail} — {_DISPOSITION_FIX_HINT}")
+
+
 def _contained(path: str, root: str) -> bool:
     """Is `path` inside `root` after full symlink resolution? (R2-H4)"""
     rp = os.path.realpath(root)
