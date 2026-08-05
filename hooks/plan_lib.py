@@ -2742,6 +2742,17 @@ _GOAL_CAMPAIGN_ESCAPE: Final[str] = (
     " — a child closed not-planned per its own acceptance criteria counts as "
     "satisfied, and the owner may pause the campaign at any time"
 )
+# Terminal-for-now states (#943, epic #871 AC 5). Campaign-variant ONLY: a per-issue
+# wf2/wf3 goal has no campaign state to justify this escape. Without it the Stop hook
+# reads an honest pause as an unmet goal — measured: three prods during one owner-ordered
+# pause — and, symmetrically, an unsupervised run gets stalled on a question nobody is
+# there to answer. Only `complete` may authorize teardown; a paused campaign releases
+# the session while its state persists.
+_GOAL_CAMPAIGN_WAIT: Final[str] = (
+    ", and a campaign whose driver-state records campaign_wait as waiting_for_owner or "
+    "waiting_for_reset with a stated clearing condition is an honest pause that "
+    "satisfies this goal for now"
+)
 _GOAL_CAP: Final[int] = 4000
 _AC_STRIP_RE = re.compile(r"^\s*(?:\d+[.):]\s*|[-*•]\s*)")
 
@@ -2797,14 +2808,14 @@ def build_goal_text(
             nums = ", ".join(f"#{n}" for n in child_issues)
             full = (
                 f"Epic #{issue_number} campaign done: all ordered child issues "
-                f"({nums}) merged with green CI{_GOAL_CAMPAIGN_ESCAPE}"
+                f"({nums}) merged with green CI{_GOAL_CAMPAIGN_ESCAPE}{_GOAL_CAMPAIGN_WAIT}"
             )
             if len(full) <= _GOAL_CAP:
                 return full
         # empty/None children, or a child list that would overflow the cap.
         return (
             f"Epic #{issue_number} campaign done: all ordered child issues of "
-            f"epic #{issue_number} merged with green CI{_GOAL_CAMPAIGN_ESCAPE}"
+            f"epic #{issue_number} merged with green CI{_GOAL_CAMPAIGN_ESCAPE}{_GOAL_CAMPAIGN_WAIT}"
         )
 
     if variant == "wf3":

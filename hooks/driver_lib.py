@@ -45,9 +45,26 @@ import heapq
 import re
 
 # Canonical driver-state statuses (design #134 status machine).
+# DELIBERATELY does NOT include the terminal-for-now waits. Those are campaign-level and
+# live in the additive top-level `campaign_wait` object instead (#943): this vocabulary
+# is closed and enforced twice (`record_child_outcome`, `validate_driver_state`) with
+# three further closed sets keyed off it (`_DISPOSED_STATUSES`, `TERMINAL_STATUSES`, the
+# `pr_open` transition map), so adding a word here would silently change all of their
+# meanings. `additionalProperties: true` permits new FIELDS, never new `status` VALUES.
 VALID_STATUSES = frozenset(
     {"queued", "in_progress", "pr_open", "merged", "deferred", "abandoned"}
 )
+
+# Campaign-level terminal-for-now states (#943, epic #871 AC 5). "Terminal for now"
+# because a Stop-hook goal loop must be able to read an HONEST wait: a paused campaign
+# is neither complete nor failing, and treating it as unmet made the hook nag an
+# owner-ordered pause three times in one measured run.
+CAMPAIGN_WAIT_STATUSES = frozenset({"waiting_for_owner", "waiting_for_reset"})
+
+# `clears_when` is required with the rest: a pause whose exit condition nobody can state
+# is a stall wearing a pause's clothes.
+_CAMPAIGN_WAIT_FIELDS = ("status", "reason", "blocker_id", "entered_at", "clears_when")
+
 SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
 # What "dependency satisfied" means, per the deps_satisfied_by policy knob.
 _SATISFIED_BY = {
@@ -2322,6 +2339,34 @@ def mid_child_handoff(state: dict, *, position, include_bind: bool = True) -> di
                                                             include_bind=include_bind)}
 
 
+def _campaign_wait_errors(wait) -> list[str]:
+    """Validate the optional top-level `campaign_wait` object (#943).
+
+    Purely additive: absent or null means "not waiting", so every pre-#943 campaign
+    file validates byte-unchanged and no `schema_version` bump is needed. The committed
+    contract (`docs/driver-state/queue.schema.json`) already sets
+    `additionalProperties: true` at the top level.
+
+    This issue ships the field and this validator ONLY. The behavioural consumers —
+    scheduling, Stop-hook release, resume, teardown — belong to #927 and #586.
+    """
+    if wait is None:
+        return []
+    if not isinstance(wait, dict):
+        return ["campaign_wait must be a JSON object or null"]
+    errors = []
+    for field in _CAMPAIGN_WAIT_FIELDS:
+        value = wait.get(field)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"campaign_wait.{field} must be a non-empty string")
+    status = wait.get("status")
+    if isinstance(status, str) and status not in CAMPAIGN_WAIT_STATUSES:
+        errors.append(
+            f"campaign_wait.status must be one of {sorted(CAMPAIGN_WAIT_STATUSES)}, "
+            f"got {status!r}")
+    return errors
+
+
 def validate_driver_state(state: dict) -> tuple[bool, list[str]]:
     """Minimal readability check for a driver-state object (schema v1 and v2).
 
@@ -2379,6 +2424,8 @@ def validate_driver_state(state: dict) -> tuple[bool, list[str]]:
             not isinstance(do, list) or not all(_is_int(x) for x in do)
         ):
             errors.append(f"issues[{idx}].depends_on must be a list of ints")
+
+    errors.extend(_campaign_wait_errors(state.get("campaign_wait")))
 
     # Serial-active invariant: the driver builds one issue at a time, so at most
     # one issue may be in_progress. pr_open is NOT counted — PRs may accumulate
