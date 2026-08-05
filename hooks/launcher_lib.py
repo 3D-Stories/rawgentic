@@ -1827,7 +1827,8 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
 
     out: dict = {"ok": False, "steps": [], "results": {}, "truncated": False,
                  "failed_step": None, "new_pane": None, "session_id": None,
-                 "cleanup": None, "teardown_skipped": None, "predecessor_guard": None}
+                 "cleanup": None, "teardown_skipped": None, "predecessor_guard": None,
+                 "failure_detail": None, "pane_capture": None}
 
     ladder = _VERIFICATION_STEPS if steps is None else steps
     gate_steps = _predecessor_steps(ladder)
@@ -1838,6 +1839,11 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             "(`retire-predecessor`), not to the session being retired")
 
     def record(kind, argv, proc=None, note=None):
+        if note is None and proc is not None and getattr(proc, "returncode", 1) != 0:
+            # #731 — one choke point: a failed step's herdr error body becomes its note
+            # automatically, so no failure record is ever bare.
+            note = _error_note(f"{getattr(proc, 'stdout', '') or ''}"
+                               f"{getattr(proc, 'stderr', '') or ''}")
         out["steps"].append({"kind": kind, "argv": argv,
                              "returncode": getattr(proc, "returncode", None),
                              "note": note})
@@ -1922,6 +1928,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         if not revalidated:
             out["failed_step"] = QUEUE_REVALIDATED_STEP
             out["reason"] = revalidation_reason
+            out["failure_detail"] = revalidation_reason
             return out
 
     # Captured BEFORE the split so nothing already on disk can be mistaken for this launch's
@@ -1930,6 +1937,9 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     registry_baseline = _baseline(read_text, registry_path)
     if registry_baseline is None:
         out["failed_step"] = "registry_baseline_unreadable"
+        out["failure_detail"] = (
+            "the session registry exists but could not be read for a pre-launch baseline — "
+            "without one, no later row can count as fresh evidence")
         return out
 
     # Pane inventory before the split. REQUIRED, not best-effort (#611 Step-11 pass-6 High 1):
@@ -1940,6 +1950,9 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     panes_before = _pane_inventory(runner)
     if panes_before is None:
         out["failed_step"] = "pane_inventory_unavailable"
+        out["failure_detail"] = (
+            "`herdr pane list` failed or returned an unusable inventory — a new pane could "
+            "not be proven ours, so no split was attempted")
         return out
 
     transferred = False
@@ -2174,6 +2187,9 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             out["results"]["prompt_landed"] = landed
             if not landed:
                 out["failed_step"] = "prompt_landed"
+                out["failure_detail"] = (
+                    "the resume prompt's marker never appeared in the successor transcript "
+                    "within the poll budget — transport rc 0 proves delivery, not arrival")
                 return out
 
         # SEND 3 of 3 — the GUARD, LAST, deliberately while the successor is already working.
@@ -2207,6 +2223,9 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             attempts=GOAL_POLL_ATTEMPTS, delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
         if not out["results"]["goal_armed"]:
             out["failed_step"] = "goal_armed"
+            out["failure_detail"] = (
+                "no unmet goal_status row for the armed condition appeared in the successor "
+                "transcript within the poll budget")
             return out
 
         # The unguarded window is now BETWEEN send 2 and this row, and it is bounded by exactly the
@@ -2217,11 +2236,15 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         ok, failed, _ = evaluate_verifications(out["results"], steps=gate_steps)
         if not ok:
             out["failed_step"] = failed
+            out["failure_detail"] = (
+                f"verification {failed!r} did not pass — fail-closed: an unreported check "
+                "counts as failed")
             return out
 
         transferred = True
     except (LauncherError, OSError, subprocess.SubprocessError) as exc:
         out["failed_step"] = out["failed_step"] or f"exception: {exc}"
+        out["failure_detail"] = out["failure_detail"] or str(exc)
         return out
     finally:
         if not transferred:
@@ -2235,6 +2258,13 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                 # A pane may exist that we cannot name. Report it; never guess (see
                 # `_report_possible_orphan`).
                 out["cleanup"] = _report_possible_orphan(panes_before, runner, anchor_pane)
+        # #731 — no try-body exit returns a bare failed_step: derive the cause from the failing
+        # step's own recorded note when no site set it explicitly. Idempotent (explicit wins),
+        # and the pane capture recorded during cleanup is lifted the same way.
+        if out.get("failed_step") and not out.get("failure_detail"):
+            out["failure_detail"] = failure_detail(out)
+        if out.get("pane_capture") is None:
+            out["pane_capture"] = pane_capture(out)
 
     # Teardown LAST, only when authorized, and its result is NOT ignored (Step-11 Medium 5).
     allowed, reason = teardown_allowed(out["results"], steps=gate_steps)
@@ -2483,6 +2513,57 @@ def _is_pane_busy(proc, body: str) -> bool:
         return False
     err = doc.get("error") if isinstance(doc, dict) else None
     return isinstance(err, dict) and err.get("code") == PANE_READY_ERROR_CODE
+
+
+def failure_detail(out) -> str | None:
+    """The human-readable cause behind out['failed_step'], or None.
+
+    Precedence: an explicitly-set out['failure_detail'] → the LAST recorded note of the step
+    kind that failed → out['reason'] → out['predecessor_guard'] (only for the teardown-phase
+    predecessor_goal_* failures, whose whole cause lives there) → None. Deliberately NO
+    cross-kind note fallback: borrowing an unrelated step's note would attribute the failure
+    to the wrong cause, which is worse than admitting no detail was captured (#731).
+    """
+    if not isinstance(out, dict) or not out.get("failed_step"):
+        return None
+    explicit = out.get("failure_detail")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    failed = out["failed_step"]
+    steps = out.get("steps")
+    if isinstance(steps, list):
+        for step in reversed(steps):
+            if isinstance(step, dict) and step.get("kind") == failed:
+                note = step.get("note")
+                if isinstance(note, str) and note:
+                    return note
+    reason = out.get("reason")
+    if isinstance(reason, str) and reason:
+        return reason
+    if isinstance(failed, str) and failed.startswith("predecessor_goal"):
+        guard = out.get("predecessor_guard")
+        if isinstance(guard, str) and guard:
+            return guard
+    return None
+
+
+def pane_capture(out) -> str | None:
+    """The tentative pane's captured output (the 'cleanup_pane_capture' step note), or None.
+
+    Lifted from the step record so the CLI payload can carry it without shipping the whole
+    ladder — the successor's own output is the single most informative artifact of a failed
+    handoff, and cleanup used to destroy it unread (#731 AC2).
+    """
+    if not isinstance(out, dict):
+        return None
+    steps = out.get("steps")
+    if isinstance(steps, list):
+        for step in reversed(steps):
+            if isinstance(step, dict) and step.get("kind") == "cleanup_pane_capture":
+                note = step.get("note")
+                if isinstance(note, str) and note:
+                    return note
+    return None
 
 
 def _error_code(body) -> str | None:
@@ -4335,6 +4416,11 @@ def _cmd_ad_hoc_handoff(args) -> int:
     payload = {k: out[k] for k in
                ("ok", "results", "failed_step", "new_pane", "session_id",
                 "truncated", "cleanup", "teardown_skipped", "predecessor_guard")}
+    # #731 — the cause and the captured pane output ride the payload; `steps` stays out.
+    # Via the helpers, not out[...]: they tolerate results that predate these keys, and they
+    # derive from the step records for exits (teardown-phase) the library did not pre-fill.
+    payload["failure_detail"] = failure_detail(out)
+    payload["pane_capture"] = pane_capture(out)
     if used_override:
         # #758 — the audit record rides the output ONLY when an override was actually
         # consumed (goals differed AND an affirmative owner answer authorized it);

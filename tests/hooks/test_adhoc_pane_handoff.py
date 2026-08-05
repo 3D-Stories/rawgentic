@@ -1487,3 +1487,133 @@ class TestAgentListArgvAndErrorCode:
     def test_error_code_is_none_on_empty_or_none(self) -> None:
         assert ll._error_code("") is None
         assert ll._error_code(None) is None
+
+
+# ---------------------------------------------------------------------------
+# #731 — T2: failure_detail + pane_capture surfacing (AC1)
+# ---------------------------------------------------------------------------
+
+class TestFailureDetailSurfacing:
+    """AC1: every failed_step return carries the underlying error text — the CLI payload
+    filter used to drop `steps`, so the operator saw a bare token and nothing else."""
+
+    def test_a_failing_step_records_the_herdr_error_without_an_explicit_note(self) -> None:
+        """record() derives the note itself from a failed proc's body — one choke point,
+        every failure record carries the herdr error without touching 30+ call sites."""
+        body = json.dumps({"error": {"code": "split_denied", "message": "no space"}})
+        base = Runner(_responses())
+
+        def runner(argv, timeout=180):
+            if Runner.key(argv) == "herdr pane split":
+                base.calls.append(list(argv))
+                return FakeProc(returncode=1, stdout=body)
+            return base(argv, timeout)
+
+        out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert out["failed_step"] == "split"
+        split_steps = [s for s in out["steps"] if s["kind"] == "split"]
+        assert split_steps and split_steps[-1]["note"] == "herdr error: split_denied — no space"
+        assert out["failure_detail"] == "herdr error: split_denied — no space"
+
+    def test_failure_detail_prefers_the_failing_steps_last_note(self) -> None:
+        out = {"failed_step": "agent_start", "steps": [
+            {"kind": "agent_start", "note": "first attempt"},
+            {"kind": "other", "note": "unrelated"},
+            {"kind": "agent_start", "note": "herdr error: x — y"}]}
+        assert ll.failure_detail(out) == "herdr error: x — y"
+
+    def test_failure_detail_never_borrows_an_unrelated_note(self) -> None:
+        """Wrong attribution is worse than no detail — no cross-kind fallback."""
+        out = {"failed_step": "agent_wait", "steps": [{"kind": "split", "note": "fine"}]}
+        assert ll.failure_detail(out) is None
+
+    def test_failure_detail_falls_back_to_reason(self) -> None:
+        out = {"failed_step": "queue_revalidated", "steps": [], "reason": "receipt stale"}
+        assert ll.failure_detail(out) == "receipt stale"
+
+    def test_failure_detail_is_none_on_success_and_on_a_bare_dict(self) -> None:
+        assert ll.failure_detail({"failed_step": None, "steps": []}) is None
+        assert ll.failure_detail({}) is None
+
+    def test_pane_capture_lifts_the_capture_note(self) -> None:
+        out = {"steps": [{"kind": "cleanup_pane_capture", "note": "the pane said X"}]}
+        assert ll.pane_capture(out) == "the pane said X"
+        assert ll.pane_capture({"steps": []}) is None
+        assert ll.pane_capture({}) is None
+
+    def test_goal_armed_failure_carries_a_detail(self) -> None:
+        r = Runner(_responses())
+        bad_goal = json.dumps({"attachment": {"type": "goal_status", "met": False,
+                                              "sentinel": True, "condition": "something else"}})
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, goal_row=bad_goal)))
+        assert out["failed_step"] == "goal_armed"
+        assert out["failure_detail"], "a poll failure with no step record must still explain itself"
+
+    def test_prompt_landed_failure_carries_a_detail(self) -> None:
+        r = Runner(_responses(pane_read="nothing recognizable"))
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, marker_after_nudges=99)))
+        assert out["failed_step"] == "prompt_landed"
+        assert out["failure_detail"]
+
+    def test_registry_baseline_unreadable_carries_a_detail(self) -> None:
+        r = Runner(_responses())
+
+        def read_text(path):
+            raise OSError("registry unreadable")
+
+        out = ll.perform_handoff(**_handoff(r, read_text=read_text))
+        assert out["failed_step"] == "registry_baseline_unreadable"
+        assert out["failure_detail"]
+
+    def test_pane_inventory_unavailable_carries_a_detail(self) -> None:
+        r = Runner(_responses(), fail_on="herdr pane list")
+        out = ll.perform_handoff(**_handoff(r))
+        assert out["failed_step"] == "pane_inventory_unavailable"
+        assert out["failure_detail"]
+
+    def test_an_exception_exit_carries_the_exception_text(self) -> None:
+        base = Runner(_responses())
+
+        def runner(argv, timeout=180):
+            if Runner.key(argv) == "herdr pane get":
+                raise OSError("herdr socket vanished")
+            return base(argv, timeout)
+
+        out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert out["failed_step"].startswith("exception:")
+        assert "herdr socket vanished" in out["failure_detail"]
+
+    def test_cli_payload_carries_failure_detail_and_pane_capture(self, tmp_path, monkeypatch,
+                                                                 capsys) -> None:
+        """The AC6 headline shape: the operator's JSON names the cause, not a bare token."""
+        detail = "herdr error: agent_name_taken — agent name successor is already used"
+
+        def fake(**kw):
+            return {"ok": False, "results": {}, "steps": [
+                        {"kind": "agent_start", "argv": [], "returncode": 1, "note": detail},
+                        {"kind": "cleanup_pane_capture", "argv": [], "returncode": 0,
+                         "note": "successor pane tail"}],
+                    "new_pane": "w1:pZZ", "session_id": None,
+                    "cleanup": "closed tentative pane w1:pZZ", "truncated": False,
+                    "failed_step": "agent_start", "teardown_skipped": None,
+                    "predecessor_guard": None}
+
+        monkeypatch.setattr(ll, "perform_handoff", fake)
+        rc = ll.main(_argv(tmp_path))
+        assert rc == 4
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["failure_detail"] == detail
+        assert payload["pane_capture"] == "successor pane tail"
+        assert "steps" not in payload, "the report surfaces the cause, never the whole ladder"
+
+    def test_cli_payload_keys_are_none_on_success(self, tmp_path, monkeypatch, capsys) -> None:
+        def fake(**kw):
+            return {"ok": True, "results": {}, "steps": [], "new_pane": "w1:pZZ",
+                    "session_id": "s", "cleanup": None, "truncated": False,
+                    "failed_step": None, "teardown_skipped": None, "predecessor_guard": None}
+
+        monkeypatch.setattr(ll, "perform_handoff", fake)
+        assert ll.main(_argv(tmp_path)) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["failure_detail"] is None
+        assert payload["pane_capture"] is None
