@@ -2605,11 +2605,23 @@ def pane_capture(out) -> str | None:
     steps = out.get("steps")
     if isinstance(steps, list):
         for step in reversed(steps):
-            if isinstance(step, dict) and step.get("kind") == "cleanup_pane_capture":
+            if isinstance(step, dict) and step.get("kind") == "cleanup_pane_capture" \
+                    and step.get("returncode") == 0:
                 note = step.get("note")
                 if isinstance(note, str) and note:
                     return note
     return None
+
+
+_PANE_CAPTURE_CAP = 2000
+
+
+def _capped_tail(text: str, cap: int = _PANE_CAPTURE_CAP) -> str:
+    """The LAST `cap` chars — tail-biased, because a failing pane's error is at the end,
+    and a megabyte of scrollback must not ride a JSON report."""
+    if len(text) <= cap:
+        return text
+    return f"[capture truncated to the last {cap} chars]\n" + text[-cap:]
 
 
 def _agent_name_holder(agent_list_stdout, name) -> tuple[bool, str | None]:
@@ -2747,6 +2759,27 @@ def _close_tentative_pane(pane: str, runner, record, expected_session: str | Non
     inventory alone — herdr 0.7.5 exposes no creation token that would close that gap.
     """
     try:
+        # #731 AC2 — capture the pane's visible output BEFORE anything closes it: the
+        # successor's own words are the single most informative artifact of a failed handoff,
+        # and this used to be destroyed unread. FIRST, even before the identity probe — a
+        # read is safe regardless of ownership, and a probe refusal should not cost the
+        # evidence. Best-effort in every direction: no capture failure may block the close.
+        read_argv = build_pane_read_argv(pane)
+        try:
+            read_proc = runner(read_argv)
+        except (OSError, subprocess.SubprocessError) as exc:
+            read_proc = None
+            record("cleanup_pane_capture", read_argv, None,
+                   note=f"pane read raised {exc} — capture skipped")
+        if read_proc is not None:
+            if getattr(read_proc, "returncode", 1) == 0:
+                text = (getattr(read_proc, "stdout", "") or "").strip()
+                record("cleanup_pane_capture", read_argv, read_proc,
+                       note=_capped_tail(text) if text
+                       else "pane read succeeded but the viewport was empty")
+            else:
+                record("cleanup_pane_capture", read_argv, read_proc)
+
         if expected_session is not None:
             probe = build_pane_get_argv(pane)
             proc = runner(probe)

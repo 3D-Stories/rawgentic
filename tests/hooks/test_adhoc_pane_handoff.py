@@ -1535,9 +1535,14 @@ class TestFailureDetailSurfacing:
         assert ll.failure_detail({"failed_step": None, "steps": []}) is None
         assert ll.failure_detail({}) is None
 
-    def test_pane_capture_lifts_the_capture_note(self) -> None:
-        out = {"steps": [{"kind": "cleanup_pane_capture", "note": "the pane said X"}]}
-        assert ll.pane_capture(out) == "the pane said X"
+    def test_pane_capture_lifts_only_a_successful_captures_note(self) -> None:
+        ok = {"steps": [{"kind": "cleanup_pane_capture", "returncode": 0,
+                         "note": "the pane said X"}]}
+        assert ll.pane_capture(ok) == "the pane said X"
+        failed = {"steps": [{"kind": "cleanup_pane_capture", "returncode": 1,
+                             "note": "herdr error: read_failed — nope"}]}
+        assert ll.pane_capture(failed) is None, \
+            "a capture-failure status note must never masquerade as pane text"
         assert ll.pane_capture({"steps": []}) is None
         assert ll.pane_capture({}) is None
 
@@ -1695,3 +1700,73 @@ class TestNameTakenPreflight:
         out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
         assert out["ok"] is True, out["failed_step"]
         assert n["starts"] == 2
+
+
+# ---------------------------------------------------------------------------
+# #731 — T4: capture the tentative pane BEFORE cleanup closes it (AC2)
+# ---------------------------------------------------------------------------
+
+class TestCaptureBeforeCleanup:
+    @staticmethod
+    def _failing_start_runner(base, body):
+        def runner(argv, timeout=180):
+            if Runner.key(argv) == "herdr agent start":
+                base.calls.append(list(argv))
+                return FakeProc(returncode=1, stdout=body)
+            return base(argv, timeout)
+        return runner
+
+    BOOM = json.dumps({"error": {"code": "kaboom", "message": "agent exploded"}})
+
+    def test_pane_is_read_before_it_is_closed(self) -> None:
+        """AC2: the successor's own output is the most informative artifact of a failed
+        handoff — it must be in the report before teardown destroys it."""
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+        out = ll.perform_handoff(**_handoff(self._failing_start_runner(base, self.BOOM),
+                                            read_text=Artifacts(base)))
+        assert out["failed_step"] == "agent_start"
+        reads = [i for i, c in enumerate(base.calls)
+                 if c[:3] == ["herdr", "pane", "read"] and c[3] == "w1:pZZ"]
+        closes = [i for i, c in enumerate(base.calls)
+                  if c[:3] == ["herdr", "pane", "close"] and c[3] == "w1:pZZ"]
+        assert reads and closes and reads[0] < closes[0], \
+            f"capture must precede close (calls: {[Runner.key(c) for c in base.calls]})"
+        assert out["pane_capture"] == PANE_PASTE_WAITING.strip()
+        cap = [s for s in out["steps"] if s["kind"] == "cleanup_pane_capture"]
+        assert cap and cap[-1]["note"] == PANE_PASTE_WAITING.strip()
+
+    def test_capture_read_failure_is_recorded_and_close_proceeds(self) -> None:
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN},
+                      fail_on="herdr pane read")
+        out = ll.perform_handoff(**_handoff(self._failing_start_runner(base, self.BOOM),
+                                            read_text=Artifacts(base)))
+        assert any(c[:3] == ["herdr", "pane", "close"] for c in base.calls), \
+            "a failed capture must never block the close"
+        cap = [s for s in out["steps"] if s["kind"] == "cleanup_pane_capture"]
+        assert cap and cap[-1]["returncode"] == 1
+        assert out["pane_capture"] is None
+        assert "closed tentative pane" in out["cleanup"]
+
+    def test_a_raising_capture_read_still_closes(self) -> None:
+        base = Runner({**_responses(), "herdr agent list": AGENT_LIST_CLEAN})
+        start_runner = self._failing_start_runner(base, self.BOOM)
+
+        def runner(argv, timeout=180):
+            if argv[:3] == ["herdr", "pane", "read"]:
+                base.calls.append(list(argv))
+                raise OSError("read socket died")
+            return start_runner(argv, timeout)
+
+        out = ll.perform_handoff(**_handoff(runner, read_text=Artifacts(base)))
+        assert any(c[:3] == ["herdr", "pane", "close"] for c in base.calls)
+        assert out["pane_capture"] is None
+        assert "closed tentative pane" in out["cleanup"]
+
+    def test_a_long_capture_is_tail_truncated(self) -> None:
+        long_body = "A" * 3000 + "THE-END"
+        base = Runner({**_responses(pane_read=long_body), "herdr agent list": AGENT_LIST_CLEAN})
+        out = ll.perform_handoff(**_handoff(self._failing_start_runner(base, self.BOOM),
+                                            read_text=Artifacts(base)))
+        assert out["pane_capture"] is not None
+        assert out["pane_capture"].endswith("THE-END"), "tail-biased: the error is at the end"
+        assert len(out["pane_capture"]) <= 2100
