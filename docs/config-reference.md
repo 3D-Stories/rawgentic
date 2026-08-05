@@ -84,7 +84,51 @@ project information during execution:
 | `formatting` | Tool, config file, and format command. | implement-feature, fix-bug (for code style compliance). |
 | `documentation` | Primary doc files and format. | setup. |
 | `custom` | Free-form object for project-specific metadata (e.g., security debt). | Any skill. |
+| `defaultTaskClass` | **Optional** fallback task class (`disposable` \| `internal` \| `production`) when an issue body sets none; unset or invalid → `production`. See [`defaultTaskClass`](#defaulttaskclass). | implement-feature (Step 1 resolve+snapshot), adversarial-review, peer-consult. |
 | `laneImplExtensions` | **Optional** array of file extensions (e.g. `[".md"]`) that a **prompt/skill repo** counts as *implementation* toward the small-standard lane's `LANE_MAX_IMPL_FILES` ceiling — the "markdown-is-product" opt-in (#143). Default (unset) = exclude `.md`/`docs/` (unchanged for app repos). A `docs/` dir stays docs even when opted in; tests stay excluded. Normalized via `plan_lib.lane_impl_extensions`. | implement-feature (`<small-standard-lane>` eligibility + Step 9 reconcile). |
+
+### `defaultTaskClass`
+
+**Optional** top-level string — the project's fallback task class when an issue body does not set
+one. Valid values: `disposable`, `internal`, `production`. Unset (or invalid) → `production`.
+
+Three states, kept distinct on purpose: **absent** (or explicit `null`, which is a legitimate
+spelling of "not set") resolves to `production` **silently**; a **present but invalid** value —
+whatever its JSON type, `"bogus"` and `42` alike — resolves to `production` **with a visible
+diagnostic**; a **valid** value is used as written.
+
+```json
+{
+  "defaultTaskClass": "internal"
+}
+```
+
+The task class (#761) records **the work's intended durability**, and nothing more:
+
+| Value | Meaning |
+|---|---|
+| `disposable` | A throwaway probe, spike, or one-off script; nothing depends on it later. |
+| `internal` | Tooling, fixtures, or scaffolding used inside the project only. |
+| `production` | Anything users or other systems depend on. The conservative default. |
+
+**How it is resolved and used.** An issue body may carry the canonical line
+`**Task class:** <value>` on its own line. WF2 Step 1 resolves the class ONCE — body line first,
+then this config key, then `production` — and snapshots it **write-once** to
+`claude_docs/.wf2-state/<issue>/task_class.json`. Every later gate reads that snapshot rather than
+the body, so a body edited mid-run cannot change the class under a running gate. WF5 and WF13 read
+it via `task_class_lib.py read` and pass `--task-class` (plus `--issue` when an issue is in scope)
+to `review_runner.py`, which renders one line into the reviewer/peer prompt.
+
+**It is contextual metadata only.** No demand is scaled by it and no gate is relaxed: reviewers are
+told the class and told explicitly to apply the same rubric regardless. A malformed, unrecognized,
+or duplicated body line resolves to `production` **with a visible diagnostic** and bypasses this
+config key — fail-closed, never a silent accept. An invalid value here likewise resolves to
+`production` with a diagnostic. The diagnostic carries issue-body text and is therefore never
+routed into a prompt; its only destinations are the snapshot, stderr, and session notes.
+
+Read directly from `.rawgentic.json` by `hooks/task_class_lib.py` (one key, capped read,
+fail-open) rather than through the capabilities object — the narrow single-block exception in the
+repo's `CLAUDE.md` §1.
 
 ## Versioning
 

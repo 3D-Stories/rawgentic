@@ -1108,8 +1108,42 @@ def normalize_findings(raw: object) -> list[dict]:
 # Prompt construction (the runner interpolates these into its invocations)
 # ============================================================================
 
+# Mirrored from task_class_lib.TASK_CLASSES rather than imported: this module is stdlib-only and
+# stays that way. A drift-guard test asserts the two tuples are equal (the repo convention for a
+# mirrored constant), so they cannot diverge silently.
+TASK_CLASSES = ("disposable", "internal", "production")
+DEFAULT_TASK_CLASS = "production"
+
+
+def _task_class_line(task_class: str) -> str:
+    """The inert task-class line, rendered OUTSIDE the nonce fence (#761).
+
+    Outside is safe and deliberate: what is interpolated is one of three VALIDATED literals
+    chosen by the resolver, never issue-body text, so there is nothing to escape. The resolver's
+    diagnostic — which does carry body text — is barred from every prompt surface.
+
+    Validated HERE as well as at the CLI flag. Checking only the flag would leave the safety of
+    any direct or future library caller unverifiable, and this is the boundary that matters.
+
+    The line is always rendered, defaulting to the strictest class: an omitted argument must
+    degrade to `production`, never to no line at all, or a caller that forgets it silently
+    produces a class-less prompt — the vacuity this wiring exists to prevent.
+    """
+    if not isinstance(task_class, str) or task_class not in TASK_CLASSES:
+        raise ValueError(
+            f"task_class {task_class!r} is not one of {', '.join(TASK_CLASSES)} — refusing to "
+            f"interpolate an unvalidated value into a prompt"
+        )
+    return (
+        f"TASK CLASS: {task_class}. This is contextual metadata about the work's intended "
+        "durability. It does NOT change what you look for or how strictly you judge: no demand "
+        "is scaled by it yet. Apply the same rubric you would to any other artifact.\n\n"
+    )
+
+
 def build_prompt(
     artifact_text: str, artifact_type: str, nonce: str | None = None,
+    task_class: str = DEFAULT_TASK_CLASS,
 ) -> str:
     """Construct the adversarial review prompt with a type-aware lens.
 
@@ -1133,6 +1167,8 @@ def build_prompt(
         "You are an independent, skeptical adversarial reviewer from a DIFFERENT "
         f"model family than the author. You are reviewing ONLY the {artifact_type} "
         f"artifact text provided below. {lens}\n\n"
+
+        + _task_class_line(task_class) +
 
         "TOOLS — STRICTLY FORBIDDEN: All content you need is inlined in this "
         "prompt. Do NOT run any shell command, do NOT read or write any file, do "
@@ -1473,7 +1509,8 @@ PROPOSAL_SCHEMA: Final[dict] = {
 }
 
 
-def build_consult_prompt(problem_text: str, nonce: str | None = None) -> str:
+def build_consult_prompt(problem_text: str, nonce: str | None = None,
+                         task_class: str = DEFAULT_TASK_CLASS) -> str:
     """Peer-designer prompt: an independent proposal, not a critique.
 
     Nonce-fenced exactly like build_prompt — untrusted problem text cannot
@@ -1489,6 +1526,8 @@ def build_consult_prompt(problem_text: str, nonce: str | None = None) -> str:
         "and produce your OWN independent design proposal. Do not critique or "
         "assume any other proposal exists. Output ONLY the structured schema: "
         "approach, key_decisions, risks, sketch.\n\n"
+
+        + _task_class_line(task_class) +
 
         "TOOLS — STRICTLY FORBIDDEN: All content you need is inlined in this "
         "prompt. Do NOT run any shell command, do NOT read or write any file, do "

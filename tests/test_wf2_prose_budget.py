@@ -47,14 +47,36 @@ SKILL_DIR = REPO_ROOT / "skills" / "implement-feature"
 # actual + max(1 KiB, 10%) that shipped with the split. AC7's STALE CEILING check
 # is what forced the recalibration: it condemned all 22 provisional rows, which is
 # the guard doing its job rather than a regression.
-TOTAL_CEILING_BYTES = 245_497
+# #761 raised `references/step-01.md` (and the total with it) across three rounds, all
+# operative prose rather than commentary: the task-class resolve-and-snapshot instruction
+# (the step had only 256 bytes of headroom); Step 8a's F2 fix, which made the fetch a
+# single captured call with an exit-status gate because an unguarded second fetch could
+# snapshot an EMPTY body permanently; and Step 11's R2-1/R2-6 fixes, which gate the `jq`
+# extraction through a temp-file rename and clean up the captured body.
+#
+# Measured at the time of writing (Step 11 DIFF-4 asked for the numbers to be recorded
+# beside the constants — the finding's premise that they are unverifiable is declined,
+# since the STALE CEILING check below MECHANICALLY enforces
+# `ceiling <= actual + allowed_headroom()` on every run, which is stronger than a
+# comment; the numbers are recorded anyway because they help a human reader):
+#   references/step-01.md  actual 6_360 + headroom   318 -> ceiling   6_678
+#   corpus total           actual 246_684 + headroom 4_934 -> ceiling 251_618
+#
+# The raise is deliberate but was TRIMMED FIRST, because epic #875 is named STAY SMALL and #903
+# set the precedent that raising a ceiling inside that milestone needs the trim attempted first
+# (it trimmed step-04.md twice rather than raise). Applied here: the rationale prose was
+# compressed 7_074 -> 6_360 bytes with every guard, command and failure clause intact. The
+# residual growth over the pre-#761 4_108 is a genuinely NEW gated sub-step, not commentary —
+# resolve-and-snapshot did not exist before, and its three failure gates are the Step-8a/Step-11
+# findings. That is the honest distinction: trim commentary, keep operative prose.
+TOTAL_CEILING_BYTES = 251_618
 PER_FILE_CEILING_BYTES = {
     "SKILL.md": 46_099,
     "references/quality-bar.md": 3_616,
     "references/run-record.md": 23_202,
     "references/state-and-resume.md": 6_476,
     "references/step-00-preamble.md": 18_925,
-    "references/step-01.md": 4_364,
+    "references/step-01.md": 6_678,
     "references/step-01b.md": 3_444,
     "references/step-02.md": 9_676,
     "references/step-03.md": 8_831,

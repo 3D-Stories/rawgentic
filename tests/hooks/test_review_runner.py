@@ -1116,3 +1116,238 @@ class TestGlmSingleAttempt:
         assert res["status"] == "failure"
         assert res["error_class"] == "transport"
         assert len(calls) == 2
+
+
+# ===========================================================================
+# #761 T4 — the `--task-class` / `--issue` flag pair on all three verbs.
+#
+# C3/C7 (pass-6 High, terminal ADOPTED disposition d-761-6-7-b750): omitting
+# `--issue` conflates a legitimately issue-less review with an accidental
+# omission on an issue-scoped one. The latter would silently inject the project
+# default instead of the snapshotted class, so the prompt could display the
+# WRONG class with no failure and no diagnostic. Hence: `--issue` without
+# `--task-class` REFUSES rather than defaulting.
+#
+# Design AC 10 (docs/planning/2026-08-04-761-proportionality-contract-design.md
+# :319): an out-of-enum value is refused (exit 2) BEFORE egress, and absence of
+# the flag leaves behaviour unchanged.
+# ===========================================================================
+
+class TestTaskClassFlags:
+    def test_out_of_enum_task_class_refuses_before_egress(self, stub, project):
+        result = _cli(_artifact_args(project, extra=("--task-class", "bogus")),
+                      stub.env)
+        assert result.returncode == 2
+        assert stub.calls == 0, "refusal must precede egress"
+        r = _result(project)
+        assert r["error_class"] == "invalid_input"
+        assert "bogus" in r["error_detail"]
+
+    def test_issue_without_task_class_refuses(self, stub, project):
+        """C3/C7: an issue-scoped review may not fall back to the default."""
+        result = _cli(_artifact_args(project, extra=("--issue", "761")),
+                      stub.env)
+        assert result.returncode == 2
+        assert stub.calls == 0
+        r = _result(project)
+        assert r["error_class"] == "invalid_input"
+        assert "--task-class" in r["error_detail"]
+
+    def test_issue_with_task_class_succeeds_and_records_both(self, stub, project):
+        result = _cli(
+            _artifact_args(project,
+                           extra=("--task-class", "disposable", "--issue", "761")),
+            stub.env)
+        assert result.returncode == 0, result.stderr
+        r = _result(project)
+        assert r["status"] == "success"
+        assert r["task_class"] == "disposable"
+        assert r["issue"] == 761
+
+    def test_task_class_renders_in_the_artifact_prompt(self, stub, project):
+        stub.env["CODEX_STUB_STDIN_FILE"] = str(project / "stdin.txt")
+        result = _cli(_artifact_args(project,
+                                     extra=("--task-class", "disposable")),
+                      stub.env)
+        assert result.returncode == 0, result.stderr
+        prompt = (project / "stdin.txt").read_text()
+        assert "TASK CLASS: disposable" in prompt
+        assert "TASK CLASS: production" not in prompt
+
+    def test_absent_flag_leaves_behaviour_unchanged(self, stub, project):
+        """Always-render, defaulting to the strictest class — never NO line."""
+        stub.env["CODEX_STUB_STDIN_FILE"] = str(project / "stdin.txt")
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        r = _result(project)
+        assert r["task_class"] == "production"
+        assert r["issue"] is None
+        assert "TASK CLASS: production" in (project / "stdin.txt").read_text()
+
+    def test_consult_threads_the_task_class(self, stub, project):
+        stub.env["CODEX_STUB_BODY"] = VALID_PROPOSAL
+        stub.env["CODEX_STUB_STDIN_FILE"] = str(project / "stdin.txt")
+        args = [
+            "consult", "--artifact", str(project / "artifact.md"),
+            "--reviewer", "gpt-5.5-codex",
+            "--out", str(project / "result.json"),
+            "--project-root", str(project),
+            "--task-class", "internal", "--issue", "761",
+        ]
+        result = _cli(args, stub.env)
+        assert result.returncode == 0, result.stderr
+        assert "TASK CLASS: internal" in (project / "stdin.txt").read_text()
+        assert _result(project)["task_class"] == "internal"
+
+    def test_consult_issue_without_task_class_refuses(self, stub, project):
+        args = [
+            "consult", "--artifact", str(project / "artifact.md"),
+            "--reviewer", "gpt-5.5-codex",
+            "--out", str(project / "result.json"),
+            "--project-root", str(project),
+            "--issue", "761",
+        ]
+        result = _cli(args, stub.env)
+        assert result.returncode == 2
+        assert stub.calls == 0
+        assert _result(project)["error_class"] == "invalid_input"
+
+    def test_review_code_threads_the_task_class(self, stub, repo):
+        stub.env["CODEX_STUB_STDIN_FILE"] = str(repo / "stdin.txt")
+        result = _cli(_code_args(repo, extra=("--task-class", "internal",
+                                              "--issue", "761")),
+                      stub.env, cwd=str(repo))
+        assert result.returncode == 0, result.stderr
+        assert "TASK CLASS: internal" in (repo / "stdin.txt").read_text()
+        assert json.loads((repo / "result.json").read_text())["task_class"] \
+            == "internal"
+
+    def test_review_code_issue_without_task_class_refuses(self, stub, repo):
+        result = _cli(_code_args(repo, extra=("--issue", "761")),
+                      stub.env, cwd=str(repo))
+        assert result.returncode == 2
+        assert stub.calls == 0
+        r = json.loads((repo / "result.json").read_text())
+        assert r["error_class"] == "invalid_input"
+
+    def test_refusal_is_recorded_in_the_receipt_not_just_stderr(self, stub,
+                                                               project):
+        """The orchestrator gates on the receipt, so the refusal must be IN it."""
+        result = _cli(_artifact_args(project, extra=("--task-class", "Production")),
+                      stub.env)
+        assert result.returncode == 2, "the enum is case-SENSITIVE"
+        assert (project / "result.json").exists()
+        assert _result(project)["status"] == "refused"
+
+    # --- #761 Step 8a F1 (High, cross-model, conf 0.99; owner decision D207) ---
+    # The runner validated the enum but never opened the issue's snapshot, so
+    # `--issue 761 --task-class disposable` succeeded even when 761's snapshot said
+    # `production`: the prompt and receipt then reported a class the issue never set
+    # and nothing failed, defeating the snapshot boundary the design asserts. The
+    # owner chose verify-if-present over the reviewer's always-read: an ABSENT
+    # snapshot still proceeds, so a standalone WF5 review naming an issue that never
+    # ran WF2 keeps working.
+
+    @staticmethod
+    def _seed_snapshot(project, issue, task_class):
+        snap = (project / "claude_docs" / ".wf2-state" / str(issue)
+                / "task_class.json")
+        snap.parent.mkdir(parents=True, exist_ok=True)
+        snap.write_text(json.dumps({
+            "task_class": task_class, "provenance": "issue_body",
+            "issue": issue, "resolved_at": "2026-08-05T00:00:00Z",
+        }))
+        return snap
+
+    def test_class_disagreeing_with_the_snapshot_refuses(self, stub, project):
+        self._seed_snapshot(project, 761, "production")
+        result = _cli(_artifact_args(project, extra=("--task-class", "disposable",
+                                                     "--issue", "761")), stub.env)
+        assert result.returncode == 2
+        assert stub.calls == 0, "the mismatch must be caught before egress"
+        r = _result(project)
+        assert r["error_class"] == "invalid_input"
+        assert "production" in r["error_detail"] and "disposable" in r["error_detail"]
+
+    def test_class_agreeing_with_the_snapshot_succeeds(self, stub, project):
+        self._seed_snapshot(project, 761, "internal")
+        result = _cli(_artifact_args(project, extra=("--task-class", "internal",
+                                                     "--issue", "761")), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert _result(project)["task_class"] == "internal"
+
+    def test_absent_snapshot_still_proceeds(self, stub, project):
+        """D207: verify-if-present. No snapshot = standalone use, not an error."""
+        result = _cli(_artifact_args(project, extra=("--task-class", "disposable",
+                                                     "--issue", "999")), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert _result(project)["task_class"] == "disposable"
+
+    def test_corrupt_snapshot_refuses_rather_than_ignoring_it(self, stub, project):
+        """A snapshot that exists but will not validate is NOT 'absent'."""
+        snap = self._seed_snapshot(project, 761, "production")
+        snap.write_text("{ not json")
+        result = _cli(_artifact_args(project, extra=("--task-class", "production",
+                                                     "--issue", "761")), stub.env)
+        assert result.returncode == 2
+        assert stub.calls == 0
+        assert _result(project)["error_class"] == "invalid_input"
+
+    def test_wrong_issue_snapshot_refuses(self, stub, project):
+        """Identity validation still applies through the runner's read."""
+        snap = (project / "claude_docs" / ".wf2-state" / "761" / "task_class.json")
+        snap.parent.mkdir(parents=True, exist_ok=True)
+        snap.write_text(json.dumps({
+            "task_class": "production", "provenance": "issue_body",
+            "issue": 999, "resolved_at": "2026-08-05T00:00:00Z",
+        }))
+        result = _cli(_artifact_args(project, extra=("--task-class", "production",
+                                                     "--issue", "761")), stub.env)
+        assert result.returncode == 2
+        assert stub.calls == 0
+
+    # --- Step 11 R2-2 / DIFF-2 (High, both passes converged) + inline L1 ---
+    # D207's verify-if-present is the owner's decision and stands: an ABSENT snapshot
+    # proceeds. But `os.path.exists` FOLLOWS symlinks, so a dangling symlink and an
+    # unreadable file both read as "absent" and took the trust-the-caller branch —
+    # which contradicts D207's own words ("a snapshot that EXISTS and fails to
+    # validate is NOT treated as absent"). Absent must mean nothing is there at all.
+
+    def test_a_dangling_symlink_snapshot_refuses_rather_than_reading_as_absent(
+            self, stub, project):
+        snap = (project / "claude_docs" / ".wf2-state" / "761" / "task_class.json")
+        snap.parent.mkdir(parents=True, exist_ok=True)
+        snap.symlink_to(project / "does-not-exist.json")
+        assert not os.path.exists(snap) and os.path.lexists(snap), "fixture premise"
+        result = _cli(_artifact_args(project, extra=("--task-class", "production",
+                                                     "--issue", "761")), stub.env)
+        assert result.returncode == 2
+        assert stub.calls == 0
+        assert _result(project)["error_class"] == "invalid_input"
+
+    def test_a_snapshot_that_is_a_directory_refuses(self, stub, project):
+        """EISDIR is 'unusable', not 'absent'."""
+        snap = (project / "claude_docs" / ".wf2-state" / "761" / "task_class.json")
+        snap.mkdir(parents=True)
+        result = _cli(_artifact_args(project, extra=("--task-class", "production",
+                                                     "--issue", "761")), stub.env)
+        assert result.returncode == 2
+        assert stub.calls == 0
+
+    def test_a_non_int_issue_refuses_instead_of_skipping_the_check(self, project):
+        """Inline L1: a library caller with a non-int issue silently disabled F1.
+
+        The CLI declares `--issue type=int`, so this is reachable only in-process — but
+        a guarantee a TYPE ERROR can quietly switch off is weaker than it reads, and it
+        also let a non-int land in the receipt's `issue` field.
+        """
+        def explode(*a, **k):
+            raise AssertionError("egress must not be reached")
+        res = rr.run_review(
+            verb="review-artifact", artifact=str(project / "artifact.md"),
+            artifact_type="design", author_model="claude-fable-5",
+            reviewer="gpt-5.5-codex", project_root=str(project),
+            out_path=str(project / "r.json"),
+            task_class="production", issue="../../../../etc/passwd", runner=explode)
+        assert res["status"] == "refused"
+        assert res["error_class"] == "invalid_input"

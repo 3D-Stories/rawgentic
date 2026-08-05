@@ -1,0 +1,339 @@
+"""End-to-end task-class integration: snapshot -> resolved class -> real prompt (#761).
+
+This file exists because builder unit tests are VACUOUS on their own. That was
+constraint C1/C5 (pass-5 and pass-6 High, terminal ADOPTED dispositions
+`d-761-5-1-62ee` and `d-761-6-5-b362`): `build_prompt`/`build_consult_prompt`
+gained a `task_class` argument with a default, so every direct builder test can
+pass while REAL workflow prompts carry no class at all — nothing named the call
+site that reads `task_class.json` and supplies the flag. Two halves are needed,
+and both are pinned here:
+
+1. **The machine half** — seed a snapshot, read it back through the SAME CLI the
+   prose calls (`task_class_lib.py read --issue N`), drive the runner's own
+   prompt-construction path with the result, and assert both generated prompts
+   carry the SNAPSHOT's class and NOT the project default. Non-vacuity comes from
+   making those two values differ: any wiring that silently fell back to the
+   config default would render `disposable` and fail.
+2. **The prose half** — the handoff lives in markdown, so no Python test can
+   execute it. What CAN be pinned is that the WF5/WF13 skill files actually carry
+   the read-then-pass instruction. A missing or reworded handoff leaves real
+   prompts class-less, which is exactly the vacuity above.
+
+Design: `docs/planning/2026-08-04-761-proportionality-contract-design.md`
+(injection-points table, and "Integration test, not just builder unit tests" —
+it stops BELOW egress, so no backend is called: the injected runner captures the
+composed prompt and returns a valid body).
+"""
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+HOOKS_DIR = REPO_ROOT / "hooks"
+sys.path.insert(0, str(HOOKS_DIR))
+
+import adversarial_review_lib as arl  # noqa: E402
+import review_runner as rr  # noqa: E402
+import task_class_lib as tcl  # noqa: E402
+
+TCL_CLI = str(HOOKS_DIR / "task_class_lib.py")
+
+# The two values are deliberately DIFFERENT so a fallback cannot pass silently.
+SNAPSHOT_CLASS = "internal"
+CONFIG_DEFAULT = "disposable"
+ISSUE = 761
+
+VALID_FINDINGS_BODY = json.dumps({
+    "summary": "one real defect",
+    "findings": [{
+        "evidence": "the guard returns True on error",
+        "severity": "High", "category": "correctness", "confidence": 0.85,
+        "description": "fail-open guard", "recommendation": "return False",
+        "ambiguity_flag": None, "ambiguity_reason": None,
+        "location": "hooks/x.py:10", "loopback_class": "design-flaw",
+    }],
+})
+VALID_PROPOSAL_BODY = json.dumps({
+    "approach": "small module", "key_decisions": ["k1"],
+    "risks": ["r1"], "sketch": "def f(): ...",
+})
+
+
+@pytest.fixture()
+def seeded(tmp_path):
+    """A project whose config default DISAGREES with its snapshotted class."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "artifact.md").write_text("# Design\n\nA small design document.\n")
+    (root / ".rawgentic.json").write_text(json.dumps({
+        "version": 1, "project": {"name": "t"}, tcl.CONFIG_KEY: CONFIG_DEFAULT,
+    }))
+    snapshot = root / "claude_docs" / ".wf2-state" / str(ISSUE) / "task_class.json"
+    tcl.write_snapshot(str(snapshot), {
+        "task_class": SNAPSHOT_CLASS, "provenance": "issue_body",
+        "issue": ISSUE, "resolved_at": "2026-08-05T00:00:00Z",
+    })
+    return root
+
+
+def _read_class_via_cli(project_root, issue=ISSUE):
+    """Exactly what the WF5/WF13 prose does to obtain the value it passes."""
+    argv = [sys.executable, TCL_CLI, "read", "--project-root", str(project_root)]
+    if issue is not None:
+        argv += ["--issue", str(issue)]
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+@pytest.fixture(autouse=True)
+def _backend_prereq_is_irrelevant_here(monkeypatch):
+    """Make these tests independent of whether THIS machine has codex.
+
+    Caught by CI, not locally: `run_review` probes `_gpt_available()` before the attempt
+    loop, and the dev host has codex authenticated while the CI runner installs only
+    gitleaks/semgrep/osv-scanner. So two tests passed here and failed there — the exact
+    "verify in the real environment, not the setup you happen to hold" trap.
+
+    Patching the probe rather than PATH-stubbing the binary is deliberate: every test in
+    this file injects a runner and asserts on the prompt BELOW egress (the design says so
+    explicitly — "it stops below egress so no backend call is needed"), so backend
+    availability is not part of what they test. The CLI-level tests in
+    `test_review_runner.py` keep the house PATH-stub, which is where exercising the real
+    probe belongs.
+    """
+    monkeypatch.setattr(rr, "_gpt_available", lambda: True)
+
+
+class _PromptCapture:
+    """An injected runner: captures the composed prompt, never calls a backend."""
+
+    def __init__(self, body):
+        self.body = body
+        self.prompts = []
+
+    def __call__(self, cmd, **kwargs):
+        self.prompts.append(kwargs.get("input", ""))
+        out = cmd[cmd.index("-o") + 1]
+        Path(out).write_text(self.body)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    @property
+    def prompt(self):
+        assert len(self.prompts) == 1, f"expected 1 egress, got {len(self.prompts)}"
+        return self.prompts[0]
+
+
+# ===========================================================================
+# 1. The machine half — snapshot wins over the config default, in a REAL prompt
+# ===========================================================================
+
+class TestSnapshotReachesTheRealPrompt:
+    def test_cli_read_returns_the_snapshot_not_the_config_default(self, seeded):
+        got = _read_class_via_cli(seeded)
+        assert got["task_class"] == SNAPSHOT_CLASS
+        assert got["provenance"] == "issue_body"
+        assert got["issue_scoped"] is True
+
+    def test_review_prompt_carries_the_snapshot_class(self, seeded):
+        resolved = _read_class_via_cli(seeded)["task_class"]
+        capture = _PromptCapture(VALID_FINDINGS_BODY)
+        res = rr.run_review(
+            verb="review-artifact", artifact=str(seeded / "artifact.md"),
+            artifact_type="design", author_model="claude-fable-5",
+            reviewer="gpt-5.5-codex", project_root=str(seeded),
+            out_path=str(seeded / "r.json"),
+            task_class=resolved, issue=ISSUE, runner=capture,
+        )
+        assert res["status"] == "success", res["error_detail"]
+        assert res["task_class"] == SNAPSHOT_CLASS
+        assert f"TASK CLASS: {SNAPSHOT_CLASS}" in capture.prompt
+        assert CONFIG_DEFAULT not in capture.prompt
+
+    def test_consult_prompt_carries_the_snapshot_class(self, seeded):
+        resolved = _read_class_via_cli(seeded)["task_class"]
+        capture = _PromptCapture(VALID_PROPOSAL_BODY)
+        res = rr.run_review(
+            verb="consult", artifact=str(seeded / "artifact.md"),
+            author_model=None, reviewer="gpt-5.5-codex",
+            project_root=str(seeded), out_path=str(seeded / "r.json"),
+            task_class=resolved, issue=ISSUE, runner=capture,
+        )
+        assert res["status"] == "success", res["error_detail"]
+        assert res["task_class"] == SNAPSHOT_CLASS
+        assert f"TASK CLASS: {SNAPSHOT_CLASS}" in capture.prompt
+        assert CONFIG_DEFAULT not in capture.prompt
+
+    def test_issueless_read_falls_back_to_the_config_default(self, seeded):
+        """The legitimate issue-less path — and it must say it is not scoped."""
+        got = _read_class_via_cli(seeded, issue=None)
+        assert got["task_class"] == CONFIG_DEFAULT
+        assert got["issue_scoped"] is False
+
+    def test_a_run_that_forgets_the_class_cannot_reach_a_prompt(self, seeded):
+        """C7 end to end: the omission REFUSES instead of rendering a default."""
+        capture = _PromptCapture(VALID_FINDINGS_BODY)
+        res = rr.run_review(
+            verb="review-artifact", artifact=str(seeded / "artifact.md"),
+            artifact_type="design", author_model="claude-fable-5",
+            reviewer="gpt-5.5-codex", project_root=str(seeded),
+            out_path=str(seeded / "r.json"),
+            task_class=None, issue=ISSUE, runner=capture,
+        )
+        assert res["status"] == "refused"
+        assert res["error_class"] == "invalid_input"
+        assert capture.prompts == [], "refusal must precede egress"
+
+    def test_the_two_enums_have_not_drifted(self):
+        """`arl` mirrors the enum rather than importing it (stdlib-only module)."""
+        assert arl.TASK_CLASSES == tcl.TASK_CLASSES
+        assert arl.DEFAULT_TASK_CLASS == tcl.DEFAULT_CLASS
+
+    def test_every_builder_call_site_threads_the_task_class(self):
+        """Step 11 R2-4 (Medium, cross-model, flagged ambiguous): make the call-site
+        claim MECHANICAL rather than a claim.
+
+        The reviewer could not verify from a diff alone that every builder caller was
+        wired, and was right that a future unwired caller would silently render
+        `production`. A grep I ran once proves today; this proves it on every run. Any
+        NEW call site that forgets `task_class=` fails here.
+        """
+        import re
+        offenders = []
+        for path in sorted((REPO_ROOT / "hooks").glob("*.py")):
+            if path.name == "adversarial_review_lib.py":
+                continue  # the definitions themselves, not call sites
+            src = path.read_text()
+            for m in re.finditer(r"\b(?:arl\.)?build_(?:consult_)?prompt\s*\(", src):
+                # the call's argument list, up to the balanced close paren
+                depth, i = 0, m.end() - 1
+                while i < len(src):
+                    if src[i] == "(":
+                        depth += 1
+                    elif src[i] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    i += 1
+                call = src[m.start():i + 1]
+                if "task_class" not in call:
+                    line = src[:m.start()].count("\n") + 1
+                    offenders.append(f"{path.name}:{line}")
+        assert not offenders, (
+            "these prompt-builder call sites do not pass task_class, so they would "
+            "render the default regardless of the issue's snapshot: "
+            + ", ".join(offenders))
+
+
+# ===========================================================================
+# 2. The prose half (C1) — the handoff markdown must actually be there
+# ===========================================================================
+
+class TestProseHandoffExists:
+    """A missing handoff is invisible to every Python test above."""
+
+    @pytest.mark.parametrize("skill", ["adversarial-review", "peer-consult"])
+    def test_skill_reads_the_snapshot_and_passes_both_flags(self, skill):
+        text = (REPO_ROOT / "skills" / skill / "SKILL.md").read_text()
+        assert "task_class_lib.py read" in text, (
+            f"{skill} must RESOLVE the class from the snapshot, not guess it")
+        assert "--task-class" in text, f"{skill} must pass --task-class"
+        assert "--issue" in text, (
+            f"{skill} must pass --issue when an issue is in scope, so an "
+            f"issue-scoped review cannot silently take the project default")
+
+    def test_wf2_step_01_resolves_and_snapshots(self):
+        text = (REPO_ROOT / "skills" / "implement-feature" / "references"
+                / "step-01.md").read_text()
+        assert "task_class_lib.py resolve" in text
+        assert "task_class.json" in text
+
+    def test_wf2_step_01_gates_on_the_fetch_and_does_not_refetch(self):
+        """Step 8a F2 (High, cross-model): an unguarded second fetch snapshots an
+        EMPTY body permanently.
+
+        `gh issue view ... > file` creates and truncates the file BEFORE gh runs, so
+        if the fetch fails and the step continues, the resolver reads an empty body,
+        happily picks the config default, and writes a write-once snapshot — which
+        directly violates the design's own "issue fetch fails -> abort Step 1" row.
+        Two things must hold: the fetch's exit status is checked, and Step 1 fetches
+        exactly ONCE (a second fetch is a second chance to fail).
+        """
+        text = (REPO_ROOT / "skills" / "implement-feature" / "references"
+                / "step-01.md").read_text()
+        assert "exit status" in text, (
+            "Step 1 must tell the orchestrator to check gh's exit status before "
+            "using the captured issue")
+        assert text.count("gh issue view") == 1, (
+            f"Step 1 should fetch the issue ONCE, found {text.count('gh issue view')} "
+            f"— reuse the captured JSON instead of re-fetching for the task class")
+
+    @pytest.mark.parametrize("skill", ["adversarial-review", "peer-consult"])
+    def test_the_checklist_does_not_contradict_the_instruction(self, skill):
+        """Step 11 R2-3/DIFF-3 (High, both passes converged) — a regression I introduced.
+
+        The F4 fix corrected the operative instruction to keep `--task-class` on the
+        issue-less path but left completion-checklist item 5 still saying to omit BOTH
+        flags. A checklist-driven executor would follow the checklist and silently
+        render `production`, undoing the fix. Two statements of one rule in one file is
+        how they drift, so the contradictory phrasing is banned by name.
+        """
+        text = (REPO_ROOT / "skills" / skill / "SKILL.md").read_text()
+        assert "both omitted when none is" not in text, (
+            f"{skill}'s checklist contradicts its own instruction: it says to omit "
+            f"--task-class along with --issue, which discards the resolved class")
+
+    def test_wf2_step_01_gates_the_body_extraction_too(self):
+        """Step 11 R2-1 (High, cross-model): the F2 fix moved the hole, not closed it.
+
+        Gating only the fetch left the `jq` extraction unguarded, and `>` truncates its
+        target before jq runs — so a missing jq or a corrupt capture still handed
+        `resolve` an empty body, which then got snapshotted permanently. The extraction
+        must write to a temp file and rename only on success, and must stop on failure.
+        """
+        text = (REPO_ROOT / "skills" / "implement-feature" / "references"
+                / "step-01.md").read_text()
+        assert "body.md.tmp" in text, (
+            "the body extraction must write to a temp file and rename on success, so a "
+            "failed jq cannot leave a truncated body file behind")
+        assert "rm -f" in text, (
+            "Step 1 must clean up the captured issue body — it holds the issue verbatim "
+            "in the project root as untracked residue (R2-6)")
+
+    @pytest.mark.parametrize("skill", ["adversarial-review", "peer-consult"])
+    def test_standalone_path_still_passes_the_resolved_class(self, skill):
+        """Step 8a F4 (Medium, cross-model): the standalone path discarded its class.
+
+        The skills told the caller to read the project default and then to drop
+        `--task-class` along with `--issue`, so every issue-less invocation rendered
+        `production` and a configured `internal`/`disposable` default could never
+        reach a prompt — the documented standalone path was unreachable.
+        """
+        text = (REPO_ROOT / "skills" / skill / "SKILL.md").read_text()
+        assert "`--task-class` is ALWAYS passed" in text, (
+            f"{skill} must keep --task-class on the issue-less path, dropping only "
+            f"--issue")
+
+    def test_wf1_draft_body_carries_the_canonical_line(self):
+        text = (REPO_ROOT / "skills" / "create-issue" / "SKILL.md").read_text()
+        assert "Task class:" in text
+        for value in tcl.TASK_CLASSES:
+            assert value in text, f"the draft contract must document {value!r}"
+
+    def test_step_14_cleanup_stays_directory_wide(self):
+        """C7: the snapshot's post-merge removal is STRUCTURAL, not a file list.
+
+        `task_class.json` is never named in any cleanup step — it is removed because
+        it lives inside `claude_docs/.wf2-state/<issue>/`, which Step 14 deletes
+        whole. That is deliberate (nothing to keep in sync), but it means narrowing
+        the cleanup to an explicit file list would silently strand snapshots and
+        leave a later re-run adopting a class from a merged issue. So pin the path.
+        """
+        text = (REPO_ROOT / "skills" / "implement-feature" / "references"
+                / "step-14.md").read_text()
+        assert "claude_docs/.wf2-state/<issue>/" in text, (
+            "Step 14 no longer names the whole .wf2-state/<issue>/ directory — if "
+            "cleanup became a file list, add task_class.json to it explicitly")

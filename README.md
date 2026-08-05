@@ -725,6 +725,55 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.128.0 (2026-08-05)
+- **A task class (`disposable` | `internal` | `production`) is now resolved once from the issue body,
+  snapshotted write-once, and rendered into every cross-model review and consult prompt (#761,
+  epic #875).** New `hooks/task_class_lib.py` resolves the canonical `**Task class:**` line by
+  prefix-then-validate (a line with trailing junk is *malformed*, never silently the config default)
+  behind a CommonMark line-state walk, so an issue that merely documents the field — as #761 does —
+  cannot set it; `os.link` plus a containing-DIRECTORY fsync makes the snapshot atomic AND durable,
+  since atomic visibility is not persistence. `build_prompt` / `build_consult_prompt` gained a
+  `task_class` argument that always renders and defaults to the strictest class, and
+  `hooks/review_runner.py` gained `--task-class` / `--issue` on all three verbs. The load-bearing
+  refusal: `--issue` WITHOUT `--task-class` exits 2 before any egress, because an issue-scoped review
+  that quietly fell back to the project default would show the reviewer a class the issue never set
+  with no failure and no diagnostic. Prose wired at four surfaces (WF1 draft contract, WF2 Step 1
+  resolve+snapshot, WF5 and WF13 read-then-pass) and `defaultTaskClass` documented in
+  `docs/config-reference.md`. The class is **inert**: reviewers are told it and told explicitly to
+  apply the same rubric regardless — no demand scales, no gate relaxes. Shipped under owner override
+  **D204**, which closed the Step-4 design gate after two escalations and turned pass-6's 13 findings
+  into implementation constraints C1–C13; all 13 are folded into the design doc (Revision 7) with a
+  constraint→location map, and the 7 High ones carry terminal ADOPTED dispositions. Scope is the
+  owner's rescope (`issuecomment-5187270371`): AC1 + AC5 + AC2's injection half; AC4 and AC6 are
+  #923's. Tests: `tests/hooks/test_task_class_lib.py`,
+  `test_task_class_prompt_injection.py`, `test_task_class_integration.py` (the integration file drives
+  a seeded snapshot through the runner's real prompt path with the snapshot's class and the config
+  default deliberately DIFFERENT, so a silent fallback fails rather than passes, and additionally pins
+  the four prose handoffs no Python test can execute), plus `TestTaskClassFlags` in
+  `test_review_runner.py`; `tests/test_wf2_prose_budget.py` ceilings recalibrated to
+  actual + allowed_headroom for `step-01.md` and the corpus total. The Step-8a wave over the three
+  high-risk tasks ran two independent passes and found five real defects, all fixed rather than
+  deferred: the runner trusted a caller-supplied class without checking the snapshot (resolved under
+  owner decision **D207** as verify-if-present, since the reviewer's `design-flaw` classification
+  collided with D204's no-further-design-passes override); Step 1's task-class instruction re-fetched
+  the issue body with no exit-status gate, so a failed fetch could resolve an EMPTY body and snapshot
+  that permanently; a non-string `defaultTaskClass` was silent where a bad string diagnosed; the
+  issue-less WF5/WF13 path resolved the project default and then discarded it, so a configured
+  `internal` could never reach a prompt; and `resolve`'s failure surface was a raw traceback rather
+  than the `task-class: FAILED — <reason>` line its own docs promise. Step 11 then ran two passes plus
+  the mandated adversarial diff layer and returned twelve more findings (0 dropped by band, 10 unique):
+  nine applied, one declined on the merits, and one — the argument that the runner should refuse
+  outright when no snapshot exists — left closed because D207 had already ruled on exactly that
+  question. Two are worth naming because they were regressions in the Step-8a fixes themselves: the
+  corrected WF5/WF13 instruction was contradicted by its own completion checklist, and gating the
+  issue fetch left the `jq` body extraction unguarded, so the empty-body hole had moved rather than
+  closed. Also fixed: a newly-created snapshot directory's own entry was never fsynced (durable
+  contents inside a directory a crash could still lose); `os.path.exists` followed symlinks, so a
+  dangling link read as "absent" and took the trust-the-caller branch; an excluded-candidate notice
+  was suppressed whenever the config default was also invalid; and block-quote exclusion missed
+  CommonMark lazy continuation, so quoted documentation of the field could set it.
+  No workflow-spine change → no diagram REV. Suite 5080→5208.
+
 ### v3.127.1 (2026-08-05)
 - **herdr re-pinned to v0.8.0 against the migrated `herdrdev/herdr` org, with every value 0.8.0
   changed re-measured from a probe rather than from the release notes (#886, epic #875).**

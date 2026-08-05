@@ -194,7 +194,15 @@ The egress warning text (destination(s) named, and any detected secret categorie
 
 ### Instructions
 
-1. Run the review through the runner (fail-closed; the codex binary is PATH-stubbed in tests):
+1. **Resolve the task class FIRST (#761) — required on this path, never guessed and never hand-defaulted.** Read it from the snapshot the run already committed to:
+   ```bash
+   # an issue IS in scope (the WF2/WF3 embedded case) — read THAT issue's snapshot
+   python3 hooks/task_class_lib.py read --issue "<ISSUE>" --project-root "<PROJECT_ROOT>"
+   # standalone artifact review, NO issue in scope — omit --issue; returns the project default
+   python3 hooks/task_class_lib.py read --project-root "<PROJECT_ROOT>"
+   ```
+   Take `task_class` from the JSON on stdout (rc 1 = unreadable/invalid snapshot: STOP and relay it — never re-resolve and never substitute a default). **When an issue is in scope you MUST pass BOTH `--task-class` and `--issue` below.** Passing `--issue` without `--task-class` is REFUSED (exit 2, `invalid_input`) by design: an issue-scoped review that quietly fell back to the project default would show the reviewer a class the issue never set, with no failure and no diagnostic.
+2. Run the review through the runner (fail-closed; the codex binary is PATH-stubbed in tests):
    ```bash
    python3 hooks/review_runner.py review-artifact \
      --artifact "<artifact>" \
@@ -202,17 +210,20 @@ The egress warning text (destination(s) named, and any detected secret categorie
      --author-model "<AUTHOR_MODEL>" \
      --reviewer "<REVIEWER>" \
      --backend <gpt|glm> \
+     --task-class "<TASK_CLASS>" \
+     --issue "<ISSUE>" \
      --out "<PROJECT_ROOT>/.rawgentic-wf5-result.json" \
      --project-root "<PROJECT_ROOT>"
    ```
+   **`--task-class` is ALWAYS passed** — with an issue in scope or without one. When no issue is in scope, drop ONLY the `--issue` line and still pass the class `task_class_lib.py read` returned (the project's `defaultTaskClass`, else `production`). Dropping both would throw away the value you just resolved and render `production` even in a project that configured `internal` or `disposable`, making the documented standalone config-default path unreachable. Passing `--issue` WITHOUT `--task-class` is refused (exit 2).
    `--reviewer` is backend-specific: pass the pinned id for `gpt` (`gpt-5.6-sol` per the `<model-routing-resolve>` contract); for `glm`, OMIT the flag — the runner resolves `glm-5.2` itself, and that omission is the sanctioned form, not an oversight. Under `both`, run TWO independent invocations — one `--backend gpt` (with `--reviewer gpt-5.6-sol`) and one `--backend glm` (no `--reviewer`) — with distinct `--out` paths. The result JSON is the machine-readable findings sidecar for embedded callers: `{status, diagnostic, reviewer_model, backend, input_sha256, head_sha, timing, findings, summary, error_class}`. Standalone WF5 runs are tokenless, so `diagnostic` is `true` — irrelevant here, because WF5 is report-only and authorizes nothing.
-2. Interpret the exit code per invocation:
+3. Interpret the exit code per invocation:
    - `0` → success; the result file holds validated findings + summary.
    - `2` → refused (identity/validation/oversize/config — no egress happened). STOP and relay `error_detail`.
    - `3` → terminal backend failure (`error_class`: org_quota | account_quota | transport | unclassified). STOP and report; **do not** fabricate findings, and do not add your own retry loop — the runner already applied the #857 policy.
    - `4` → empty/invalid backend output after the runner's bounded retry. STOP and report.
    - **`both` PARTIAL: one invocation succeeded, one failed → do NOT stop — render and present the successful backend's report and name the failed backend with its `error_class`.**
-3. On a single-backend 2/3/4, the review did NOT succeed — report the failure to the user. Never present partial or invented findings as a completed review.
+4. On a single-backend 2/3/4, the review did NOT succeed — report the failure to the user. Never present partial or invented findings as a completed review.
 
 ### Output
 The result JSON path(s) (one per backend) or the failure reason.
@@ -287,7 +298,7 @@ Before declaring WF5 complete, verify ALL of the following. Print the checklist 
 2. [ ] Artifact validated (exists, under project root, type resolved)
 3. [ ] Selected backend's prerequisite satisfied (gpt: codex installed+authenticated; glm: zhipuai>=2.1.5 + key; both: >=1 ready, degradation warned)
 4. [ ] Egress notice printed (warn-only)
-5. [ ] Review invoked through `hooks/review_runner.py` with the resolved backend, the backend-appropriate identity (`--reviewer gpt-5.6-sol` for gpt; flag omitted for glm — the runner resolves `glm-5.2`), and `--author-model`; exit code interpreted (fail-closed on 2/3/4; both-mode partial presented with the failure named)
+5. [ ] Review invoked through `hooks/review_runner.py` with the resolved backend, the backend-appropriate identity (`--reviewer gpt-5.6-sol` for gpt; flag omitted for glm — the runner resolves `glm-5.2`), `--author-model`, and the task class resolved via `task_class_lib.py read` (`--task-class` is ALWAYS passed; `--issue` is additionally passed whenever an issue is in scope, and ONLY `--issue` is omitted when none is); exit code interpreted (fail-closed on 2/3/4; both-mode partial presented with the failure named)
 6. [ ] On success: report(s) written to <project>/docs/reviews/ and presented (both files under `both`)
 7. [ ] Artifact NOT modified (report-only invariant)
 
