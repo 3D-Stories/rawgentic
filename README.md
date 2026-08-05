@@ -741,7 +741,7 @@ For major changes, please open an issue first to discuss the approach.
   plugin-root token); both `incident` ordering pins rebuilt on a new provenance-preserving
   `corpus.skill_files()` because the joined corpus string cannot express "same file", and verified
   by mutation. Follow-up #928 filed for the behavioural selection gate this repo still lacks.
-  No workflow-spine change → no diagram REV. Suite 5208→5244.
+  No workflow-spine change → no diagram REV. Suite 5208→5249.
 
 ### v3.128.0 (2026-08-05)
 - **A task class (`disposable` | `internal` | `production`) is now resolved once from the issue body,
