@@ -14,6 +14,66 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #875 M1 — #761: a task class, resolved once and rendered inert · v3.128.0
+
+Round-11 session (mid-child handoff from round 10), full lane — `complex_feature`, `fast_path_eligible`
+false, so no design-stage ceremony was dropped. Plugin 3.125.8 cache.
+
+The campaign's own session-mining report named the gap: **"no actor at any gate owning the question
+'should this exist at this size at all?'"** #761 ships the *field* that question needs and nothing
+that acts on it — `disposable | internal | production`, resolved ONCE from the issue body at Step 1,
+snapshotted **write-once**, and rendered as one line into every cross-model review and consult
+prompt. Reviewers are told the class and told explicitly to apply the same rubric regardless. No
+demand scales; no gate relaxes. That inertness is the point: the demand-scaling half and the WF2-lite
+lane are #923's, after the owner split this issue mid-flight.
+
+**The design cost more than the code.** Seven revisions, six Step-4 passes, and the `design`
+loop-back source refused at 2/2 twice with the ambiguity breaker unclear both times. The owner ended
+it by **override (D204)** — implement-with-constraints, rather than a third design pass, another
+split, or folding into #923 — on the condition that the doc not ship carrying known gaps. Revision 7
+is that fold: all thirteen pass-6 findings written in as constraints C1–C13 with a
+constraint→location map, so the shipped doc and the shipped code agree. Six of the thirteen were
+DOC gaps where the code was already right, which is worth recording plainly — a design that
+describes something the code does not do is the prose-divergence this campaign keeps finding.
+
+**Then the reviews found seventeen more defects, and two of them were regressions in the fixes.**
+Step 8a (two passes over the three high-risk tasks): five findings, all applied. Step 11 (two passes
+plus the mandated adversarial diff layer, `diffReviewMode: always`): twelve findings, 0 dropped by
+band, 10 unique after deduping the two the passes independently converged on — nine applied, one
+declined on the merits, one left closed as already-adjudicated. The two regressions are the
+instructive part: the Step-8a fix that corrected the WF5/WF13 instruction left its own **completion
+checklist** still saying the opposite, and the Step-8a fix that gated the issue *fetch* left the `jq`
+body *extraction* unguarded — the empty-body hole had **moved, not closed**. Both were caught only
+because the round re-reviewed the fixes rather than the original diff.
+
+One finding went back to the owner rather than being decided in-flight. The cross-model pass argued
+the runner should read the snapshot itself instead of trusting its caller, and tagged it
+`design-flaw` — which would mean returning to Step 3, in direct conflict with D204's override. All
+five findings were presented together and the owner chose **verify-if-present (D207)**: where the
+snapshot is readable the runner checks it and refuses a disagreement; an absent snapshot proceeds, so
+a standalone WF5 review naming a never-ran-WF2 issue keeps working. Step 11 then re-raised the
+always-read argument and it was **not re-opened** — a prior answer stands.
+
+**Both Step-11 passes ran TOKENLESS.** `review-reopen` refused at rc 3 with the total budget at 3/3,
+so the round was diagnostic by construction: a design-level finding escalates instead of looping.
+Every fix still landed red-before-green.
+
+**Telemetry (run-record `wf2-761-<sha>`):** gates — Design Critique CLOSED BY OWNER OVERRIDE (D204,
+13 findings → implementation constraints, 7 High with terminal ADOPTED dispositions), Per-task Review
+pass (T1/T2/T3 all `applied`), Implementation Drift pass, Code Review pass (9 applied, 1 declined
+with a recorded reason, 1 not re-opened), security scan PASS (0 blocking, skipped: iac — a visible
+skip, not a pass). Tests **+128**, suite **5080→5208/0**. Loop-backs **3/3 exhausted** — 2 design,
+1 review_design — with the Step-11 round therefore tokenless. No workflow-spine change → no diagram
+REV.
+
+**On STAY SMALL, since this slot pushed a byte ceiling.** `references/step-01.md` gained a whole new
+gated sub-step and went 4108 → 7074 bytes. #903 set the precedent that raising a ceiling inside a
+milestone named STAY SMALL requires trying the trim first, so the rationale prose was compressed back
+to **6360** with every guard, command and failure clause intact. The residual growth is operative
+prose, not commentary: resolve-and-snapshot did not exist before, and its three failure gates are
+themselves the Step-8a and Step-11 findings. Trim the commentary, keep the guards — stated here
+because "we raised a ceiling in STAY SMALL" deserves an argument, not a shrug.
+
 ## Epic #875 M1 — #903: a budget-exhausted design-gate close requires resolved ground · v3.127.0
 
 Round-9 session, small-standard lane (`standard_feature`, 4 impl files ≤ 7), plugin 3.125.8 cache.
