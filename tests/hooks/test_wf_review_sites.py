@@ -83,7 +83,9 @@ _WINDOW = 2500
 
 
 def _norm(text: str) -> str:
-    """Whitespace-normalize so a wrapped sentence still matches (CLAUDE.md §5 prose-pin rule)."""
+    """Whitespace-normalize so a wrapped sentence still matches (the drift-guard-test rule,
+    now in the `quality-bar` workspace skill; repo CLAUDE.md §4 mistake #6 carries the
+    corpus-regex half)."""
     return re.sub(r"\s+", " ", text)
 
 
