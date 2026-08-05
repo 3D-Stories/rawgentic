@@ -513,6 +513,29 @@ def test_real_repo_is_clean():
     assert rc == 0, f"checker found stale surfaces in the live repo:\n{out}"
 
 
+def test_real_repo_config_loading_population_is_the_expected_set():
+    """#910 — pin the MEMBERSHIP, not just the count that the guard derives.
+
+    Raised by cross-model review: every other check here proves prose agrees
+    with `_skills_with_config_loading`, so if that helper silently omitted or
+    over-counted a skill the new computed guard would enforce the wrong number
+    consistently and nothing would notice. Naming the set closes that: an
+    omission and a compensating addition can no longer cancel out.
+
+    A skill legitimately gaining or losing the block updates this list — the
+    failure names the difference in both directions.
+    """
+    expected = {
+        "adversarial-review", "create-issue", "epic-post-mortem", "fix-bug",
+        "implement-feature", "incident", "peer-consult", "run-feedback", "scan",
+    }
+    actual = set(src._skills_with_config_loading(REPO_ROOT))
+    assert actual == expected, (
+        f"config-loading population changed: unexpected {sorted(actual - expected)}, "
+        f"missing {sorted(expected - actual)}"
+    )
+
+
 def test_real_repo_manual_claims_no_hand_pinned_counts():
     """#910 AC3 — the manual must not advertise a count as hand-pinned.
 

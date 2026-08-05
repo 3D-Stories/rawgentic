@@ -738,19 +738,22 @@ For major changes, please open an issue first to discuss the approach.
   is checked against the tree instead of against its own copies. That promotion is the substantive
   half: consensus had failed in the only way consensus can, with README and its own test literal
   agreeing on 8 while the corpus carried 9, every copy consistent and every copy wrong. A lone pin
-  trivially agrees with itself, which is why one occurrence reported OK for months. `pin:workspace`
-  deliberately stays consensus-only and says so in the source — no per-skill category metadata
-  exists to derive it from, and inventing a taxonomy would add a hand-maintained surface while
-  claiming to remove one; its net is cross-surface consensus plus the existing `breakdown-sum`
-  guard. The checker already names the stale surface with file:line, so the failure message
+  trivially agrees with itself, which is why one occurrence reported OK for months. The two counts are NOT guarded equally, and both the manual and this entry now
+  say so rather than implying parity: the config-driven count is computed, while the
+  workspace-management count stays **consensus-checked, not computed** — no per-skill category
+  metadata exists to derive it from, and inventing a taxonomy would add a hand-maintained surface
+  while claiming to remove one. Cross-model review was right that `breakdown-sum` cannot close that
+  gap, since a category running low still passes when another absorbs the difference (`[9, 8, 2, 2]`
+  sums to 21 exactly as `[9, 9, 1, 2]` does), so the honest description replaced the overstated one. The checker already names the stale surface with file:line, so the failure message
   requirement needed no new machinery. Verified by reverting the prose: `pin:config-driven` reports
   `expected 9, stale at: ... README.md:460 (8), CLAUDE.md:221 (7)` and `pin:workspace` names
-  `CLAUDE.md:222 (6)` against six surfaces at 9. Four new tests cover the promotion, the widened
-  sweep, the fail-closed path that must never silently demote a computed family back to consensus,
-  and AC3's claim itself; all four are mutation-verified. The change also exposed a latent bug in the checker's
+  `CLAUDE.md:222 (6)` against six surfaces at 9. Five new tests cover the promotion, the widened sweep, the
+  fail-closed path that must never silently demote a computed family back to consensus, AC3's claim
+  itself, and — at the reviewers' request — the config-loading **membership** rather than only the
+  count, so an omission and a compensating addition can no longer cancel out. The change also exposed a latent bug in the checker's
   own fixture, which claimed two config-driven skills over a tree containing one — the single-copy
   blind spot reproducing itself inside the test suite. No workflow-spine change → no diagram REV.
-  Suite 5249→5253.
+  Suite 5249→5254.
 
 ### v3.128.1 (2026-08-05)
 - **Skill frontmatter descriptions brought under Anthropic's 1,024-char cap, two descriptions
