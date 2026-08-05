@@ -1238,3 +1238,70 @@ class TestTaskClassFlags:
         assert result.returncode == 2, "the enum is case-SENSITIVE"
         assert (project / "result.json").exists()
         assert _result(project)["status"] == "refused"
+
+    # --- #761 Step 8a F1 (High, cross-model, conf 0.99; owner decision D207) ---
+    # The runner validated the enum but never opened the issue's snapshot, so
+    # `--issue 761 --task-class disposable` succeeded even when 761's snapshot said
+    # `production`: the prompt and receipt then reported a class the issue never set
+    # and nothing failed, defeating the snapshot boundary the design asserts. The
+    # owner chose verify-if-present over the reviewer's always-read: an ABSENT
+    # snapshot still proceeds, so a standalone WF5 review naming an issue that never
+    # ran WF2 keeps working.
+
+    @staticmethod
+    def _seed_snapshot(project, issue, task_class):
+        snap = (project / "claude_docs" / ".wf2-state" / str(issue)
+                / "task_class.json")
+        snap.parent.mkdir(parents=True, exist_ok=True)
+        snap.write_text(json.dumps({
+            "task_class": task_class, "provenance": "issue_body",
+            "issue": issue, "resolved_at": "2026-08-05T00:00:00Z",
+        }))
+        return snap
+
+    def test_class_disagreeing_with_the_snapshot_refuses(self, stub, project):
+        self._seed_snapshot(project, 761, "production")
+        result = _cli(_artifact_args(project, extra=("--task-class", "disposable",
+                                                     "--issue", "761")), stub.env)
+        assert result.returncode == 2
+        assert stub.calls == 0, "the mismatch must be caught before egress"
+        r = _result(project)
+        assert r["error_class"] == "invalid_input"
+        assert "production" in r["error_detail"] and "disposable" in r["error_detail"]
+
+    def test_class_agreeing_with_the_snapshot_succeeds(self, stub, project):
+        self._seed_snapshot(project, 761, "internal")
+        result = _cli(_artifact_args(project, extra=("--task-class", "internal",
+                                                     "--issue", "761")), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert _result(project)["task_class"] == "internal"
+
+    def test_absent_snapshot_still_proceeds(self, stub, project):
+        """D207: verify-if-present. No snapshot = standalone use, not an error."""
+        result = _cli(_artifact_args(project, extra=("--task-class", "disposable",
+                                                     "--issue", "999")), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert _result(project)["task_class"] == "disposable"
+
+    def test_corrupt_snapshot_refuses_rather_than_ignoring_it(self, stub, project):
+        """A snapshot that exists but will not validate is NOT 'absent'."""
+        snap = self._seed_snapshot(project, 761, "production")
+        snap.write_text("{ not json")
+        result = _cli(_artifact_args(project, extra=("--task-class", "production",
+                                                     "--issue", "761")), stub.env)
+        assert result.returncode == 2
+        assert stub.calls == 0
+        assert _result(project)["error_class"] == "invalid_input"
+
+    def test_wrong_issue_snapshot_refuses(self, stub, project):
+        """Identity validation still applies through the runner's read."""
+        snap = (project / "claude_docs" / ".wf2-state" / "761" / "task_class.json")
+        snap.parent.mkdir(parents=True, exist_ok=True)
+        snap.write_text(json.dumps({
+            "task_class": "production", "provenance": "issue_body",
+            "issue": 999, "resolved_at": "2026-08-05T00:00:00Z",
+        }))
+        result = _cli(_artifact_args(project, extra=("--task-class", "production",
+                                                     "--issue", "761")), stub.env)
+        assert result.returncode == 2
+        assert stub.calls == 0

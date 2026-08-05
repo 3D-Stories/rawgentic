@@ -52,6 +52,7 @@ from datetime import datetime, timezone
 from atomic_write_lib import atomic_write_text
 import adversarial_review_lib as arl
 import plan_lib
+import task_class_lib as tcl
 
 BACKENDS = ("gpt", "glm")
 
@@ -579,6 +580,41 @@ def run_review(*, verb: str, artifact=None, artifact_type: str = "generic",
     # `production`, never to no line at all (the vacuity this wiring prevents).
     task_class = task_class or arl.DEFAULT_TASK_CLASS
     result["task_class"], result["issue"] = task_class, issue
+
+    # Step 8a F1 (High, cross-model), resolved under owner decision D207: enum
+    # membership is NOT the same claim as "this is the class that issue decided".
+    # Validating only the enum let `--issue 761 --task-class disposable` succeed
+    # while 761's snapshot said `production` — the prompt and the receipt then
+    # reported a class the issue never set, and nothing failed. The snapshot is the
+    # design's authority, so where the snapshot is READABLE the runner checks it
+    # rather than trusting the caller, which turns a prose-enforced boundary into a
+    # machine-enforced one.
+    #
+    # VERIFY-IF-PRESENT, not always-read (the owner's call over the reviewer's
+    # stronger form): an ABSENT snapshot proceeds, because a standalone WF5 review
+    # may legitimately name an issue that never ran WF2 Step 1 and so has no
+    # snapshot. But a snapshot that EXISTS and fails to validate is not "absent" —
+    # it is a fail-loud condition, exactly as `read_snapshot` treats it, so a
+    # corrupt or wrong-issue record refuses instead of being silently skipped.
+    if issue is not None:
+        snapshot_path = os.path.join(project_root, "claude_docs", ".wf2-state",
+                                     str(issue), "task_class.json")
+        if os.path.exists(snapshot_path):
+            try:
+                snapshotted = tcl.read_snapshot(snapshot_path, issue)["task_class"]
+            except tcl.TaskClassError as exc:
+                return _finish("refused", error_class="invalid_input",
+                               error_detail=(
+                                   f"issue {issue}'s task-class snapshot is unusable: "
+                                   f"{exc}"))
+            if snapshotted != task_class:
+                return _finish("refused", error_class="invalid_input",
+                               error_detail=(
+                                   f"--task-class {task_class!r} disagrees with issue "
+                                   f"{issue}'s snapshot, which says {snapshotted!r}. The "
+                                   f"snapshot is authoritative; resolve with "
+                                   f"`task_class_lib.py read --issue {issue}` and pass "
+                                   f"what it returns"))
 
     # --- reopen token (the #855 choke point) ---
     token, token_err = load_reopen_token(reopen_token)

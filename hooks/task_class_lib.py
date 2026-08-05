@@ -318,11 +318,20 @@ def format_surface_line(task_class: str, provenance: str, snapshot: str,
     return line
 
 
-def read_config_default(project_root: str) -> str | None:
-    """The project's `defaultTaskClass`, or None. Fail-OPEN: an unreadable config is not fatal.
+def read_config_default(project_root: str):
+    """The project's `defaultTaskClass` as WRITTEN, or None when it is not set.
 
-    Only this one key is read. Value validation lives in `_config_outcome`, so an invalid value
-    surfaces as a diagnostic on the normal path rather than as an exception here.
+    Fail-OPEN: an unreadable or malformed config is not fatal.
+
+    Only this one key is read, and it is returned **without a type filter** (Step 8a F3). An earlier
+    version returned `value if isinstance(value, str) else None`, which made
+    `"defaultTaskClass": 42` indistinguishable from an ABSENT key: it took `production` with NO
+    diagnostic, while `"bogus"` — no more valid — produced one. The design promises a diagnostic for
+    an invalid config value, and the *type* of the invalidity is not a reason to go quiet. Returning
+    the raw value lets `_config_outcome` judge it and name it in the diagnostic.
+
+    `null` is deliberately treated as ABSENT rather than invalid: it is a reasonable spelling of
+    "not set", and `None` is already this function's absent signal.
     """
     path = os.path.join(project_root, ".rawgentic.json")
     try:
@@ -336,8 +345,7 @@ def read_config_default(project_root: str) -> str | None:
         return None
     if not isinstance(data, dict):
         return None
-    value = data.get(CONFIG_KEY)
-    return value if isinstance(value, str) else None
+    return data.get(CONFIG_KEY)
 
 
 # ======================================================================================
@@ -349,8 +357,34 @@ def _iso_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _fail(reason: str) -> int:
+    """The ONE failure surface: stderr, then rc 1. Emit-then-exit, never the reverse.
+
+    Step 8a M1. Every other surface in this design reports through the Step-1 session-note marker,
+    but a resolve failure happens BEFORE that marker exists, so the marker cannot be its
+    destination. `_cmd_resolve` used to catch only `TaskClassError`, which left the body read,
+    `mkdir`, `mkstemp` and the directory `fsync` free to escape as a raw traceback. `rc` was still
+    1, so fail-loud was intact and no run ever proceeded on an unread class — but the stated
+    contract (`docs/config-reference.md`, and the design's "Where a failed WRITE is logged")
+    promises this exact line, and a doc describing a format the code does not emit is a
+    prose-divergence rather than a cosmetic gap.
+    """
+    print(f"task-class: FAILED — {reason}", file=sys.stderr)
+    return 1
+
+
+def _os_error_reason(exc: OSError, what: str) -> str:
+    """An OSError in the contract's words: what failed, which path, strerror and errno."""
+    where = getattr(exc, "filename", None) or "<unknown path>"
+    return (f"{what} {where!r}: {exc.strerror or exc.__class__.__name__} "
+            f"(errno {exc.errno})")
+
+
 def _cmd_resolve(args) -> int:
-    body = pathlib.Path(args.body_file).read_text(encoding="utf-8") if args.body_file else ""
+    try:
+        body = pathlib.Path(args.body_file).read_text(encoding="utf-8") if args.body_file else ""
+    except OSError as exc:
+        return _fail(_os_error_reason(exc, "could not read the issue body from"))
     cls, prov, diag = resolve_class(body, read_config_default(args.project_root))
     payload = {"task_class": cls, "provenance": prov, "issue": args.issue,
                "resolved_at": _iso_now()}
@@ -363,8 +397,11 @@ def _cmd_resolve(args) -> int:
             cls, prov, diag = existing["task_class"], existing["provenance"], \
                 existing.get("diagnostic")
     except TaskClassError as exc:
-        print(f"task-class: FAILED — {exc}", file=sys.stderr)
-        return 1
+        return _fail(str(exc))
+    except OSError as exc:
+        # `write_snapshot` wraps the `os.link` OSError itself; this catches the rest of the
+        # sequence — mkdir, mkstemp, the write, and the directory fsync — which it does not.
+        return _fail(_os_error_reason(exc, "could not write the task-class snapshot at"))
     print(format_surface_line(cls, prov, outcome, diag), file=sys.stderr)
     print(json.dumps({"task_class": cls, "provenance": prov, "snapshot": outcome,
                       "diagnostic": diag}))

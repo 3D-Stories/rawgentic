@@ -179,7 +179,7 @@ The egress warning text (and any detected secret categories).
      --out "<PROJECT_ROOT>/.rawgentic-wf13-result.json" \
      --project-root "<PROJECT_ROOT>"
    ```
-   Drop the `--issue` line **and** the `--task-class` line together when no issue is in scope; the runner then renders the strictest class (`production`). Never drop only one.
+   **`--task-class` is ALWAYS passed** — with an issue in scope or without one. When no issue is in scope, drop ONLY the `--issue` line and still pass the class `task_class_lib.py read` returned (the project's `defaultTaskClass`, else `production`). Dropping both would throw away the value you just resolved and render `production` even in a project that configured `internal` or `disposable`, making the documented standalone config-default path unreachable. Passing `--issue` WITHOUT `--task-class` is refused (exit 2).
    Under `both`, run TWO independent invocations — one `--backend gpt` (peer `gpt-5.6-sol`) and one `--backend glm` (omit `--reviewer`; it resolves `glm-5.2`) — with distinct `--out` paths. The result JSON carries the structured proposal: `{status, diagnostic, reviewer_model, backend, proposal: {approach, key_decisions, risks, sketch}, …}`. Consults are always `diagnostic: true` — a proposal never authorizes a fix round.
 3. **Interpret each invocation by its EXIT CODE — never by whether the out file exists:**
    - `0` → success; the result file holds the validated proposal.

@@ -9,12 +9,14 @@ ledgered at claude_docs/.wf2-state/761/dispositions.jsonl.
 """
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+HOOKS = REPO_ROOT / "hooks"
 sys.path.insert(0, str(REPO_ROOT / "hooks"))
 
 import task_class_lib as tcl  # noqa: E402
@@ -313,3 +315,82 @@ def test_an_adopted_snapshot_resurfaces_its_stored_diagnostic(tmp_path):
     line = tcl.format_surface_line(rec["task_class"], rec["provenance"], "adopted",
                                    rec.get("diagnostic"))
     assert "throwaway" in line
+
+
+# ======================================================================================
+# Step 8a fixes (#761): F3 (cross-model, Medium) and M1 (inline self-review, Medium)
+# ======================================================================================
+
+@pytest.mark.parametrize("bad", [42, True, ["internal"], {"a": 1}, 3.5])
+def test_a_present_but_NON_STRING_config_value_still_diagnoses(tmp_path, bad):
+    """F3: a non-string value was silently indistinguishable from an ABSENT key.
+
+    `read_config_default` filtered on `isinstance(value, str)` and returned None
+    otherwise, so `defaultTaskClass: 42` took the `production` default with NO
+    diagnostic while `defaultTaskClass: "bogus"` produced one. The design promises a
+    diagnostic for an invalid config value; the type of the invalidity is not a
+    reason to go quiet. Confirmed by execution before the fix.
+    """
+    (tmp_path / ".rawgentic.json").write_text(
+        json.dumps({"version": 1, tcl.CONFIG_KEY: bad}))
+    got = tcl.read_config_default(str(tmp_path))
+    cls, prov, diag = tcl._config_outcome(got)
+    assert cls == tcl.DEFAULT_CLASS
+    assert prov == "default"
+    assert diag is not None, f"a present-but-invalid {type(bad).__name__} went silent"
+    assert tcl.CONFIG_KEY in diag
+
+
+def test_an_absent_key_stays_silent(tmp_path):
+    """The other half of F3: absent is NOT invalid, and must not diagnose."""
+    (tmp_path / ".rawgentic.json").write_text(json.dumps({"version": 1}))
+    assert tcl.read_config_default(str(tmp_path)) is None
+    assert tcl._config_outcome(None) == (tcl.DEFAULT_CLASS, "default", None)
+
+
+def test_an_explicit_json_null_is_treated_as_absent(tmp_path):
+    """Stated deliberately: `null` is a reasonable spelling of "not set"."""
+    (tmp_path / ".rawgentic.json").write_text(
+        json.dumps({"version": 1, tcl.CONFIG_KEY: None}))
+    assert tcl.read_config_default(str(tmp_path)) is None
+
+
+def _resolve_cli(*args):
+    proc = subprocess.run(
+        [sys.executable, str(HOOKS / "task_class_lib.py"), "resolve", *args],
+        capture_output=True, text=True, timeout=60)
+    return proc
+
+
+def test_a_failed_BODY_READ_reports_the_contract_line_not_a_traceback(tmp_path):
+    """M1: the CLI died with a raw traceback on the paths C8 governs.
+
+    `_cmd_resolve` caught only `TaskClassError`, so an OSError from the body read or
+    from `mkdir`/`mkstemp`/the directory `fsync` escaped as a traceback. rc was still
+    1 — fail-loud was intact and nothing proceeded on an unread class — but the
+    design doc and docs/config-reference.md both state the destination is stderr in
+    the form `task-class: FAILED — <reason>`. Shipping docs that describe a format
+    the code does not emit is the prose-divergence class this campaign keeps finding.
+    """
+    proc = _resolve_cli("--issue", "1",
+                        "--body-file", str(tmp_path / "nope.md"),
+                        "--out", str(tmp_path / "s.json"),
+                        "--project-root", str(tmp_path))
+    assert proc.returncode == 1
+    assert "task-class: FAILED" in proc.stderr, proc.stderr
+    assert "Traceback" not in proc.stderr, proc.stderr
+    assert "nope.md" in proc.stderr
+
+
+def test_a_failed_SNAPSHOT_WRITE_reports_the_contract_line(tmp_path):
+    """The case C8 is literally about: the WRITE fails, before any marker exists."""
+    body = tmp_path / "body.md"
+    body.write_text("no class line\n")
+    blocker = tmp_path / "blocker"
+    blocker.write_text("i am a file, not a directory\n")
+    proc = _resolve_cli("--issue", "1", "--body-file", str(body),
+                        "--out", str(blocker / "sub" / "task_class.json"),
+                        "--project-root", str(tmp_path))
+    assert proc.returncode == 1
+    assert "task-class: FAILED" in proc.stderr, proc.stderr
+    assert "Traceback" not in proc.stderr, proc.stderr

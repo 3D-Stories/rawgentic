@@ -215,7 +215,7 @@ The egress warning text (destination(s) named, and any detected secret categorie
      --out "<PROJECT_ROOT>/.rawgentic-wf5-result.json" \
      --project-root "<PROJECT_ROOT>"
    ```
-   Drop the `--issue` line **and** the `--task-class` line together when no issue is in scope; the runner then renders the strictest class (`production`). Never drop only one.
+   **`--task-class` is ALWAYS passed** — with an issue in scope or without one. When no issue is in scope, drop ONLY the `--issue` line and still pass the class `task_class_lib.py read` returned (the project's `defaultTaskClass`, else `production`). Dropping both would throw away the value you just resolved and render `production` even in a project that configured `internal` or `disposable`, making the documented standalone config-default path unreachable. Passing `--issue` WITHOUT `--task-class` is refused (exit 2).
    `--reviewer` is backend-specific: pass the pinned id for `gpt` (`gpt-5.6-sol` per the `<model-routing-resolve>` contract); for `glm`, OMIT the flag — the runner resolves `glm-5.2` itself, and that omission is the sanctioned form, not an oversight. Under `both`, run TWO independent invocations — one `--backend gpt` (with `--reviewer gpt-5.6-sol`) and one `--backend glm` (no `--reviewer`) — with distinct `--out` paths. The result JSON is the machine-readable findings sidecar for embedded callers: `{status, diagnostic, reviewer_model, backend, input_sha256, head_sha, timing, findings, summary, error_class}`. Standalone WF5 runs are tokenless, so `diagnostic` is `true` — irrelevant here, because WF5 is report-only and authorizes nothing.
 3. Interpret the exit code per invocation:
    - `0` → success; the result file holds validated findings + summary.

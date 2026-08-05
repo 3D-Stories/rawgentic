@@ -197,6 +197,40 @@ class TestProseHandoffExists:
         assert "task_class_lib.py resolve" in text
         assert "task_class.json" in text
 
+    def test_wf2_step_01_gates_on_the_fetch_and_does_not_refetch(self):
+        """Step 8a F2 (High, cross-model): an unguarded second fetch snapshots an
+        EMPTY body permanently.
+
+        `gh issue view ... > file` creates and truncates the file BEFORE gh runs, so
+        if the fetch fails and the step continues, the resolver reads an empty body,
+        happily picks the config default, and writes a write-once snapshot — which
+        directly violates the design's own "issue fetch fails -> abort Step 1" row.
+        Two things must hold: the fetch's exit status is checked, and Step 1 fetches
+        exactly ONCE (a second fetch is a second chance to fail).
+        """
+        text = (REPO_ROOT / "skills" / "implement-feature" / "references"
+                / "step-01.md").read_text()
+        assert "exit status" in text, (
+            "Step 1 must tell the orchestrator to check gh's exit status before "
+            "using the captured issue")
+        assert text.count("gh issue view") == 1, (
+            f"Step 1 should fetch the issue ONCE, found {text.count('gh issue view')} "
+            f"— reuse the captured JSON instead of re-fetching for the task class")
+
+    @pytest.mark.parametrize("skill", ["adversarial-review", "peer-consult"])
+    def test_standalone_path_still_passes_the_resolved_class(self, skill):
+        """Step 8a F4 (Medium, cross-model): the standalone path discarded its class.
+
+        The skills told the caller to read the project default and then to drop
+        `--task-class` along with `--issue`, so every issue-less invocation rendered
+        `production` and a configured `internal`/`disposable` default could never
+        reach a prompt — the documented standalone path was unreachable.
+        """
+        text = (REPO_ROOT / "skills" / skill / "SKILL.md").read_text()
+        assert "`--task-class` is ALWAYS passed" in text, (
+            f"{skill} must keep --task-class on the issue-less path, dropping only "
+            f"--issue")
+
     def test_wf1_draft_body_carries_the_canonical_line(self):
         text = (REPO_ROOT / "skills" / "create-issue" / "SKILL.md").read_text()
         assert "Task class:" in text

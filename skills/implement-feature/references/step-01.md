@@ -9,10 +9,15 @@
    - Hash-prefixed: `#1`
    - URL: `https://github.com/<owner>/<repo>/issues/1`
 
-3. Fetch the issue via gh CLI:
+3. Fetch the issue via gh CLI — **capture it, so the whole step runs on ONE fetch**:
    ```bash
-   gh issue view <number> --repo ${capabilities.repo} --json number,title,body,labels,state
+   gh issue view <number> --repo ${capabilities.repo} \
+     --json number,title,body,labels,state > .rawgentic-<number>-issue.json
    ```
+   **Check `gh`'s exit status before using that file.** The redirect creates and truncates it
+   *before* `gh` runs, so a failed fetch leaves an empty-but-present file behind — continuing would
+   read an empty body. Non-zero exit → **STOP and abort Step 1** (the failure contract's fail-loud
+   row); there is no run to assign a class to.
 
 4. Validate:
    - Issue exists and is open
@@ -24,8 +29,11 @@
    - If any are missing (manually created issue): generate them from the description and ask user to confirm.
 
 6. **Resolve and snapshot the task class (#761).** With the body in hand, decide the class ONCE for this issue and persist it **write-once**. Every later gate reads the SNAPSHOT, never the body, so a body edited mid-run cannot change the class under a running gate:
+   **Reuse item 3's captured issue — do NOT fetch again.** A second fetch would be a second chance
+   to fail, and an unguarded one silently resolves an EMPTY body to the project default and then
+   snapshots that decision permanently. You only reach this item because item 3's fetch succeeded:
    ```bash
-   gh issue view <number> --repo ${capabilities.repo} --json body -q .body > .rawgentic-<number>-body.md
+   jq -r '.body // ""' .rawgentic-<number>-issue.json > .rawgentic-<number>-body.md
    python3 hooks/task_class_lib.py resolve --issue <number> \
      --body-file .rawgentic-<number>-body.md \
      --out claude_docs/.wf2-state/<number>/task_class.json \

@@ -49,16 +49,19 @@ SKILL_DIR = REPO_ROOT / "skills" / "implement-feature"
 # the guard doing its job rather than a regression.
 # #761 raised `references/step-01.md` (and the total with it): Step 1 gained the
 # task-class resolve-and-snapshot instruction, which is operative prose — the step
-# had 256 bytes of headroom and the instruction needs ~1.4 KB. Both rows are set to
-# actual + allowed_headroom(), not padded, so the STALE CEILING check stays honest.
-TOTAL_CEILING_BYTES = 246_836
+# had 256 bytes of headroom and the instruction needs ~1.4 KB. Step 8a's F2 fix then
+# added ~700 bytes more: the fetch now captures to a file with an exit-status gate and
+# the resolver reuses it, because an unguarded second fetch silently snapshotted an
+# EMPTY body. Both rows are set to actual + allowed_headroom(), not padded, so the
+# STALE CEILING check stays honest in the other direction.
+TOTAL_CEILING_BYTES = 251_459
 PER_FILE_CEILING_BYTES = {
     "SKILL.md": 46_099,
     "references/quality-bar.md": 3_616,
     "references/run-record.md": 23_202,
     "references/state-and-resume.md": 6_476,
     "references/step-00-preamble.md": 18_925,
-    "references/step-01.md": 5_763,
+    "references/step-01.md": 6_515,
     "references/step-01b.md": 3_444,
     "references/step-02.md": 9_676,
     "references/step-03.md": 8_831,
