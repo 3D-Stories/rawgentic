@@ -13,12 +13,17 @@
 ```
 
 ```callout
-ok | Updated 2026-08-05 — M0 and M1 are SHIPPED; M2 is the active milestone
+ok | Updated 2026-08-05 (second amendment, D185) — M2 PAUSED at 3/16; M4 re-scoped and runs NEXT
 M0 (the retreat, PRs #867/#868/#870/#872) and M1 (#856/#761/#822, epic #875) are merged. The
 2026-08-05 backlog rationalization closed 47 issues, folded 3 duplicates, filed 3 decision
 tickets, and reordered everything below M2 by impact — full evidence in the companion doc
 `2026-08-05-backlog-rationalization-post-m1.md` (§11 has the summary). The original 2026-08-03
 text below M0/M1 is kept as history; M2-and-beyond reflects the new ordering.
+LATER the same day (D185): with #916, #928 and #731 merged, M2 was PAUSED and M4 was re-scoped to
+SESSION CONTINUITY & UNSUPERVISED MODES (away · sleeping) and moved up to run NEXT — #927, #769
+and #726 fold into it, #888 moves up from M2.5, and new children #943 (supervision core) and #944
+(revalidate hardening) were filed. Full plan: https://rawgentic-plan-871.vercel.app/ and
+`2026-08-05-871-m4-session-continuity-away-mode.md`. M2's remaining ten children resume after.
 ```
 
 ## The roadmap
@@ -33,26 +38,31 @@ M1 — STAY SMALL | SHIPPED 2026-08-05 · epic #875 | ok
   #856 | CI byte ceilings + steps.md split into step-local files (#874) | ok
   #761 | Task-class field through drafting + review gates (lane split to #923) | ok
   #822 | Version-surface + changelog check folded into the pin test | ok
-M2 — THE PANE-HANDOFF CHAIN | epic #906 · active | crit
-  QW | Quick wins: #916 stale-page redeploy · #928 wire the 9 evals.json into the shipped skill-creator harness | note
-  1 | Launcher robustness: #731 + #835 — #800 already shipped (PR #912) | crit
+M2 — THE PANE-HANDOFF CHAIN | epic #906 · PAUSED at 3/16 (D185) — resumes after M4 | warn
+  QW | Quick wins SHIPPED: #916 redeploy (no PR, D182) · #928 evals harness (PR #941, v3.129.0) | ok
+  1 | Launcher robustness: #731 SHIPPED (PR #942, v3.129.1) · #835 remains — #800 already shipped (PR #912) | note
   2 | Meter rework (D177): #797 55/75 + rolling summary · #729 residual (ack-tracking) · #734 blind-start | note
-  3 | #726 in-flight-work gate + durable-path check + abandoned work named to the successor | note
-  4 | Epic-run rework (D176): #927 fresh-session default · #769 boundary sweep · close-or-fold owed: #845 #846 #848 #849 #850 #851 | note
+  3 | #726 → MOVED to M4 (D185) | ok
+  4 | Epic-run rework (D176): #927 + #769 → MOVED to M4 (D185); the #845/#846/#848/#849/#850/#851 dispositions ride with #927 (#848→#944, #845→#927 already settled) | ok
   5 | Trusted goal reader: #864 + #772 + #878 | note
   6 | #806 goal cap from the constant + exact-text display; no auto-arm | note
   SP | M1 spillover: #923 WF2-lite lane · #899 word budget | note
-M2.5 — MINIMUM TELEMETRY TRUTH | epic #935 · gates away mode | warn
-  #888 | One transactional persistence contract (absorbs #588 + #355) | note
+M2.5 — MINIMUM TELEMETRY TRUTH | epic #935 · after the M4 wave | warn
+  #888 | → MOVED up into the M4 wave (D185, records-first minimum) | ok
   #363 | Per-run usage attribution (absorbs #660) | note
   #356 | Dispatch entries that survive session seams | note
 M3 — TRUST THE NEW MACHINERY | epic #936 · runner · review loop · config | warn
   RH | Runner hardening (siblings, not merged): #876 trusted --brief · #894 death/OOM evidence · #365 contaminated returns · #893 engagement evidence | note
   RL | Review loop: #889 clean-round token refund · #892 re-litigation flag · #891 retire fail-open riskLevel default · #895 blindness guard | note
   CFG | #884 + #883 config pair · roadmap tail: #860 consult-on-exhaustion · #808 WF3 close · #750 registry helper · #759 deferral registry | note
-M4 — AWAY MODE, BOUNDED | epic #871 · gated on M2 + M2.5 | warn
-  #871 | A narrow first slice: explicit duration, cancel, recovery limits | note
-  #586 | Resume launcher that survives /clear | note
+M4 — SESSION CONTINUITY & UNSUPERVISED MODES | epic #871 · NEXT UP (D185, re-scoped) | crit
+  #888 | Records first: run-records that land exactly once (moved up from M2.5) | note
+  #943 | Supervision core: away/sleep/attended declaration, departure sweep, blocker routing; replaces RAWGENTIC_HEADLESS ×3 | crit
+  #927 | Epic-run rework: two-question setup, transport derived from herdr, mode-change command, #845 fence, generated successor prompts | crit
+  #769 | Child-boundary learnings sweep, mechanized state | note
+  #726 | In-flight-work gate + durable-path check | note
+  #586 | Resume rewrite: measured resets_at one-shot (+60 s), --continue behind an identity check, pane-aware | crit
+  #944 | Revalidate hardening: claim-inventory coverage + obsolete-child owner gate | note
 M5 — IDENTITY & CONCURRENCY + WF HYGIENE | epic #937 · grouped pairs | note
   P1 | #345 + #346 one keying design, two migrations · #593 + #594 concurrent same-project sessions | note
   P2 | #372 WF14-vs-guard · #364 doc-only resume state · #370 + #379 ambiguity-breaker pair | note
@@ -225,12 +235,18 @@ different trust boundaries need independent tests (consult finding, adopted):
 - **Review-loop economics:** #889 (refund an unused reopen token on a clean round) · #892 (fuzzy re-litigation flag, never auto-dissolve) · #891 (retire the fail-open absence-based riskLevel default) · #895 (blindness guard: reserved artifact prefix + pre-draft search exclusion).
 - **Config + old tail:** #884 + #883 (resolver distinguishes project-absent from field-absent; setup offers diffReviewMode) · #860 (consult-on-exhaustion into the gates) · #808 (WF3's own budget-exhausted close) · #750 (registry append helper) · #759-lite (owner deferral registry).
 
-### M4 — AWAY MODE, AS A BOUNDED SLICE *(added 2026-08-05)*
-**#871** (the epic — replace the retired headless stopgaps with a proper "nobody is watching"
-mode; first slice with explicit duration, cancellation, artifact and recovery limits) + **#586**
-(durable resume that survives /clear). Gated on M2 reliability + M2.5 records. #654's unattended
-remainder (keystroke-free restart) lands here. Decision ticket #931 (native Bash sandboxing)
-feeds this epic's design.
+### M4 — SESSION CONTINUITY & UNSUPERVISED MODES *(re-scoped and moved up 2026-08-05, D185)*
+Re-planned mid-#906 after the "single-session means no pane-handoff" confusion recurred: one
+cohesive design unifying epic-run, pane-handoff, plugin-refresh, long-run-resume, revalidation
+and two declared unsupervised modes — **AWAY** (asks by text, waits min(return, 20 min), then
+decides) and **SLEEPING** (consults cross-model, then decides immediately). Full plan (owner +
+Fable 5, gpt-5.6-sol consult): `2026-08-05-871-m4-session-continuity-away-mode.md`, hosted at
+https://rawgentic-plan-871.vercel.app/. Queue on epic **#871**: #888 (records first) → **#943**
+supervision core → #927 → #769 → #726 → #586 → **#944** revalidate hardening. No longer gated on
+M2/M2.5 completion — #888 is the sliced records-first minimum; #654's unattended remainder
+(keystroke-free restart) lands in #586; decision ticket #931 (native Bash sandboxing) feeds the
+away-mode slice. The former M4 gate rationale is preserved by the #888 slice, stated rather than
+dropped.
 
 ### M5 — PROJECT IDENTITY & CONCURRENCY + WF HYGIENE *(2026-08-05 — epic #937)*
 #345 + #346 (one project-scoped keying design; two migration tickets — .wf2-state collisions and
