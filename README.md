@@ -1,6 +1,6 @@
 # rawgentic
 
-**9 SDLC workflow skills + 9 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
+**9 SDLC workflow skills + 12 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)](https://docs.anthropic.com/en/docs/claude-code)
@@ -11,9 +11,9 @@
 
 Claude Code is powerful but unstructured. Complex tasks — building features, fixing bugs, running security audits — need consistent quality gates, test-driven development, and deployment verification. Without guardrails, it's easy to skip code review, forget to run CI, or merge without testing.
 
-**Rawgentic** provides 21 skills organized in four layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
+**Rawgentic** provides 24 skills organized in four layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
 
-- **Workspace management** (9 skills) — Project registration, configuration, session binding, guard exception management, opt-in operating-charter installation, session-registry housekeeping, full-text session-history recall, gated pane handoff to a fresh session, and epic-child revalidation against a moved `main`
+- **Workspace management** (12 skills) — Project registration, configuration, session binding, guard exception management, opt-in operating-charter installation, session-registry housekeeping, full-text session-history recall, gated pane handoff to a fresh session, epic-child revalidation against a moved `main`, and three supervision commands (`away`, `sleeping`, `back`) that declare whether anybody is watching the session
 - **SDLC workflows** (9 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a post-run `run-feedback` self-assessment (WF14), a telemetry-driven epic post-mortem (WF19), and human-gated session-history mining (WF17)
 - **Planning** (1 skill) — A lightweight `interview` skill for pre-build requirements discovery
 - **Security & infrastructure** (2 skills + hooks) — Whole-tree security scanning, security pattern syncing, dangerous pattern blocking, per-project WAL logging, session binding enforcement, and cross-project file guards
@@ -676,20 +676,44 @@ pytest tests/hooks/test_wal_guard.py -v
 
 **Impact measurement:** `scripts/wf2_impact_metrics.py` computes deterministic Tier-1 impact metrics (test growth, fail-closed coverage, dedup, diff volume) for a skill-extraction effort over a `--baseline`/`--head` git range. See [docs/measurements/2026-06-15-wf2-extraction-impact.md](docs/measurements/2026-06-15-wf2-extraction-impact.md) for the WF2 extraction analysis.
 
-Skills are tested via the `/skill-creator` eval pipeline (11/21 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `epic-post-mortem`, `housekeeping`, `interview`, `revalidate-children`, `run-feedback`, `scan`, `session-mining`, and `session-recall` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard. The eval data is also read by the **behavioural selection gate** (`hooks/skill_evals.py`, #928): `discover` reports every file's cases and their intents (`trigger` / `slash` / `refuse`), and a live verdict is a documented manual gate — see `docs/skill-evals.md`.
+Skills are tested via the `/skill-creator` eval pipeline (11/24 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `away`, `back`, `epic-post-mortem`, `housekeeping`, `interview`, `revalidate-children`, `run-feedback`, `scan`, `session-mining`, `session-recall`, and `sleeping` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard. The eval data is also read by the **behavioural selection gate** (`hooks/skill_evals.py`, #928): `discover` reports every file's cases and their intents (`trigger` / `slash` / `refuse`), and a live verdict is a documented manual gate — see `docs/skill-evals.md`.
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 
 ---
 
-## Headless Mode (retired)
+## Supervision state (replaces headless mode)
 
 The headless orchestration mode — the session-start access gate, the GitHub-comment
 QUESTION/suspend protocol, and the label-triggered Action pilot — was **retired in the M0
-executor retreat (#866, M0d)**. `RAWGENTIC_HEADLESS=1` survives only as a bare
-"nobody is watching this session" signal consumed by the context-pressure handoff routing and
-the no-unattended-installs guards (owner decision D184); a first-class away mode replaces it in
-epic #871.
+executor retreat (#866, M0d)**. Its last remnant was a bare environment variable that
+meant only "nobody is watching", with no way to say whether the owner was reachable, and
+no way for a session to clear it. **That variable is retired as of #943**; nothing reads
+it, and setting it now has no effect.
+
+In its place, supervision is **declared**, in
+`<workspace>/claude_docs/.supervision.json`:
+
+| Command | Meaning |
+|---|---|
+| `/rawgentic:away [until]` | absent, still reachable by phone |
+| `/rawgentic:sleeping <wake time>` | unreachable until a stated time (required) |
+| `/rawgentic:back` | watching again — the ONLY thing that lifts the guards |
+
+Two guards read it, and they fail safe in **opposite** directions, which is why there are
+two predicates rather than one flag:
+
+- **`nobody-to-ask`** decides whether a context-pressure nag says "hand over" or "tell
+  me". An expired declaration relaxes it — past a stated return time, assume the owner is
+  back, since the only cost is which advice is printed.
+- **`installs-forbidden`** decides whether missing security scanners may be
+  auto-installed. An expired declaration does **not** relax it, and neither does a state
+  file that cannot be parsed: installing packages is an outward act, and a clock passing a
+  timestamp is not evidence anybody returned.
+
+Blocker routing while unsupervised — texting the owner, consulting cross-model, parking a
+campaign — is **not** part of this and is deliberately gated off; it lands in #947. See
+`docs/supervision.md`.
 
 ---
 
@@ -724,6 +748,43 @@ For major changes, please open an issue first to discuss the approach.
 ---
 
 ## Changelog
+
+### v3.131.0 (2026-08-05)
+- **Supervision is declared, not guessed — `RAWGENTIC_HEADLESS` is retired (#943 Part A, epic #871).**
+  Three code paths asked "is anybody watching?" by reading one environment variable that could
+  say only present-or-absent: it could not distinguish the owner stepping out (reachable by phone)
+  from the owner asleep, and a session could not clear it, because a process cannot un-export its
+  parent's environment. Replaced by a declared workspace state
+  (`claude_docs/.supervision.json`) written by three new commands — `/rawgentic:away [until]`,
+  `/rawgentic:sleeping <wake time>` (a wake time is required; "unreachable forever" is not a state
+  to leave a run in), and `/rawgentic:back`, the only thing that lifts the guards. Split across two
+  modules for a measured reason: `supervision_lib` is read-only and **stdlib-imports-only**
+  (test-enforced) because `context_meter` consumes it on a hook that runs every tool call, while
+  `supervision_admin` holds `plan_lib.file_lock` across the whole read-validate-increment-write
+  cycle and lands via `atomic_write_text(fsync=True)`, fenced by `--expected-revision` so a write
+  computed against a stale read aborts instead of clobbering a fresher declaration. **Two
+  predicates rather than one flag**, because the consumers need opposite safe defaults:
+  `nobody-to-ask` relaxes when a declaration expires (it only picks which advice a
+  context-pressure nag prints), while `installs-forbidden` does not — installing packages is an
+  outward act, and a clock passing a stated wake time is not evidence anybody returned. For the
+  same reason present-but-invalid is **not** absence: `ENOENT` under a valid root is the only file
+  failure read as absent, so a corrupt file — or a supplied-but-unresolvable workspace root —
+  keeps refusing installs instead of a config bug inverting the guard. Also adds the additive
+  top-level driver-state `campaign_wait` object (`waiting_for_owner` / `waiting_for_reset`, with
+  `clears_when` required) and its `build_goal_text` campaign clause, so a Stop-hook goal loop reads
+  an honest pause rather than nagging one — deliberately NOT new `issues[].status` values, since
+  that vocabulary is closed and enforced twice with three further closed sets keyed off it, and
+  `additionalProperties: true` permits new fields, never new values. The retirement is kept honest
+  in both directions: the bare token joins `RETIRED_VOCABULARY` **and** the exact-set assertion is
+  retained with an empty allowed set, so any re-introduction fails loudly. Skills 21 → 24. Blocker
+  routing while unsupervised — texting, consulting, action claims, `authority_permits`, the
+  departure preflight, and any behavioural consumer of `campaign_wait` — is split out to #947 and
+  gated off, so an absent owner currently gets an honest park rather than an autonomous decision;
+  `docs/supervision.md` says so plainly. 121 tests added across
+  `tests/hooks/test_supervision_lib.py`, `test_supervision_admin.py` and
+  `test_supervision_campaign_wait.py`, including the asymmetry test that fails if the two
+  predicates are ever collapsed and the inert-feature regression proving a bare `/rawgentic:away`
+  still guards the hook sites. No workflow-spine change → no diagram REV. Suite 5366→5487.
 
 ### v3.130.0 (2026-08-05)
 - **Run-records now land exactly once (#888, epic #871).** Closes both measured halves of the

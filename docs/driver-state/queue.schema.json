@@ -4,12 +4,19 @@
   "title": "rawgentic multi-issue driver campaign state",
   "description": "Schema for a multi-issue driver campaign state file (design #134, #148, #163). The LIVE per-campaign instance is written at runtime to claude_docs/.driver-state/<campaign>.json (disk-persisted working state, gitignored); this schema + the example-*.campaign.json files are the git-tracked contract-of-record. schema_version 2 adds issues[].depends_on (v1 files, which omit it, still validate).",
   "type": "object",
-  "required": ["schema_version", "campaign", "issues"],
+  "required": [
+    "schema_version",
+    "campaign",
+    "issues"
+  ],
   "additionalProperties": true,
   "properties": {
     "schema_version": {
       "type": "integer",
-      "enum": [1, 2],
+      "enum": [
+        1,
+        2
+      ],
       "description": "1 = original queue; 2 = adds dependency DAG (issues[].depends_on) + epic anchor. A v2 reader must accept v1 files."
     },
     "campaign": {
@@ -21,59 +28,172 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "order": {"type": "string", "description": "e.g. impact | dependency"},
-        "deploy": {"enum": ["per-issue", "batch", "none"]},
-        "has_deploy": {"type": "boolean"},
-        "smoke_gate": {"type": ["string", "null"]},
-        "review_budget": {"type": "integer", "minimum": 0},
-        "never_haiku": {"type": "boolean"},
+        "order": {
+          "type": "string",
+          "description": "e.g. impact | dependency"
+        },
+        "deploy": {
+          "enum": [
+            "per-issue",
+            "batch",
+            "none"
+          ]
+        },
+        "has_deploy": {
+          "type": "boolean"
+        },
+        "smoke_gate": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "review_budget": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "never_haiku": {
+          "type": "boolean"
+        },
         "deps_satisfied_by": {
-          "enum": ["merged", "pr_open"],
+          "enum": [
+            "merged",
+            "pr_open"
+          ],
           "description": "When a dependency counts as satisfied for the advance rule (v2). Default merged."
         }
       }
     },
     "base_default_branch_sha": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "origin/<default> HEAD when the campaign started (rollback-anchor baseline)."
     },
     "epic": {
-      "type": ["integer", "null"],
+      "type": [
+        "integer",
+        "null"
+      ],
       "description": "Epic issue number whose task list anchors the queue (v2). null for an inline queue."
     },
     "notes": {
       "type": "array",
-      "items": {"type": "string"},
-      "description": "Campaign ledger — dated free-text entries (DEFER surfacing, rate-limit window resets, mid-loop status changes). The state file IS the ledger."
+      "items": {
+        "type": "string"
+      },
+      "description": "Campaign ledger \u2014 dated free-text entries (DEFER surfacing, rate-limit window resets, mid-loop status changes). The state file IS the ledger."
     },
     "issues": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["number", "status"],
+        "required": [
+          "number",
+          "status"
+        ],
         "additionalProperties": true,
         "properties": {
-          "number": {"type": "integer"},
+          "number": {
+            "type": "integer"
+          },
           "status": {
-            "enum": ["queued", "in_progress", "pr_open", "merged", "deferred", "abandoned"]
+            "enum": [
+              "queued",
+              "in_progress",
+              "pr_open",
+              "merged",
+              "deferred",
+              "abandoned"
+            ]
           },
           "depends_on": {
             "type": "array",
-            "items": {"type": "integer"},
+            "items": {
+              "type": "integer"
+            },
             "description": "Issue numbers this issue depends on (v2). Absent on v1 files."
           },
-          "pr": {"type": ["integer", "null"]},
-          "merge_sha": {"type": ["string", "null"]},
-          "rollback_anchor": {"type": ["string", "null"]},
+          "pr": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "merge_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rollback_anchor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "deferred_reason": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "DEFER taxonomy: owner-decision | owner-reserved | cross-repo | budget | cross-issue-dependency."
           },
-          "deferred_branch": {"type": ["string", "null"]},
+          "deferred_branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "branch_preservation": {
-            "enum": ["pushed", "discarded", "none", null],
-            "description": "Deterministic on DEFER: pushed (resumable, ≥1 commit) | discarded (approach abandoned) | none (no commits)."
+            "enum": [
+              "pushed",
+              "discarded",
+              "none",
+              null
+            ],
+            "description": "Deterministic on DEFER: pushed (resumable, \u22651 commit) | discarded (approach abandoned) | none (no commits)."
           }
+        }
+      }
+    },
+    "campaign_wait": {
+      "description": "Campaign-level terminal-for-now wait (#943, epic #871 AC 5). Absent or null means not waiting. Deliberately NOT a value of issues[].status, which is a closed vocabulary enforced by record_child_outcome and validate_driver_state; this is an additive top-level field, so no schema_version bump is required. clears_when is required: a pause whose exit condition nobody can state is a stall wearing a pause's clothes.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "status",
+        "reason",
+        "blocker_id",
+        "entered_at",
+        "clears_when"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "status": {
+          "enum": [
+            "waiting_for_owner",
+            "waiting_for_reset"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "blocker_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "entered_at": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clears_when": {
+          "type": "string",
+          "minLength": 1
         }
       }
     }

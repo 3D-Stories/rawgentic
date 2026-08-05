@@ -43,48 +43,48 @@ def _status(last_attempt=None):
 
 
 class TestDecide:
-    def test_headless_skips_first(self):
-        # headless wins even with everything else also true
-        assert sb.decide(optout_env=True, optout_ws=True, headless=True,
-                         missing=["trivy"], status={}, now=T0, throttle_s=3600) == "skip-headless"
+    def test_unattended_skips_first(self):
+        # the unattended guard wins even with everything else also true
+        assert sb.decide(optout_env=True, optout_ws=True, installs_forbidden=True,
+                         missing=["trivy"], status={}, now=T0, throttle_s=3600) == "skip-unattended"
 
     def test_optout_env_skips(self):
-        assert sb.decide(optout_env=True, optout_ws=False, headless=False,
+        assert sb.decide(optout_env=True, optout_ws=False, installs_forbidden=False,
                          missing=["trivy"], status={}, now=T0, throttle_s=3600) == "skip-optout-env"
 
     def test_optout_ws_skips(self):
-        assert sb.decide(optout_env=False, optout_ws=True, headless=False,
+        assert sb.decide(optout_env=False, optout_ws=True, installs_forbidden=False,
                          missing=["trivy"], status={}, now=T0, throttle_s=3600) == "skip-optout-ws"
 
     def test_all_present_is_ok(self):
-        assert sb.decide(optout_env=False, optout_ws=False, headless=False,
+        assert sb.decide(optout_env=False, optout_ws=False, installs_forbidden=False,
                          missing=[], status={}, now=T0, throttle_s=3600) == "ok"
 
     def test_missing_no_prior_attempt_installs(self):
-        assert sb.decide(optout_env=False, optout_ws=False, headless=False,
+        assert sb.decide(optout_env=False, optout_ws=False, installs_forbidden=False,
                          missing=["trivy"], status={}, now=T0, throttle_s=3600) == "install"
 
     def test_missing_recent_attempt_is_throttled(self):
         recent = "2026-06-22T11:30:00Z"  # 30 min before T0
-        assert sb.decide(optout_env=False, optout_ws=False, headless=False,
+        assert sb.decide(optout_env=False, optout_ws=False, installs_forbidden=False,
                          missing=["trivy"], status=_status(recent),
                          now=T0, throttle_s=3600) == "throttled"
 
     def test_missing_old_attempt_reinstalls(self):
         old = "2026-06-22T09:00:00Z"  # 3h before T0
-        assert sb.decide(optout_env=False, optout_ws=False, headless=False,
+        assert sb.decide(optout_env=False, optout_ws=False, installs_forbidden=False,
                          missing=["trivy"], status=_status(old),
                          now=T0, throttle_s=3600) == "install"
 
     def test_unparseable_last_attempt_does_not_block_install(self):
         # A corrupt timestamp must not silently throttle forever (fail toward action).
-        assert sb.decide(optout_env=False, optout_ws=False, headless=False,
+        assert sb.decide(optout_env=False, optout_ws=False, installs_forbidden=False,
                          missing=["trivy"], status=_status("not-a-date"),
                          now=T0, throttle_s=3600) == "install"
 
     def test_optout_beats_presence(self):
         # opt-out short-circuits before the missing check
-        assert sb.decide(optout_env=True, optout_ws=False, headless=False,
+        assert sb.decide(optout_env=True, optout_ws=False, installs_forbidden=False,
                          missing=[], status={}, now=T0, throttle_s=3600) == "skip-optout-env"
 
 
@@ -204,6 +204,26 @@ def _run_main(tmp_path, installer, *, event="startup", workspace=None,
     return r
 
 
+def _workspace_with_supervision(tmp_path, *, state="away", until=None):
+    """Build a workspace file plus a DECLARED supervision state (#943).
+
+    Returns the path to `.rawgentic_workspace.json`, which is what `--workspace`
+    takes; the supervision file lives under that file's DIRECTORY, which is the
+    workspace root.
+    """
+    root = tmp_path / "ws"
+    (root / "claude_docs").mkdir(parents=True, exist_ok=True)
+    ws = root / ".rawgentic_workspace.json"
+    ws.write_text(json.dumps({"version": 1, "projects": []}))
+    (root / "claude_docs" / ".supervision.json").write_text(json.dumps({
+        "schema_version": 1, "revision": 1, "state": state, "until": until,
+        "declared_at": "2026-08-05T20:00:00Z", "declared_by_session": "s",
+        "governed_campaign_ids": [],
+        "consult_grant": {"providers": [], "granted": False},
+    }))
+    return ws
+
+
 def _status_path(tmp_path):
     return tmp_path / ".rawgentic" / "scanner-status.json"
 
@@ -253,12 +273,58 @@ class TestMainIntegration:
         time.sleep(0.3)
         assert not sentinel.exists()
 
-    def test_headless_skips_visibly(self, tmp_path):
+    def test_declared_absence_skips_visibly(self, tmp_path):
         installer, sentinel = _fake_installer(tmp_path, missing=("trivy",))
-        r = _run_main(tmp_path, installer, extra_env={"RAWGENTIC_HEADLESS": "1"})
+        ws = _workspace_with_supervision(tmp_path, state="away")
+        r = _run_main(tmp_path, installer, workspace=ws)
         assert r.returncode == 0
         st = json.loads(_status_path(tmp_path).read_text())
-        assert st["outcome"] == "skipped-headless"
+        assert st["outcome"] == "skipped-unattended"
+        time.sleep(0.3)
+        assert not sentinel.exists()
+
+    def test_setting_the_retired_env_var_does_not_skip(self, tmp_path):
+        """#943 clean break. The old variable is retired; exporting it must not
+        suppress an install, or it would still be a live input under a new name."""
+        installer, sentinel = _fake_installer(tmp_path, missing=("trivy",))
+        r = _run_main(tmp_path, installer,  # tripwire-exempt: subject IS the token
+                      extra_env={"RAWGENTIC_HEADLESS": "1"})  # tripwire-exempt: ditto
+        assert r.returncode == 0
+        st = json.loads(_status_path(tmp_path).read_text())
+        assert st["outcome"] == "installing"
+        assert _wait_for(sentinel), "an undeclared session must still install"
+
+    def test_an_expired_declaration_still_skips(self, tmp_path):
+        """A clock passing a stated wake time is not evidence a human came back, and
+        this guard authorizes a real package install — so expiry must NOT lift it."""
+        installer, sentinel = _fake_installer(tmp_path, missing=("trivy",))
+        ws = _workspace_with_supervision(tmp_path, state="away",
+                                         until="2020-01-01T00:00:00Z")
+        r = _run_main(tmp_path, installer, workspace=ws)
+        assert json.loads(_status_path(tmp_path).read_text())["outcome"] \
+            == "skipped-unattended"
+        time.sleep(0.3)
+        assert not sentinel.exists()
+
+    def test_an_unparseable_supervision_file_still_skips(self, tmp_path):
+        """Present-but-invalid is not absent: a file we cannot read is not permission."""
+        installer, sentinel = _fake_installer(tmp_path, missing=("trivy",))
+        ws = _workspace_with_supervision(tmp_path, state="away")
+        (tmp_path / "ws" / "claude_docs" / ".supervision.json").write_text("{corrupt")
+        r = _run_main(tmp_path, installer, workspace=ws)
+        assert json.loads(_status_path(tmp_path).read_text())["outcome"] \
+            == "skipped-unattended"
+        time.sleep(0.3)
+        assert not sentinel.exists()
+
+    def test_an_unresolvable_workspace_still_skips(self, tmp_path):
+        """A caller-configuration failure must not read as 'nobody declared anything'
+        and thereby authorize an install."""
+        installer, sentinel = _fake_installer(tmp_path, missing=("trivy",))
+        r = _run_main(tmp_path, installer,
+                      workspace=tmp_path / "nowhere" / ".rawgentic_workspace.json")
+        assert json.loads(_status_path(tmp_path).read_text())["outcome"] \
+            == "skipped-unattended"
         time.sleep(0.3)
         assert not sentinel.exists()
 
@@ -292,7 +358,8 @@ class TestMainIntegration:
         """The whole point of Hole 2's detectability: even a skip writes a fresh,
         timestamped status — a stale/absent status is now a visible no-fire signal."""
         installer, _ = _fake_installer(tmp_path, missing=("trivy",))
-        _run_main(tmp_path, installer, extra_env={"RAWGENTIC_HEADLESS": "1"},
+        _run_main(tmp_path, installer,  # tripwire-exempt: proving the token is inert
+                  extra_env={"RAWGENTIC_HEADLESS": "1"},  # tripwire-exempt: ditto
                   now="2026-06-22T12:00:00Z")
         st = json.loads(_status_path(tmp_path).read_text())
         assert st["checked_at"] == "2026-06-22T12:00:00Z"

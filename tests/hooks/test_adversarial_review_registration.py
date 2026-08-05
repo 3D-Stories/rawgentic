@@ -54,7 +54,7 @@ def test_marketplace_registers_skill():
 # a scoped local run that skips this file is exactly how the miss reaches CI.
 # Deliberately not naming the retired module here: tests/test_retirement_tripwire.py
 # scans active surfaces for retired vocabulary and flagged the earlier wording.
-EXPECTED_PLUGIN_VERSION = "3.130.0"
+EXPECTED_PLUGIN_VERSION = "3.131.0"
 
 VERSION_SURFACE_FILES = (
     ".claude-plugin/plugin.json",
@@ -368,7 +368,7 @@ def test_readme_count_strings_updated():
         f"{sorted(set(skills) - have - {'peer-consult'})} (peer-consult is "
         f"called out separately as a stub)"
     )
-    assert "9 workspace management" in readme  # #113 — README count must match plugin/marketplace descriptions
+    assert "12 workspace management" in readme  # #113 — README count must match plugin/marketplace descriptions
 
 
 def test_readme_changelog_has_no_spliced_headings():

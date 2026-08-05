@@ -1108,11 +1108,14 @@ def emit_payload(event, text):
 
 
 def nag_text(*, tier, used, window, provenance, seam, seam_reason,
-             headless, fresh_handoff_capable, herdr_available=False):
+             unattended, fresh_handoff_capable, herdr_available=False):
     """The injected advisory. Contains ONLY integers and the pointer's own
     fields — never any transcript content, which would leak the very context it
     is measuring. Pure: env is read at the caller (#732 `herdr_available`
-    follows the existing headless/fresh_handoff_capable pattern)."""
+    follows the existing unattended/fresh_handoff_capable pattern).
+
+    `unattended` comes from the DECLARED supervision state since #943 — it was
+    `headless`, read from an env var that said only present-or-absent."""
     pct = used * 100.0 / window if window else 0.0
     lines = [
         f"[rawgentic context meter] This session is using {used:,} tokens of an "
@@ -1166,12 +1169,12 @@ def nag_text(*, tier, used, window, provenance, seam, seam_reason,
             "counters so the successor can resume."
         )
 
-    if headless and fresh_handoff_capable:
+    if unattended and fresh_handoff_capable:
         lines.append(
             "Unattended with an armed launcher: checkpoint and hand over via "
             "`launcher_lib.py handoff` — do not wait for a human."
         )
-    elif headless and herdr_available:
+    elif unattended and herdr_available:
         # AC4 (#732) — "stop cleanly for a manual resume" means stop with nobody to
         # continue (the overnight failure #713 documented). With a herdr pane available
         # there IS a successor to spawn into, so prefer the route that actually hands over.
@@ -1181,7 +1184,7 @@ def nag_text(*, tier, used, window, provenance, seam, seam_reason,
             "then actually hands over, spawning and binding the successor. "
             "`clear-prep` ALONE leaves no successor."
         )
-    elif headless:
+    elif unattended:
         lines.append(
             "Unattended, but NO durable launcher is armed, so there is nothing "
             "to relaunch you: run the `clear-prep` skill to write the durable "
@@ -1436,14 +1439,24 @@ def cmd_hook(argv) -> int:
 
     # Build the message BEFORE reserving, so nothing fallible sits between
     # winning the reservation and delivering it.
-    headless = env.get("RAWGENTIC_HEADLESS") == "1"
+    # #943: the DECLARED supervision state, not an env var. `workspace` was already
+    # resolved above, so this costs one capped read and no second walk — and it lands
+    # here, on the emit path, so the common no-nag tool call still pays nothing.
+    # The import is function-local for that same reason: at module scope every tool
+    # call would pay it before the early returns (pre-PR review finding), which is
+    # the precedent `subprocess` above already follows.
+    import supervision_lib  # pylint: disable=import-outside-toplevel
+    unattended = supervision_lib.nobody_to_ask(
+        supervision_lib.evaluate_workspace(
+            supervision_lib.read_state(workspace),
+            now=datetime.now(timezone.utc)))
     fresh_handoff_capable = (env.get("RAWGENTIC_LAUNCHER_ARMED") == "1"
                              and env.get("RAWGENTIC_FRESH_LAUNCH_SUPPORTED") == "1")
     herdr_available = env.get("HERDR_ENV") == "1"
     try:
         text = nag_text(tier=tier, used=used, window=window,
                         provenance=provenance, seam=seam,
-                        seam_reason=seam_reason, headless=headless,
+                        seam_reason=seam_reason, unattended=unattended,
                         fresh_handoff_capable=fresh_handoff_capable,
                         herdr_available=herdr_available)
         payload_out = json.dumps(emit_payload(event, text))

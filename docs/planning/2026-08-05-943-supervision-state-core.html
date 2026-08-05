@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>#943 — Supervision-state core (PART A): one declared signal for who is watching</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-design{background:radial-gradient(1200px 600px at 50% -10%,rgba(124,156,255,.10),transparent 60%),var(--bg)}
+.tpl-design .wrap{max-width:1080px;padding:0 clamp(16px,4vw,32px) 64px}
+.tpl-design header{padding:clamp(24px,4vw,56px) 0 12px;border-bottom:none;margin-bottom:18px}
+.tpl-design h1{font-size:clamp(26px,3.4vw,40px)}
+.tpl-design h2{font-size:20.8px;margin:1.9em 0 .6em}
+
+/* #76 — the frame's companions only. Two rules, deliberately few.
+   An earlier draft of this PR also added a two-column `.dz-options` grid "so the wide measure
+   pays for itself". Both wrong: the grid was DEAD (the `.dz-options` rule further down sets
+   `display:block` at equal specificity and later source order), and it contradicted a decision
+   this file already records — cards stack FULL WIDTH because "a trade-off you have to READ is
+   not a 220px tile". The width pays for itself inside each card, where the for/against grid is
+   two columns and needs the room. Deleted rather than reconciled. */
+.tpl-design h1{line-height:1.2;max-width:22ch}
+.tpl-design header .eyebrow{font-size:11px;letter-spacing:.14em}
+.tpl-design .dz-lead{background:var(--surface);border:1px solid var(--line);
+border-left:4px solid var(--accent);border-radius:12px;padding:4px 20px 14px;margin:6px 0 26px}
+.tpl-design .dz-lead>p:first-child{font-size:17.5px;line-height:1.55;color:var(--ink);font-weight:550}
+/* Option cards. Stacked full-width, because a trade-off you have to READ is not a 220px tile;
+   the shared layer's flex row is overridden here at higher specificity. */
+.tpl-design .dz-options{margin:22px 0;display:block;counter-reset:dz-opt}
+.tpl-design .dz-options .blk-opt{counter-increment:dz-opt;display:grid;gap:10px 14px;
+grid-template-columns:1fr 1fr;grid-template-areas:"head head" "pro con";
+background:var(--surface);border:1px solid var(--line);border-radius:14px;
+padding:16px 18px;margin:0 0 16px;flex:none}
+.tpl-design .dz-options .blk-opt>.blk-title{grid-area:head;display:flex;gap:12px;
+align-items:baseline;font-size:19px;letter-spacing:-.01em;margin:0}
+.tpl-design .dz-options .blk-opt>.blk-title::before{content:counter(dz-opt,decimal-leading-zero);
+font:700 22px/1.1 ui-monospace,Menlo,Consolas,monospace;color:var(--accent);flex:none}
+.tpl-design .dz-options .blk-for{grid-area:pro;background:var(--req-c-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+.tpl-design .dz-options .blk-against{grid-area:con;background:var(--sev-high-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+/* #134 SETTLED THE FOLLOW-UP THIS COMMENT USED TO NAME. It said these labels were CSS-generated
+   content, so not dependable semantic markup, that the reference uses real DOM text
+   (`<h4>Pros</h4>`), and that making it semantic "means changing the renderer, which moves every
+   style's bytes and so cannot ride in a per-template PR". That is exactly what #134 did: `_options`
+   now emits a real `.blk-lbl` element, every rich style's bytes moved, and `plain` did not.
+   So this is no longer a `::before` at all — it RESTYLES the markup label the renderer emits.
+   Only the typography is set here; the colours come from the shared layer, which reaches this
+   template because the wrapper carries both `blk-options` and `dz-options`. `text-transform`
+   keeps the visible form FOR/AGAINST while the accessible name stays the emitted "For"/"Against".
+   The space the renderer emits after the label collapses harmlessly against a block. */
+.tpl-design .dz-options .blk-lbl{display:block;font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;text-transform:uppercase}
+/* Restated at (0,4,0): the card rule above is (0,3,0) and was silently beating the shared
+   `.blk-options .is-chosen` (0,2,0), so the chosen card lost its accent border. Measured. */
+.tpl-design .dz-options .blk-opt.is-chosen{border-color:var(--accent);border-width:2px}
+.tpl-design .dz-options .blk-opt.is-rejected{opacity:.72}
+.tpl-design .dz-options .is-chosen>.blk-title::after{content:"CHOSEN";font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent);
+border:1px solid var(--accent);border-radius:999px;padding:1px 8px;margin-left:auto;flex:none}
+@media(max-width:640px){.tpl-design .dz-options .blk-opt{grid-template-columns:1fr;
+grid-template-areas:"head" "pro" "con"}}
+/* A today/proposed pair is TWO ROOTS in one `nodes compare` block, so the
+   grid goes on the top-level list. Two separate fences cannot pair — each is
+   its own wrapper with a single child. */
+@media(min-width:720px){.tpl-design .dz-compare>ul{grid-template-columns:1fr 1fr}}
+.tpl-design .dz-compare{background:var(--code);border-radius:12px;padding:10px 14px}
+/* The verdict band — `.recommend` in the reference. A gradient wash rather than a flat fill, so
+   the decision reads as the page's conclusion and not as one more callout. */
+.tpl-design .dz-decision{margin:24px 0 8px}
+.tpl-design .dz-decision>.blk-callout{border:1px solid var(--accent);border-left-width:1px;
+border-radius:14px;padding:16px 18px;
+background:linear-gradient(180deg,var(--accent-soft),transparent)}
+.tpl-design .dz-decision>.blk-callout>.blk-title::before{content:"DECISION";display:block;
+font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent)}
+/* Trade-off table. Styled, deliberately NOT markered: a markdown table emits a bare <table> with
+   no hook, and `section_class` is not a table marker — using it would flip `design` into
+   sectioned rendering and demote its h2s. */
+.tpl-design table{border-collapse:collapse;width:100%;margin:14px 0}
+.tpl-design thead th{font:700 11px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);
+border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
+.tpl-design tbody td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.tpl-design tbody tr:nth-child(even){background:var(--code)}
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+
+.blk-options{display:flex;flex-wrap:wrap;gap:12px}
+.blk-options .blk-opt{flex:1 1 220px;background:var(--surface);border:1px solid var(--line);
+border-radius:12px;padding:12px 14px}
+.blk-options .is-chosen{border-color:var(--accent);border-width:2px}
+.blk-options .is-rejected{opacity:.72}
+.blk-options .blk-title{display:block;font-weight:700;margin-bottom:6px}
+.blk-options .blk-for,.blk-options .blk-against{display:block;font-size:13px}
+/* #134 — the stance label is MARKUP now (`_options` emits `.blk-lbl`), not `content:"+ "`/`"- "`
+   on a pseudo-element. Generated content is not dependable semantic markup, and keeping a copy
+   here beside the real one would both drift and double-announce. A word also beats a bare sign at
+   a glance and does not lean on colour alone — the argument `design.py` had already made for its
+   own labels. Styled, never hidden: with the glyphs gone, hiding this leaves no stance signal.
+
+   The gap between label and prose is a REAL SPACE in the markup, not a margin here. The old
+   `content:"+ "` carried its own trailing space; an early version of this dropped it and leaned on
+   `margin-right`, which separates the label visually while leaving the DOM text fused as
+   "Forfewest files" — so text extraction, copy-paste, and any consumer that concatenates text nodes
+   got the exact failure this change exists to prevent. One space does both jobs, so there is no
+   margin here to keep in sync with it. Found twice independently: in a browser, and by review. */
+.blk-options .blk-lbl{font-weight:700}
+.blk-options .blk-for .blk-lbl{color:var(--req-c)}
+.blk-options .blk-against .blk-lbl{color:var(--sev-high)}
+
+:root{--accent:#f2a65e;}
+:root[data-theme=dark]{--accent:#f2a65e;}
+:root[data-theme=light]{--accent:#a26211;}
+@media print{:root,:root[data-theme=dark]{--accent:#a26211;}}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-05 16:22 MDT</div>
+<h1>#943 — Supervision-state core (PART A): one declared signal for who is watching</h1>
+
+</header>
+<main>
+<div class="dz-lead"><p><strong>Date:</strong> 2026-08-05 · <strong>Issue:</strong> #943 · <strong>Epic:</strong> #871 (M4 wave, child 2 of 7) <strong>Design authority above this doc:</strong> <code>docs/planning/2026-08-05-871-m4-session-continuity-away-mode.md</code> §3.1 <strong>Status:</strong> Step 4 gate CLOSED by owner resolution of the ambiguity breaker (D226) — see §12</p>
+<div class="blk blk-stats"><div class="blk-item"><span class="blk-value">3</span><span class="blk-label">RAWGENTIC_HEADLESS reads replaced</span></div><div class="blk-item is-accent"><span class="blk-value">2</span><span class="blk-label">predicates, not one boolean</span></div><div class="blk-item"><span class="blk-value">4</span><span class="blk-label">effective states: attended · away · sleeping · attended-overdue</span></div><div class="blk-item"><span class="blk-value">0</span><span class="blk-label">external APIs used by Part A</span></div></div>
+<p>The one change that makes this work: <strong>who is watching becomes a declared, revisioned file the session can write, instead of an inherited environment variable it cannot clear.</strong> Everything else follows from that. The four forks below were the ones actually weighed, and §12 records the gate provenance for each.</p>
+<div class="blk blk-options dz-options"><div class="blk-opt is-chosen"><span class="blk-title">Split into Part A + Part B (#947)</span><span class="blk-for"><span class="blk-lbl">For</span> Ships the read/write core and the retirement now; the routing machinery that no consumer is ready for waits</span><span class="blk-against"><span class="blk-lbl">Against</span> #943 stays open until #947 lands, so the issue&#x27;s own ACs are satisfied in two PRs</span></div><div class="blk-opt is-rejected"><span class="blk-title">Expand #943 to the whole slice</span><span class="blk-for"><span class="blk-lbl">For</span> One issue, one merge, no follow-up to track</span><span class="blk-against"><span class="blk-lbl">Against</span> Duplicates #927&#x27;s broker and builds the second authorization system the M4 design forbids</span></div><div class="blk-opt is-chosen"><span class="blk-title">Two predicates (nobody-to-ask, installs-forbidden)</span><span class="blk-for"><span class="blk-lbl">For</span> Each consumer gets its own safe default on expiry; an expired away still refuses installs</span><span class="blk-against"><span class="blk-lbl">Against</span> Two names to keep straight, and a test that exists only to stop them collapsing</span></div><div class="blk-opt is-rejected"><span class="blk-title">One is_watched boolean</span><span class="blk-for"><span class="blk-lbl">For</span> Simplest possible surface</span><span class="blk-against"><span class="blk-lbl">Against</span> attended-overdue would authorize unattended package installs — the exact failure the split exists to prevent</span></div><div class="blk-opt is-chosen"><span class="blk-title">Two modules (supervision_lib read, supervision_admin write)</span><span class="blk-for"><span class="blk-lbl">For</span> context_meter runs per tool call and never imports plan_lib; stdlib-only is test-enforced</span><span class="blk-against"><span class="blk-lbl">Against</span> A reader and a writer for one file, which looks like ceremony until you check the import cost</span></div><div class="blk-opt"><span class="blk-title">One skills/supervision command with a subcommand</span><span class="blk-for"><span class="blk-lbl">For</span> One skill to register instead of three</span><span class="blk-against"><span class="blk-lbl">Against</span> The epic design names three commands, and a wake time belongs in the command the owner types when going to bed</span></div></div></div>
+<h2>1. The problem, in plain words</h2>
+<p>Three places in the code ask &quot;is anybody watching this session?&quot; by reading one environment variable. It only says present-or-absent: it cannot distinguish the owner stepping out for twenty minutes from the owner asleep until morning, and a session that hits a question with nobody there has no defined behaviour.</p>
+<h2>2. What exists today — confirmed inventory</h2>
+<p>Every line read directly at <code>b7d3f258</code>.</p>
+<table>
+<thead><tr><th>#</th><th>Site</th><th>Current code / prose</th><th>Seam</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>hooks/context_meter.py:1439</code></td><td><code>headless = env.get(&quot;RAWGENTIC_HEADLESS&quot;) == &quot;1&quot;</code></td><td>feeds <code>nag_text(..., headless=headless)</code> at <code>:1444</code>; pure</td></tr>
+<tr><td>2</td><td><code>hooks/scanner_bootstrap.py:269</code></td><td><code>headless = os.environ.get(&quot;RAWGENTIC_HEADLESS&quot;) == &quot;1&quot;</code></td><td>feeds pure <code>decide(*, optout_env, optout_ws, headless, ...)</code> at <code>:110</code>; <code>headless</code> FIRST in precedence → <code>&quot;skip-headless&quot;</code></td></tr>
+<tr><td>3</td><td><code>skills/setup/SKILL.md:149-152</code></td><td>prose: &quot;When <code>RAWGENTIC_HEADLESS=1</code>, do NOT install — just record the gap.&quot;</td><td>Step 2e</td></tr>
+</tbody>
+</table>
+<p>Constraints established by direct inspection:</p>
+<ul>
+<li><code>context_meter.py:869</code> <code>find_workspace(cwd)</code> resolves the workspace root; the <code>:1439</code> read is on</li>
+</ul>
+<p>  the <strong>emit</strong> path past early returns (<code>:1402</code>, <code>:1416</code>), and the fast-path comment at <code>:1324</code>   promises &quot;no workspace walk, no config read&quot;.</p>
+<ul>
+<li><strong><code>context_meter.py</code> imports stdlib ONLY:</strong> <code>argparse</code>, <code>glob</code>, <code>json</code>, <code>os</code>, <code>re</code>, <code>stat</code>,</li>
+</ul>
+<p>  <code>sys</code>, <code>time</code>, <code>datetime</code> (+ a function-local <code>subprocess</code> at <code>:1059</code>); <code>plan_lib</code> appears only   in a docstring at <code>:929</code>. This measured fact is why the read path is a separate module (§4.1).</p>
+<ul>
+<li><code>scanner_bootstrap.py:246</code> <code>main()</code> accepts <code>--workspace</code>; imports <code>atomic_write_lib</code> at <code>:41</code>;</li>
+</ul>
+<p>  already registered in <code>tests/hooks/test_atomic_write_lib.py::TestAllSitesRouted</code>.</p>
+<ul>
+<li><code>tests/test_retirement_tripwire.py:177</code> asserts the token&#x27;s active-surface carrier set EQUALS</li>
+</ul>
+<p>  <code>D184_ALLOWED_FILES</code> (<code>:168-174</code>), both directions. <code>RETIRED_VOCABULARY</code> (<code>:26-47</code>) holds only   the <code>_TRIGGER</code> variant (docstring <code>:13-16</code>).</p>
+<ul>
+<li><code>tests/hooks/test_headless.py:78</code> <strong>positively asserts</strong> the literal <code>RAWGENTIC_HEADLESS=1</code> and</li>
+</ul>
+<p>  &quot;do NOT install — just record the gap&quot; in <code>skills/setup/SKILL.md</code>.</p>
+<ul>
+<li><strong>Driver-state <code>status</code> is a CLOSED vocabulary, enforced twice:</strong> <code>driver_lib.py:48</code></li>
+</ul>
+<p>  <code>VALID_STATUSES</code>, refused by <code>record_child_outcome</code> (<code>:1533-1535</code>) and <code>validate_driver_state</code>   (<code>:2372-2375</code>); related closed sets <code>_DISPOSED_STATUSES:278</code>, <code>TERMINAL_STATUSES:1504</code>, the   <code>pr_open</code> map <code>:55</code>. <code>additionalProperties: true</code> permits new <strong>fields</strong>, never new <code>status</code>   <strong>values</strong>.</p>
+<ul>
+<li><strong>No live producer of the env var:</strong> no settings <code>env</code> block sets it, no launcher exports it,</li>
+</ul>
+<p>  <code>tests/test_headless_action_workflow.py</code> is gone, and this repo&#x27;s <code>config-reference.md</code> no   longer names it.</p>
+<h2>3. Scope: Part A (this issue) and Part B (next)</h2>
+<p>Owner decision D226, after three adversarial design rounds exhausted the gate&#x27;s loop-back budget with 8 findings still open: <strong>split</strong>. Five of those eight findings lived entirely in machinery that was already gated off, so splitting lets the specified half ship and moves the hard half to where its dependencies live.</p>
+<p><strong>PART A — this issue.</strong> The state model and the cutover, which is what the epic queue names (&quot;supervision-state core … replaces the three <code>RAWGENTIC_HEADLESS</code> stopgap reads&quot;): the state file + validator; <code>effective_state</code> with expiry and the invalid-≠-absent rule; the two predicates; the three read replacements; the env-var retirement with the both-direction tripwire; the three declaration commands; the additive <code>campaign_wait</code> field + validator + goal-text clause; and the <code>consult_grant</code> schema field. <strong>Covers issue ACs 1, 4, 5, and the schema half of 7.</strong></p>
+<p><strong>PART B — the follow-up child, done after Part A merges.</strong> Everything the remaining findings are about: departure preflight with a transaction/rollback marker (AC 2); blocker routing — <code>route_for</code>, the transport capability gate, the disposition table (AC 3); revision-bound action claims with atomic execute-once semantics; <code>authority_permits</code> <strong>including the absence argument it is currently missing</strong> (AC 6); and the consult USE path (AC 7).</p>
+<p><strong>Part A ships no routing, no claims, no authority logic and no external calls</strong>, so none of the Part-B findings can affect it. That is the property that makes the split safe rather than merely convenient.</p>
+<h2>4. The design (Part A)</h2>
+<h3>4.1 Modules</h3>
+<p><strong>TWO modules, split by hot-path import cost</strong> — the read path is imported by a hook that runs on every tool call and today imports stdlib only (§2); <code>plan_lib</code> (home of <code>file_lock</code>) is large.</p>
+<pre><code>hooks/supervision_lib.py        # READ + PURE. stdlib imports ONLY (test-enforced).
+  evaluate_workspace(record, *, now) -&gt; SupervisionView     # workspace-global; no campaign
+  nobody_to_ask(view) -&gt; bool
+  installs_forbidden(view) -&gt; bool
+  validate_declaration(state, until, now) -&gt; (ok, error)
+  validate_campaign_id(value) -&gt; bool
+  validate_providers(values) -&gt; (ok, error)
+  supervision_path(workspace_root) -&gt; str    # &lt;ws&gt;/claude_docs/.supervision.json
+  read_state(workspace_root) -&gt; Loaded       # (record, load_status); never searches for the root
+  # CLI: installs-forbidden | nobody-to-ask | effective
+
+hooks/supervision_admin.py      # WRITE. May import plan_lib / atomic_write_lib freely.
+  declare(ws, *, state, until, session_id, campaign_ids, consult_providers,
+          consult_granted, expected_revision=None) -&gt; dict
+  mark_attended(ws, *, session_id, reason, expected_revision) -&gt; dict
+  # CLI: declare | mark-attended</code></pre>
+<p>One shared validator lives in <code>supervision_lib</code>, so the split cannot grow competing semantics. <code>read_state</code> takes the workspace root and never walks the tree — <code>context_meter</code> already found it via <code>find_workspace(cwd)</code>, <code>scanner_bootstrap</code> already has <code>--workspace</code>.</p>
+<p><code>declare</code> and <code>mark_attended</code> each run the locked read → validate → increment → atomic-replace cycle (the <code>launcher_lib.py:2914</code> <code>_locked_state_update</code> pattern) and take <code>expected_revision</code>, so a write computed against a stale read aborts rather than clobbering a fresher declaration.</p>
+<p><strong>Predicate-specific CLI, never a bare state word.</strong> A caller deciding &quot;may I install?&quot; must not be handed <code>attended-overdue</code> to interpret:</p>
+<pre><code>python3 hooks/supervision_lib.py installs-forbidden --workspace &lt;root&gt;
+#   exit 0 = FORBIDDEN · 1 = allowed · 2 = invalid input (fail-loud diagnostic)</code></pre>
+<p>Reuse (each verified at the cited line): <code>atomic_write_lib.py:27</code> <code>atomic_write_text(..., mkdir=True, fsync=True)</code>; <code>plan_lib.py:2702</code> <code>file_lock</code> (sidecar); the locked cycle from <code>launcher_lib.py:2914</code>; the capped fail-open read shape from <code>task_class_lib.py:363</code>; the fail-LOUD per-command <code>_fail</code> CLI shape from <code>task_class_lib.py:402-415</code>.</p>
+<h3>4.2 State file — normative schema</h3>
+<p><code>&lt;workspace-root&gt;/claude_docs/.supervision.json</code>:</p>
+<pre><code>{
+  &quot;schema_version&quot;: 1,
+  &quot;revision&quot;: 7,
+  &quot;state&quot;: &quot;away&quot;,
+  &quot;until&quot;: &quot;2026-08-05T22:30:00Z&quot;,
+  &quot;declared_at&quot;: &quot;2026-08-05T20:10:00Z&quot;,
+  &quot;declared_by_session&quot;: &quot;f0411833-...&quot;,
+  &quot;governed_campaign_ids&quot;: [&quot;epic-871-m4-wave&quot;],
+  &quot;consult_grant&quot;: {&quot;providers&quot;: [&quot;gpt&quot;], &quot;granted&quot;: true}
+}</code></pre>
+<ul>
+<li><code>state</code> ∈ <code>attended | away | sleeping</code>, DECLARED, never inferred.</li>
+<li><code>until</code> — ISO-8601 UTC or <code>null</code>. REQUIRED non-null for <code>sleeping</code>; MUST be <code>null</code> for</li>
+</ul>
+<p>  <code>attended</code>; <strong>rejected if already in the past at declaration time</strong> (a wake time behind <code>now</code>   would declare an instantly-expired absence).</p>
+<ul>
+<li><code>revision</code> — monotonic; the optimistic-concurrency token, and the absence-window id that</li>
+</ul>
+<p>  Part B&#x27;s decision records will cite.</p>
+<ul>
+<li><code>governed_campaign_ids</code> — campaign NAMES, each validated <code>^[A-Za-z0-9._-]+$</code> with path</li>
+</ul>
+<p>  separators and <code>..</code> rejected: Part B joins these into a state-file path, so an unvalidated value   would be a path-traversal write primitive. Validated in Part A because the field ships in Part A.   <strong>Empty list = governs every campaign</strong>; naming campaigns narrows it (consumed by Part B).</p>
+<ul>
+<li><code>consult_grant.providers</code> — validated against the runner&#x27;s provider vocabulary (<code>gpt</code>, <code>glm</code>) at</li>
+</ul>
+<p>  declaration time, not at send time. The field ships now; its USE is Part B.</p>
+<p>Workspace-level: away-ness is a property of the human, not a repo.</p>
+<h3>4.3 Evaluation and the two predicates</h3>
+<pre><code>@dataclass(frozen=True)
+class SupervisionView:
+    state: str        # EFFECTIVE: attended | away | sleeping | attended-overdue
+    declared: str     # as written, or &quot;invalid&quot;
+    until: str | None
+    expired: bool
+    revision: int
+    declared_at: str | None
+    load_status: str  # &quot;absent&quot; | &quot;valid&quot; | &quot;invalid&quot;
+    consult_providers: tuple[str, ...]
+    granted: bool</code></pre>
+<p>Part A ships ONE evaluator, <code>evaluate_workspace</code> — &quot;is the human watching, at all?&quot; — which is the only question its consumers have, because the two hook sites belong to no campaign. <code>governed_campaign_ids</code> does NOT narrow it: narrowing an install guard by campaign is meaningless. The campaign-scoped evaluator, and with it any use of the override field, is Part B. This is the resolution of a defect an earlier draft carried: a single evaluator taking <code>campaign_id=None</code> made the safe reading and a silently-inert reading equally plausible, and an inert reading would have shipped a feature that does nothing at the very sites it exists for.</p>
+<p>Expiry: past <code>until</code>, the effective state is <code>attended-overdue</code> — attended for new blocker routing (Part B&#x27;s concern), with <code>revision</code>/<code>declared_at</code> retained so an owner-return report can still lead with what happened during the declared window.</p>
+<p><strong>Two predicates, not one boolean.</strong> The two hook sites need OPPOSITE fail-safe directions:</p>
+<ul>
+<li><code>nobody_to_ask(view)</code> — <code>True</code> only for effective <code>away</code>/<code>sleeping</code>. Consumer: <code>context_meter</code>.</li>
+</ul>
+<p>  It only changes the wording of advice, so expiry should fail toward &quot;a human is back&quot;.</p>
+<ul>
+<li><code>installs_forbidden(view)</code> — <code>True</code> whenever an <code>away</code>/<code>sleeping</code> declaration is in force</li>
+</ul>
+<p>  <strong>including after expiry</strong>, and whenever the state is INVALID. Only <code>/rawgentic:back</code> clears it.   Consumers: <code>scanner_bootstrap</code>, setup Step 2e. This authorizes a real, outward,   not-trivially-undone action, so neither a passing clock nor an unparseable file may license it.</p>
+<p>A single <code>is_watched</code> boolean — proposed by the peer consult — would have collapsed these: the moment a wake time passed, an unattended host would resume installing packages on the strength of a clock rather than evidence a human returned.</p>
+<p><strong>Present-but-invalid is NOT absent</strong>, and an unresolvable workspace counts as invalid:</p>
+<table>
+<thead><tr><th>Condition</th><th><code>load_status</code></th><th><code>nobody_to_ask</code></th><th><code>installs_forbidden</code></th></tr></thead>
+<tbody>
+<tr><td>no workspace root supplied at all</td><td><code>absent</code></td><td>False</td><td>False</td></tr>
+<tr><td>workspace supplied but unresolvable / not a directory</td><td><strong><code>invalid</code></strong></td><td>False</td><td><strong>True</strong></td></tr>
+<tr><td>file missing (<code>ENOENT</code>) under a valid root</td><td><code>absent</code></td><td>False</td><td>False</td></tr>
+<tr><td>valid, <code>attended</code></td><td><code>valid</code></td><td>False</td><td>False</td></tr>
+<tr><td>valid, <code>away</code>/<code>sleeping</code></td><td><code>valid</code></td><td><strong>True</strong></td><td><strong>True</strong></td></tr>
+<tr><td>valid, expired → <code>attended-overdue</code></td><td><code>valid</code></td><td>False</td><td><strong>True</strong></td></tr>
+<tr><td>present but unreadable / oversized / malformed / off-vocab</td><td><code>invalid</code></td><td>False</td><td><strong>True</strong> + diagnostic</td></tr>
+</tbody>
+</table>
+<p>Two lines carry the whole safety property and are asserted row by row (§9):</p>
+<ol>
+<li><code>ENOENT</code> under a valid root is the ONLY <em>file</em> failure classed as absence — a corrupt file must</li>
+</ol>
+<p>   not silently drop the guard, which is exactly what would happen if the file were damaged    <em>during</em> an away window.</p>
+<ol start="2">
+<li><strong>A supplied-but-unresolvable root is invalid, not absent.</strong> Classing it as absence would let a</li>
+</ol>
+<p>   path-resolution or caller-misconfiguration failure ALLOW installs while the real workspace held    an active away declaration — a fail-safe property inverted by a config bug. &quot;No root supplied&quot;    stays absence, because that genuinely means there is no rawgentic workspace context, which is    today&#x27;s behaviour and must not change.</p>
+<h3>4.4 The three read replacements</h3>
+<ol>
+<li><code>context_meter.py:1439</code> → <code>nobody_to_ask(evaluate_workspace(read_state(workspace), now=...))</code></li>
+</ol>
+<p>   using the already-discovered workspace; <code>nag_text</code> kwarg renamed <code>headless</code> → <code>unattended</code>.</p>
+<ol start="2">
+<li><code>scanner_bootstrap.py:269</code> → <code>installs_forbidden(...)</code> from the existing <code>--workspace</code>;</li>
+</ol>
+<p>   <code>decide()</code>&#x27;s param renamed <code>installs_forbidden</code>; sentinel <code>&quot;skip-headless&quot;</code> →    <code>&quot;skip-unattended&quot;</code> with its <code>_OUTCOME</code> key.</p>
+<ol start="3">
+<li><code>skills/setup/SKILL.md</code> Step 2e → invokes <code>installs-forbidden --workspace</code> with its exit-code</li>
+</ol>
+<p>   contract; <code>tests/hooks/test_headless.py:78</code> rewritten in the same commit, since it positively    asserts the old string.</p>
+<h3>4.5 Declaration commands</h3>
+<p>Three thin skills over one <code>supervision_admin declare</code> call:</p>
+<table>
+<thead><tr><th>Skill</th><th>Command</th><th>Writes</th></tr></thead>
+<tbody>
+<tr><td><code>skills/away/SKILL.md</code></td><td><code>/rawgentic:away [until]</code></td><td><code>state=away</code>, <code>until</code> optional</td></tr>
+<tr><td><code>skills/sleeping/SKILL.md</code></td><td><code>/rawgentic:sleeping &lt;wake time&gt;</code></td><td><code>state=sleeping</code>, <code>until</code> REQUIRED</td></tr>
+<tr><td><code>skills/back/SKILL.md</code></td><td><code>/rawgentic:back</code></td><td><code>state=attended</code>, <code>until=null</code>, clears the grant</td></tr>
+</tbody>
+</table>
+<p>Part A&#x27;s skills declare state and report the result. The campaign-sweeping <strong>departure preflight is Part B</strong> (it is the subject of an open finding about multi-file write rollback), so Part A&#x27;s skills ask no questions and invoke no harness tool — which is why §8 is <code>none</code>. Each skill states plainly that the blocker-routing behaviour arrives with Part B, so a user reading the command does not over-trust it.</p>
+<p>Registration: whitelist entries (<code>away</code>, <code>back</code> after <code>adversarial-review</code>; <code>sleeping</code> between <code>session-recall</code> and <code>setup</code>); symlinks <code>../../../skills/&lt;name&gt;</code>; counts 21 → 24 across <code>README.md:14</code>, <code>README.md:3</code> + <code>:16-18</code> (workspace management 9 → 12), <code>README.md:679</code> evals <code>11/24</code>, both <code>plugin.json</code> descriptions (sum 24, byte-identical), the codex <code>interface.longDescription</code>. No <code>&lt;config-loading&gt;</code> ⇒ <code>EXPECTED_CONFIG_LOADING_COUNT</code> and the sync MANIFEST untouched.</p>
+<p>A pre-merge runtime slash-command discovery spike cannot exist: sessions load skills from <code>~/.claude/plugins/cache/rawgentic/rawgentic/&lt;version&gt;/</code>, so a new skill resolves only after reinstall AND a new session (repo <code>CLAUDE.md</code> §1, mistake #4). Verification is <code>hooks/skill_registration_check.py check --skill &lt;name&gt;</code> plus the packaging/count guards pre-merge, and D183 plugin-refresh post-merge. <strong>Recorded disagreement:</strong> the peer consult proposed one <code>skills/supervision</code> skill with the mode as an argument; kept at three per the epic design (D224).</p>
+<h3>4.6 Campaign wait field + goal clause (AC 5)</h3>
+<p>Additive TOP-LEVEL driver-state field — NOT a new <code>status</code> value:</p>
+<pre><code>&quot;campaign_wait&quot;: {&quot;status&quot;: &quot;waiting_for_owner&quot;, &quot;reason&quot;: &quot;...&quot;, &quot;blocker_id&quot;: &quot;...&quot;,
+                  &quot;entered_at&quot;: &quot;...&quot;, &quot;clears_when&quot;: &quot;...&quot;}</code></pre>
+<p><strong>Why not a <code>status</code> value:</strong> the per-issue vocabulary is closed and enforced twice (<code>driver_lib.py:48</code>, refused at <code>:1533-1535</code> and <code>:2372-2375</code>), with three further closed sets keyed off it. <code>additionalProperties: true</code> covers new FIELDS, not new VALUES — an earlier draft conflated them. A top-level object is genuinely additive: <code>validate_driver_state</code> inspects only <code>schema_version</code>, <code>campaign</code>, <code>issues</code>, <code>depends_on</code> and the single-<code>in_progress</code> invariant. No <code>schema_version</code> bump; every existing campaign file still validates. <code>clears_when</code> is REQUIRED — a pause whose exit condition nobody can state is a stall wearing a pause&#x27;s clothes.</p>
+<p>Part A ships <strong>the field, its validator, and the goal clause only.</strong> The scheduling / Stop-release / resume / teardown consumers are #927&#x27;s and #586&#x27;s, and Part A makes no claim that writing this field halts anything. <code>plan_lib.py:2758</code> <code>build_goal_text</code> gains a terminal-for-now clause in the <strong>campaign</strong> branch only, so a Stop-hook goal loop can read an honest wait instead of nagging (3 prods measured during a real owner pause); <code>_GOAL_CAP = 4000</code> binds and gets a boundary test.</p>
+<h3>4.7 Retirement, kept honest (AC 4)</h3>
+<ol>
+<li>Add the bare token to <code>RETIRED_VOCABULARY</code> (<code>tests/test_retirement_tripwire.py:26</code>).</li>
+<li><strong>KEEP</strong> the exact-set test with <code>D184_ALLOWED_FILES = set()</code>, renamed to say it asserts zero</li>
+</ol>
+<p>   active-surface carriers — retaining both-direction equality rather than weakening it to a subset    or a count (the peer consult was right about this).</p>
+<ol start="3">
+<li>Update the docstring note at <code>:13-16</code>, which currently asserts the opposite.</li>
+<li>Reword <code>docs/context-meter.md:191</code>&#x27;s row and the README prose above the Changelog (the Changelog</li>
+</ol>
+<p>   is excluded from scanning, <code>:117-121</code>, so this version&#x27;s entry may name it as history).</p>
+<p>The allowed set goes to empty and STAYS asserted, so after this commit any file naming the token fails the suite — &quot;retired in prose but honored in code&quot;, or the reverse, cannot land.</p>
+<h2>5. Migration</h2>
+<p><strong>Clean break, no shim</strong>, justified by §2&#x27;s confirmed absence of any producer. <strong>Residual, stated honestly:</strong> a hand-set <code>RAWGENTIC_HEADLESS=1</code> afterwards has no effect and no warning, because warning requires naming it in code; mitigation is the changelog + setup prose. The peer&#x27;s coordinated-rollout gate is moot (no producer) and recorded in case one appears.</p>
+<h2>6. Error handling and failure modes</h2>
+<table>
+<thead><tr><th>Failure</th><th>Behavior</th></tr></thead>
+<tbody>
+<tr><td>no workspace root supplied</td><td><code>absent</code> → <code>attended</code>; both predicates False (today&#x27;s unset-env default)</td></tr>
+<tr><td>root supplied but unresolvable</td><td><code>invalid</code> → <strong><code>installs_forbidden</code> True</strong> + diagnostic</td></tr>
+<tr><td>file missing under a valid root</td><td><code>absent</code> → <code>attended</code>; both predicates False</td></tr>
+<tr><td>present but unreadable / oversized / malformed / off-vocab</td><td><code>invalid</code> → <code>nobody_to_ask</code> False, <strong><code>installs_forbidden</code> True</strong>, one stderr diagnostic; never raises into a hook</td></tr>
+<tr><td><code>until</code> in the past at declaration</td><td>refused before any write</td></tr>
+<tr><td>unknown consult provider</td><td>refused at declaration time</td></tr>
+<tr><td><code>sleeping</code> with no wake time</td><td>refused before any write</td></tr>
+<tr><td>declaration WRITE fails</td><td>rc 1, loud; the skill reports the owner is NOT recorded as away</td></tr>
+<tr><td><code>expected_revision</code> mismatch</td><td>abort and report the new revision rather than clobber</td></tr>
+<tr><td>lock contention</td><td><code>file_lock</code> serializes; <code>revision</code> makes the loser detectable</td></tr>
+</tbody>
+</table>
+<p>READ is fail-open for AVAILABILITY but fail-SAFE for AUTHORITY: a broken file never wedges a per-tool-call hook, and never unlocks an outward action. WRITE is fail-loud.</p>
+<h2>7. Security implications</h2>
+<ul>
+<li>No credentials in the file; <code>0o600</code> via <code>atomic_write_text</code>&#x27;s mkstemp default.</li>
+<li><code>consult_grant</code> is an egress control whose default is un-granted; Part A validates it and stores</li>
+</ul>
+<p>  it, and no code in Part A performs egress, so silence cannot authorize a send.</p>
+<ul>
+<li><code>governed_campaign_ids</code> charset-validated, because Part B joins them into paths.</li>
+<li>One-directional trust boundary: the file may relax <em>advice</em> and suppress <em>installs</em>. **Part A</li>
+</ul>
+<p>  contains no authority logic at all** — merge, destructive and outward authority are untouched by   this issue and remain governed by the epic-run grant and the harness permission system.   (<code>authority_permits</code> and AC 6 are Part B; an earlier draft of this section asserted a merge   prohibition that contradicted the epic design&#x27;s rule that merge authority comes from the   epic-run grant, and would have forbidden the very mode this wave runs under.)</p>
+<ul>
+<li>A corrupt file, or an unresolvable workspace, TIGHTENS the outward-action guard rather than</li>
+</ul>
+<p>  loosening it.</p>
+<ul>
+<li><code>until</code> validated (parseable, not past) so a corrupt timestamp degrades to <code>attended</code> rather</li>
+</ul>
+<p>  than a permanent unsupervised state.</p>
+<h2>8. Platform / external dependencies</h2>
+<pre><code>platform_apis: none</code></pre>
+<p>Part A uses no platform, framework or external API: no messaging transport, no consult runner, no harness tool. It is stdlib (<code>flock</code>, <code>os.replace</code>, <code>json</code>) routed through the existing <code>atomic_write_lib</code> / <code>plan_lib.file_lock</code> helpers, plus two hooks and skill prose. Every external surface the earlier full-scope design declared — the BlueBubbles bridge, the consult runner, <code>AskUserQuestion</code> — belongs to Part B, along with the release gate that must prove live delivery before AWAY autonomy is trusted.</p>
+<h2>9. Testing strategy</h2>
+<p>New: <code>tests/hooks/test_supervision_lib.py</code>, <code>tests/hooks/test_supervision_admin.py</code>. Pure functions imported via <code>sys.path.insert</code>; CLI black-box via subprocess; injected clock; no real waits.</p>
+<ul>
+<li><code>evaluate_workspace</code>: each declared state; expiry exactly AT <code>until</code>; <code>attended-overdue</code> retains</li>
+</ul>
+<p>  <code>revision</code>/<code>declared_at</code>. <strong>The inert-feature regression:</strong> a bare <code>/rawgentic:away</code> with an   empty <code>governed_campaign_ids</code> must still make <code>installs_forbidden</code> True — the workspace evaluator   never narrows by campaign.</p>
+<ul>
+<li><strong>The load-status table asserted row by row</strong>, with both safety lines explicit: <code>ENOENT</code> under a</li>
+</ul>
+<p>  valid root is absence, and a supplied-but-unresolvable root is INVALID and forbids installs.</p>
+<ul>
+<li><strong>The asymmetry test:</strong> expired <code>away</code> ⇒ <code>nobody_to_ask</code> False AND <code>installs_forbidden</code> True —</li>
+</ul>
+<p>  the test that catches a future refactor collapsing the two predicates into one boolean.</p>
+<ul>
+<li><strong><code>supervision_lib</code> imports stdlib only</strong> — asserted by parsing its own import list, because the</li>
+</ul>
+<p>  split&#x27;s entire purpose dies to one convenience import.</p>
+<ul>
+<li><strong>Setting the retired env var changes nothing</strong>, at both replaced sites.</li>
+<li><code>validate_declaration</code>: <code>sleeping</code> without <code>until</code>; <code>attended</code> with non-null <code>until</code>; past</li>
+</ul>
+<p>  <code>until</code>; unparseable <code>until</code>. <code>validate_campaign_id</code>: separators, <code>..</code>, empty, over-long.   <code>validate_providers</code>: unknown provider rejected.</p>
+<ul>
+<li><code>declare</code>/<code>mark_attended</code>: monotonic <code>revision</code> under concurrent writer subprocesses, always-valid</li>
+</ul>
+<p>  JSON, no stray temp files, loud rc 1 on write failure, <code>expected_revision</code> mismatch aborts.</p>
+<ul>
+<li><code>campaign_wait</code>: additive validation, <code>clears_when</code> required, a pre-existing campaign file still</li>
+</ul>
+<p>  validates unchanged, and <code>VALID_STATUSES</code> asserted UNCHANGED (so a future hand adding a wait word   to the per-issue vocabulary fails loudly).</p>
+<ul>
+<li>Goal text: the clause stays within <code>_GOAL_CAP = 4000</code> at the boundary.</li>
+<li>Tripwire: zero active-surface carriers of the token.</li>
+</ul>
+<p>Baseline for the regression claim: 5366 passed, exit 0, at <code>b7d3f258</code>.</p>
+<h2>10. Out of scope — and where it went</h2>
+<p><strong>Part B (the follow-up child):</strong> departure preflight with a transaction/rollback marker (AC 2); <code>route_for</code>, the transport capability gate and the disposition table (AC 3); revision-bound action claims with atomic execute-once semantics; <code>authority_permits</code> with its missing absence argument (AC 6); the consult USE path (AC 7); and the campaign-scoped evaluator plus the <code>supervision_override</code> lifecycle. <strong>Other children:</strong> #927 (boundary rework, the executable broker, the <code>campaign_wait</code> consumers), #586 (resume, <code>resets_at</code>), #944 (revalidate hardening).</p>
+<h2>11. Multi-PR assessment</h2>
+<p>Single PR for Part A. ~12 implementation files on one seam; splitting the read replacements from the module feeding them ships a dead module, and splitting the tripwire edit from the code ships a red suite.</p>
+<h2>12. Gate provenance — how this design was arrived at</h2>
+<p><strong>Step 3 peer consult</strong> (blind both ways; drafted and written to disk before the result was opened). Backend <code>gpt</code>, reviewer <code>gpt-5.6-sol</code>, <code>status: success</code>, <code>diagnostic: true</code>. <em>Adopted:</em> the two-module split (the single-module draft was wrong, and §2&#x27;s stdlib-only import list is the measured basis); the locked-write pattern; retaining the both-direction exact-set assertion at empty; <code>revision</code> on the view. <em>Overridden:</em> a single <code>is_watched</code> boolean (§4.3); one <code>skills/supervision</code> skill (§4.5, D224); a coordinated launcher-rollout gate (§5 — moot, no producer).</p>
+<p><strong>Step 4 — three adversarial rounds, 27 findings, 19 applied.</strong> Rounds returned 10 → 9 → 8 findings; several later findings were caused by earlier rounds&#x27; own fixes. Findings that changed this design materially and survive in Part A:</p>
+<ul>
+<li>present-but-invalid ≠ absent (§4.3) — the strongest finding of the three rounds: an earlier draft</li>
+</ul>
+<p>  would have silently dropped the install guard if the state file were damaged during an away   window, collapsing in the error path the very asymmetry the two predicates exist to preserve;</p>
+<ul>
+<li><code>status</code> is a closed vocabulary enforced twice, so the wait had to become an additive</li>
+</ul>
+<p>  <code>campaign_wait</code> field and the <code>additionalProperties</code> justification was wrong (§4.6);</p>
+<ul>
+<li>an unresolvable workspace must be invalid, not absent (§4.3) — otherwise a config bug inverts the</li>
+</ul>
+<p>  fail-safe property;</p>
+<ul>
+<li>the predicate-specific CLI with an exit-code contract, because a bare state word makes</li>
+</ul>
+<p>  <code>attended-overdue</code> ambiguous at the install site (§4.1);</p>
+<ul>
+<li><code>campaign_id=None</code> overloading, which risked shipping an inert feature — resolved in Part A by</li>
+</ul>
+<p>  shipping only the workspace evaluator (§4.3).</p>
+<p>Two findings were <strong>refuted with evidence</strong> rather than complied with: nothing can intercept <code>AskUserQuestion</code> (a model-invoked harness tool, not a Python function), and no pre-merge runtime slash-command discovery spike can exist (skills load from the installed plugin cache after reinstall + a fresh session). A registration-style static guard IS feasible and belongs to Part B with the routing it guards.</p>
+<p><strong>How the gate closed.</strong> The <code>design</code> loop-back budget was exhausted (2/2, global 2/3) with 8 findings still open, and two of them carried ambiguity markers — which refuses the #798 budget-exhausted close, because that close is only for exhaustion over resolved ground. The contract therefore required escalation, and the owner resolved it: <strong>split</strong> (D226). This gate closed by <strong>owner resolution of the ambiguity breaker</strong> — explicitly not by a clean review round and not by a budget-exhausted close. The 8 open findings were not dropped: 5 transferred wholesale to Part B, 2 were fixed here (§4.3&#x27;s unresolvable-root row and §7&#x27;s corrected authority statement), and 1 (<code>AskUserQuestion</code> capability evidence) transferred with the preflight that needs it.</p>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#943 (feature, complex)</td></tr><tr><th>Lane</th><td>full</td></tr><tr><th>Tests</th><td>121 added · 5487/5487 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: passed</td></tr><tr><th>Usage</th><td>in None / out None tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>39</td><td>33</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>1</td><td>1</td><td>pass</td></tr><tr><td>8a</td><td>Per-task Review</td><td>8</td><td>7</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>6</td><td>6</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
+</main>
+<footer>Last updated: 2026-08-05 16:22 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

@@ -188,7 +188,7 @@ Three independent facts, because conflating them sends a session at a command th
 
 | Value | True when | Effect on the message |
 |---|---|---|
-| `headless` | `RAWGENTIC_HEADLESS=1` | the surviving unattended-session signal (D184, #866 → epic #871): no human to ask, so it says "checkpoint and write the handoff" |
+| `unattended` | the DECLARED supervision state says `away` or `sleeping` (#943, replacing the retired env var): no human to ask, so it says "checkpoint and write the handoff" |
 | `fresh_handoff_capable` | **both** `RAWGENTIC_LAUNCHER_ARMED=1` **and** `RAWGENTIC_FRESH_LAUNCH_SUPPORTED=1` | and only then does it name `launcher_lib.py handoff` as the route |
 | `herdr_available` | `HERDR_ENV=1` | a sibling pane can be spawned, so an unattended session without a launcher is routed to `/rawgentic:pane-handoff` instead of stop-and-wait (#732) |
 
