@@ -425,12 +425,20 @@ class TestStep7BranchBase:
 def test_incident_hotfix_branch_fetches_first():
     """#140 AC4: incident is the one sibling whose branch step lacked an explicit
     fetch (the other 7 already fetch). Its hotfix branch must fetch first so a
-    stale origin/<default> ref can't reintroduce the bug."""
-    incident = (REPO_ROOT / "skills" / "incident" / "SKILL.md").read_text()
-    idx = incident.find("git checkout -b hotfix/")
-    assert idx != -1, "incident hotfix checkout not found"
-    preceding = incident[:idx]
-    assert "git fetch origin" in preceding, "incident must fetch origin before the hotfix checkout"
+    stale origin/<default> ref can't reintroduce the bug.
+
+    #909 moved Step 10 into references/phase-b-analyze.md, so this is rebuilt on
+    the provenance-preserving mapping: both commands exactly once, in the SAME
+    file, in order. The previous single-file `find()` form would go vacuous over a
+    joined corpus, where any earlier `git fetch origin` anywhere satisfies it."""
+    from tests.corpus import assert_ordered_in_one_file, skill_files
+
+    assert_ordered_in_one_file(
+        skill_files("incident"),
+        "git fetch origin <default_branch>",
+        "git checkout -b hotfix/",
+        why="a stale origin/<default> ref would silently base the hotfix on old code (#140 AC4)",
+    )
 
 
 # --- #138: deferred-to-target verification surfaced across the spine ---
