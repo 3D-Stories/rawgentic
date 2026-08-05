@@ -749,6 +749,43 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.131.0 (2026-08-05)
+- **Supervision is declared, not guessed — `RAWGENTIC_HEADLESS` is retired (#943 Part A, epic #871).**
+  Three code paths asked "is anybody watching?" by reading one environment variable that could
+  say only present-or-absent: it could not distinguish the owner stepping out (reachable by phone)
+  from the owner asleep, and a session could not clear it, because a process cannot un-export its
+  parent's environment. Replaced by a declared workspace state
+  (`claude_docs/.supervision.json`) written by three new commands — `/rawgentic:away [until]`,
+  `/rawgentic:sleeping <wake time>` (a wake time is required; "unreachable forever" is not a state
+  to leave a run in), and `/rawgentic:back`, the only thing that lifts the guards. Split across two
+  modules for a measured reason: `supervision_lib` is read-only and **stdlib-imports-only**
+  (test-enforced) because `context_meter` consumes it on a hook that runs every tool call, while
+  `supervision_admin` holds `plan_lib.file_lock` across the whole read-validate-increment-write
+  cycle and lands via `atomic_write_text(fsync=True)`, fenced by `--expected-revision` so a write
+  computed against a stale read aborts instead of clobbering a fresher declaration. **Two
+  predicates rather than one flag**, because the consumers need opposite safe defaults:
+  `nobody-to-ask` relaxes when a declaration expires (it only picks which advice a
+  context-pressure nag prints), while `installs-forbidden` does not — installing packages is an
+  outward act, and a clock passing a stated wake time is not evidence anybody returned. For the
+  same reason present-but-invalid is **not** absence: `ENOENT` under a valid root is the only file
+  failure read as absent, so a corrupt file — or a supplied-but-unresolvable workspace root —
+  keeps refusing installs instead of a config bug inverting the guard. Also adds the additive
+  top-level driver-state `campaign_wait` object (`waiting_for_owner` / `waiting_for_reset`, with
+  `clears_when` required) and its `build_goal_text` campaign clause, so a Stop-hook goal loop reads
+  an honest pause rather than nagging one — deliberately NOT new `issues[].status` values, since
+  that vocabulary is closed and enforced twice with three further closed sets keyed off it, and
+  `additionalProperties: true` permits new fields, never new values. The retirement is kept honest
+  in both directions: the bare token joins `RETIRED_VOCABULARY` **and** the exact-set assertion is
+  retained with an empty allowed set, so any re-introduction fails loudly. Skills 21 → 24. Blocker
+  routing while unsupervised — texting, consulting, action claims, `authority_permits`, the
+  departure preflight, and any behavioural consumer of `campaign_wait` — is split out to #947 and
+  gated off, so an absent owner currently gets an honest park rather than an autonomous decision;
+  `docs/supervision.md` says so plainly. 105 tests added across
+  `tests/hooks/test_supervision_lib.py`, `test_supervision_admin.py` and
+  `test_supervision_campaign_wait.py`, including the asymmetry test that fails if the two
+  predicates are ever collapsed and the inert-feature regression proving a bare `/rawgentic:away`
+  still guards the hook sites. No workflow-spine change → no diagram REV. Suite 5366→5471.
+
 ### v3.130.0 (2026-08-05)
 - **Run-records now land exactly once (#888, epic #871).** Closes both measured halves of the
   telemetry-loss problem this issue absorbed. Dropped (#588): WF2 Step 14 gains the merge-grant
