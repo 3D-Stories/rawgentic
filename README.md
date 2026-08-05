@@ -676,7 +676,7 @@ pytest tests/hooks/test_wal_guard.py -v
 
 **Impact measurement:** `scripts/wf2_impact_metrics.py` computes deterministic Tier-1 impact metrics (test growth, fail-closed coverage, dedup, diff volume) for a skill-extraction effort over a `--baseline`/`--head` git range. See [docs/measurements/2026-06-15-wf2-extraction-impact.md](docs/measurements/2026-06-15-wf2-extraction-impact.md) for the WF2 extraction analysis.
 
-Skills are tested via the `/skill-creator` eval pipeline (10/21 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `epic-post-mortem`, `epic-run`, `housekeeping`, `interview`, `revalidate-children`, `run-feedback`, `scan`, `session-mining`, and `session-recall` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard.
+Skills are tested via the `/skill-creator` eval pipeline (11/21 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `epic-post-mortem`, `housekeeping`, `interview`, `revalidate-children`, `run-feedback`, `scan`, `session-mining`, and `session-recall` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard. The eval data is also read by the **behavioural selection gate** (`hooks/skill_evals.py`, #928): `discover` reports every file's cases and their intents (`trigger` / `slash` / `refuse`), and a live verdict is a documented manual gate — see `docs/skill-evals.md`.
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 
@@ -724,6 +724,39 @@ For major changes, please open an issue first to discuss the approach.
 ---
 
 ## Changelog
+
+### v3.129.0 (2026-08-05)
+- **Behavioural selection gate for skill evals (#928, epic #906).** `hooks/skill_evals.py` turns
+  eleven `evals.json` files from inert data into a runnable gate: `discover_eval_files` finds both
+  sanctioned locations plus the skill-root spelling, `load_cases` accepts both on-disk schemas
+  (`skill_name`+`evals` and the `peer-consult` stub's `skill`+`cases`), `classify_intent` separates
+  the three intents already in the corpus, `skills_selected` parses a transcript for `Skill`
+  `tool_use` blocks, and `judge` scores a case — with a **refuse** case counting the skill *firing*
+  as the failure. The live `claude -p` spawn is an INJECTED seam, so all 49 new tests
+  (`tests/hooks/test_skill_evals.py`) run in the ordinary lane; the transcript shape is measured
+  against a real 1.5 MB session transcript, not guessed. Two classifier defects were found by
+  running the real 38-case corpus rather than fixtures: a whole-text "does not" match called
+  `pane-handoff` cases 1/4/5 refusals (inverting the gate for three dominant real phrasings — those
+  negations are about what the skill does not do *internally*), and reading `slash` from
+  `expected_output` matched any path-shaped token, mislabelling natural-language cases across five
+  skills; `slash` now comes from the prompt, keyed on the skill's own name. Adds
+  `skills/epic-run/evals/evals.json` — six cases covering the 403 description characters #909
+  restored, which had never been exercised for selection, including both of that description's
+  NOT-for-this-skill boundaries. Evals fraction 10/21 → 11/21. `docs/skill-evals.md` records the
+  fourth AC's decision: a live verdict is a documented MANUAL gate, not a CI lane, because
+  selection runs from the installed plugin cache and reinstalling while hook-using sessions live is
+  prohibited (§7, mistake #5) — the same wall that stopped #909. The live end-to-end run is
+  explicitly deferred, with the reason and the follow-up recorded in that doc. The Step-11
+  cross-model pass (gpt-5.6-sol) returned 7 findings and all 7 were fixed, not deferred: `discover`
+  now FAILS on an empty corpus instead of reporting `total cases: 0` and exiting 0; `load_cases`
+  refuses a file with neither case key (truncation used to read as a deliberate stub); skill
+  matching is namespace-aware, so `other-plugin:pane-handoff` can no longer satisfy a gate on
+  `rawgentic:pane-handoff`; a refusal no longer passes on a dead session, and one that names the
+  correct route requires that route to fire; the refusal regex is bound to clause order, so
+  "Invokes pane-handoff but does not invoke clear-prep" is a trigger; and the manual procedure
+  gained real containment (disposable workspace-less cwd + `--disallowed-tools`) because the corpus
+  prompts are live requests and this CLI has no `--max-turns`.
+  No workflow-spine change → no diagram REV. Suite 5254→5303.
 
 ### v3.128.4 (2026-08-05)
 - **Milestone epics referenced from the plan (#756 follow-through, part 2).** The five milestone
