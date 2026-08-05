@@ -755,8 +755,8 @@ For major changes, please open an issue first to discuss the approach.
   correct route requires that route to fire; the refusal regex is bound to clause order, so
   "Invokes pane-handoff but does not invoke clear-prep" is a trigger; and the manual procedure
   gained real containment (disposable workspace-less cwd + `--disallowed-tools`) because the corpus
-  prompts are live requests and this CLI has no `--max-turns`. No workflow-spine change → no
-  diagram REV. Suite 5254→5303.
+  prompts are live requests and this CLI has no `--max-turns`.
+  No workflow-spine change → no diagram REV. Suite 5254→5303.
 
 ### v3.128.4 (2026-08-05)
 - **Milestone epics referenced from the plan (#756 follow-through, part 2).** The five milestone
