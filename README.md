@@ -732,7 +732,7 @@ For major changes, please open an issue first to discuss the approach.
   (`skill_name`+`evals` and the `peer-consult` stub's `skill`+`cases`), `classify_intent` separates
   the three intents already in the corpus, `skills_selected` parses a transcript for `Skill`
   `tool_use` blocks, and `judge` scores a case — with a **refuse** case counting the skill *firing*
-  as the failure. The live `claude -p` spawn is an INJECTED seam, so all 30 new tests
+  as the failure. The live `claude -p` spawn is an INJECTED seam, so all 33 new tests
   (`tests/hooks/test_skill_evals.py`) run in the ordinary lane; the transcript shape is measured
   against a real 1.5 MB session transcript, not guessed. Two classifier defects were found by
   running the real 38-case corpus rather than fixtures: a whole-text "does not" match called
@@ -747,7 +747,7 @@ For major changes, please open an issue first to discuss the approach.
   selection runs from the installed plugin cache and reinstalling while hook-using sessions live is
   prohibited (§7, mistake #5) — the same wall that stopped #909. The live end-to-end run is
   explicitly deferred, with the reason and the follow-up recorded in that doc. No workflow-spine
-  change → no diagram REV. Suite 5254→5284.
+  change → no diagram REV. Suite 5254→5287.
 
 ### v3.128.4 (2026-08-05)
 - **Milestone epics referenced from the plan (#756 follow-through, part 2).** The five milestone

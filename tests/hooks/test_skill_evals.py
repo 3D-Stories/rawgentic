@@ -320,3 +320,37 @@ def test_run_records_a_submitter_failure_as_a_failed_case_not_a_pass():
 
 def test_run_on_zero_cases_is_an_empty_result_not_a_vacuous_pass():
     assert skill_evals.run([], "peer-consult", lambda p: "") == []
+
+
+# --- inline self-review findings (mechanical + bug_logic lens) ------------------------
+
+def test_a_malformed_case_is_not_blamed_on_the_submitter():
+    """A case missing `prompt` must not be reported as 'submitter failed'.
+
+    The first version read `case["prompt"]` INSIDE the try that guards the spawn, so a
+    KeyError in our own data was attributed to the submitter — misdirecting whoever reads
+    the failure at exactly the moment they are debugging a live spawn.
+    """
+    calls = []
+    results = skill_evals.run([{"id": 1, "intent": "trigger"}], "s",
+                              lambda p: calls.append(p) or "")
+    assert results[0]["passed"] is False
+    assert "prompt" in results[0]["why"].lower()
+    assert "submitter" not in results[0]["why"].lower()
+    assert calls == [], "a malformed case must never reach the submitter"
+
+
+def test_a_non_string_expected_output_does_not_crash_the_loader(tmp_path):
+    """`expected_output` is authored by hand per skill; a dict there must not raise
+    AttributeError out of `classify_intent`. It carries no refusal signal, so the case
+    is a trigger."""
+    p = tmp_path / "evals.json"
+    _write(p, {"skill_name": "s", "evals": [
+        {"id": 1, "prompt": "go", "expected_output": {"unexpected": "shape"}}]})
+    name, cases = skill_evals.load_cases(p)
+    assert cases[0]["intent"] == "trigger"
+
+
+def test_classify_intent_tolerates_a_non_string_argument():
+    assert skill_evals.classify_intent(None) == "trigger"
+    assert skill_evals.classify_intent({"a": 1}) == "trigger"

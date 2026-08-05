@@ -169,7 +169,10 @@ def classify_intent(expected_output: str, prompt: str = "", skill_name: str = ""
     skill running and then rejecting its ARGUMENT, which for a selection gate is a
     successful selection.
     """
-    text = (expected_output or "").strip()
+    # Not a string is not a refusal. `expected_output` is hand-authored per skill, so a
+    # dict or a null there must classify as a plain trigger rather than raise out of a
+    # classifier — the caller is a gate, and crashing it is worse than reading no signal.
+    text = expected_output.strip() if isinstance(expected_output, str) else ""
     if _slash_command_for(prompt, skill_name):
         return "slash"
     if not text:
@@ -251,12 +254,22 @@ def run(cases, skill_name: str, submit) -> list[dict]:
     """
     results = []
     for case in cases or []:
+        def _fail(why: str) -> dict:
+            return {"id": case.get("id"), "intent": case.get("intent", "trigger"),
+                    "passed": False, "why": why, "selected": [], "skill": skill_name}
+
+        # Read the prompt OUTSIDE the spawn guard. Reading it inside attributed a
+        # KeyError in our own data to "submitter failed", which misdirects whoever is
+        # debugging a live spawn — and it would have called the submitter's failure path
+        # without ever calling the submitter.
+        prompt = case.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            results.append(_fail("malformed case: no usable `prompt`"))
+            continue
         try:
-            transcript = submit(case["prompt"])
+            transcript = submit(prompt)
         except Exception as e:  # noqa: BLE001 — any submitter failure is a case failure
-            results.append({"id": case.get("id"), "intent": case.get("intent", "trigger"),
-                            "passed": False, "why": f"submitter failed: {e}",
-                            "selected": [], "skill": skill_name})
+            results.append(_fail(f"submitter failed: {e}"))
             continue
         results.append(judge(case, skills_selected(transcript), skill_name))
     return results
