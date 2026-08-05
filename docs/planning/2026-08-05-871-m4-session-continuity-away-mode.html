@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>#871 M4 — Session continuity &amp; unsupervised modes: one cohesive plan</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+:root{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}
+:root[data-theme=dark]{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}
+:root[data-theme=light]{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#955a06;--defer-bg:#f8f2e2}
+@media print{:root,:root[data-theme=dark]{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#955a06;--defer-bg:#f8f2e2}}
+.mstone{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:12px;padding:14px 16px;margin:14px 0}
+.mstone h3{margin:0 0 .4em;font-size:15px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.c-conf{color:var(--chip-c);background:var(--chip-c-bg)}
+.c-defer{color:var(--defer);background:var(--defer-bg)}
+.c-plan{color:var(--ink-2);background:var(--code)}
+
+body.tpl-roadmap{background:radial-gradient(1000px 520px at 70% -8%,#17202c 0%,var(--bg) 58%)}
+.tpl-roadmap .wrap{max-width:1120px;padding:0 22px 72px}
+.tpl-roadmap header{padding:36px 0 14px;border-bottom:none;margin-bottom:20px}
+.tpl-roadmap h1{font-size:clamp(26px,3.6vw,36px)}
+.tpl-roadmap h2{font-size:20px;margin:2em 0 .6em}
+
+.tpl-roadmap .rm-epic{border-left-width:4px}
+.tpl-roadmap .rm-meter{margin:10px 0 4px}
+.tpl-roadmap .rm-meter .blk-track{height:8px}
+.tpl-roadmap .rm-child{gap:5px}
+.tpl-roadmap .rm-child .blk-chip{font-size:10.5px;padding:2px 8px}
+/* Phase rail — what we take from the reference's `.gantt` is that a row is a PHASE, not a log
+   entry: the marker is a short bar rather than a dot, and the phase name is the heavy element
+   while the `when` shrinks to a label. It is NOT proportional — see the docstring; every bar is
+   the same size, because the grammar carries no duration. */
+.tpl-roadmap .rm-timeline{margin:18px 0;border-left-color:var(--line)}
+.tpl-roadmap .rm-timeline .blk-tl{padding:10px 0}
+.tpl-roadmap .rm-timeline .blk-tl::before{width:4px;height:22px;border-radius:2px;left:-19px;
+top:12px;background:var(--line)}
+.tpl-roadmap .rm-timeline .is-now::before{background:var(--accent)}
+.tpl-roadmap .rm-timeline .is-past::before{background:var(--ink-3)}
+.tpl-roadmap .rm-timeline .blk-when{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase}
+.tpl-roadmap .rm-timeline .blk-title{font-size:15.5px}
+/* Risk table — the reference's `.sev` pill, coloured by level, ahead of the risk text so the
+   column of pills is scannable on its own.
+   Severity is NOT a closed set here, which is worth knowing before reading the four rules below.
+   `_findings` calls `_token(value, "severity")` and `_SEMANTIC_SETS` has no "severity" entry, so
+   ANY slug passes straight through — `blocker` yields `is-blocker`, and a blank field yields
+   `is-note`. Neither warns. Executed, not assumed. The four rules colour the four levels the rest
+   of the engine already uses (`review` styles the same set); anything else keeps the base pill
+   shape with no fill, and the author's own word still renders inside it. Deliberate: an
+   unrecognised severity should look unrecognised, not be silently recoloured. */
+.tpl-roadmap .rm-risk{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+padding:4px 16px;margin:14px 0}
+.tpl-roadmap .rm-risk .blk-finding{border-bottom:1px solid var(--line);padding:10px 0}
+.tpl-roadmap .rm-risk .blk-finding:last-child{border-bottom:none}
+.tpl-roadmap .rm-risk .blk-sev{display:inline-block;font:700 10px/1.6 ui-monospace,Menlo,
+Consolas,monospace;letter-spacing:.06em;text-transform:uppercase;padding:2px 9px;
+border-radius:999px;margin-right:8px}
+.tpl-roadmap .rm-risk .is-critical .blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.tpl-roadmap .rm-risk .is-high .blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.tpl-roadmap .rm-risk .is-medium .blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.tpl-roadmap .rm-risk .is-low .blk-sev{color:var(--sev-low);background:var(--sev-low-bg)}
+/* Data-flow figure — the reference's `.diagram`: a framed figure whose nodes are boxes and
+   whose edges are accented. The tree stays a tree; only the framing and the edge weight come
+   from the reference. */
+.tpl-roadmap .rm-flow{background:var(--code);border:1px solid var(--line);border-radius:12px;
+padding:12px 16px;margin:16px 0}
+.tpl-roadmap .rm-flow .blk-node{background:var(--bg)}
+.tpl-roadmap .rm-flow .blk-edge{color:var(--accent);font:700 10.5px/1.6 ui-monospace,Menlo,
+Consolas,monospace;letter-spacing:.05em}
+.tpl-roadmap .rm-flow .blk-label{font-weight:650}
+/* #68: the segmented composition meter — the signature device of the approved visual spec
+   (docs/planning/2026-08-02-72-visual-spec.md §2). One segment per group, proportional to its
+   count, coloured by STATE. The gap between segments is what makes it read as parts of a whole
+   rather than one bar; a solid bar is what `meter` already is. */
+.tpl-roadmap .blk-comp{margin:14px 0}
+.tpl-roadmap .blk-comp-bar{display:flex;gap:5px}
+.tpl-roadmap .blk-comp-seg{height:9px;border-radius:5px;background:var(--ink-3)}
+.tpl-roadmap .blk-comp-seg.is-crit{background:var(--sev-crit)}
+.tpl-roadmap .blk-comp-seg.is-warn{background:var(--sev-med)}
+.tpl-roadmap .blk-comp-seg.is-ok{background:var(--chip-c)}
+.tpl-roadmap .blk-comp-legend{display:flex;flex-wrap:wrap;gap:6px 20px;margin-top:9px;
+font-size:10.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3)}
+.tpl-roadmap .blk-comp-key{display:inline-flex;align-items:center;gap:7px}
+.tpl-roadmap .blk-comp-key::before{content:"";width:8px;height:8px;border-radius:2px;
+background:var(--ink-3)}
+.tpl-roadmap .blk-comp-key.is-crit::before{background:var(--sev-crit)}
+.tpl-roadmap .blk-comp-key.is-warn::before{background:var(--sev-med)}
+.tpl-roadmap .blk-comp-key.is-ok::before{background:var(--chip-c)}
+/* #68 PR 2: the phase band — the container the composition meter measures.
+   Spec §2 "Tracks as first-class containers": a titled band with its own state badge, its own
+   segmented bar, and its work items nested INSIDE it. Depth by ground, not shadow (spec rule 2):
+   the band sits on `--surface` and its item strip sinks back to `--bg`, which is the two-ground
+   version of the target's three. The ordinal is what makes the sequence visible — it is the
+   "phases in order" the issue title asks for, and it is why the gutter is fixed-width and mono:
+   `01` and `10` must line up or the column stops reading as a sequence. */
+.tpl-roadmap .rm-phase{margin:18px 0;display:flex;flex-direction:column;gap:14px}
+.tpl-roadmap .blk-ph{background:var(--surface);border:1px solid var(--line);
+border-radius:12px;padding:14px 16px;border-left:4px solid var(--ink-3)}
+.tpl-roadmap .blk-ph.is-crit{border-left-color:var(--sev-crit)}
+.tpl-roadmap .blk-ph.is-warn{border-left-color:var(--sev-med)}
+.tpl-roadmap .blk-ph.is-ok{border-left-color:var(--chip-c)}
+.tpl-roadmap .blk-ph-head{display:flex;align-items:baseline;gap:12px}
+.tpl-roadmap .blk-ph-ord{flex:none;width:26px;font:700 13px/1.4 ui-monospace,Menlo,
+Consolas,monospace;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.tpl-roadmap .blk-ph-title{flex:1;font-size:15.5px;font-weight:700}
+.tpl-roadmap .blk-ph-badge{flex:none;font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.11em;text-transform:uppercase;padding:2px 9px;border-radius:6px;
+color:var(--ink-3);border:1px solid var(--line)}
+.tpl-roadmap .blk-ph-badge.is-crit{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-badge.is-warn{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-badge.is-ok{color:var(--chip-c);background:var(--sev-low-bg);
+border-color:transparent}
+/* One segment per ITEM, so the bar is a picture of the list beneath it. Equal widths (spec §2)
+   — `flex:1` rather than an inline percentage, so the renderer does no arithmetic and the
+   segments cannot drift out of step with the rows they stand for. */
+.tpl-roadmap .blk-ph > .blk-comp-bar{margin:11px 0 0}
+.tpl-roadmap .blk-ph .blk-comp-seg{flex:1}
+.tpl-roadmap .blk-ph-items{margin-top:11px}
+.tpl-roadmap .blk-ph-items:empty{display:none}
+/* 38px = the ordinal's 26px plus the head's 12px gap, so an item's id starts exactly under
+   its phase's title. At 26px they were three-quarters aligned, which reads as a mistake
+   rather than as a level of hierarchy — found by looking, not by a test. */
+.tpl-roadmap .blk-ph-item{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+padding:8px 0 8px 38px;border-top:1px solid var(--line)}
+.tpl-roadmap .blk-ph-id{font:700 11.5px/1.6 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-2);border-bottom:2px solid var(--line);padding-bottom:1px}
+.tpl-roadmap .blk-ph-item.is-crit .blk-ph-id{color:var(--sev-crit);
+border-bottom-color:var(--sev-crit)}
+.tpl-roadmap .blk-ph-chip{font:700 9.5px/1.7 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.11em;text-transform:uppercase;padding:1px 7px;border-radius:6px;
+color:var(--ink-3);background:var(--code)}
+.tpl-roadmap .blk-ph-chip.is-crit{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.tpl-roadmap .blk-ph-chip.is-warn{color:var(--sev-med);background:var(--sev-med-bg)}
+.tpl-roadmap .blk-ph-chip.is-ok{color:var(--chip-c);background:var(--sev-low-bg)}
+.tpl-roadmap .blk-ph-text{flex:1 1 240px;color:var(--ink-2);font-size:14px}
+
+:root{--accent:#f2a65e;}
+:root[data-theme=dark]{--accent:#f2a65e;}
+:root[data-theme=light]{--accent:#a26211;}
+@media print{:root,:root[data-theme=dark]{--accent:#a26211;}}
+</style>
+</head>
+<body class="tpl-roadmap">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-05 12:34 MDT</div>
+<h1>#871 M4 — Session continuity &amp; unsupervised modes: one cohesive plan</h1>
+
+</header>
+<main>
+<p><strong>Date:</strong> 2026-08-05 · <strong>Authors:</strong> owner + Fable 5, gpt-5.6-sol as consultant · <strong>Status:</strong> for owner review <strong>Epic:</strong> #871 (reshaped by this design) · <strong>Supersedes:</strong> the M2/M4 split of #927, #769, #726, #586</p>
+<div class="blk blk-stats"><div class="blk-item"><span class="blk-value">5</span><span class="blk-label">mechanisms unified</span></div><div class="blk-item is-accent"><span class="blk-value">2</span><span class="blk-label">unsupervised modes: away · sleeping</span></div><div class="blk-item"><span class="blk-value">7</span><span class="blk-label">ACs (5 owner + 2 suggested)</span></div><div class="blk-item"><span class="blk-value">7</span><span class="blk-label">wave children (2 new issues)</span></div><div class="blk-item"><span class="blk-value">3</span><span class="blk-label">RAWGENTIC_HEADLESS stopgap reads retired</span></div></div>
+<div class="blk blk-callout"><div class="blk-callout is-ok"><div class="blk-title">Owner decisions already made this session (2026-08-05)</div><p>Fold the overlapping M2 children (#927, #769, #726, #586) into this M4 wave — the other ten #906
+children resume after. Blockers: AWAY asks by text and waits min(return time, 20 min); SLEEPING
+decides immediately. Revalidate hardening = the claim-coverage gap + the obsolete-child owner
+gate. M2.5 is sliced: #888 (exactly-once run-records) rides this wave; #363/#356 stay behind.</p></div></div>
+<section class="mstone rm-epic"><h3>1. The problem, in plain words <span class="chip c-conf">DONE</span></h3><p>rawgentic has five separately-built mechanisms that all exist to keep long work going past the limits of one session, and they do not compose. The owner has had to untangle the same confusion repeatedly — most recently: &quot;you keep getting confused that single-session mode means don&#x27;t run pane-handoff.&quot;</p>
+<p>Measured incidents, each a real run:</p>
+<ul>
+<li><strong>Epic #875 (2026-08-05):</strong> driver-state said <code>single-session</code>, so after #761 merged the run</li>
+</ul>
+<p>  went straight into the next child in the same exhausted session. No trigger fired; none was due.   The owner had to intervene. (#927&#x27;s filing evidence.)</p>
+<ul>
+<li><strong>Epic #906 (this run):</strong> the owner wanted a pane-handoff chain (the epic is literally named</li>
+</ul>
+<p>  &quot;pane-handoff chain&quot;), but the campaign was armed <code>single-session</code> — so every boundary handoff   is done by hand with a hand-written prompt, outside the driver&#x27;s own machinery, and the   fresh-session gate machinery (receipts, dispositions) is driven manually.</p>
+<ul>
+<li><strong>A <code>single-session</code> campaign has NO sanctioned boundary handoff at all</strong> (#927&#x27;s table): the</li>
+</ul>
+<p>  <code>handoff</code> command is gated on <code>fresh-session</code> mode, <code>mid-child-handoff</code> refuses at a boundary   (<code>no_active_child</code>), and ad-hoc <code>pane-handoff</code>&#x27;s own skill says &quot;not for mid-campaign epic runs.&quot;</p>
+<ul>
+<li><strong>The stop-hook goal loop nags an honestly-paused run</strong> (this session, 3 consecutive stop-hook</li>
+</ul>
+<p>  prods during an owner-ordered pause) and, symmetrically, <strong>stalls an unsupervised run</strong> on   questions nobody is present to answer (D36, thewanderinginn epic #7: the stop hook fired eleven   times demanding the epic finish while the contract said the session must end).</p>
+<ul>
+<li><strong>Overnight resumes silently fail</strong> (#586, owner report 2026-07-22): the cron launcher pins a</li>
+</ul>
+<p>  session ID at arm time; <code>/clear</code> mints a new one; <code>--resume &lt;old-id&gt;</code> errors. And the launcher   polls blind on a <code>*/20</code> staleness heuristic instead of knowing when the 5-hour window actually   resets.</p>
+<ul>
+<li><strong>Plugin refresh (D183) and the learnings sweep (D181) live in handoff-doc prose</strong>, not in any</li>
+</ul>
+<p>  skill or command — each new successor must be told by hand, and this run&#x27;s successor was.</p></section>
+<section class="mstone rm-epic"><h3>2. What exists today (component inventory) <span class="chip c-conf">DONE</span></h3><table>
+<thead><tr><th>Mechanism</th><th>Home</th><th>What it does</th><th>Trigger</th></tr></thead>
+<tbody>
+<tr><td>epic-run driver</td><td><code>skills/epic-run</code> + <code>driver_lib</code>/<code>launcher_lib</code></td><td>sequence WF2 over children; `session_mode: single-session \</td><td>fresh-session` (default single)</td><td>operator</td></tr>
+<tr><td>fresh-session boundary</td><td><code>launcher_lib handoff</code></td><td>pane split + successor launch + predecessor retirement, receipt-gated</td><td><code>fresh-session</code> mode only</td></tr>
+<tr><td>mid-child-handoff</td><td><code>launcher_lib mid-child-handoff</code></td><td>context-pressure handoff DURING a child; generation/claim fence</td><td>context meter</td></tr>
+<tr><td>ad-hoc pane-handoff</td><td><code>skills/pane-handoff</code></td><td>one-shot successor with bind/prompt/goal verification</td><td>user ask, or meter tiers</td></tr>
+<tr><td>context meter</td><td><code>hooks/context_meter.py</code></td><td>55/75 thresholds → advisory/directive handoff; reads <code>RAWGENTIC_HEADLESS</code> as &quot;unattended&quot; stopgap</td><td>statusline bridge</td></tr>
+<tr><td>revalidate-children</td><td>skill + <code>rebuild-receipt</code></td><td>re-check queued children&#x27;s claims after every merge; receipt gates next-child</td><td>driver gate</td></tr>
+<tr><td>plugin-refresh</td><td>workspace skill <code>refresh.sh</code></td><td>reinstall plugin so successor loads the merged build (D183)</td><td>owner instruction, prose</td></tr>
+<tr><td>long-run-resume</td><td>workspace skill + <code>overnight-resume.sh</code></td><td>system-cron relaunch on staleness; pins session ID (#586)</td><td>cron <code>*/20</code></td></tr>
+<tr><td>goal / stop hook</td><td>harness <code>/goal</code></td><td>re-prompts the session until the DONE condition is met</td><td>every turn end</td></tr>
+<tr><td>goal-read</td><td>skill + <code>launcher_lib read-goal-condition</code></td><td>reads the ARMED goal&#x27;s condition verbatim from a verified source (transcript <code>goal_status</code> rows) — what pane-handoff&#x27;s byte-identical goal carry and every status report stand on</td><td>pane-handoff, status reports, teardown validation</td></tr>
+</tbody>
+</table>
+<p>Three <code>RAWGENTIC_HEADLESS</code> stopgap reads (context_meter, scanner_bootstrap, setup 2e) survive from the deleted headless machinery, by owner decision D184 — #871 exists to replace them.</p></section>
+<section class="mstone rm-epic"><h3>3. The unified model <span class="chip c-conf">DONE</span></h3><p>Two orthogonal axes, named plainly:</p>
+<p><strong>Axis 1 — supervision state</strong> (who is watching): <code>attended</code> (default) · <code>away</code> (owner absent but reachable by phone) · <code>sleeping</code> (owner unreachable until a stated wake time). Declared, never inferred; one workspace-level state file; an owner message always means attended again.</p>
+<p><strong>Axis 2 — session continuation</strong> (how work outlives one context window / one usage window):</p>
+<ul>
+<li><strong>child boundary</strong> → pane-handoff chain (fresh successor pane per child) — the DEFAULT whenever</li>
+</ul>
+<p>  herdr is present (owner AC 1);</p>
+<ul>
+<li><strong>mid-child context pressure</strong> → the meter&#x27;s two tiers → mid-child-handoff (unchanged);</li>
+<li><strong>usage-window pause</strong> → the durable launcher resumes at the MEASURED reset time (owner AC 3).</li>
+</ul>
+<p>Every mechanism in §2 slots into exactly one cell of that model. The confusion existed because &quot;single-session&quot; conflated axis-2 policy with axis-1 absence, and because the default fought the owner&#x27;s standing intent.</p>
+<h3>3.1 Supervision state — the away/sleep core (new work)</h3>
+<ul>
+<li>One state file (workspace-level, e.g. <code>claude_docs/.supervision.json</code>) — normative shape</li>
+</ul>
+<p>  (review finding 8): <code>{schema_version, revision, state: attended|away|sleeping,   until: &lt;ts|null&gt;, declared_at, declared_by_session, governed_campaign_ids: [...],   consult_grant: {providers: [...], granted: bool}}</code> — written by a small skill   (<code>/rawgentic:away</code>, <code>/rawgentic:sleeping &lt;wake time&gt;</code>, <code>/rawgentic:back</code>), readable by every   hook. A campaign may carry its own override field, which wins for that campaign. <strong>Expiry is   explicit:</strong> past <code>until</code>, the effective state is <code>attended-overdue</code> — hooks treat it as   attended for new blocker routing (no more sleeping-mode decisions on an expired declaration)   while the owner-return report still leads with everything decided during the declared window.   <code>waiting_for_owner</code> / <code>waiting_for_reset</code> live in CAMPAIGN state (driver-state fields), not   here — supervision says who is watching; the campaign says what it is waiting for. Replaces   all three <code>RAWGENTIC_HEADLESS</code> reads (#871 AC 5). <code>RAWGENTIC_HEADLESS</code> dies after cutover.</p>
+<ul>
+<li><strong>Departure protocol</strong> (#871 AC 2): on declaring away/sleeping, the session sweeps the active</li>
+</ul>
+<p>  run for decisions that could block unsupervised progress and asks them via <code>AskUserQuestion</code>   BEFORE the owner leaves.</p>
+<ul>
+<li><strong>Blocker routing</strong> (owner decision this session): AWAY → two-way <code>ask-owner</code> text, bounded wait</li>
+</ul>
+<p>  of <code>min(declared return, now + 20 min)</code>, then decide + log; SLEEPING → decide + log immediately;   one-way <code>notify-owner</code> only for run-fatal events. Both: decision log entry with an undo; the   next report leads with decisions made without the owner.   <strong>Messaging capability contract (review finding 2):</strong> the transports are the existing workspace   skills — <code>ask-owner</code> (two-way BlueBubbles) and <code>notify-owner</code> (one-way) — and the supervision   core names their exact invocations. The 20-minute timer starts only after CONFIRMED submission;   a send failure or an uncorrelatable reply is logged visibly and the item enters   <code>waiting_for_owner</code> — a delivery failure must never masquerade as &quot;the owner chose not to   answer&quot; and trigger an autonomous decision on a false premise.   <strong>Owner-only exemption (review finding 6):</strong> <code>pending_disposition: issue_obsolete</code> — and any   other item the design marks owner-only — is EXEMPT from AWAY&#x27;s decide-after-timeout rule: on   timeout it is deferred when dependency-safe, else the campaign enters <code>waiting_for_owner</code>.   Only an owner write-back clears it.</p>
+<ul>
+<li><strong>Self-unblocking</strong> (#871 AC 3): while unsupervised, use codex/glm consults (peer-consult /</li>
+</ul>
+<p>  adversarial-review runner) to break ties before deciding. <strong>Consult egress grant (review   finding 7):</strong> consults transmit artifact/repo text off-box, so unsupervised consulting is   conditional on an explicit pre-departure grant (part of the departure preflight; recorded in   the supervision state as <code>consult_grant</code>) naming the allowed providers. Without the grant, or   on any runner/auth failure: no external send — log the unavailable consult and follow the   local-decision or <code>waiting_for_owner</code> rule instead.</p>
+<ul>
+<li><strong>Goal interplay (review finding 1 — three outcomes, not two):</strong> the goal/stop-hook contract</li>
+</ul>
+<p>  distinguishes <code>complete</code> from <code>paused_waiting_for_owner</code> and <code>paused_waiting_for_reset</code>. ONLY   <code>complete</code> may write the resume launcher&#x27;s done marker or authorize teardown; either paused   outcome releases the current session while the armed launcher and campaign state persist. The   goal-condition template for unsupervised runs carries this clause; the campaign state fields   give the evaluator something checkable (pattern proven by this run&#x27;s pause, where the binary   contract produced three stop-hook nags on an honest wait).</p>
+<h3>3.2 Epic-run rework (owner ACs 1 + 2; absorbs #927, #769, #845-fold)</h3>
+<ul>
+<li><strong>Step 2 asks exactly two questions</strong> (AC 2): (a) merge policy (auto-merge scoped grant vs</li>
+</ul>
+<p>  PR-only), (b) arm the 5-hour resume launcher (recommended yes). The session-mode question DIES.</p>
+<ul>
+<li><strong>Boundary mode is derived, not asked</strong> (AC 1; wording unified with §5 per review finding 5):</li>
+</ul>
+<p>  at campaign creation, record <code>preferred_transport: pane_chain</code> only after a herdr capability   PROBE succeeds (<code>HERDR_ENV</code> alone is a hint, never proof — the probe is <code>select-mode</code>-style:   herdr reachable, launcher present, fresh-launch supported); otherwise <code>inline</code>. Before EVERY   boundary and resume, repeat the probe and record that transition&#x27;s <code>effective_transport</code> — an   <code>inline</code> transition under a <code>pane_chain</code> preference is an explicit, visible, temporary   degradation, and the next boundary re-probes. <code>session_mode</code> is migrated once   (<code>fresh-session</code> → <code>pane_chain</code>, <code>single-session</code> → <code>inline</code>) and runtime code stops reading   it. The launcher keeps deferring to the recorded preference (#927 AC 3 preserved; #611 stays   fixed) — what changes is that the RECORD is a preference plus per-transition reality, never a   stale permanent answer.</p>
+<ul>
+<li><strong>In-flight mode change</strong> (#927 AC 2): sanctioned command flips a campaign&#x27;s mode at the next</li>
+</ul>
+<p>  boundary; refused mid-child.</p>
+<ul>
+<li><strong>Exactly-one-successor fence at the boundary</strong> (the #845 close-or-fold obligation lands here):</li>
+</ul>
+<p>  the fresh-session boundary gets the same claim/fence discipline mid-child-handoff already has.</p>
+<ul>
+<li><strong>The child-boundary contract becomes explicit in the skill</strong>: merge-verify → record-child-outcome</li>
+</ul>
+<p>  → revalidate-children → learnings sweep (#769&#x27;s 5-part procedure, mechanized state so a   successor knows whether sweep N ran) → plugin-refresh when the project is rawgentic (D183   codified; <code>refresh.sh</code> gains the marketplace-update step measured this run) → pane-handoff with   a launcher-GENERATED successor prompt (driver-state position, task-list-rebuild instruction —   the #819 prose rules — baked into the template, no hand-authored prompts).</p>
+<h3>3.3 Resume that survives the 5-hour window (owner AC 3; absorbs #586)</h3>
+<p>Confirmed mechanics (triangulated: official statusline schema via context7, claude-code-guide agent on docs, prior art <code>kristofferR/smart_resume</code>; CLI <code>--help</code> verified live on this host):</p>
+<ul>
+<li>The statusline JSON payload carries <code>rate_limits.five_hour.{used_percentage, resets_at}</code> —</li>
+</ul>
+<p>  <code>resets_at</code> is a Unix epoch. The existing statusline bridge appends it to a small per-session   state file (the #654 pattern, ~3 lines). <strong>Spike first (review finding 3):</strong> the docs prove the   schema, not that THIS host&#x27;s configured bridge (<code>~/.claude/rawgentic-statusline.sh</code>) receives   the field and can write the state file — #586&#x27;s first AC is a live capture through the real   bridge. When the field is absent or the write fails, the launcher logs it visibly and the   campaign enters <code>waiting_for_reset_unmeasured</code> — the <code>*/20</code> watchdog then carries the resume   (the old behavior), stated rather than silently substituted. The one-shot scheduler is named at   implementation (system crontab one-shot entry that self-removes, or <code>at</code> if present) and spiked   alongside.</p>
+<ul>
+<li><code>claude -p --continue</code> resumes the MOST RECENT conversation in the cwd — no pinned session ID,</li>
+</ul>
+<p>  which is the #586 fix. Idempotent fresh <code>-p</code> prompt stays as the fallback.</p>
+<ul>
+<li>The launcher becomes: <strong>one-shot resume armed at <code>resets_at + 1 minute</code></strong> (measured, not</li>
+</ul>
+<p>  guessed; the fixed 60 s allows for reset lag — owner decision 2026-08-05) + the existing <code>*/20</code>   staleness watchdog as belt-and-braces + done-marker/flock/launch-cap unchanged. Headless <code>claude -p</code> emits no reset time on 429 — the statusline bridge is the one   channel, so the bridge write must happen while the session is still healthy.</p>
+<ul>
+<li><strong>Pane-aware resume (RESOLVED at consult, §5):</strong> the launcher re-resolves the effective</li>
+</ul>
+<p>  transport at resume time — herdr usable and the campaign prefers <code>pane_chain</code> ⇒ resume INTO a   herdr pane; otherwise resume headless, marked as an explicit degraded transition, and the next   safe boundary re-enters the pane chain. Receipt gates are transport-independent and stay   authoritative on both paths. Before any <code>--continue</code>, the campaign-identity check (§5 item 2)   must pass; otherwise the generated fresh <code>-p</code> prompt is used.</p>
+<h3>3.4 Revalidate-children hardening (owner AC 4, as scoped this session)</h3>
+<ul>
+<li><strong>Coverage gap:</strong> a mechanical claim inventory over the issue body, bound claim-by-claim to the</li>
+</ul>
+<p>  receipt, so a <code>deep</code> stamp that skipped claims is refused instead of trusted (closes the   documented &quot;depth is your obligation&quot; hole).</p>
+<ul>
+<li><strong>Obsolete-child owner gate</strong> (#848 lineage, rebuilt): a <code>pending_disposition: issue_obsolete</code></li>
+</ul>
+<p>  child cannot be handed out until an owner write-back clears it. Supervision-aware: attended/away   → ask-owner; sleeping → the child is deferred with the ERROR-comment protocol and the run   continues.</p>
+<ul>
+<li>Explicitly NOT in scope (owner declined): merging the whole boundary into one script, and</li>
+</ul>
+<p>  cheaper passes.</p>
+<h3>3.5 Records-first minimum (owner decision: M2.5 sliced)</h3>
+<p><strong>#888</strong> (run-records that land exactly once, persist-before-merge ordering) ships in this wave, before the first real unsupervised run under the new mode. #363 and #356 stay in M2.5.</p></section>
+<section class="mstone rm-epic"><h3>4. The M4 wave — issue breakdown (proposed) <span class="chip c-plan">—</span></h3><p>Reshaped epic #871 task list, in execution order (sequencing settled at consult, §5):</p>
+<div class="blk blk-phases rm-phase"><div class="blk-ph is-crit"><div class="blk-ph-head"><span class="blk-ph-ord">01</span><span class="blk-ph-title">M4 — SESSION CONTINUITY &amp; UNSUPERVISED MODES</span><span class="blk-ph-badge is-crit">epic #871 · next up</span></div><span class="blk-comp-bar"><span class="blk-comp-seg is-note"></span><span class="blk-comp-seg is-crit"></span><span class="blk-comp-seg is-crit"></span><span class="blk-comp-seg is-note"></span><span class="blk-comp-seg is-note"></span><span class="blk-comp-seg is-crit"></span><span class="blk-comp-seg is-note"></span></span><div class="blk-ph-items"><div class="blk-ph-item is-note"><span class="blk-ph-id">#888</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">Records first: run-records that land exactly once (moves up from M2.5)</span></div><div class="blk-ph-item is-crit"><span class="blk-ph-id">NEW</span><span class="blk-ph-chip is-crit">crit</span><span class="blk-ph-text">Supervision-state core: away/sleep/attended declaration, departure sweep, blocker routing, replaces RAWGENTIC_HEADLESS ×3</span></div><div class="blk-ph-item is-crit"><span class="blk-ph-id">#927</span><span class="blk-ph-chip is-crit">crit</span><span class="blk-ph-text">Epic-run rework: two-question setup, transport derived from herdr, mode-change command, #845 fence</span></div><div class="blk-ph-item is-note"><span class="blk-ph-id">#769</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">Child-boundary learnings sweep, mechanized state, folded into the boundary contract</span></div><div class="blk-ph-item is-note"><span class="blk-ph-id">#726</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">In-flight-work gate + durable-path check (scope as filed)</span></div><div class="blk-ph-item is-crit"><span class="blk-ph-id">#586</span><span class="blk-ph-chip is-crit">crit</span><span class="blk-ph-text">Resume rewrite: measured resets_at one-shot + --continue with identity check + pane-aware resume</span></div><div class="blk-ph-item is-note"><span class="blk-ph-id">NEW</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">Revalidate hardening: claim-inventory coverage binding + obsolete-child owner gate</span></div></div></div><div class="blk-ph is-note"><div class="blk-ph-head"><span class="blk-ph-ord">02</span><span class="blk-ph-title">M2 — REMAINING TEN</span><span class="blk-ph-badge is-note">#906 resumes after the wave</span></div><span class="blk-comp-bar"><span class="blk-comp-seg is-note"></span></span><div class="blk-ph-items"><div class="blk-ph-item is-note"><span class="blk-ph-id">Q</span><span class="blk-ph-chip is-note">note</span><span class="blk-ph-text">#835, #797, #729, #734, #864, #772, #878, #806, #923, #899 — order re-derived at resume</span></div></div></div></div>
+<div class="blk blk-legend"><dl><dt class="blk-swatch is-crit">crit</dt><dd>the surfaces that have burned real runs</dd><dt class="blk-swatch is-note">note</dt><dd>scheduled in the wave</dd></dl></div>
+<p>Two NEW issues total; #931 (sandbox trial) stays attached to the epic as the decision ticket feeding the away-mode slice. The remaining ten #906 children resume as M2 after this wave.</p></section>
+<section class="mstone rm-epic"><h3>5. Consult outcomes (gpt-5.6-sol peer proposal, 2026-08-05 — adopted / rejected) <span class="chip c-plan">—</span></h3><p>Report: <code>docs/reviews/peer-2026-08-05-871-m4-session-continuity-away-mode-2026-08-05.md</code>.</p>
+<p><strong>Adopted into this design:</strong></p>
+<ol>
+<li><strong><code>preferred_transport</code> + <code>effective_transport</code> replace <code>session_mode</code></strong> (answers old open Q3):</li>
+</ol>
+<p>   the campaign records its preference at creation (herdr present ⇒ <code>pane_chain</code>); every boundary    and resume RE-RESOLVES capabilities and records the effective transport for that transition.    Losing herdr is an explicit per-transition degradation with a visible marker — never a silent    permanent mode change. Old <code>session_mode</code> values map: <code>fresh-session</code> → <code>pane_chain</code>,    <code>single-session</code> → <code>inline</code>.</p>
+<ol start="2">
+<li><strong>Campaign-identity check before <code>--continue</code></strong> (hardens §3.3; mechanics pinned per review</li>
+</ol>
+<p>   finding 4): the newest conversation in the cwd can be UNRELATED work — concurrent sessions    share this workspace root. The check is concrete: the campaign records its session LINEAGE    (each session&#x27;s id, appended at bind/handoff) in driver-state; the launcher enumerates    <code>~/.claude/projects/&lt;cwd-slug&gt;/*.jsonl</code> by mtime and requires the NEWEST transcript&#x27;s session    id to be the campaign lineage&#x27;s tail. <code>/clear</code> mints a new id, which the resumed session&#x27;s    bind appends — so lineage stays current. Because <code>--continue</code>&#x27;s own selection cannot be    queried before launch, the rule is conservative: any mismatch, tie within the staleness    window, or unreadable enumeration ⇒ launch the generated fresh <code>-p</code> prompt from the durable    checkpoint (position, receipts, pending decisions, successor instructions) instead.    <code>--continue</code> is the optimization, never the authority, and the fallback is tested under    concurrent sessions.</p>
+<ol start="3">
+<li><strong>Away wait = <code>min(declared return time, now + 20 min)</code></strong> (answers old open Q4).</li>
+<li><strong>Terminal-for-now states for the goal loop:</strong> <code>waiting_for_owner</code> and <code>waiting_for_reset</code></li>
+</ol>
+<p>   recorded in supervision/campaign state, referenced by the goal-condition template, so the Stop    hook reads an honest wait instead of nagging (this session measured 3 stop-hook prods during an    owner pause) or stalling an unsupervised run (D36).</p>
+<ol start="5">
+<li><strong>Reset-observation sanity checks:</strong> persist <code>resets_at</code> with its observation time; reject</li>
+</ol>
+<p>   stale/implausible epochs (freshness, range, monotonicity); launch cap and flock stay as final    guards against a resume storm.</p>
+<ol start="6">
+<li><strong>Predecessor survives until successor acknowledgement</strong> at the plugin-refresh seam, and the</li>
+</ol>
+<p>   previous cached plugin version is retained as rollback — a failed refresh can no longer strand    a campaign with no usable successor.</p>
+<ol start="7">
+<li><strong>Autonomous authority is bounded SEPARATELY from supervision state:</strong> sleeping never widens</li>
+</ol>
+<p>   permissions; merge authority comes only from the epic-run Step-2 grant; destructive/outward    actions outside the granted set notify and enter <code>waiting_for_owner</code> regardless of mode.</p>
+<ol start="8">
+<li><strong>Departure preflight enumerates affected runs:</strong> the away/sleeping declaration lists every</li>
+</ol>
+<p>   live campaign it will govern, and asks the blocker-sweep questions per run before the owner    leaves (#871 AC 2, sharpened).</p>
+<ol start="9">
+<li><strong>Test harness without real 5-hour waits</strong> (answers old open Q6): injected clock, synthetic</li>
+</ol>
+<p>   statusline payloads, fake scheduler, fake herdr adapter; crash-point matrix over    supervision × transport availability × boundary checkpoint × duplicate launcher.</p>
+<ol start="10">
+<li><strong>Obsolete-child deferral must respect dependency order</strong> (§3.4): a sleeping run defers an</li>
+</ol>
+<p>    obsolete-marked child only when no remaining child depends on it; otherwise the run parks with     an honest terminal-for-now state.</p>
+<p><strong>Rejected, with reasons (D179 honesty):</strong></p>
+<ul>
+<li><strong>The full event-log + outbox coordinator.</strong> Driver-state, receipts and the handoff ladder</li>
+</ul>
+<p>  already carry this state; a parallel event-sourced store contradicts the roadmap&#x27;s   &quot;no new enforcement state machines&quot; ruling (§7) and would be a second source of truth to drift.   The adopted pieces above are grafted onto the EXISTING driver-state schema (new fields, not a   new store).</p>
+<ul>
+<li><strong>Owner-authenticated supervision events.</strong> Single-owner host; the declaration skill writing a</li>
+</ul>
+<p>  workspace state file is sufficient. Session IDs stay observations, as the peer said.</p>
+<p><strong>Sequencing (old open Q5, settled by the peer&#x27;s slice logic + owner&#x27;s M2.5 answer):</strong> #888 records-first → supervision core → epic-run/boundary rework → resume rewrite → revalidate hardening. #726 rides with the boundary rework wave position it already holds.</p></section>
+<section class="mstone rm-epic"><h3>6. Review provenance <span class="chip c-plan">—</span></h3><p>gpt-5.6-sol adversarially reviewed this plan (WF5, 2026-08-05): 8 findings — 7 High, 1 Medium, 0 Critical — all confirmed by the orchestrator and ALL FIXED IN THIS DOCUMENT before implementation (D179 disposition: fix): three goal outcomes instead of a binary (finding 1), the messaging capability contract with confirmed-submission timers (2), the statusline spike + <code>waiting_for_reset_unmeasured</code> fallback (3), concrete session-lineage identity mechanics (4), the §3.2/§5 transport contract unified around a capability probe (5), the owner-only exemption from AWAY&#x27;s decide-after-timeout (6), the pre-departure consult egress grant (7), and the normative supervision schema with expiry semantics (8). Report: <code>docs/reviews/2026-08-05-871-m4-session-continuity-away-mode-md-2026-08-05.md</code> (local, gitignored by design). Earlier peer consult: same reviewer identity, §5.</p></section>
+<section class="mstone rm-epic"><h3>7. Supervision state — placement <span class="chip c-plan">—</span></h3><p>Workspace-level (away-ness is a property of the human, not a project), with the peer&#x27;s two refinements: the declaration enumerates the campaigns it governs, and a campaign may carry an explicit override field.</p></section>
+
+</main>
+<footer>Last updated: 2026-08-05 12:34 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
