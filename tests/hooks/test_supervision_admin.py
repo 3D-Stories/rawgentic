@@ -32,6 +32,19 @@ def _iso(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _real_future(hours=2):
+    """An `until` the REAL clock has not reached yet.
+
+    `_declare` injects the frozen `NOW`, so the in-process tests stay deterministic.
+    The CLI subprocess cannot take that clock — `supervision_admin` has no `--now`
+    override by design, because it gates outward installs — so it reads the real one.
+    A frozen future constant crossing into `_cli` therefore expires for good once
+    wall-clock time passes it: `LATER` is 2026-08-05T23:00:00Z, and the CLI declare
+    test began failing permanently at that instant (#948).
+    """
+    return _iso(datetime.now(timezone.utc) + timedelta(hours=hours))
+
+
 def _read(root):
     return json.loads(Path(sl.supervision_path(str(root))).read_text())
 
@@ -255,7 +268,7 @@ def _cli(*args):
 
 def test_cli_declare_prints_json_on_stdout_and_a_human_line_on_stderr(tmp_path):
     r = _cli("declare", "--workspace", str(tmp_path), "--state", "sleeping",
-             "--until", _iso(LATER), "--session-id", "sess-cli",
+             "--until", _real_future(), "--session-id", "sess-cli",
              "--campaign", "epic-871-m4-wave", "--provider", "gpt", "--granted")
     assert r.returncode == 0
     payload = json.loads(r.stdout)
