@@ -725,6 +725,30 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.126.0 (2026-08-04)
+- **Reviewer confidence is now a native number the severity band filter can consume mechanically
+  (#902, epic #875).** Ten consecutive cross-model review rounds returned `confidence` as a word
+  ("high"/"medium") because the runner's OWN contract demanded words — the `FINDINGS_SCHEMA`
+  declared an enum, `validate_finding` enforced it, and the prompt instructed it; reviewers were
+  complying, and every round needed a manual word→float mapping before
+  `plan_lib.SEVERITY_BANDED_CONFIDENCE` could run. The schema now demands `{"type": "number"}`
+  (live-probed on the exact `codex exec --output-schema` invocation before design: native floats,
+  rc 0 — external probe evidence recorded in session notes, not CI-reproducible; the checked-in
+  strict-keyword ban test pins the schema discipline; range checked in `validate_finding` since
+  `minimum`/`maximum` are strict-mode-rejected), the prompt asks
+  for 0.0–1.0, and `adversarial_review_lib.coerce_confidence` handles the fallback: legacy words and
+  numeric strings map through the ONE existing map `ADV_CONFIDENCE_TO_FLOAT` (AC1's second-map
+  triple deliberately dropped per the issue's authority comment) with per-finding
+  `confidence_source: native|mapped` and top-level `confidence_mapped` provenance — flagged, never
+  silently native; garbage (bool, out-of-range, non-finite) refuses the whole review. The runner
+  gives a word round ONE bounded retry (mirrors the #793 truncation retry) before accepting the
+  mapped fallback — the GLM backend has no strict schema mode, which is exactly the path the
+  fallback exists for. WF2 Step 11 prose now verifies provenance instead of mapping by hand; the
+  golden prompt fixture was re-captured (and renamed to drop its stale `pre393` label). Tests: the
+  full coerce/validate/normalize matrix, schema pins, runner retry/provenance CLI black-box, and a
+  consumer test applying the banded filter mechanically to a mapped result. No workflow-spine
+  change → no diagram REV. Suite 4959→5031.
+
 ### v3.125.8 (2026-08-04)
 - **A closing keyword next to an issue number is now caught before the PR is opened (#901, epic
   #875).** GitHub's closing-keyword parser does not understand negation: a PR body reading "this PR

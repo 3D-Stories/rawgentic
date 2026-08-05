@@ -21,6 +21,7 @@ Design invariants (issue #77):
 """
 import argparse
 import json
+import math
 import os
 import re
 import secrets
@@ -194,11 +195,52 @@ _TYPE_LENS: Final[dict[str, str]] = {
     ),
 }
 
-# Maps the findings-schema `confidence` enum (high/medium/low) onto the numeric
+# Maps legacy word-form confidence (high/medium/low) onto the numeric
 # SEVERITY_BANDED_CONFIDENCE scale consumed by WF2 Step 11 (issue #131).
+# Since #902 the schema demands a native number and this map is the runner-side
+# fallback applied in normalize_findings via coerce_confidence — the ONE
+# word→float map in this repo (AC1's 0.8/0.6/0.3 triple was deliberately not
+# added; see the #902 authority comment).
 ADV_CONFIDENCE_TO_FLOAT: Final[dict[str, float]] = {
     "high": 0.9, "medium": 0.7, "low": 0.4,
 }
+
+
+def coerce_confidence(value: object):
+    """Coerce a reviewer-supplied confidence to ``(float_in_[0,1], source)``.
+
+    source is "native" (a JSON number already in range) or "mapped" (a legacy
+    word from ADV_CONFIDENCE_TO_FLOAT, case/whitespace-tolerant, or a numeric
+    string — the classic GLM slip). Mapped values are flagged so a consumer can
+    never mistake a fallback for schema-enforced output (#902 AC1/AC2).
+    Returns None for anything else — bool (an int subclass, never a
+    confidence), out-of-range, non-finite, unmappable garbage — and the caller
+    fail-closes (whole-review refusal, the existing validate_findings gate).
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            v = float(value)
+        except OverflowError:
+            # A JSON integer of arbitrary precision (e.g. 1 followed by 400
+            # zeros) overflows float() — refuse, never crash (Step-11 F2).
+            return None
+        if math.isfinite(v) and 0.0 <= v <= 1.0:
+            return v, "native"
+        return None
+    if isinstance(value, str):
+        word = value.strip().lower()
+        if word in ADV_CONFIDENCE_TO_FLOAT:
+            return ADV_CONFIDENCE_TO_FLOAT[word], "mapped"
+        try:
+            v = float(word)
+        except ValueError:
+            return None
+        if math.isfinite(v) and 0.0 <= v <= 1.0:
+            return v, "mapped"
+        return None
+    return None
 
 
 # ============================================================================
@@ -887,11 +929,16 @@ FINDINGS_SCHEMA: Final[dict] = {
                         "enum": list(CATEGORIES),
                         "description": "One of the fixed review categories.",
                     },
+                    # #902: native numeric contract, live-probed on the exact
+                    # codex --output-schema invocation. Range [0,1] enforced in
+                    # validate_finding — minimum/maximum are strict-mode-rejected
+                    # keywords (see the header comment above).
                     "confidence": {
-                        "enum": ["high", "medium", "low"],
-                        "description": "Honest probability the problem is real. A "
-                                       "low-confidence finding may not exceed Medium "
-                                       "severity. For triage/sorting only.",
+                        "type": "number",
+                        "description": "Honest probability in [0.0, 1.0] that the "
+                                       "problem is real. A finding with confidence "
+                                       "below 0.5 may not exceed Medium severity. "
+                                       "For triage/sorting only.",
                     },
                     "description": {
                         "type": "string",
@@ -982,9 +1029,11 @@ def validate_finding(d: object) -> tuple[bool, list[str]]:
     cat = d.get("category")
     if isinstance(cat, str) and cat.strip() and cat not in CATEGORIES:
         errors.append(f"invalid category: {cat!r}")
-    # confidence is a required enum (triage key + the severity cap in the prompt).
+    # confidence: a number in [0,1] (native, the #902 schema contract) or a
+    # mappable word / numeric string (tolerant GLM path — flagged "mapped" in
+    # normalize_findings, never silently native). Anything else fail-closes.
     conf = d.get("confidence")
-    if conf not in ("high", "medium", "low"):
+    if coerce_confidence(conf) is None:
         errors.append(f"invalid/missing confidence: {conf!r}")
     # Optional fields are required-but-nullable in the strict-mode schema (#80):
     # they may be null, but a non-null value must match the declared type.
@@ -1027,6 +1076,8 @@ def normalize_findings(raw: object) -> list[dict]:
       dropped (fail-closed), keeping the schema honest.
     - Dedupe key: (severity, location, full description) — the FULL description,
       so findings that share an opening clause are not silently collapsed.
+    - Confidence leaves numeric with a `confidence_source` provenance flag
+      ("native"/"mapped", #902) — the one place the word→float fallback runs.
     - Sort by severity rank (Critical first) then category.
     """
     if not isinstance(raw, list):
@@ -1045,6 +1096,9 @@ def normalize_findings(raw: object) -> list[dict]:
         if key in seen:
             continue
         seen.add(key)
+        # Copy before annotating — callers' raw findings stay untouched (#902).
+        f = dict(f)
+        f["confidence"], f["confidence_source"] = coerce_confidence(f["confidence"])
         out.append(f)
     out.sort(key=lambda x: (_SEVERITY_RANK[x["severity"]], x["category"]))
     return out
@@ -1065,9 +1119,10 @@ def build_prompt(
     Callers may pass a nonce (tests pin it); when omitted — the runner's normal
     path — one is minted here. The nonce is interpolated into BOTH the fence AND
     the instruction from a single variable, so the data-vs-instruction contract
-    cannot silently drift apart. Output is byte-identical to the historical
-    no-ledger prompt (golden-tested); the #393 dispositions-ledger second fence
-    was deleted with the old engine (#866 M0d).
+    cannot silently drift apart. Output is byte-pinned by a golden test
+    (re-captured at #902 when the confidence instruction went numeric); the
+    #393 dispositions-ledger second fence was deleted with the old engine
+    (#866 M0d) and the byte pin keeps it from coming back.
     """
     if nonce is None:
         nonce = secrets.token_hex(16)
@@ -1145,9 +1200,10 @@ def build_prompt(
         "any duplicate. Do NOT praise the artifact and do NOT soften findings.\n\n"
 
         "CLASSIFY each finding: severity in "
-        f"[{sevs}]; category in [{cats}]; confidence in [high, medium, low] (your "
-        "honest probability the problem is real — a low-confidence finding may NOT "
-        "exceed Medium severity). Provide a concrete recommendation (name the "
+        f"[{sevs}]; category in [{cats}]; confidence as a number between 0.0 and "
+        "1.0 (your honest probability the problem is real — a finding with "
+        "confidence below 0.5 may NOT exceed Medium severity). Provide a concrete "
+        "recommendation (name the "
         "section/field to change and what to change it to) and a location (section "
         "or line) for each. The `summary` field is the ONE place a neutral "
         "orientation line is allowed (1-3 sentences) — no flattery.\n\n"

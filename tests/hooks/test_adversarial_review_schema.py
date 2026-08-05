@@ -18,7 +18,7 @@ def _finding(**over):
     # schema the strict jsonschema test enforces. evidence (grounding quote) and
     # confidence are required + non-nullable.
     base = {"evidence": "a quoted span", "severity": "High", "category": "security",
-            "confidence": "high",
+            "confidence": 0.9,
             "description": "d", "recommendation": "r", "location": "S1",
             "ambiguity_flag": False, "ambiguity_reason": None,
             "loopback_class": None}
@@ -78,16 +78,109 @@ def test_validate_finding_all_known_categories_accepted():
         assert ok, (cat, errs)
 
 
-@pytest.mark.parametrize("bad", ["sure", "HIGH", "", None, 0.9])
+@pytest.mark.parametrize("bad", [
+    "sure", "", None, 1.5, -0.1, True, False, "1.5", "certain",
+    float("nan"), float("inf"), [], {"v": 0.9},
+])
 def test_validate_finding_bad_confidence(bad):
+    # Garbage refuses (#902 AC3): out-of-range, non-finite, bool (an int
+    # subclass — never a confidence), unmappable strings, wrong types.
     ok, errs = arl.validate_finding(_finding(confidence=bad))
     assert not ok and any("confidence" in e for e in errs)
 
 
-@pytest.mark.parametrize("good", ["high", "medium", "low"])
+@pytest.mark.parametrize("good", [
+    "high", "medium", "low",     # legacy words — tolerant GLM path (mapped)
+    "HIGH", " high ",            # case/whitespace variants (mapped)
+    0.9, 0.0, 1.0, 0, 1, 0.42,   # native numerics in [0, 1]
+    "0.9",                       # numeric string — classic GLM slip (mapped)
+])
 def test_validate_finding_good_confidence(good):
     ok, errs = arl.validate_finding(_finding(confidence=good))
     assert ok, errs
+
+
+# --- coerce_confidence (#902): numeric-or-word with provenance ---
+
+@pytest.mark.parametrize("value,expected", [
+    (0.9, (0.9, "native")),
+    (0.0, (0.0, "native")),
+    (1.0, (1.0, "native")),
+    (0, (0.0, "native")),
+    (1, (1.0, "native")),
+    (0.42, (0.42, "native")),
+])
+def test_coerce_confidence_native_numbers_pass_through(value, expected):
+    assert arl.coerce_confidence(value) == expected
+
+
+@pytest.mark.parametrize("value,expected_float", [
+    ("high", 0.9), ("medium", 0.7), ("low", 0.4),
+    ("HIGH", 0.9), (" high ", 0.9), ("Medium", 0.7),
+])
+def test_coerce_confidence_words_map_with_mapped_flag(value, expected_float):
+    # Word forms map through the ONE existing map (ADV_CONFIDENCE_TO_FLOAT —
+    # AC1's 0.8/0.6/0.3 literals deliberately dropped, see the issue's
+    # authority comment) and are flagged mapped, never silently native.
+    assert arl.coerce_confidence(value) == (expected_float, "mapped")
+
+
+def test_coerce_confidence_word_values_are_the_single_map():
+    for word, val in arl.ADV_CONFIDENCE_TO_FLOAT.items():
+        assert arl.coerce_confidence(word) == (val, "mapped")
+
+
+@pytest.mark.parametrize("value,expected_float", [
+    ("0.9", 0.9), ("0", 0.0), ("1", 1.0), (" 0.65 ", 0.65),
+])
+def test_coerce_confidence_numeric_strings_map_with_mapped_flag(value, expected_float):
+    assert arl.coerce_confidence(value) == (expected_float, "mapped")
+
+
+@pytest.mark.parametrize("value", [
+    True, False,                       # bool is an int subclass — refused
+    None, "", "sure", "very high",     # garbage
+    1.5, -0.1, "1.5", "-3",            # out of range
+    float("nan"), float("inf"), "nan", "inf", "1e300",  # non-finite / overflow
+    [], {}, ("high",),
+    10 ** 400,                         # Step-11 F2: float(huge int) raises
+    -(10 ** 400),                      # OverflowError — must refuse, not crash
+])
+def test_coerce_confidence_garbage_refuses(value):
+    assert arl.coerce_confidence(value) is None
+
+
+# --- normalize_findings (#902): numeric confidence + confidence_source ---
+
+def test_normalize_word_confidence_becomes_numeric_with_mapped_source():
+    out = arl.normalize_findings([_finding(confidence="high")])
+    assert len(out) == 1
+    assert out[0]["confidence"] == 0.9
+    assert out[0]["confidence_source"] == "mapped"
+
+
+def test_normalize_native_confidence_keeps_value_with_native_source():
+    out = arl.normalize_findings([_finding(confidence=0.85)])
+    assert len(out) == 1
+    assert out[0]["confidence"] == 0.85
+    assert out[0]["confidence_source"] == "native"
+
+
+def test_normalize_mixed_confidences_flag_per_finding():
+    out = arl.normalize_findings([
+        _finding(confidence=0.85, description="native one"),
+        _finding(confidence="low", description="worded one"),
+    ])
+    by_desc = {f["description"]: f for f in out}
+    assert by_desc["native one"]["confidence_source"] == "native"
+    assert by_desc["worded one"]["confidence"] == 0.4
+    assert by_desc["worded one"]["confidence_source"] == "mapped"
+
+
+def test_normalize_does_not_mutate_caller_findings():
+    f = _finding(confidence="high")
+    arl.normalize_findings([f])
+    assert f["confidence"] == "high" and "confidence_source" not in f
 
 
 # --- validate_findings ---
@@ -208,16 +301,31 @@ def test_category_is_enum_sharing_one_source_of_truth():
     assert item["properties"]["category"]["enum"] == list(arl.CATEGORIES)
 
 
-def test_confidence_is_enum_in_schema():
+def test_confidence_is_number_in_schema():
+    # #902: the schema demands a native number so codex strict mode enforces it
+    # server-side; the word map is fallback-only (normalize_findings), not schema.
     item = arl.FINDINGS_SCHEMA["properties"]["findings"]["items"]
-    assert item["properties"]["confidence"]["enum"] == ["high", "medium", "low"]
+    prop = item["properties"]["confidence"]
+    assert prop["type"] == "number"
+    assert "enum" not in prop
+    assert "0.0" in prop["description"] and "1.0" in prop["description"]
+
+
+def test_schema_rejects_word_confidence_with_jsonschema():
+    # The words remain valid at validate_finding (tolerant GLM fallback) but the
+    # SCHEMA — what codex enforces server-side — refuses them.
+    jsonschema = pytest.importorskip("jsonschema")
+    doc = {"summary": "s", "findings": [_finding(confidence="high")]}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(doc, arl.FINDINGS_SCHEMA)
 
 
 def test_evidence_and_confidence_required_non_nullable():
     item = arl.FINDINGS_SCHEMA["properties"]["findings"]["items"]
     assert "evidence" in item["required"] and "confidence" in item["required"]
-    # non-nullable: a plain string type, not ["string","null"]
+    # non-nullable: plain types, not ["string","null"] / ["number","null"]
     assert item["properties"]["evidence"]["type"] == "string"
+    assert item["properties"]["confidence"]["type"] == "number"
 
 
 def test_evidence_is_first_property_for_cot_grounding():
@@ -279,7 +387,7 @@ def test_strict_schema_validates_full_findings_with_jsonschema():
     jsonschema = pytest.importorskip("jsonschema")
     doc = {"summary": "s", "findings": [
         {"evidence": "q", "severity": "High", "category": "security",
-         "confidence": "high", "description": "d", "recommendation": "r",
+         "confidence": 0.9, "description": "d", "recommendation": "r",
          "ambiguity_flag": None, "ambiguity_reason": None, "location": None,
          "loopback_class": None},
     ]}

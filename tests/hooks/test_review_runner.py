@@ -39,7 +39,7 @@ VALID_FINDING = {
     "evidence": "the guard returns True on error",
     "severity": "High",
     "category": "correctness",
-    "confidence": "high",
+    "confidence": 0.85,
     "description": "fail-open guard",
     "recommendation": "return False on error",
     "ambiguity_flag": None,
@@ -48,6 +48,11 @@ VALID_FINDING = {
     "loopback_class": "design-flaw",
 }
 VALID_BODY = json.dumps({"summary": "one real defect", "findings": [VALID_FINDING]})
+# #902: legacy word-confidence body — exercises the retry-then-map fallback.
+WORD_BODY = json.dumps({"summary": "one real defect",
+                        "findings": [dict(VALID_FINDING, confidence="high")]})
+GARBAGE_CONF_BODY = json.dumps({"summary": "s",
+                                "findings": [dict(VALID_FINDING, confidence="certain")]})
 # Hoisted so the keyword and quoted value never share a line: gitleaks'
 # generic-api-key rule false-positives on `consumed_at="<iso timestamp>"`.
 SPENT_AT = "2026-08-03T20:30:00Z"
@@ -77,6 +82,10 @@ if [ -n "$CODEX_STUB_FAIL_FIRST" ] && [ "$n" = "1" ]; then
   printf '%s\n' "$CODEX_STUB_FAIL_FIRST_STDERR" >&2
   exit "${CODEX_STUB_FAIL_FIRST_RC:-1}"
 fi
+if [ -n "$CODEX_STUB_FAIL_SECOND" ] && [ "$n" = "2" ]; then
+  printf '%s\n' "$CODEX_STUB_FAIL_SECOND_STDERR" >&2
+  exit "${CODEX_STUB_FAIL_SECOND_RC:-1}"
+fi
 if [ -n "$CODEX_STUB_STDERR" ]; then printf '%s\n' "$CODEX_STUB_STDERR" >&2; fi
 if [ -n "$CODEX_STUB_STDOUT" ]; then printf '%s\n' "$CODEX_STUB_STDOUT"; fi
 rc="${CODEX_STUB_RC:-0}"
@@ -86,6 +95,10 @@ while [ $# -gt 0 ]; do
   if [ "$1" = "-o" ]; then out="$2"; fi
   shift
 done
+if [ -n "$CODEX_STUB_BODY_FIRST" ] && [ "$n" = "1" ]; then
+  if [ -n "$out" ]; then printf '%s' "$CODEX_STUB_BODY_FIRST" > "$out"; fi
+  exit 0
+fi
 if [ -n "$out" ] && [ -n "$CODEX_STUB_BODY" ]; then
   printf '%s' "$CODEX_STUB_BODY" > "$out"
 fi
@@ -501,6 +514,178 @@ class TestErrorClassesCli:
                       stub.env, timeout=120)
         assert result.returncode == 3
         assert _result(project)["error_class"] == "transport"
+
+
+class TestNumericConfidence:
+    """#902: native numeric passes through; word forms get one bounded retry
+    then map through ADV_CONFIDENCE_TO_FLOAT with a provenance flag; garbage
+    refuses (whole-review invalid_output — never a silent pass)."""
+
+    def test_native_confidence_single_call_not_mapped(self, stub, project):
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert stub.calls == 1  # native numbers never trigger the word retry
+        r = _result(project)
+        assert r["confidence_mapped"] is False
+        f = r["findings"][0]
+        assert f["confidence"] == 0.85
+        assert f["confidence_source"] == "native"
+
+    def test_word_confidence_one_retry_then_mapped(self, stub, project):
+        stub.env["CODEX_STUB_BODY"] = WORD_BODY
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert stub.calls == 2  # one bounded word-confidence retry, then accept
+        r = _result(project)
+        assert r["status"] == "success"
+        assert r["confidence_mapped"] is True
+        f = r["findings"][0]
+        assert f["confidence"] == 0.9  # ADV_CONFIDENCE_TO_FLOAT — the one map
+        assert f["confidence_source"] == "mapped"
+
+    def test_word_then_native_retry_recovers_unmapped(self, stub, project):
+        stub.env["CODEX_STUB_BODY_FIRST"] = WORD_BODY
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert stub.calls == 2
+        r = _result(project)
+        assert r["confidence_mapped"] is False
+        assert r["findings"][0]["confidence_source"] == "native"
+
+    # --- 8a F1 (#902): the confidence re-roll must never lose the held result.
+    # The first valid mapped parse is retained; the retry replaces it ONLY when
+    # it is itself valid, fully native, and non-empty. Any other retry outcome
+    # (empty, invalid, transport-failed) falls back to the held mapped result —
+    # a review already validly in hand never turns into a failure or an
+    # empty pass because its polish re-roll went sideways.
+
+    def test_word_retry_returning_empty_findings_keeps_held_result(self, stub, project):
+        stub.env["CODEX_STUB_BODY_FIRST"] = WORD_BODY
+        stub.env["CODEX_STUB_BODY"] = json.dumps({"summary": "nothing", "findings": []})
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert stub.calls == 2
+        r = _result(project)
+        assert r["status"] == "success"
+        assert r["confidence_mapped"] is True
+        assert len(r["findings"]) == 1  # the held finding survives the empty re-roll
+        assert r["findings"][0]["confidence"] == 0.9
+        assert r["findings"][0]["confidence_source"] == "mapped"
+
+    def test_word_retry_returning_garbage_keeps_held_result(self, stub, project):
+        stub.env["CODEX_STUB_BODY_FIRST"] = WORD_BODY
+        stub.env["CODEX_STUB_BODY"] = '{"summary": "trunca'
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert stub.calls == 2  # no truncation retry spent on the re-roll
+        r = _result(project)
+        assert r["status"] == "success"
+        assert r["confidence_mapped"] is True
+        assert len(r["findings"]) == 1
+
+    def test_word_retry_transport_failure_keeps_held_result(self, stub, project):
+        # Stub counts calls; make the SECOND call fail at transport.
+        stub.env["CODEX_STUB_BODY_FIRST"] = WORD_BODY
+        stub.env["CODEX_STUB_FAIL_SECOND"] = "1"
+        stub.env["CODEX_STUB_FAIL_SECOND_STDERR"] = "connection reset by peer"
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert stub.calls == 2  # no transport retry spent on the re-roll
+        r = _result(project)
+        assert r["status"] == "success"
+        assert r["confidence_mapped"] is True
+        assert len(r["findings"]) == 1
+
+    def test_native_reroll_merges_instead_of_replacing_held(self, stub, project):
+        # Step-11 F1 (#902): a native non-empty re-roll must never silently
+        # LOSE held findings — the union is kept (native copy wins only on an
+        # exact dedupe-key match).
+        stub.env["CODEX_STUB_BODY_FIRST"] = WORD_BODY
+        stub.env["CODEX_STUB_BODY"] = json.dumps({"summary": "fresh", "findings": [
+            dict(VALID_FINDING, confidence=0.75,
+                 description="a different native finding"),
+        ]})
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        r = _result(project)
+        descs = {f["description"] for f in r["findings"]}
+        assert descs == {"fail-open guard", "a different native finding"}
+        by_desc = {f["description"]: f for f in r["findings"]}
+        assert by_desc["fail-open guard"]["confidence_source"] == "mapped"
+        assert by_desc["a different native finding"]["confidence_source"] == "native"
+        assert r["confidence_mapped"] is True  # a mapped held finding survived
+        # Adversarial A2 (#902): the re-roll's summary alone could omit or
+        # contradict retained held findings — the merge disclosure names them.
+        assert r["summary"].startswith("fresh")
+        assert "[merge note: 1 finding(s) retained" in r["summary"]
+
+    def test_native_reroll_matching_finding_takes_native_copy(self, stub, project):
+        # Same finding (identical dedupe key) in both rounds: the native
+        # re-roll copy wins the collapse, so nothing is mapped in the result.
+        stub.env["CODEX_STUB_BODY_FIRST"] = WORD_BODY
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        r = _result(project)
+        assert len(r["findings"]) == 1
+        assert r["findings"][0]["confidence"] == 0.85
+        assert r["findings"][0]["confidence_source"] == "native"
+        assert r["confidence_mapped"] is False
+
+    def test_retry_diagnostic_names_non_native_confidence(self, stub, project):
+        # 8a F3: numeric strings route here too — the diagnostic must not
+        # claim "word-form".
+        stub.env["CODEX_STUB_BODY"] = WORD_BODY
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        assert "non-native confidence" in result.stderr
+        assert "word-form confidence" not in result.stderr
+
+    def test_garbage_confidence_refuses_invalid_output(self, stub, project):
+        stub.env["CODEX_STUB_BODY"] = GARBAGE_CONF_BODY
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 4
+        assert stub.calls == 1  # schema-invalid is terminal, never a blind retry
+        r = _result(project)
+        assert r["error_class"] == "invalid_output"
+        assert "confidence" in r["error_detail"]
+
+    def test_glm_word_confidence_maps_with_flag(self, project):
+        calls = []
+
+        def fake_glm(prompt, *, model, effort, timeout):
+            calls.append(1)
+            return WORD_BODY, ""
+
+        res = rr.run_review(
+            verb="review-artifact",
+            artifact=str(project / "artifact.md"), artifact_type="design",
+            author_model="claude-fable-5", reviewer=None, backend="glm",
+            project_root=str(project), out_path=str(project / "r.json"),
+            glm_fn=fake_glm,
+        )
+        assert res["status"] == "success"
+        assert len(calls) == 2  # one bounded retry before accepting the map
+        assert res["confidence_mapped"] is True
+        assert res["findings"][0]["confidence"] == 0.9
+
+    def test_banded_filter_runs_mechanically_on_mapped_result(self, stub, project):
+        # The consumer operation AC2 exists for: apply
+        # plan_lib.SEVERITY_BANDED_CONFIDENCE to a result's findings with no
+        # per-finding human judgement in between (the Step-11 filter).
+        import plan_lib
+        stub.env["CODEX_STUB_BODY"] = json.dumps({"summary": "s", "findings": [
+            dict(VALID_FINDING, confidence="low", description="worded low"),
+            dict(VALID_FINDING, confidence=0.95, description="native high"),
+        ]})
+        result = _cli(_artifact_args(project), stub.env)
+        assert result.returncode == 0, result.stderr
+        r = _result(project)
+        kept = [f["description"] for f in r["findings"]
+                if f["confidence"] >= plan_lib.SEVERITY_BANDED_CONFIDENCE[f["severity"]]]
+        dropped = [f["description"] for f in r["findings"]
+                   if f["confidence"] < plan_lib.SEVERITY_BANDED_CONFIDENCE[f["severity"]]]
+        assert kept == ["native high"]      # 0.95 >= High band 0.65
+        assert dropped == ["worded low"]    # low -> 0.4 < High band 0.65
 
 
 # ===========================================================================

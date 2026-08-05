@@ -500,6 +500,9 @@ def run_review(*, verb: str, artifact=None, artifact_type: str = "generic",
         "error_class": None, "error_detail": "",
         "stripped_paths": [], "secrets_detected": [],
         "attempts": 0, "backend_switched": False, "reopen": None,
+        # #902: True when any finding's confidence arrived as a word/numeric
+        # string and was mapped (never silently treated as native).
+        "confidence_mapped": False,
     }
     resolved_out = None
 
@@ -659,7 +662,38 @@ def run_review(*, verb: str, artifact=None, artifact_type: str = "generic",
     cur_backend, cur_model = backend, model
     transport_retries = 0
     truncation_retries = 0
+    word_confidence_retries = 0
     switch_note = ""
+    # #902 (8a F1 + Step-11 F1): a valid parse whose confidence needed mapping
+    # is HELD while the one bounded re-roll runs. A valid, fully native,
+    # non-empty re-roll is UNION-merged with the held findings (native copy
+    # wins an exact dedupe-key match; no held finding is ever lost); any other
+    # outcome (empty, still-mapped, invalid, transport-failed) accepts the
+    # held mapped result outright. A review already validly in hand never
+    # becomes a failure or an empty pass because its polish re-roll went
+    # sideways, and no transport/truncation retry or backend switch is ever
+    # spent on the re-roll.
+    held_mapped = None  # (parsed, stderr_of_that_attempt)
+
+    def _accept(parsed, any_mapped, stderr_text):
+        result["confidence_mapped"] = any_mapped
+        result["findings"] = list(parsed["findings"])
+        result["summary"] = parsed["summary"]
+        result["proposal"] = parsed["proposal"]
+        reported = _transport_model(stderr_text)
+        result["reviewer_model"] = reported or cur_model
+        if token is not None and not diagnostic:
+            # Round-1 H2: an actionable result requires a successful EXCLUSIVE
+            # stamp — a token spent concurrently or unstampable withholds the
+            # actionable authorization (diagnostic downgrade), never grants it.
+            ok_stamp, why = consume_token_exclusively(reopen_token)
+            if not ok_stamp:
+                result["diagnostic"] = True
+                result["error_detail"] = f"downgraded to diagnostic: {why}"
+                print(f"review_runner: WARNING {why} — actionable authorization "
+                      f"withheld; result downgraded to diagnostic",
+                      file=sys.stderr)
+        return _finish("success")
 
     def _switchable():
         other = "glm" if cur_backend == "gpt" else "gpt"
@@ -697,6 +731,10 @@ def run_review(*, verb: str, artifact=None, artifact_type: str = "generic",
         result["reviewer_model"] = cur_model
 
         if att["timed_out"] or att["rc"] != 0:
+            if held_mapped is not None:
+                print("review_runner: confidence re-roll failed — accepting "
+                      "the held mapped result (#902)", file=sys.stderr)
+                return _accept(held_mapped[0], True, held_mapped[1])
             # Round-1 L8: providers put failure text on either stream —
             # classify a bounded combination, same precedence.
             cls = ("transport" if att["timed_out"]
@@ -720,38 +758,76 @@ def run_review(*, verb: str, artifact=None, artifact_type: str = "generic",
             return _finish("failure", error_class=cls, error_detail=detail)
 
         if not att["payload"].strip():
+            if held_mapped is not None:
+                print("review_runner: confidence re-roll returned empty output "
+                      "— accepting the held mapped result (#902)",
+                      file=sys.stderr)
+                return _accept(held_mapped[0], True, held_mapped[1])
             return _finish("failure", error_class="empty_output",
                            error_detail="backend exited 0 with empty output — "
                                         "terminal failure, never a pass (#766)")
         parsed, perr = _parse_success(verb, att["payload"])
-        if parsed is None and perr == "retry":
-            if truncation_retries < 1:
-                truncation_retries += 1
-                print("review_runner: truncated/non-JSON output — one bounded "
-                      "retry (#793)", file=sys.stderr)
-                continue
-            return _finish("failure", error_class="invalid_output",
-                           error_detail="output not parseable as JSON after retry")
         if parsed is None:
+            if held_mapped is not None:
+                print("review_runner: confidence re-roll returned unusable "
+                      "output — accepting the held mapped result (#902)",
+                      file=sys.stderr)
+                return _accept(held_mapped[0], True, held_mapped[1])
+            if perr == "retry":
+                if truncation_retries < 1:
+                    truncation_retries += 1
+                    print("review_runner: truncated/non-JSON output — one bounded "
+                          "retry (#793)", file=sys.stderr)
+                    continue
+                return _finish("failure", error_class="invalid_output",
+                               error_detail="output not parseable as JSON after retry")
             return _finish("failure", error_class="invalid_output",
                            error_detail=perr)
-        result["findings"] = list(parsed["findings"])
-        result["summary"] = parsed["summary"]
-        result["proposal"] = parsed["proposal"]
-        reported = _transport_model(att["stderr"])
-        result["reviewer_model"] = reported or cur_model
-        if token is not None and not diagnostic:
-            # Round-1 H2: an actionable result requires a successful EXCLUSIVE
-            # stamp — a token spent concurrently or unstampable withholds the
-            # actionable authorization (diagnostic downgrade), never grants it.
-            ok_stamp, why = consume_token_exclusively(reopen_token)
-            if not ok_stamp:
-                result["diagnostic"] = True
-                result["error_detail"] = f"downgraded to diagnostic: {why}"
-                print(f"review_runner: WARNING {why} — actionable authorization "
-                      f"withheld; result downgraded to diagnostic",
-                      file=sys.stderr)
-        return _finish("success")
+        # #902 AC1: a non-native confidence (word / numeric string, mapped by
+        # normalize_findings) gets ONE bounded re-roll so the backend can
+        # produce the schema's native number; the first valid parse is HELD
+        # meanwhile (8a F1) and wins unless the re-roll is strictly better.
+        any_mapped = any(f.get("confidence_source") == "mapped"
+                         for f in parsed["findings"])
+        if any_mapped and word_confidence_retries < 1 and held_mapped is None:
+            word_confidence_retries += 1
+            held_mapped = (parsed, att["stderr"])
+            print("review_runner: non-native confidence — one bounded retry "
+                  "before mapping (#902)", file=sys.stderr)
+            continue
+        if held_mapped is not None and (any_mapped or not parsed["findings"]):
+            # A still-mapped or empty re-roll is not better — the held review
+            # wins outright.
+            print("review_runner: confidence re-roll not strictly better — "
+                  "accepting the held mapped result (#902)", file=sys.stderr)
+            return _accept(held_mapped[0], True, held_mapped[1])
+        if held_mapped is not None:
+            # Native non-empty re-roll: UNION-merge (Step-11 F1) — every held
+            # finding survives; on an exact dedupe-key match the native copy
+            # wins. A re-roll can only ADD findings or upgrade provenance,
+            # never silently lose a held finding.
+            key = lambda f: (f["severity"], f.get("location") or "",
+                             f["description"])
+            merged = list(parsed["findings"])
+            have = {key(f) for f in merged}
+            merged.extend(f for f in held_mapped[0]["findings"]
+                          if key(f) not in have)
+            merged.sort(key=lambda x: (arl._SEVERITY_RANK[x["severity"]],
+                                       x["category"]))
+            # Adversarial A2 (#902): the re-roll's summary alone can omit or
+            # contradict the retained held findings — disclose them
+            # deterministically so the top-level narrative stays honest.
+            retained = len(merged) - len(parsed["findings"])
+            summary = parsed["summary"]
+            if retained:
+                summary += (f" [merge note: {retained} finding(s) retained "
+                            f"from the pre-re-roll round are not described "
+                            f"above]")
+            parsed = {"findings": merged, "summary": summary,
+                      "proposal": parsed["proposal"]}
+            any_mapped = any(f.get("confidence_source") == "mapped"
+                             for f in merged)
+        return _accept(parsed, any_mapped, att["stderr"])
 
 
 def _exit_code(result: dict) -> int:

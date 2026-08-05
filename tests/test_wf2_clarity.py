@@ -279,7 +279,13 @@ class TestStep11DiffReview:
         assert re.search(r"stale|cleanup|leftover", s11, re.IGNORECASE), (
             "the sweep must carry cleanup/stale language (crash recovery)"
         )
-        assert "ADV_CONFIDENCE_TO_FLOAT" in s11, "confidence enum must map via ADV_CONFIDENCE_TO_FLOAT"
+        assert "confidence_source" in s11, (
+            "#902: runner findings arrive numeric — Step 11 verifies the "
+            "confidence_source provenance flag instead of mapping words itself"
+        )
+        assert "ADV_CONFIDENCE_TO_FLOAT" in s11, (
+            "the one word-to-float map (applied runner-side since #902) must stay named"
+        )
 
     def test_secrets_surfacing_in_marker(self):
         assert "secrets detected" in _step11()
