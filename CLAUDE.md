@@ -222,7 +222,7 @@ load-bearing for resume. Never edit or truncate an existing entry.
    (`hooks/skill_registration_check.py`), and the two counts below are guarded — but
    NOT equally, so do not read them as interchangeable. "All 9 config-driven skills"
    is COMPUTED from the tree (`pin:config-driven`, the canary's own population).
-   "9 workspace management" is only CONSENSUS-checked across the config surfaces plus
+   "12 workspace management" is only CONSENSUS-checked across the config surfaces plus
    `breakdown-sum`: no per-skill category metadata exists to derive it from, so a
    category count that is too low still passes when another absorbs the difference.
    Treat the second as hand-maintained-but-cross-checked. (Both had rotted while

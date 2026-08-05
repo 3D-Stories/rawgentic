@@ -1,6 +1,6 @@
 # rawgentic
 
-**9 SDLC workflow skills + 9 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
+**9 SDLC workflow skills + 12 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)](https://docs.anthropic.com/en/docs/claude-code)
@@ -11,9 +11,9 @@
 
 Claude Code is powerful but unstructured. Complex tasks — building features, fixing bugs, running security audits — need consistent quality gates, test-driven development, and deployment verification. Without guardrails, it's easy to skip code review, forget to run CI, or merge without testing.
 
-**Rawgentic** provides 21 skills organized in four layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
+**Rawgentic** provides 24 skills organized in four layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
 
-- **Workspace management** (9 skills) — Project registration, configuration, session binding, guard exception management, opt-in operating-charter installation, session-registry housekeeping, full-text session-history recall, gated pane handoff to a fresh session, and epic-child revalidation against a moved `main`
+- **Workspace management** (12 skills) — Project registration, configuration, session binding, guard exception management, opt-in operating-charter installation, session-registry housekeeping, full-text session-history recall, gated pane handoff to a fresh session, epic-child revalidation against a moved `main`, and three supervision commands (`away`, `sleeping`, `back`) that declare whether anybody is watching the session
 - **SDLC workflows** (9 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a post-run `run-feedback` self-assessment (WF14), a telemetry-driven epic post-mortem (WF19), and human-gated session-history mining (WF17)
 - **Planning** (1 skill) — A lightweight `interview` skill for pre-build requirements discovery
 - **Security & infrastructure** (2 skills + hooks) — Whole-tree security scanning, security pattern syncing, dangerous pattern blocking, per-project WAL logging, session binding enforcement, and cross-project file guards
@@ -676,7 +676,7 @@ pytest tests/hooks/test_wal_guard.py -v
 
 **Impact measurement:** `scripts/wf2_impact_metrics.py` computes deterministic Tier-1 impact metrics (test growth, fail-closed coverage, dedup, diff volume) for a skill-extraction effort over a `--baseline`/`--head` git range. See [docs/measurements/2026-06-15-wf2-extraction-impact.md](docs/measurements/2026-06-15-wf2-extraction-impact.md) for the WF2 extraction analysis.
 
-Skills are tested via the `/skill-creator` eval pipeline (11/21 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `epic-post-mortem`, `housekeeping`, `interview`, `revalidate-children`, `run-feedback`, `scan`, `session-mining`, and `session-recall` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard. The eval data is also read by the **behavioural selection gate** (`hooks/skill_evals.py`, #928): `discover` reports every file's cases and their intents (`trigger` / `slash` / `refuse`), and a live verdict is a documented manual gate — see `docs/skill-evals.md`.
+Skills are tested via the `/skill-creator` eval pipeline (11/24 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `away`, `back`, `epic-post-mortem`, `housekeeping`, `interview`, `revalidate-children`, `run-feedback`, `scan`, `session-mining`, `session-recall`, and `sleeping` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard. The eval data is also read by the **behavioural selection gate** (`hooks/skill_evals.py`, #928): `discover` reports every file's cases and their intents (`trigger` / `slash` / `refuse`), and a live verdict is a documented manual gate — see `docs/skill-evals.md`.
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 

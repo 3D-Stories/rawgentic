@@ -368,7 +368,7 @@ def test_readme_count_strings_updated():
         f"{sorted(set(skills) - have - {'peer-consult'})} (peer-consult is "
         f"called out separately as a stub)"
     )
-    assert "9 workspace management" in readme  # #113 — README count must match plugin/marketplace descriptions
+    assert "12 workspace management" in readme  # #113 — README count must match plugin/marketplace descriptions
 
 
 def test_readme_changelog_has_no_spliced_headings():
