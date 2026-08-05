@@ -751,8 +751,17 @@ For major changes, please open an issue first to discuss the approach.
   default deliberately DIFFERENT, so a silent fallback fails rather than passes, and additionally pins
   the four prose handoffs no Python test can execute), plus `TestTaskClassFlags` in
   `test_review_runner.py`; `tests/test_wf2_prose_budget.py` ceilings recalibrated to
-  actual + allowed_headroom for `step-01.md` and the corpus total.
-  No workflow-spine change → no diagram REV. Suite 5080→5180.
+  actual + allowed_headroom for `step-01.md` and the corpus total. The Step-8a wave over the three
+  high-risk tasks ran two independent passes and found five real defects, all fixed rather than
+  deferred: the runner trusted a caller-supplied class without checking the snapshot (resolved under
+  owner decision **D207** as verify-if-present, since the reviewer's `design-flaw` classification
+  collided with D204's no-further-design-passes override); Step 1's task-class instruction re-fetched
+  the issue body with no exit-status gate, so a failed fetch could resolve an EMPTY body and snapshot
+  that permanently; a non-string `defaultTaskClass` was silent where a bad string diagnosed; the
+  issue-less WF5/WF13 path resolved the project default and then discarded it, so a configured
+  `internal` could never reach a prompt; and `resolve`'s failure surface was a raw traceback rather
+  than the `task-class: FAILED — <reason>` line its own docs promise.
+  No workflow-spine change → no diagram REV. Suite 5080→5197.
 
 ### v3.127.1 (2026-08-05)
 - **herdr re-pinned to v0.8.0 against the migrated `herdrdev/herdr` org, with every value 0.8.0
