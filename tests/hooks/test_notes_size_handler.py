@@ -320,18 +320,51 @@ class TestTrimIsNonDestructive:
         assert tmp_path.exists() and (tmp_path / "proj.md").stat().st_size > 64_000
 
     def test_same_second_archives_do_not_clobber(self, tmp_path):
-        """Two trims in one second must not have the second destroy the first archive."""
+        """Two trims in one second must not have the second destroy the first archive.
+
+        The collision is FORCED rather than raced for (#761 drive-by). The original
+        version ran two trims back to back and asserted that the second took a `-1`
+        suffix — true only when both landed inside the same wall-clock second, since the
+        stamp is `%Y-%m-%dT%H:%M:%SZ`. When they straddled a boundary both archives got
+        distinct names, no suffix was needed, and the assertion failed on correct
+        behaviour. It failed a CI run on PR #926 and 1 of 3 local runs.
+
+        Fix: pre-create a decoy archive for BOTH seconds the second trim can possibly
+        land in, so a collision is certain either way and the `-1` path is exercised
+        deterministically. The non-destructiveness assertion — the property that actually
+        matters — is unchanged and still unconditional.
+        """
+        from datetime import datetime, timezone, timedelta
+
         f = tmp_path / "proj.md"
         f.write_text("".join(f"first {i}\n" for i in range(12_000)))
         _run_handler(f)
+        adir = tmp_path / ".notes-archive"
+        real = sorted(adir.glob("proj.md.*.archive.md"))
+        assert len(real) == 1, f"first trim should make exactly one archive: {real}"
+
+        # Occupy the un-suffixed name for this second and the next, so whichever second
+        # the second trim reads, its first candidate is already taken.
+        now = datetime.now(timezone.utc)
+        decoys = []
+        for delta in (0, 1):
+            ts = (now + timedelta(seconds=delta)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            decoy = adir / f"proj.md.{ts}.archive.md"
+            if not decoy.exists():
+                decoy.write_text("decoy\n")
+                decoys.append(decoy)
+
         f.write_text("".join(f"second {i}\n" for i in range(12_000)))
         _run_handler(f)
-        archives = sorted((tmp_path / ".notes-archive").glob("proj.md.*.archive.md"))
-        assert len(archives) == 2, f"an archive was clobbered: {archives}"
+
+        archives = sorted(adir.glob("proj.md.*.archive.md"))
         assert any(a.name.endswith("-1.archive.md") for a in archives), (
-            "the second trim did not take a collision-suffixed name, so this "
-            "test may have passed only by crossing a wall-clock second"
+            f"the second trim did not take a collision-suffixed name: {archives}"
         )
+        assert real[0].read_text(), "the first trim's archive was clobbered"
+        for d in decoys:
+            assert d.read_text() == "decoy\n", f"a pre-existing archive was clobbered: {d}"
+        archives = [a for a in archives if a not in decoys]
         blob = "".join(a.read_text() for a in archives)
         assert "first 0\n" in blob and "second 0\n" in blob
 

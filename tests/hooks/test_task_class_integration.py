@@ -89,6 +89,25 @@ def _read_class_via_cli(project_root, issue=ISSUE):
     return json.loads(proc.stdout)
 
 
+@pytest.fixture(autouse=True)
+def _backend_prereq_is_irrelevant_here(monkeypatch):
+    """Make these tests independent of whether THIS machine has codex.
+
+    Caught by CI, not locally: `run_review` probes `_gpt_available()` before the attempt
+    loop, and the dev host has codex authenticated while the CI runner installs only
+    gitleaks/semgrep/osv-scanner. So two tests passed here and failed there — the exact
+    "verify in the real environment, not the setup you happen to hold" trap.
+
+    Patching the probe rather than PATH-stubbing the binary is deliberate: every test in
+    this file injects a runner and asserts on the prompt BELOW egress (the design says so
+    explicitly — "it stops below egress so no backend call is needed"), so backend
+    availability is not part of what they test. The CLI-level tests in
+    `test_review_runner.py` keep the house PATH-stub, which is where exercising the real
+    probe belongs.
+    """
+    monkeypatch.setattr(rr, "_gpt_available", lambda: True)
+
+
 class _PromptCapture:
     """An injected runner: captures the composed prompt, never calls a backend."""
 
