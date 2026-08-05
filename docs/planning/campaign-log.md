@@ -14,6 +14,57 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #875 M1 — #910: the last two hand-pinned counts, and a guard that already existed · v3.128.2
+
+**Issue:** [#910](https://github.com/3D-Stories/rawgentic/issues/910) ·
+**Design:** brief note, small-standard lane (no separate design doc)
+
+Filed as the tail of the #271 computed-guard conversion: two count strings in `CLAUDE.md` §4
+mistake #2 that the guards never reached. Measuring them first turned up that **both were already
+wrong** — "All 7 config-driven skills" and "6 workspace management" against a real 9 and 9. Not new
+either: the #528 run record booked exactly that drift as a follow-up on 2026-07-20 and it survived
+fifteen days, because nothing read those lines. Correcting the numbers is a forced consequence of
+guarding them.
+
+**The durable lesson is where the guard went, not what it checks.** The first implementation built a
+computed guard in `test_adversarial_review_registration.py` — mutation-verified, section-anchored,
+and *wrong*, because `hooks/skill_registration_check.py` (#528, three slots earlier in this same
+campaign) already swept every count pin, already enumerated both families, and already had a
+`COMPUTED_FAMILIES` mechanism built for exactly this promotion. Its own `test_real_repo_is_clean`
+failed and said so. That cost the run's `tdd` loop-back. The rule that would have prevented it is
+already written down twice — workspace §3 and repo §3, "one helper, one home" — and Step 2 did not
+check it. **A step-2 inventory that greps for the surface but not for an existing owner of that
+surface will keep producing this.**
+
+**Shipped:** `CLAUDE.md` added to `SWEEP_GLOBS` (it is not "docs" in the excluded sense — it is the
+manual read as instruction, and being outside the sweep is *why* it rotted); `pin:config-driven`
+promoted into `COMPUTED_FAMILIES` against the canary's own population; a fail-closed branch so an
+uncomputable expectation can never silently demote a family back to consensus. Five new tests, four
+mutation-verified.
+
+**The promotion mattered for a reason worth stating.** Consensus failed in the only way consensus
+can: README and its own test literal agreed on 8 while the corpus carried 9 — every copy consistent,
+every copy wrong. **A lone pin trivially agrees with itself.** The change then exposed the same blind
+spot reproduced inside the test suite: the checker's own fixture claimed two config-driven skills
+over a fixture tree containing one, and consensus-of-one had been passing it.
+
+**What the review caught, and what it got wrong.** Two cross-model passes returned five findings.
+The High was real and applied — the claim that *both* counts are now computed was overstated, since
+`pin:workspace` is consensus-checked and `breakdown-sum` cannot close the gap (`[9, 8, 2, 2]` sums
+to 21 exactly as `[9, 9, 1, 2]` does); the manual now names which is which. Their other remedy —
+invent a per-skill category taxonomy — was declined, because it adds a hand-maintained surface while
+claiming to remove one. **Both passes also independently raised the same Critical, and both were
+wrong:** they predicted this PR's changelog text would trip the sweep, not seeing `_readme_body()`,
+which truncates README at `## Changelog` precisely because the changelog legitimately holds
+historical counts. Two independent reviewers agreeing on a false conclusion, inside the PR whose
+subject is that agreement is not correctness.
+
+**Gates:** suite 5249 → 5254, 0 failed, exit 0 · both lint lanes 10.00/10 · security scan PASS
+(1 visible skip: iac not applicable) · loop-backs 2/3 (`tdd` 1/1 rehome, `review` 1/1 mint) ·
+lane-widened 3→4 impl files · no workflow-spine change → no diagram REV.
+
+---
+
 ## Epic #875 M1 — #909: a description cap, and the YAML comment that was eating triggers · v3.128.1
 
 **Issue:** [#909](https://github.com/3D-Stories/rawgentic/issues/909) ·
