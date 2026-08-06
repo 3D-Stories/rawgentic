@@ -525,14 +525,28 @@ and **never** a WF2 step, so it is structurally impossible for the driver to
 **weaken** WF2. WF2's per-issue termination (`<termination-rule>`) is a
 precondition the driver relies on, not something it overrides.
 
-## Fresh session per child (#569, opt-in)
+## Fresh session per child (#569; the DEFAULT since #927)
 
 By default the whole epic run lives in ONE Claude process (the `/goal` Stop-hook
 re-injects into the same session); "fresh WF2 per child" is NOT a fresh *session*, so
-context accumulates across children. **Fresh-session mode** (`.driver-state`
-`session_mode: "fresh-session"`, opt-in at epic-run Step 2; absent → `single-session`,
-byte-identical to before) gives each child its own process, with continuity carried by
-durable state alone.
+context accumulates across children. **The per-child process boundary gives each child its own
+process, with continuity carried by durable state alone — and since #927 it is the DEFAULT.**
+
+**How a campaign's transport is decided (#927).** `.driver-state.preferred_transport` is
+`pane_chain` or `inline`, and it is **PROBED at campaign creation**, never asked at setup:
+`launcher_lib transport resolve-creation` runs a tier-1 herdr capability probe and records the
+answer plus the probe's reason. `pane_chain` means a boundary per child; `inline` means the
+in-session loop. It is write-once — `transport set pane_chain|inline --reason "<why>"` changes it
+later, refused while a child is `in_progress` or a boundary holds a claim, and the NEXT boundary
+still probes. `session_mode` survives ONLY as a write-only compatibility projection kept in sync
+at the single locked writer, so a build rolled back to a pre-#927 version still behaves
+correctly; `preferred_transport` always wins where they disagree. A campaign carrying neither
+field is the one genuinely defaulted case and stays `inline`, byte-identical to before.
+
+**Why probed rather than recorded once by hand.** herdr can be present at creation and gone by
+boundary 4, so an answer given at setup is stale by construction — that staleness is the defect
+#927 exists to remove, which is also why the launcher's caller-asserted `--herdr-available` flag
+was deleted rather than defaulted.
 
 **The boundary.** After a child reaches ANY terminal outcome — `merged` or a blocker's
 `deferred`/`abandoned` — the session ENDS (a blocked child's context must not bleed into an
@@ -548,9 +562,17 @@ It computes an explicit disposition — never a `None` sentinel:
   document and `skills/epic-run/SKILL.md` both described a two-step "get the disposition, then
   `open_handoff` it" flow that production never implemented. Following it launched the successor
   before anything durable was written and then looked for a `disp` that does not exist.)*
-  **Known gap:** because nothing is persisted here, this boundary has no generation/claim fence —
-  that belongs to `mid-child-handoff`, which does call `open_handoff`. Two `handoff` invocations
-  for one boundary can each launch a successor. Tracked as #845.
+  **The exactly-one-successor fence is HERE now (#845, closed inside #927).** The command opens
+  the generation and takes a claim BEFORE it probes, then records a `resolution` event with the
+  pre-split pane inventory BEFORE any launch, and marks `split_attempted` before calling the
+  split. That ordering is the safety property: `split_attempted: false` PROVES nothing was
+  created, so only that state authorises a relaunch, and a `null` successor under
+  `split_attempted: true` is resolved by an inventory diff rather than trusted. A second
+  invocation for one boundary loses the claim and exits **rc 7** doing no campaign work — it does
+  NOT fall back to running the child in its own session, because at a boundary nothing is in
+  flight and "continuing" would mean starting the next child beside the holder's successor. The
+  claim is released on a DEFINITE terminal outcome and deliberately held on an indeterminate one,
+  because that lease is what protects a possibly-live successor until reconciliation runs.
 - `complete` (ONLY when every child is `merged`) → run the wrap-up (close the epic).
 - `blocked` (unmerged children remain but none is ready — all deferred/abandoned/dep-blocked) →
   leave the epic OPEN with an honest summary and end. **`blocked` is never conflated with
@@ -566,12 +588,14 @@ plugin repo — a deferred owner-attended follow-up, mirroring the #568 Phase-1 
 until it lands, fresh-session mode's pre-launch check degrades to single-session, so nothing
 regresses.)
 
-> **Scope of the two sections below: the MID-CHILD boundary only** (`mid-child-handoff`, #665).
-> Round-5 High 3: they read as though they also covered the child boundary described above, which
-> flatly contradicts it — that boundary's `handoff` command never calls `open_handoff`, writes no
-> `handoff_pending`, and offers a successor nothing to claim. Until **#845** lands, there is no
-> generation counter and no exactly-one-successor fence at the child boundary. Everything from
-> here to the end of this subsection describes `mid-child-handoff`.
+> **Scope of the two sections below: both boundaries now share this machinery** (#927 closed
+> #845). They were written for `mid-child-handoff` (#665) alone, and Round-5 High 3 correctly
+> fenced them off because the child boundary genuinely had no claim then. It does now: the child
+> boundary reuses this generation/claim/lease/ack machinery UNCHANGED and differs only in its
+> precondition — mid-child requires exactly one child `in_progress` matching its position record,
+> the child boundary requires the opposite (the next child `queued` and nothing in flight). Where
+> a paragraph below says "mid-child", read it as "either boundary" unless it names the position
+> record or the retirement, which remain mid-child's alone.
 
 **Generation counter (monotonic).** On a `ready` mid-child disposition the driver persists the
 handoff via

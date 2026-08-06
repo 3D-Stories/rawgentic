@@ -228,3 +228,22 @@ def test_the_next_child_exit_contract_documents_rc_2():
     assert "| 2 |" in body, "rc 2 is missing from the next-child exit-code table"
     assert "parse stdout" in body.lower(), "rc 2 is useless to a caller without this instruction"
     assert "`next_issue`" in body
+
+
+def test_doc_documents_the_probed_transport_and_the_closed_fence():
+    """#927. Two contracts this doc must not drift from, both of which it once stated INVERTED.
+
+    The doc said the boundary was opt-in and that it had no exactly-one-successor fence. Both were
+    true when written and both are now false, so shipping the code without rewriting them would
+    have left the authoritative contract document telling an operator to expect a double launch.
+    """
+    text = __import__("pathlib").Path(__file__).resolve().parents[2].joinpath(
+        "docs/multi-issue-driver.md").read_text(encoding="utf-8")
+    assert "preferred_transport" in text and "transport resolve-creation" in text
+    assert "PROBED at campaign creation" in text, "the answer is probed, never asked at setup"
+    assert "write-only compatibility projection" in text, (
+        "`session_mode` survives only as a projection; the canonical field wins")
+    assert "fence is HERE now" in text
+    assert "rc 7" in text, "the losing contender's distinct exit code belongs in the contract"
+    assert "no generation counter and no exactly-one-successor fence at the child boundary" \
+        not in text, "the pre-#927 absence claim must be gone"

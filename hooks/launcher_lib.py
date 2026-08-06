@@ -2001,6 +2001,13 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     out: dict = {"ok": False, "steps": [], "results": {}, "truncated": False,
                  "failed_step": None, "new_pane": None, "session_id": None,
                  "cleanup": None, "teardown_skipped": None, "predecessor_guard": None,
+                 # #927 PR 2: the herdr `error.code` of the failing step, machine-readable.
+                 # ADDITIVE — no branch here reads it. `_cmd_handoff` needs the code rather than
+                 # the human `note` because section 16.4's downgrade triggers on an ENUMERATED
+                 # spiked refusal code (`CREATION_REFUSAL_CODES`), and parsing a prose note to
+                 # recover a code it already had would be exactly the kind of guess that finding
+                 # forbids.
+                 "failure_code": None,
                  "failure_detail": None, "pane_capture": None}
 
     ladder = _VERIFICATION_STEPS if steps is None else steps
@@ -2183,6 +2190,8 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         record("split", split_argv, proc)
         if getattr(proc, "returncode", 1) != 0:
             out["failed_step"] = "split"
+            out["failure_code"] = _error_code(
+                f"{getattr(proc, 'stdout', '') or ''}{getattr(proc, 'stderr', '') or ''}")
             return out
         new_pane = _extract_pane_id(getattr(proc, "stdout", "") or "")
         if new_pane is None:
@@ -4282,6 +4291,20 @@ def _cmd_next_child(args) -> int:
     if outcome != "ready":
         print(json.dumps({"outcome": outcome, "observed_head": observed_head}, indent=2))
         return 3
+    # #927 AC 4, the in-session half. A `ready` here under an `inline` campaign means the run is
+    # about to take the next child IN THIS SESSION — a choice the campaign recorded, not a
+    # degradation. `boundary_advisory_line` cannot speak for it (preferred and effective agree),
+    # so the operator would learn it only from silence. Advisory only: it never changes this
+    # command's exit code, and the at-most-once claim keeps `handoff` and `next-child` from both
+    # emitting for the same boundary.
+    preferred, provenance = driver_lib.campaign_transport(state)
+    line = driver_lib.inline_mode_advisory_line(preferred=preferred, provenance=provenance,
+                                                next_issue=disposition["next_issue"])
+    if line is not None:
+        _emit_advisory_once(args.driver_state,
+                            transition_id=f"bnd:{state.get('campaign', 'campaign')}:"
+                                          f"{disposition['next_issue']}",
+                            line=line)
     print(json.dumps({"outcome": "ready", "next_issue": disposition["next_issue"],
                       "observed_head": observed_head}, indent=2))
     return 0
@@ -4429,6 +4452,233 @@ def _say(message: str) -> None:
     print(message, file=sys.stderr)
 
 
+def _cmd_transport(args) -> int:
+    """The `transport` command group — AC 2, and the creation seam AC 1 depends on.
+
+    All three verbs share one rule: the guard is evaluated INSIDE the same
+    `_locked_state_update` that writes, against the state read under that lock (pass-2 finding
+    F7). A pre-lock check permits a child to start between the check and the write, which is the
+    mid-child mode flip `transport_set_blocked` exists to refuse.
+    """
+    driver_lib = _driver_lib()
+    verb = args.verb
+    outcome: dict = {}
+
+    if verb == "resolve-creation":
+        # Section 16.6. Write-once: a second call is a caller error, not a silent re-probe.
+        transport, reason = resolve_creation_transport()
+
+        def _create(s):
+            if s.get("preferred_transport") is not None:
+                outcome["refused"] = ("already_recorded", s["preferred_transport"])
+                return None
+            new = dict(s)
+            new["preferred_transport"] = transport
+            projected = driver_lib.legacy_session_mode(transport)
+            if projected is not None:
+                new["session_mode"] = projected
+            now = int(time.time())
+            rid = driver_lib.append_resolution(
+                new, transition_id=f"c:{new.get('campaign', 'campaign')}:0",
+                generation=new.get("generation", 0), trigger="creation", kind="creation",
+                preferred=transport, effective=transport, probe_reason=reason, probe_ms=None,
+                pane_ref=None, panes_before=None, now_ts=now)
+            driver_lib.append_terminal_outcome(new, resolution_id=rid, outcome="created",
+                                               now_ts=now)
+            outcome["transport"] = transport
+            return new
+
+        _locked_state_update(args.driver_state, _create)
+        if "refused" in outcome:
+            _why, recorded = outcome["refused"]
+            print(f"refusing: this campaign already records preferred_transport "
+                  f"{recorded!r} — creation is write-once. Use `transport set` to change it.",
+                  file=sys.stderr)
+            return 2
+        print(json.dumps({"preferred_transport": outcome["transport"], "reason": reason},
+                         indent=2))
+        return 0
+
+    if verb == "set":
+        # Self-review S1: an unvalidated value would become `preferred_transport`, which
+        # `campaign_transport` then reports as `unrecognized` and degrades to inline for ever.
+        if args.value not in driver_lib.TRANSPORTS:
+            print(f"refusing: {args.value!r} is not a transport; expected one of "
+                  f"{sorted(driver_lib.TRANSPORTS)}", file=sys.stderr)
+            return 2
+        try:
+            reason = driver_lib.validate_operator_note(args.reason, what="--reason")
+            operator = driver_lib.validate_operator_note(args.operator, what="--operator")
+        except driver_lib.DriverStateError as exc:
+            print(f"refusing: {exc}", file=sys.stderr)
+            return 2
+
+        def _set(s):
+            blocked, why = driver_lib.transport_set_blocked(s, now_ts=int(time.time()))
+            if blocked:
+                outcome["blocked"] = why
+                return None                 # no write at all
+            new = dict(s)
+            new["preferred_transport"] = args.value
+            projected = driver_lib.legacy_session_mode(args.value)
+            if projected is not None:
+                new["session_mode"] = projected
+            new["transport_audit"] = list(new.get("transport_audit") or []) + [
+                {"transport": args.value, "operator": operator, "reason": reason,
+                 "observed_at": int(time.time())}]
+            return new
+
+        _locked_state_update(args.driver_state, _set)
+        if "blocked" in outcome:
+            print(f"refusing: {outcome['blocked']} — the recorded transport may not change while "
+                  "a child is in flight or a boundary holds a claim (that is the "
+                  "`mid-child-handoff` case, not this one)", file=sys.stderr)
+            return 3
+        print(json.dumps({"preferred_transport": args.value, "reason": reason}, indent=2))
+        return 0
+
+    # verb == "unpark"
+    try:
+        reason = driver_lib.validate_operator_note(args.reason, what="--reason")
+        operator = driver_lib.validate_operator_note(args.operator, what="--operator")
+        if args.adopt is not None:
+            validate_pane_id(args.adopt)
+    except (driver_lib.DriverStateError, LauncherError) as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 2
+    resolved = "successor_acked" if args.adopt is not None else "reconciled_no_action"
+
+    def _unpark(s):
+        blocked, why = driver_lib.unpark_blocked(s, resolution_id=args.resolution_id)
+        if blocked:
+            outcome["blocked"] = why
+            return None
+        new = dict(s)
+        new["transitions"] = list(new.get("transitions") or [])
+        if args.adopt is not None:
+            driver_lib.record_successor_pane(new, resolution_id=args.resolution_id,
+                                             pane=args.adopt)
+        driver_lib.append_unpark(new, resolution_id=args.resolution_id, outcome=resolved,
+                                 operator=operator, reason=reason, now_ts=int(time.time()))
+        return new
+
+    _locked_state_update(args.driver_state, _unpark)
+    if "blocked" in outcome:
+        print(f"refusing: {outcome['blocked']} — only a `parked_unreconcilable` resolution may be "
+              "unparked, and only once", file=sys.stderr)
+        return 3
+    print(json.dumps({"resolution_id": args.resolution_id, "outcome": resolved,
+                      "operator": operator}, indent=2))
+    return 0
+
+
+def _claimant_id(args) -> str:
+    """Who holds the boundary claim. Per-process, so concurrent sessions cannot collide.
+
+    `$CLAUDE_CODE_SESSION_ID` is the same identity the session registry uses; the agent name is the
+    fallback for a cron-spawned launcher that has no session of its own. Never
+    `claude_docs/.current_session_id` — a shared file every session overwrites.
+    """
+    raw = os.environ.get("CLAUDE_CODE_SESSION_ID") or f"launcher:{getattr(args, 'name', '?')}"
+    # Step-11 F6: this lands in durable state AND is interpolated into the successor's generated
+    # prompt, so it must be an opaque identifier. A hostile or merely odd environment value
+    # carrying newlines could otherwise reshape those instructions.
+    return _driver_lib().validate_claimant_id(raw)
+
+
+def _classify_launch(out: dict, *, panes_before) -> tuple[str | None, bool]:
+    """`perform_handoff`'s result → `(terminal_outcome_or_None, refusal_was_measured)`.
+
+    Design §16.3. `None` means **append no terminal event**: the resolution stays the crash
+    signature §4.4 reconciles. That is the whole point of pass-2 finding F5 — a terminal event
+    CLOSES a resolution, and reconciliation only examines unterminated ones, so recording
+    `launch_failed` on a shape that MIGHT have created a pane removes that pane from
+    reconciliation's reach for good.
+
+    The second return value is `True` only for the ONE shape a live probe measured end-to-end
+    (non-zero split, an enumerated refusal code, and an empty post-failure inventory diff). It is
+    the sole thing §16.4 may downgrade a campaign's preference on.
+    """
+    if out.get("ok"):
+        return ("successor_acked", False)
+    failed = out.get("failed_step")
+    if failed == "pane_inventory_unavailable":
+        # herdr could not even be listed, so no split was attempted. Distinct from a refusal:
+        # an OBSERVATION failure must never downgrade a healthy campaign (F4).
+        return ("no_split_attempted", False)
+    if failed == "split":
+        panes_after = _pane_inventory(_default_runner)
+        if panes_after is None or panes_before is None:
+            return (None, False)            # cannot prove either way → indeterminate
+        if set(panes_after) - set(panes_before):
+            return (None, False)            # something appeared → a pane may exist
+        code = out.get("failure_code")
+        return ("launch_failed", code in _driver_lib().CREATION_REFUSAL_CODES)
+    if failed in ("split_response_unparseable", "split_response_not_new"):
+        # The RESPONSE was unreadable or unclaimable — that is not evidence about what exists.
+        return (None, False)
+    if failed in ("agent_start", "name_taken") and out.get("new_pane"):
+        return ("start_failed", False)
+    return (None, False)
+
+
+def _emit_boundary_advisory(state_path: str, *, transition_id: str, resolution_id: str | None,
+                            preferred: str, effective: str, reason: str) -> None:
+    """Print the degradation advisory at most once per transition, and record what happened.
+
+    Design §16.7 / AC 4. The claim is persisted BEFORE the print, so a competing surface
+    (`next-child`) cannot also emit it. Advisory-only: nothing here changes an exit code, and a
+    failure to print becomes a durable `failed` delivery rather than silence.
+    """
+    driver_lib = _driver_lib()
+    line = driver_lib.boundary_advisory_line(preferred=preferred, effective=effective,
+                                            reason=reason)
+    if line is None:
+        return
+    _emit_advisory_once(state_path, transition_id=transition_id, line=line)
+
+
+def _emit_advisory_once(state_path: str, *, transition_id: str, line: str) -> None:
+    """Claim, print, record — the ONE advisory path both surfaces use (#927 AC 4).
+
+    Two independent emitters exist (`handoff` at a boundary, `next-child` in the in-session loop),
+    which is why the claim is durable and taken BEFORE the print: pass-2 finding F4 showed a pure
+    predicate over a caller-supplied set lets both of them speak for the same transition.
+    """
+    driver_lib = _driver_lib()
+    claimed: dict = {}
+
+    def _claim(s):
+        got, after = driver_lib.claim_advisory(s, transition_id, now_ts=int(time.time()))
+        claimed["got"] = got
+        return after if got else None
+
+    try:
+        _locked_state_update(state_path, _claim)
+    except (OSError, ValueError, LauncherError):
+        # A campaign whose state cannot be written still deserves the line; the durable record is
+        # the backstop, not a precondition for speaking.
+        print(line, file=sys.stderr)
+        return
+    if not claimed.get("got"):
+        return
+    delivered = True
+    try:
+        # STDERR, not stdout. Both emitting surfaces publish a machine-readable JSON document on
+        # stdout that skills parse (`next-child`'s payload is read with `json.loads`), so an
+        # advisory line there breaks the data contract — caught by two pre-existing
+        # `test_revalidation_gate.py` cases on the FULL suite, after the area suite passed. The
+        # advisory is operator-facing text; the JSON is the API.
+        print(line, file=sys.stderr)
+    except OSError:
+        delivered = False
+    try:
+        _locked_state_update(state_path, lambda s: driver_lib.record_advisory_delivery(
+            s, transition_id=transition_id, delivered=delivered, now_ts=int(time.time())))
+    except (OSError, ValueError, LauncherError):
+        pass                                # `undelivered_advisories` still shows the pending
+
+
 def _cmd_handoff(args) -> int:
     """The non-test caller the Step-11 review found missing.
 
@@ -4489,7 +4739,23 @@ def _cmd_handoff(args) -> int:
     # FRESH_SESSION_MODE here (the previous revision) would hand off for a campaign documented
     # to loop in-session — `fresh_session_handoff` returns `single_session` for exactly that
     # case, and overriding it discards the answer (#611 Step-11 pass-3 High 2).
-    mode = state.get("session_mode", "single-session")
+    #
+    # #927 PR 2: the recorded answer is now read through `campaign_transport`, which prefers the
+    # canonical `preferred_transport` and MIGRATES a legacy `session_mode` on read. That is still
+    # deference, not forcing — the launcher asks the campaign what it chose and obeys it; all that
+    # changed is which field carries the answer. A campaign carrying neither field is the one
+    # genuinely defaulted case and stays `inline`/single-session, byte-identical to before.
+    # Step-11 F1: read the recorded answer under the LOCK. This used to use the unlocked snapshot
+    # taken at the top of the command, so a `transport set pane_chain` committing in between was
+    # ignored and the boundary returned rc 3 ("continue in-session") against a campaign that had
+    # just asked for the opposite. `_locked_state_read` is already this function's idiom for
+    # re-reading before a decision that matters.
+    try:
+        _locked = _locked_state_read(args.driver_state)
+    except (OSError, ValueError, LauncherError):
+        _locked = state                      # fail to the unlocked snapshot rather than refusing
+    preferred, _provenance = driver_lib.campaign_transport(_locked)
+    mode = driver_lib.legacy_session_mode(preferred) or "single-session"
     # include_bind=False: this disposition feeds `perform_handoff`, which sends the bind as SEND 1
     # of its own (#694). `resume_prompt_for_state` above keeps the default True — it serves the
     # interactive hand-back and the `claude -p` fallback, which each deliver one prompt and so have
@@ -4567,16 +4833,197 @@ def _cmd_handoff(args) -> int:
     if refused is not None:
         return refused
 
+    # --- #927 PR 2, design §16.2: the boundary fence, in ONE locked mutation -------------------
+    #
+    # Step 1. The snapshot, the precondition, the generation and the claim all land inside a single
+    # `_locked_state_update`. Pass-2 finding F3 is why: reading `preferred_transport` and evaluating
+    # the precondition before taking the claim leaves both stale by the time the claim exists — a
+    # concurrent `transport set inline` could commit and be ignored by this boundary, and a child
+    # could move to `in_progress` between the check and the claim, letting a stale attempt launch a
+    # second worker.
+    next_issue = disposition["next_issue"]
+    gate: dict = {}
+
+    def _open_and_claim(s):
+        locked_preferred, _prov = driver_lib.campaign_transport(s)
+        gate["preferred"] = locked_preferred
+        ok, why = driver_lib.child_boundary_precondition(s, next_issue)
+        if not ok:
+            gate["verdict"] = "precondition"
+            gate["reason"] = why
+            return None                     # no write at all
+        opened = driver_lib.open_handoff(s, disposition, now_ts=int(time.time()))
+        claimed, after = driver_lib.handoff_claim(
+            opened, disposition["generation"], claimant=_claimant_id(args),
+            now_ts=int(time.time()))
+        if not claimed:
+            held = opened.get("handoff_claim")
+            gate["verdict"] = "claim_refused"
+            gate["holder"] = held.get("claimant") if isinstance(held, dict) else None
+            return None                     # no write at all
+        gate["verdict"] = "claimed"
+        return after
+
+    _locked_state_update(args.driver_state, _open_and_claim)
+    if gate.get("verdict") == "precondition":
+        print(f"no handoff: {gate['reason']} — the child-boundary precondition needs the next "
+              f"child queued and nothing in flight (a child in flight is the `mid-child-handoff` "
+              f"case, not this one)")
+        return 3
+    if gate.get("verdict") == "claim_refused":
+        # Pass-1 Critical (F1). The mid-child path tells a losing contender the run "continues in
+        # place", and that is right THERE — it has a child genuinely in flight to keep working on.
+        # At a boundary the precondition is that nothing is in flight, so continuing could only
+        # mean starting the next child beside the claim holder's successor: the two-workers
+        # condition this fence exists to prevent. Distinct rc, because rc 3 means "nobody is
+        # working this boundary, proceed in-session" and rc 7 means the opposite.
+        print(f"refusing: generation {disposition['generation']} is claimed by "
+              f"{gate.get('holder')!r} — that holder owns this boundary. This contender is doing "
+              "NO campaign work and is not starting the next child; exiting so exactly one "
+              "successor exists.", file=sys.stderr)
+        return 7
+
+    claimant = _claimant_id(args)
+    generation = disposition["generation"]
+    transition_id = f"b:{state.get('campaign', 'campaign')}:{generation}"
+
+    # Step 2. The probe runs AFTER the claim — only the holder of a valid claim probes, so
+    # exactly-one-successor never depends on the probe being deterministic. It runs even under an
+    # `inline` preference so every transition carries fresh capability evidence (recorded, never
+    # acted on to upgrade).
+    # Step-11 F5: the advisory claim is keyed on the BOUNDARY (campaign + next child), not on the
+    # generation. Keyed on the generation, `handoff` and `next-child` used different ids for the
+    # same boundary, so both could speak — a degradation line from one and an in-session line from
+    # the other, for one situation.
+    advisory_key = f"bnd:{state.get('campaign', 'campaign')}:{next_issue}"
+    probe_started = time.time()
+    capability_ok, pane_ok, probe_reason = transport_probe(pane_ref=args.anchor_pane)
+    probe_ms = int((time.time() - probe_started) * 1000)
+    preferred = gate.get("preferred") or preferred
+    effective = (driver_lib.PANE_CHAIN_TRANSPORT
+                 if (preferred == driver_lib.PANE_CHAIN_TRANSPORT and capability_ok and pane_ok)
+                 else driver_lib.INLINE_TRANSPORT)
+
+    # Step 3. The pre-split inventory. Captured HERE even though `perform_handoff` captures its own,
+    # because the resolution must carry the baseline BEFORE the split (the C1 Critical) and
+    # threading `perform_handoff`'s copy out would change a tested signature on the shipped launch
+    # path. The two captures can differ only if a pane appears in between, which widens the
+    # "appeared" set and makes reconciliation PARK — it fails toward safety.
+    panes_before = _pane_inventory(_default_runner)
+
+    # Step 4. The resolution lands before any launch, with `successor_pane` null and
+    # `split_attempted` false. A crash here therefore PROVES nothing was launched.
+    recorded: dict = {}
+
+    def _append(s):
+        recorded["id"] = driver_lib.append_resolution(
+            s, transition_id=transition_id, generation=generation, trigger="child_boundary",
+            kind="child_boundary", preferred=preferred, effective=effective,
+            probe_reason=probe_reason, probe_ms=probe_ms, pane_ref=args.anchor_pane,
+            panes_before=sorted(panes_before) if panes_before is not None else None,
+            now_ts=int(time.time()))
+        return s
+
+    _locked_state_update(args.driver_state, _append)
+    resolution_id = recorded["id"]
+
+    if effective == driver_lib.INLINE_TRANSPORT:
+        # Step 5a. Nothing is launched, so the claim is released in the same mutation that closes
+        # the transition (F1 — nothing else in the codebase releases a claim, so returning here
+        # would hold it for the full 1800 s lease and refuse every later contender).
+        def _close_inline(s):
+            driver_lib.append_terminal_outcome(s, resolution_id=resolution_id,
+                                               outcome="inline_continued", now_ts=int(time.time()))
+            _released, after = driver_lib.handoff_claim_release(s, generation, claimant=claimant)
+            return after
+
+        _locked_state_update(args.driver_state, _close_inline)
+        _emit_boundary_advisory(args.driver_state, transition_id=advisory_key,
+                                resolution_id=resolution_id, preferred=preferred,
+                                effective=effective, reason=probe_reason)
+        print(json.dumps({"outcome": "inline_continued", "transport": effective,
+                          "preferred": preferred, "reason": probe_reason,
+                          "resolution_id": resolution_id, "next_issue": next_issue}, indent=2))
+        return 0
+
+    # Step 5b. `split_attempted` is durable BEFORE the split — with the marker landing first,
+    # `split_attempted: false` PROVES nothing was created, and only that state authorises a
+    # relaunch. If it landed after, a crash in between would be indistinguishable from "never
+    # started" and could put a second successor beside a live one.
+    _locked_state_update(args.driver_state, lambda s: (
+        driver_lib.mark_split_attempted(s, resolution_id=resolution_id) or s))
+
     out = perform_handoff(
         anchor_pane=args.anchor_pane, cwd=args.cwd, project_root=args.project_root,
         name=args.name, goal_condition=condition,
-        resume_prompt=disposition["resume_prompt"],
+        resume_prompt=driver_lib.with_boundary_clause(
+            disposition["resume_prompt"], generation=generation, claimant=claimant,
+            kind="child_boundary", resolution_id=resolution_id),
         registry_path=args.registry, transcript_dir=args.transcript_dir,
         launch_mode=args.launch_mode, expected_project=getattr(args, "project", None),
         teardown=not args.no_teardown)
-    print(json.dumps({k: out[k] for k in
+
+    outcome, downgrade = _classify_launch(out, panes_before=panes_before)
+
+    def _close_launch(s):
+        if out.get("new_pane"):
+            driver_lib.record_successor_pane(s, resolution_id=resolution_id,
+                                             pane=out["new_pane"])
+        if outcome is None:
+            # Deliberately NO terminal event: this is the indeterminate crash signature §4.4
+            # reconciles, and its lease is what protects a possibly-live successor. Closing it here
+            # would remove it from reconciliation's reach for good (pass-2 finding F5).
+            return s
+        driver_lib.append_terminal_outcome(s, resolution_id=resolution_id, outcome=outcome,
+                                           now_ts=int(time.time()))
+        if outcome == "successor_acked":
+            # Step-11 F2. The claim is released below, and the child stays `queued` until the
+            # SUCCESSOR marks it `in_progress` — a window in which a second invocation would pass
+            # every check and launch again. `child_boundary_precondition` refuses on this marker.
+            s["boundary_consumed"] = {"issue": next_issue, "generation": generation,
+                                      "resolution_id": resolution_id,
+                                      "observed_at": int(time.time())}
+        # Step-11 F3: design section 16.4 restricts the downgrade to a campaign where
+        # `successor_acked` has NEVER occurred, and the first implementation dropped that half —
+        # so a campaign that had been chaining panes successfully for six children would be
+        # durably switched to inline by one `pane_not_found`. `_classify_launch` answers "was the
+        # refusal measured"; only state can answer "has this ever worked here".
+        ever_acked = any(e.get("outcome") == "successor_acked"
+                         for e in driver_lib.transition_events(s))
+        if downgrade and not ever_acked:
+            # One transaction with the terminal event (F2): a crash between them would leave a
+            # terminal resolution without the promised downgrade, and a delayed downgrade could
+            # overwrite a concurrent operator `transport set`.
+            s["preferred_transport"] = driver_lib.INLINE_TRANSPORT
+            projected = driver_lib.legacy_session_mode(driver_lib.INLINE_TRANSPORT)
+            if projected is not None:
+                s["session_mode"] = projected
+            s.setdefault("transport_audit", []).append(
+                {"transport": driver_lib.INLINE_TRANSPORT, "operator": "automatic",
+                 "reason": "creation_refused", "observed_at": int(time.time())})
+        _released, after = driver_lib.handoff_claim_release(s, generation, claimant=claimant)
+        return after
+
+    _locked_state_update(args.driver_state, _close_launch)
+    # Guarded: this runs AFTER a launch that may have succeeded, so an unreadable state file here
+    # must not turn rc 0 into a traceback (inline self-review, bug_logic lens). The advisory is the
+    # only thing that depends on it, and an advisory never changes an exit code.
+    try:
+        _post = _locked_state_read(args.driver_state)
+    except (OSError, ValueError, LauncherError):
+        _post = {}
+    downgraded = bool(driver_lib.campaign_transport(_post)[0] == driver_lib.INLINE_TRANSPORT
+                      and preferred == driver_lib.PANE_CHAIN_TRANSPORT
+                      and _post)
+    if downgraded or effective != preferred:
+        _emit_boundary_advisory(args.driver_state, transition_id=advisory_key,
+                               resolution_id=resolution_id, preferred=preferred,
+                               effective=(driver_lib.INLINE_TRANSPORT if downgraded else effective),
+                               reason="creation_refused" if downgraded else probe_reason)
+    print(json.dumps({k: out.get(k) for k in
                       ("ok", "results", "failed_step", "new_pane", "session_id",
-                       "truncated", "cleanup")}, indent=2))
+                       "truncated", "cleanup")} | {"resolution_id": resolution_id,
+                                                   "terminal_outcome": outcome}, indent=2))
     return 0 if out["ok"] else 4
 
 
@@ -5170,6 +5617,32 @@ def main(argv: list[str] | None = None) -> int:
     p_mc.add_argument("--goal-condition", default=None,
                       help="optional assertion; must equal the guard currently in force")
 
+    # #927 AC 2 + the creation seam. PR 1 shipped the pure guards and no caller, so the whole
+    # feature was unreachable; these three verbs are the callers.
+    p_tr = sub.add_parser("transport",
+                          help="record, change or unpark a campaign's transport (#927)")
+    tr_sub = p_tr.add_subparsers(dest="verb", required=True)
+    p_tr_rc = tr_sub.add_parser("resolve-creation",
+                                help="probe once and record a NEW campaign's preference (AC 1)")
+    p_tr_rc.add_argument("--driver-state", required=True)
+    p_tr_rc.add_argument("--project-root", default=".")
+    p_tr_set = tr_sub.add_parser("set", help="change an in-flight campaign's preference (AC 2)")
+    p_tr_set.add_argument("value", help="pane_chain | inline")
+    p_tr_set.add_argument("--driver-state", required=True)
+    p_tr_set.add_argument("--reason", required=True, help="why, for the audit record")
+    p_tr_set.add_argument("--operator", default="operator")
+    p_tr_up = tr_sub.add_parser("unpark",
+                                help="clear a parked boundary transition — an operator decision")
+    p_tr_up.add_argument("resolution_id")
+    p_tr_up.add_argument("--driver-state", required=True)
+    p_tr_up.add_argument("--reason", required=True)
+    p_tr_up.add_argument("--operator", default="operator")
+    adopt = p_tr_up.add_mutually_exclusive_group(required=True)
+    adopt.add_argument("--adopt", metavar="PANE",
+                       help="a surviving successor pane to adopt; validated before it is recorded")
+    adopt.add_argument("--discard", action="store_true",
+                       help="nothing survives worth adopting")
+
     p_rp = sub.add_parser("retire-predecessor",
                           help="retire the predecessor after a mid-child handoff (#665) — the "
                                "successor runs this, and only after its position is rebuilt")
@@ -5234,7 +5707,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p_mode = sub.add_parser("select-mode")
     p_mode.add_argument("--terminal-backend", default=None)
-    p_mode.add_argument("--herdr-available", action="store_true")
+    # #927 PR 2 (Step-4 pass-1 finding S2): `--herdr-available` is GONE. It was a
+    # CALLER-ASSERTED capability claim — a skill remembering to pass a flag — for something this
+    # module can determine for itself, and the whole point of #927 is that a recorded capability
+    # goes stale while the real one moves. `herdr_available()` is derived here instead. The flag's
+    # removal waited for this PR because `skills/epic-run/SKILL.md` documented it, and deleting a
+    # flag while its prose still prescribes it breaks the skill.
     # default FALSE: absence of an advertisement must not read as support (8a review, M-a).
     p_mode.add_argument("--launcher-herdr", dest="launcher_herdr", action="store_true",
                         default=False)
@@ -5264,6 +5742,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_handoff(args)
         if args.cmd == "ad-hoc-handoff":
             return _cmd_ad_hoc_handoff(args)
+        if args.cmd == "transport":
+            return _cmd_transport(args)
         if args.cmd == "mid-child-handoff":
             return _cmd_mid_child_handoff(args)
         if args.cmd == "retire-predecessor":
@@ -5285,7 +5765,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "select-mode":
             mode, reason = select_launch_mode(
                 terminal_backend=args.terminal_backend,
-                herdr_available=args.herdr_available,
+                herdr_available=herdr_available(),
                 launcher_supports_herdr=args.launcher_herdr)
             print(f"{mode}\t{reason}")
             return 0

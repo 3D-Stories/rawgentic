@@ -45,14 +45,28 @@ the same stall class (owner-away review verdicts, unattended quota pauses; measu
 basis: epic #509 lever 1, one 56.3-min owner-away gap, ~56 min per comparable attended
 run). Declining is fine and never blocks the run.
 
-**Session-mode choice (#569 — opt-in, default single-session).** Also ask whether to run
-in **fresh-session mode**: each child runs in its OWN Claude process (fresh context, none
-of the prior child's turns) instead of accumulating the whole epic in one session. It
-requires the durable launcher armed (above) and writes `session_mode: "fresh-session"` to
-`.driver-state`. Default (absent / `single-session`) is byte-identical to today — the run
-loops child-by-child in one session. Fresh-session mode hands off across a process boundary
-per Step 4; if the boundary can't be crossed it degrades to single-session (fail-open). The
-contract lives in `docs/multi-issue-driver.md`.
+**Transport is PROBED, not asked (#927 — this step asks exactly TWO questions, above).**
+There is no session-mode question any more. After the driver-state file exists, record the
+campaign's transport by probing for the capability:
+
+```bash
+python3 hooks/launcher_lib.py transport resolve-creation \
+  --driver-state claude_docs/.driver-state/<campaign>.json --project-root .
+```
+
+It writes `preferred_transport: "pane_chain"` when herdr answers, `"inline"` when it does
+not, and records the probe's reason either way. **`pane_chain` is the DEFAULT** — each child
+then runs in its OWN Claude process (fresh context, none of the prior child's turns) instead
+of accumulating the whole epic in one session. Write-once: to change it later use
+`transport set pane_chain|inline --reason "<why>"`, which is refused while a child is in
+flight or a boundary holds a claim.
+
+**Never assert the capability from `HERDR_ENV` or a flag.** The probe is a round trip, because
+a recorded capability goes stale while the real one moves — herdr can be present at creation
+and gone by boundary 4. That is why `--herdr-available` no longer exists on `select-mode`.
+
+The transport preference is the campaign's own answer and the launcher always defers to it.
+The contract lives in `docs/multi-issue-driver.md`.
 
 ## Step 3: Draft the /goal condition
 
@@ -119,8 +133,8 @@ put a list up by hand).
   auto-closed, `git fetch origin`, branch the next child from the new main. Use the
   `merge-watch` skill's lane doctrine for CI triage (hard vs advisory lanes; OAuth
   false-red signature).
-- **Fresh-session boundary (#569 — only when `session_mode == "fresh-session"`).** After a
-  child reaches ANY terminal outcome — `merged` OR a blocker's `deferred`/`abandoned` — the
+- **The child boundary is the DEFAULT (#927 — it fires unless the campaign records
+  `preferred_transport: "inline"`).** After a child reaches ANY terminal outcome — `merged` OR a blocker's `deferred`/`abandoned` — the
   session ENDS rather than looping in-process (a blocked child's context must not bleed into
   an independent successor). Get the disposition through
   **`python3 hooks/launcher_lib.py handoff ...`**, never by calling
@@ -141,19 +155,23 @@ put a list up by hand).
   launches the successor and — unless `--no-teardown` — retires the predecessor, then prints an
   `ok` report (rc 0 ok, 4 the ladder refused, 3 nothing ready, 5 head unobservable, 6 revalidate
   first). It returns no disposition object for you to persist, and there is no `disp` to pass on.
-  **Known gap, stated rather than papered over:** this boundary writes no `handoff_pending`, so
-  it carries no generation/claim fence — that mechanism belongs to `mid-child-handoff`, which
-  does call `open_handoff`. Two `handoff` invocations for the same child can therefore each
-  launch a successor. Tracked as #845; until it is closed, never run `handoff` twice for
-  one boundary on the assumption the second is a no-op. Then the durable launcher — which must
+  **The exactly-one-successor fence IS here now (#845, closed inside #927).** `handoff` opens the
+  generation and takes a claim BEFORE it probes, so two invocations for one boundary cannot both
+  launch: the loser exits **rc 7**, does no campaign work, and does NOT start the next child in
+  its own session. Treat rc 7 as "somebody else owns this boundary — stop", never as "nothing was
+  due" (that is rc 3). The claim is released when the transition reaches a DEFINITE outcome, and
+  deliberately held when a launch is indeterminate, because the lease is what protects a
+  possibly-live successor until reconciliation runs. Then the durable launcher — which must
   POSITIVELY advertise no-`--resume` support (`fresh_session_available`'s `fresh_launch_supported`
   probe) — starts a FRESH `claude -p` **with NO `--resume`** for the successor. The successor
   rebuilds position from `.driver-state`, never from in-context memory.
-  **It does NOT `handoff_claim`/`handoff_ack_started` here, and there is no exactly-one-successor
-  fence at this boundary** — corrected at round-5 High 3, which caught this paragraph asserting
-  the very fence the paragraph above it says does not exist. The claim/lease/ack machinery is
-  `mid-child-handoff`'s (#665), because only that path writes `handoff_pending` for a successor to
-  claim. Closing the gap here is #845. On `complete` (every child merged) do Step 5; on
+  **It DOES claim now (#927).** The boundary reuses `mid-child-handoff`'s generation/claim/lease/ack
+  machinery unchanged and differs only in its precondition: mid-child needs exactly one child
+  `in_progress`, the boundary needs the opposite — the next child `queued` and nothing in flight.
+  A boundary attempted while a child is in flight is refused with rc 3, because that is the
+  `mid-child-handoff` case rather than this one. Every transition also records what it chose in an
+  append-only log, and a degraded boundary prints ONE advisory line on **stderr** naming the
+  reason (stdout stays machine-readable). On `complete` (every child merged) do Step 5; on
   `blocked` (unmerged children remain but none ready) leave the epic OPEN with an honest summary
   and end — never conflate `blocked` with `complete`. On **`revalidation_required`** (#840 — the
   remaining queue has not been revalidated against the current `origin/main`) **READ THE REASON
@@ -183,8 +201,11 @@ put a list up by hand).
   enforces, and it is the tax this epic's own 2026-08-02 audit measured at 14 rotted bodies out of
   23. **The terminal-backend verdict is part of
   this decision, not a later one (#611).** Resolve it first —
-  `python3 hooks/launcher_lib.py select-mode --terminal-backend <backend> [--herdr-available]
-  [--launcher-herdr]` — and pass it as `fresh_session_available`'s `launch_mode`. Deciding it
+  `python3 hooks/launcher_lib.py select-mode --terminal-backend <backend> [--launcher-herdr]` —
+  and pass it as `fresh_session_available`'s `launch_mode`. **`--herdr-available` is gone (#927):**
+  the command derives the capability itself, because a caller-asserted capability is exactly the
+  stale answer this issue removes. `--launcher-herdr` stays asserted — it is a claim about the
+  LAUNCHER's support, which this process cannot observe. Deciding it
   only inside the launcher is too late: the driver would end the session believing the boundary
   was available, and "keep the current loop" is no longer possible once the loop has ended.
   **Fail-open:** if `driver_lib.fresh_session_available` is false (no launcher / no fresh-launch
