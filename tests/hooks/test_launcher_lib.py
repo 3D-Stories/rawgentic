@@ -3148,3 +3148,37 @@ class TestObsoletePendingGate:
         out = json.loads(captured.out)
         assert out["outcome"] == "obsolete_pending"
         assert out["issue"] == 612
+
+
+class TestAC3WriteBackClearsTheObsoletePendingGate:
+    """#944 Task 11, AC3: the remedy every rc-11 message names must ACTUALLY clear the gate on
+    the next selection call — the #840 failure mode this AC guards against is a gate whose
+    documented remedy cannot really clear it, so the run loops on the identical refusal forever."""
+
+    @pytest.fixture(autouse=True)
+    def _no_live_issue_probe(self, monkeypatch):
+        monkeypatch.setenv(ll.ISSUE_PROBE_ENV, "0")
+
+    def test_the_writeback_clears_the_gate_so_next_child_selects_past_it(self, tmp_path, capsys):
+        state, work = _pending_state(tmp_path)
+
+        rc1 = ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        first = capsys.readouterr()
+        assert rc1 == 11
+        assert "record-child-outcome --issue 612 --status deferred|abandoned|merged" in first.err
+
+        rc2 = ll.main(["record-child-outcome", "--issue", "612", "--status", "deferred",
+                       "--driver-state", str(state), "--project-root", work])
+        second = capsys.readouterr()
+        assert rc2 == 0, second
+
+        rc3 = ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        third = capsys.readouterr()
+        # Not 11 again for the SAME child — the write-back genuinely cleared the pending
+        # disposition rather than leaving it stuck on repeat (the #840 shape of this failure).
+        assert rc3 != 11, third
+        assert rc3 == 3
+        assert json.loads(third.out)["outcome"] == "blocked", (
+            "611 is merged, 612 is now deferred (not merged) — the campaign is neither "
+            "complete nor does anything else remain ready, so it must read as blocked, "
+            "never silently as 'complete' or as the same obsolete_pending refusal again")
