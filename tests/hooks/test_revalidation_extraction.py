@@ -233,6 +233,23 @@ class TestCitedCandidatesCharacterization:
         assert dl._cited_candidates("", resolves={"hooks/a.py"}) == []
         assert dl._cited_candidates(None, resolves={"hooks/a.py"}) == []
 
+    def test_all_path_candidates_includes_single_component_tokens_unconditionally(self):
+        """#944: `_cmd_rebuild_receipt` needs the RAW candidate list — including single-
+        component tokens — to know what to probe via git BEFORE it can compute `resolves` at
+        all. `_cited_candidates` cannot supply this itself, because its own single-component
+        filter needs `resolves` already known (chicken-and-egg)."""
+        candidates = dl._all_path_candidates("see config.py and hooks/a.py mentioned")
+        assert set(candidates) == {"config.py", "hooks/a.py"}
+
+    def test_cited_candidates_is_a_filter_over_all_path_candidates(self):
+        body = "see config.py and hooks/a.py and hooks/ghost.py"
+        raw = dl._all_path_candidates(body)
+        assert set(raw) == {"config.py", "hooks/a.py", "hooks/ghost.py"}
+        filtered = dl._cited_candidates(body, resolves={"hooks/a.py"})
+        # config.py dropped (single-component, does not resolve); hooks/ghost.py kept
+        # (multi-component, kept regardless of resolution).
+        assert set(filtered) == {"hooks/a.py", "hooks/ghost.py"}
+
 
 class TestAdversarialInput:
     """Issue bodies are untrusted text (criterion 8 — ReDoS). The patterns must be bounded."""

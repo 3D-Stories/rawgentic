@@ -4870,6 +4870,69 @@ def _cmd_next_child(args) -> int:
     return 0
 
 
+def _probe_path_exists(path: str, sha: str, project_root: str, *, runner=_default_runner) -> bool:
+    """True when `path` exists at `sha` in the repo at `project_root`. rc 0 = present."""
+    result = runner(["git", "-C", project_root, "cat-file", "-e", f"{sha}:{path}"])
+    return getattr(result, "returncode", 1) == 0
+
+
+def _derive_resolves(driver, body: str, from_sha: str, to_sha: str, project_root: str,
+                     *, runner=_default_runner) -> set:
+    """The set of `body`'s cited paths that exist in EITHER endpoint tree — DERIVED via real
+    git probes, never trusted from caller input (#944, Step-4 review round 2, finding 3: a
+    caller-supplied `resolves` was verified by nothing, so a fabricated list could change
+    citation-coverage matching with no integrity check catching it). Matches the skill's own
+    documented meaning of `resolves` — "paths that exist in EITHER endpoint tree".
+    """
+    resolved = set()
+    for path in driver._all_path_candidates(body):  # pylint: disable=protected-access
+        if _probe_path_exists(path, from_sha, project_root, runner=runner) \
+                or _probe_path_exists(path, to_sha, project_root, runner=runner):
+            resolved.add(path)
+    return resolved
+
+
+def _refuse_uncovered_audited(driver, audited: dict, bodies_path, project_root: str) -> "str | None":
+    """(#944, AC1) The real enforcement gate for `rebuild-receipt`. Returns a refusal message,
+    or None when every non-pending audited record's claims cover its body's mechanical
+    inventory. Checked BEFORE `_locked_state_update` runs, so a refusal here writes nothing.
+    """
+    pending_free = {number: record for number, record in audited.items()
+                    if isinstance(record, dict) and record.get("pending_disposition") is None}
+    if not pending_free:
+        return None
+    if not bodies_path:
+        return (f"--bodies is required: {sorted(pending_free)} need claim-inventory coverage "
+                "checked against their real body, and none was supplied")
+    try:
+        with open(bodies_path, encoding="utf-8") as fh:
+            raw_bodies = _load_state_strict(fh, source=bodies_path)
+    except (OSError, ValueError) as exc:
+        return f"cannot read {bodies_path}: {exc}"
+    if not isinstance(raw_bodies, dict):
+        return f"{bodies_path} must be a JSON object of {{issue number: body}}"
+    for number, record in sorted(pending_free.items()):
+        key = str(number)
+        if key not in raw_bodies:
+            return f"--bodies has no entry for #{number}, which --audited names and requires"
+        body = raw_bodies[key]
+        if not isinstance(body, str):
+            return f"--bodies[{key!r}] must be a string body, got {type(body).__name__}"
+        body_hash = hashlib.sha256(driver.normalize_issue_body(body).encode("utf-8")).hexdigest()
+        if body_hash != record.get("body_hash"):
+            return (f"the body supplied for #{number} hashes to {body_hash}, but the audited "
+                    f"record's body_hash is {record.get('body_hash')!r} — this is not the body "
+                    "that record was built from")
+        resolves = _derive_resolves(driver, body, record.get("from_sha", ""),
+                                    record.get("to_sha", ""), project_root)
+        try:
+            driver.validate_claim_coverage(body, resolves, record.get("claims") or [],
+                                           record.get("depth", "deep"))
+        except driver.DriverStateError as exc:
+            return f"#{number}: {exc}"
+    return None
+
+
 def _cmd_rebuild_receipt(args) -> int:
     """Persist a rebuilt `queue_revalidation` receipt, under the lock, against a FRESH head.
 
@@ -4930,6 +4993,17 @@ def _cmd_rebuild_receipt(args) -> int:
                       "records cannot both be the evidence for one child", file=sys.stderr)
                 return 2
             audited[number] = value
+
+    # #944, AC1 — the REAL enforcement point for claim-inventory coverage. `build_revalidation_
+    # record` (driver_lib.py) has no caller on this path at all: every real campaign's receipt
+    # is written by an agent supplying `--audited` JSON directly, which `driver.rebuild_receipt`
+    # only validates STRUCTURALLY. Coverage is checked HERE, before anything is written, so an
+    # under-covered or hash-mismatched record refuses the WHOLE command rather than landing.
+    refusal = _refuse_uncovered_audited(driver, audited, args.bodies,
+                                        getattr(args, "project_root", None) or ".")
+    if refusal is not None:
+        print(f"refusing: {refusal}", file=sys.stderr)
+        return 2
 
     def _mutate(state):
         return driver.rebuild_receipt(state, head, audited)
@@ -6354,6 +6428,10 @@ def main(argv: list[str] | None = None) -> int:
     p_rr.add_argument("--audited",
                       help="JSON file holding {issue number: record} for the children audited "
                            "this pass; omit when nothing needed auditing")
+    p_rr.add_argument("--bodies",
+                      help="JSON file holding {issue number: raw issue body} for every "
+                           "--audited entry that is not pending_disposition — required to "
+                           "enforce claim-inventory coverage (#944, AC1)")
 
     p_rco = sub.add_parser("record-child-outcome",
                            help="write a child's terminal status back to its campaign queue")
