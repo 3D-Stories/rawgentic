@@ -2379,3 +2379,65 @@ class TestMissingClaimCoverage:
     def test_unknown_depth_raises(self):
         with pytest.raises(dl.DriverStateError):
             dl.missing_claim_coverage({"citation": [], "cause": [], "ac": []}, [], "bogus")
+
+
+# --------------------------------------------------------------------------- #
+# validate_claim_coverage / build_revalidation_record (#944 — AC1, demoted primitive)
+# --------------------------------------------------------------------------- #
+class TestValidateClaimCoverage:
+    def _claim(self, kind, quoted, checked="<no-file: reasoning>"):
+        return {"kind": kind, "quoted_from_body": quoted, "checked_against": checked,
+                "evidence": "x", "verdict": "holds"}
+
+    def test_full_coverage_passes(self):
+        body = "## Acceptance criteria\n\n1. The AC.\n"
+        dl.validate_claim_coverage(body, set(), [self._claim("ac", "The AC.")], "deep")
+
+    def test_under_coverage_raises_naming_the_missing_item(self):
+        body = "## Acceptance criteria\n\n1. The AC.\n"
+        with pytest.raises(dl.DriverStateError, match="The AC"):
+            dl.validate_claim_coverage(body, set(), [], "deep")
+
+    def test_an_extraction_error_refuses_before_coverage_is_even_computed(self):
+        body = "## What must be true\n\nSee the acceptance criteria discussed on the call.\n"
+        with pytest.raises(dl.DriverStateError, match="acceptance criteria"):
+            dl.validate_claim_coverage(body, set(), [], "deep")
+
+
+class TestBuildRevalidationRecordCoverage:
+    def _claim(self, kind, quoted, checked="<no-file: reasoning>"):
+        return {"kind": kind, "quoted_from_body": quoted, "checked_against": checked,
+                "evidence": "x", "verdict": "holds"}
+
+    def test_omitting_resolves_raises_loudly(self):
+        with pytest.raises(TypeError):
+            dl.build_revalidation_record(   # pylint: disable=missing-kwoa
+                body="## Acceptance criteria\n\n1. The AC.\n",
+                from_sha="a" * 40, to_sha="b" * 40, extraction="none", depth="deep",
+                claims=[self._claim("ac", "The AC.")], validated_at=1)
+
+    def test_under_coverage_refuses_construction(self):
+        with pytest.raises(dl.DriverStateError):
+            dl.build_revalidation_record(
+                body="## Acceptance criteria\n\n1. The AC.\n",
+                from_sha="a" * 40, to_sha="b" * 40, extraction="none", depth="deep",
+                claims=[], validated_at=1, resolves=set())
+
+    def test_full_coverage_succeeds(self):
+        record = dl.build_revalidation_record(
+            body="## Acceptance criteria\n\n1. The AC.\n",
+            from_sha="a" * 40, to_sha="b" * 40, extraction="none", depth="deep",
+            claims=[self._claim("ac", "The AC.")], validated_at=1, resolves=set())
+        assert record["outcome"] == "still_valid"
+
+    def test_pending_disposition_skips_coverage_entirely(self):
+        """A pending-disposition record is not a stamped, selectable outcome (AC2) — full
+        inventory coverage does not gate it; it already requires >=1 broken claim under the
+        existing coherence rule."""
+        record = dl.build_revalidation_record(
+            body="## Acceptance criteria\n\n1. Something entirely uncovered.\n",
+            from_sha="a" * 40, to_sha="b" * 40, extraction="none", depth="deep",
+            claims=[self._claim("cause", "unrelated", checked="<no-file: gone>")],
+            validated_at=1, resolves=set(), outcome=None,
+            pending_disposition="issue_obsolete")
+        assert record["pending_disposition"] == "issue_obsolete"

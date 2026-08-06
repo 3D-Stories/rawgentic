@@ -605,6 +605,42 @@ def claim_coverage_ok(missing: dict) -> bool:
     return not missing["citation"] and not missing["cause"] and not missing["ac"]
 
 
+def validate_claim_coverage(body: str, resolves, claims: list, depth: str) -> None:
+    """Raise `DriverStateError` naming every missing item when `claims` does not cover the
+    mechanical inventory extracted from `body` at `depth` (#944, AC1) — or when the inventory
+    itself carries an extraction error (fail-closed, before coverage is even computed: an
+    ungradeable inventory has nothing to bind claims to).
+
+    NOTE (Step-4 review round 2, finding 5): this is a correct but DEMOTED primitive — the real
+    production enforcement point is `hooks/launcher_lib.py _cmd_rebuild_receipt`'s `--bodies`
+    handling, which every real campaign's write path actually goes through. This function
+    remains useful for anything that DOES construct a record via `build_revalidation_record`
+    (a future programmatic caller, or a test exercising coverage in isolation).
+    """
+    inventory = extract_claim_inventory(body, resolves)
+    if inventory["errors"]:
+        raise DriverStateError(
+            "claims cannot be validated for coverage — the mechanical inventory extraction "
+            "itself failed: " + "; ".join(inventory["errors"]))
+    missing = missing_claim_coverage(inventory, claims, depth)
+    if claim_coverage_ok(missing):
+        return
+    parts = []
+    if missing["citation"]:
+        parts.append(
+            f"citation claims missing for cited path(s): {', '.join(missing['citation'])}")
+    if missing["cause"]:
+        parts.append("cause item(s) have no matching 'cause' claim: "
+                     + "; ".join(repr(item) for item in missing["cause"]))
+    if missing["ac"]:
+        parts.append("acceptance-criteria item(s) have no matching 'ac' claim: "
+                     + "; ".join(repr(item) for item in missing["ac"]))
+    raise DriverStateError(
+        f"claims do not cover the mechanical inventory extracted from the issue body at depth "
+        f"{depth!r} — " + "; ".join(parts) + ". Add the missing claims (kind, quoted_from_body, "
+        "checked_against, evidence, verdict) and rebuild the record")
+
+
 def validate_revalidation_child(record) -> bool:
     """Fail-closed structural check of one `queue_revalidation.children[<n>]` record."""
     if not isinstance(record, dict):
@@ -1148,7 +1184,7 @@ def normalize_issue_body(body: str) -> str:
 
 
 def build_revalidation_record(*, body: str, from_sha: str, to_sha: str, extraction: str,
-                              depth: str, claims: list, validated_at: int,
+                              depth: str, claims: list, validated_at: int, resolves,
                               outcome: str | None = "still_valid",
                               pending_disposition: str | None = None,
                               correction_comment: str | None = None) -> dict:
@@ -1163,6 +1199,13 @@ def build_revalidation_record(*, body: str, from_sha: str, to_sha: str, extracti
 
     `validated_at` is INJECTED: this module does no I/O and takes no clock, which is also what
     keeps its tests deterministic.
+
+    `resolves` is REQUIRED (#944, AC1) — no default, so an omitted value is a loud `TypeError`
+    at the one call site that matters, never a silent "nothing to check coverage against".
+    Claim-inventory coverage is validated against `body`/`resolves` right after the existing
+    structural check, SKIPPED when `pending_disposition` is set — a pending-disposition record
+    is deliberately not a stamped, selectable outcome (AC2), so full inventory coverage does not
+    gate it.
     """
     record = {"body_hash": hashlib.sha256(
                   normalize_issue_body(body).encode("utf-8")).hexdigest(),
@@ -1176,6 +1219,8 @@ def build_revalidation_record(*, body: str, from_sha: str, to_sha: str, extracti
     if correction_comment is not None:
         record["correction_comment"] = correction_comment
     validate_revalidation_child(record)
+    if pending_disposition is None:
+        validate_claim_coverage(body, resolves, claims, depth)
     return record
 
 
