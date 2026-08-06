@@ -1850,3 +1850,170 @@ class TestInsertPrompt:
     def test_cli_rejects_an_invalid_pane(self) -> None:
         proc = _cli("insert-prompt", "--pane", "not a pane", "--text", "please hand off")
         assert proc.returncode != 0
+
+
+# --------------------------------------------------------- #927 transport probe
+
+class _ProbeProc:
+    """Minimal stand-in for a completed subprocess."""
+
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _probe_pane_list(*pane_ids, agents=None):
+    """A `herdr pane list` response. `agents` names which panes have an agent."""
+    agents = {p: True for p in pane_ids} if agents is None else agents
+    return json.dumps({"result": {"panes": [
+        {"pane_id": p, "workspace_id": p.split(":")[0],
+         "agent": ("claude" if agents.get(p) else None),
+         "agent_status": ("working" if agents.get(p) else None)}
+        for p in pane_ids]}})
+
+
+def _probe_pane_get(pane_id, workspace_id=None):
+    ws = workspace_id if workspace_id is not None else pane_id.split(":")[0]
+    return json.dumps({"result": {"pane": {"pane_id": pane_id, "workspace_id": ws}}})
+
+
+class TestTransportProbe:
+    """#927: the two tiers are reported SEPARATELY, and nothing is asserted without a round trip.
+
+    The collapse of these two into one verdict was a self-review finding on the design: campaign
+    creation legitimately has no pane reference, so a single verdict would report `inline` there
+    and silently re-break the default this issue exists to invert.
+    """
+
+    def test_healthy_herdr_and_a_live_pane_gives_both_tiers(self) -> None:
+        def runner(argv, timeout=None):
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return _ProbeProc(0, _probe_pane_list("w1:aaa", "w1:bbb"))
+            if argv[:3] == ["herdr", "pane", "get"]:
+                return _ProbeProc(0, _probe_pane_get("w1:aaa"))
+            raise AssertionError(f"unexpected argv {argv}")
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:aaa", runner=runner)
+        assert (cap, pane) == (True, True)
+        assert reason == "probe_ok"
+
+    def test_no_pane_reference_still_proves_CAPABILITY(self) -> None:
+        """The creation path: no pane ref exists, but herdr is healthy.
+
+        `capability_ok` must be True so creation can record `pane_chain`. Returning a single
+        collapsed `inline` verdict here is exactly the AC-1 regression.
+        """
+        calls = []
+
+        def runner(argv, timeout=None):
+            calls.append(argv)
+            return _ProbeProc(0, _probe_pane_list("w1:aaa"))
+
+        cap, pane, reason = ll.transport_probe(pane_ref=None, runner=runner)
+        assert cap is True
+        assert pane is False
+        assert reason == "no_pane_ref"
+        assert all(a[:3] != ["herdr", "pane", "get"] for a in calls), (
+            "tier 2 must not run without a pane reference")
+
+    def test_unreachable_herdr_fails_both_tiers(self) -> None:
+        cap, pane, reason = ll.transport_probe(
+            pane_ref="w1:aaa", runner=lambda argv, timeout=None: _ProbeProc(1, ""))
+        assert (cap, pane) == (False, False)
+        assert reason == "herdr_unreachable"
+
+    def test_a_missing_binary_is_not_a_crash(self) -> None:
+        def runner(argv, timeout=None):
+            raise FileNotFoundError("herdr")
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:aaa", runner=runner)
+        assert (cap, pane) == (False, False)
+        assert reason == "herdr_absent"
+
+    def test_a_timeout_degrades_rather_than_raising(self) -> None:
+        def runner(argv, timeout=None):
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=5)
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:aaa", runner=runner)
+        assert (cap, pane) == (False, False)
+        assert reason == "probe_timeout"
+
+    def test_an_identity_mismatch_is_refused(self) -> None:
+        """An rc 0 response ABOUT A DIFFERENT PANE is not evidence about this one."""
+        def runner(argv, timeout=None):
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return _ProbeProc(0, _probe_pane_list("w1:aaa"))
+            return _ProbeProc(0, _probe_pane_get("w1:zzz"))
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:aaa", runner=runner)
+        assert cap is True
+        assert pane is False
+        assert reason == "probe_identity_mismatch"
+
+    def test_a_workspace_mismatch_is_refused(self) -> None:
+        def runner(argv, timeout=None):
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return _ProbeProc(0, _probe_pane_list("w1:aaa"))
+            return _ProbeProc(0, _probe_pane_get("w1:aaa", workspace_id="w9"))
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:aaa", runner=runner)
+        assert (cap, pane) == (True, False)
+        assert reason == "probe_identity_mismatch"
+
+    def test_a_pane_herdr_does_not_know_fails_tier_two_only(self) -> None:
+        def runner(argv, timeout=None):
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return _ProbeProc(0, _probe_pane_list("w1:aaa"))
+            return _ProbeProc(1, "")
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:bbb", runner=runner)
+        assert (cap, pane) == (True, False)
+        assert reason == "pane_not_found"
+
+    def test_oversized_output_is_refused_not_buffered_forever(self) -> None:
+        def runner(argv, timeout=None):
+            return _ProbeProc(0, "x" * (ll.PROBE_MAX_BYTES + 1))
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:aaa", runner=runner)
+        assert (cap, pane) == (False, False)
+        assert reason == "probe_oversized"
+
+    def test_unparseable_output_degrades(self) -> None:
+        cap, pane, reason = ll.transport_probe(
+            pane_ref="w1:aaa", runner=lambda argv, timeout=None: _ProbeProc(0, "{not json"))
+        assert (cap, pane) == (False, False)
+        assert reason == "probe_unparseable"
+
+    def test_an_invalid_pane_reference_never_reaches_herdr(self) -> None:
+        """A hostile or mistyped $HERDR_PANE_ID must not be passed to a subprocess."""
+        calls = []
+
+        def runner(argv, timeout=None):
+            calls.append(argv)
+            return _ProbeProc(0, _probe_pane_list("w1:aaa"))
+
+        cap, pane, reason = ll.transport_probe(pane_ref="not a pane; rm -rf /", runner=runner)
+        assert cap is True
+        assert pane is False
+        assert reason == "invalid_pane_ref"
+        assert all(a[:3] != ["herdr", "pane", "get"] for a in calls)
+
+    def test_any_unexpected_exception_degrades_rather_than_propagating(self) -> None:
+        def runner(argv, timeout=None):
+            raise RuntimeError("something nobody predicted")
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:aaa", runner=runner)
+        assert (cap, pane) == (False, False)
+        assert reason.startswith("probe_error:")
+
+    def test_the_probe_is_bounded_by_a_timeout(self) -> None:
+        seen = []
+
+        def runner(argv, timeout=None):
+            seen.append(timeout)
+            return _ProbeProc(0, _probe_pane_list("w1:aaa"))
+
+        ll.transport_probe(pane_ref=None, runner=runner)
+        assert seen and all(t == ll.PROBE_TIMEOUT_S for t in seen), (
+            "every probe call carries the bounded timeout")

@@ -1566,6 +1566,100 @@ def herdr_available(which=shutil.which) -> bool:
     return which("herdr") is not None
 
 
+#: #927 — bounded reads and a bounded wall clock for the transport probe. The timeout exists
+#: for a HUNG daemon, not for latency: the round trip is a local socket. 5 s rather than the
+#: peer consult's proposed 2 s because a false negative costs one visible, self-healing
+#: `inline` transition, and this host routinely runs several agent panes plus a test suite at
+#: once — systematic spurious degradation is the failure #927 exists to end.
+PROBE_MAX_BYTES = 64 * 1024
+PROBE_TIMEOUT_S = 5
+
+
+def transport_probe(*, pane_ref, runner=None):
+    """Is a pane-chain transport available RIGHT NOW? Returns ``(capability_ok, pane_ok, reason)``.
+
+    Two tiers, reported SEPARATELY and never collapsed into one verdict (#927). Campaign
+    creation legitimately has no pane reference, and it must still be able to record
+    ``pane_chain`` from ``capability_ok`` alone. A single collapsed verdict would report
+    ``inline`` there and silently preserve the very default this issue exists to invert — the
+    design's own AC-1 regression, caught in review before it shipped.
+
+    Tier 1 (capability) reuses the ``herdr pane list`` shape that `_pane_inventory` already
+    hardens; it needs no pane reference, which is the point — `--current` is exactly what fails
+    in a pane-less session (see this module's header). Tier 2 (liveness) asks about ONE pane and
+    requires the answer to be about that pane: an rc 0 response describing a different pane is
+    not evidence about this one.
+
+    ``HERDR_ENV`` / ``HERDR_PANE_ID`` are a HINT that supplies a candidate id, never proof — the
+    round trip is the proof. Fail-open in every direction: this can degrade a boundary to
+    ``inline``, never raise into it.
+    """
+    runner = runner or _default_runner
+
+    def _read(argv):
+        """(parsed doc, error token). Never raises."""
+        proc = runner(argv, timeout=PROBE_TIMEOUT_S)
+        if getattr(proc, "returncode", 1) != 0:
+            return None, "rc"
+        out = getattr(proc, "stdout", "") or ""
+        # Refuse on SIZE before parsing. A post-hoc length check on an already-buffered string
+        # prevents nothing; callers pass a runner that caps the stream (review finding A8).
+        if len(out) > PROBE_MAX_BYTES:
+            return None, "oversized"
+        try:
+            return json.loads(out), None
+        except (ValueError, TypeError):
+            return None, "unparseable"
+
+    try:
+        doc, err = _read(["herdr", "pane", "list"])
+        if err == "oversized":
+            return (False, False, "probe_oversized")
+        if err == "unparseable":
+            return (False, False, "probe_unparseable")
+        if doc is None:
+            return (False, False, "herdr_unreachable")
+        node = doc.get("result", doc) if isinstance(doc, dict) else None
+        if not isinstance(node, dict) or not isinstance(node.get("panes"), list):
+            return (False, False, "probe_unparseable")
+
+        # Capability is proven from here on; only tier 2 can still fail.
+        if not pane_ref:
+            return (True, False, "no_pane_ref")
+        try:
+            validate_pane_id(pane_ref)
+        except LauncherError:
+            # A hostile or mistyped $HERDR_PANE_ID never reaches a subprocess.
+            return (True, False, "invalid_pane_ref")
+
+        doc2, err2 = _read(["herdr", "pane", "get", pane_ref])
+        if err2 == "oversized":
+            return (True, False, "probe_oversized")
+        if err2 == "unparseable":
+            return (True, False, "probe_unparseable")
+        if doc2 is None:
+            return (True, False, "pane_not_found")
+        node2 = doc2.get("result", doc2) if isinstance(doc2, dict) else None
+        pane = node2.get("pane") if isinstance(node2, dict) else None
+        if not isinstance(pane, dict):
+            return (True, False, "probe_unparseable")
+        if pane.get("pane_id") != pane_ref:
+            return (True, False, "probe_identity_mismatch")
+        # The workspace is the pane id's prefix — asserted live against herdr 0.8.0 rather than
+        # assumed (`w1:pKS` -> `w1`).
+        if pane.get("workspace_id") != pane_ref.split(":")[0]:
+            return (True, False, "probe_identity_mismatch")
+        return (True, True, "probe_ok")
+    except FileNotFoundError:
+        return (False, False, "herdr_absent")
+    except subprocess.TimeoutExpired:
+        return (False, False, "probe_timeout")
+    except Exception as exc:  # pylint: disable=broad-except
+        # Fail-open is the whole contract: an unpredicted error degrades the transport, it does
+        # not take the boundary down with it.
+        return (False, False, f"probe_error:{type(exc).__name__}")
+
+
 # #840 — the ONLY permitted source of `observed_head`.
 _OBSERVED_HEAD_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 
