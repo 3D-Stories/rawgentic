@@ -1629,6 +1629,35 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
     reval = state.get("queue_revalidation")
     validated_head = None
     children: dict = {}
+    # #944: computed BEFORE any structural validation, via the same TOLERANT read
+    # `_child_pending_disposition` already uses — so a pending marker stays visible even when
+    # the receipt around it is otherwise broken, and ANY refusal this function raises (not only
+    # the reasons-based one below) can disclose it. Revalidation never clears an owner decision,
+    # so a state needing BOTH remedies must say so on its FIRST refusal — the same "one step at
+    # a time is the same as a remedy that does nothing" lesson round 8 already learned for the
+    # head+stamp pair.
+    pending_eligible = sorted(
+        i["number"] for i in state.get("issues", [])
+        if effective.get(i["number"]) == "queued"
+        and _child_pending_disposition(state, i["number"]) is not None)
+
+    def _disclose_owner_remedy(exc: DriverStateError) -> DriverStateError:
+        if not pending_eligible:
+            return exc
+        names = ", ".join(f"#{n}" for n in pending_eligible)
+        plural = "ies" if len(pending_eligible) == 1 else "y"
+        message = (str(exc).rstrip(".") + f". {names} also carr{plural} a pending_disposition "
+                  "that revalidation will NOT clear — an owner write-back "
+                  "(`record-child-outcome --status deferred|abandoned|merged`) is still needed "
+                  "after revalidating")
+        enriched = type(exc)(message)
+        for attr in ("observed_head", "validated_head", "outstanding"):
+            if hasattr(exc, attr):
+                setattr(enriched, attr, getattr(exc, attr))
+        enriched.remedy = "both" if getattr(exc, "remedy", None) == "revalidate" \
+            else getattr(exc, "remedy", None)
+        return enriched
+
     if reval is not None:
         # Validated BEFORE any eligibility shortcut (Step-11 review finding 3, reproduced): the
         # old code returned early when nothing was eligible, so a receipt of
@@ -1638,7 +1667,10 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
         #
         # This also checks the LINKAGE to the per-child stamps, so a fabricated stamp with no
         # evidence behind it fails here rather than passing the gate.
-        validate_queue_revalidation(state)
+        try:
+            validate_queue_revalidation(state)
+        except DriverStateError as exc:
+            raise _disclose_owner_remedy(exc) from exc
         validated_head = reval.get("validated_head")
         children = reval.get("children") or {}
     eligible = [i for i in state.get("issues", []) if effective[i["number"]] == "queued"]
@@ -1719,9 +1751,15 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
         # fixes. Executing the printed remedy left the gate still refusing, and only then asked
         # for revalidation: a two-step remedy delivered one step at a time, which is the same
         # defect as a remedy that does nothing, spread over two attempts.
-        # Only ONE remedy exists while the owner gate is out (#848): revalidation. The two-part
-        # and owner-only branches went with it — a suffix naming a remedy no clause can produce is
-        # exactly the prose-contradicting-code defect this PR kept shipping.
+        # **The owner remedy is back (#944, the #848 rebuild) — restored HERE too, as a
+        # DISCLOSURE, not an enforcement.** `next_ready_issue`'s own loop is still the only place
+        # that gates on `pending_disposition` (this function's job stays head-freshness and
+        # per-child stamps). But `revalidate-children` carries a pending marker FORWARD
+        # unchanged (it cannot clear an owner decision), so a state needing BOTH remedies must
+        # say so in its FIRST refusal — the exact "remedy delivered one step at a time" defect
+        # round 8 already fixed for the head+stamp pair, now recurring for stamp+owner. Reuses
+        # the `pending_eligible` computed at function entry (not recomputed) so this clause and
+        # the early structural-validation clause above can never disagree about it.
         suffix = ". Run the revalidate-children skill, post any corrections, then retry."
         error = QueueRevalidationRequired(
             "refusing to hand out the next child: the remaining queue has not been revalidated "
@@ -1735,9 +1773,11 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
         # STRUCTURAL, not something a reader has to infer from the prose (round-9 High 3 and
         # Medium 1). Consumers — including the jam sweep — dispatch on this rather than pattern
         # matching the message, so corruption-controlled text cannot forge or suppress a remedy,
-        # and a refusal can be checked for having DISCLOSED every action it will take.
+        # and a refusal can be checked for having DISCLOSED every action it will take. "both" is
+        # NOT a third remedy value the DISPATCHER must special-case beyond "this needs more than
+        # revalidation" — `test_revalidation_jam_matrix.py` already reserved it for exactly this.
         error.remedy = "revalidate"
-        raise error
+        raise _disclose_owner_remedy(error)
 
 
 def campaign_deps_satisfied_by(state: dict) -> str:
@@ -1813,13 +1853,86 @@ def next_ready_issue(state: dict, deps_satisfied_by: str = "merged",
             "observed head (launcher_lib.observe_head). Selecting without one would skip the "
             "freshness gate entirely — pass observed_head, or explicitly None only for a campaign "
             "that predates #840 and has no receipt")
+    # #944, AC2: an obsolete-pending candidate does not stop the WHOLE scan — it is remembered
+    # (for an actionable message) and skipped, so a completely unrelated, independent, ready
+    # child later in queue order is still selected normally. `ObsoletePendingChild` is raised
+    # only once the scan reaches the end with no genuinely selectable candidate at all (Step-4
+    # review round 2, finding 4: the original version raised at the FIRST such candidate, which
+    # could park the whole run while unrelated ready work existed).
+    first_obsolete = None
     for issue in issues:
         if effective[issue["number"]] != "queued":
             continue
         deps = _in_queue_deps(issue, numset)
-        if all(effective[d] in satisfied for d in deps):
-            return issue["number"]
+        if not all(effective[d] in satisfied for d in deps):
+            continue
+        pending = _child_pending_disposition(state, issue["number"])
+        if pending is not None:
+            if first_obsolete is None:
+                first_obsolete = issue["number"]
+            continue
+        return issue["number"]
+    if first_obsolete is not None:
+        error = ObsoletePendingChild(
+            f"child #{first_obsolete} carries a pending_disposition and cannot be handed out "
+            "until an owner write-back clears it — run `launcher_lib.py record-child-outcome "
+            f"--issue {first_obsolete} --status deferred|abandoned|merged`",
+            issue=first_obsolete)
+        # STRUCTURAL, matching `QueueRevalidationRequired.remedy` (#840 round-9 High 3's own
+        # rule): a caller dispatches on this attribute, never on the message text. "owner" is
+        # the vocabulary `test_revalidation_jam_matrix.py`'s `drive_to_open` already reserved
+        # for this exact remedy, unreachable until now.
+        error.remedy = "owner"
+        raise error
     return None
+
+
+class ObsoletePendingChild(DriverStateError):
+    """Raised by `next_ready_issue` when EVERY remaining ready candidate carries a
+    `pending_disposition` (#944, the #848 rebuild) — the owner-gate refusal, distinct from
+    `QueueRevalidationRequired` so a caller can map it to its OWN return code (rc 11 in
+    `launcher_lib.py`, not rc 6).
+    """
+
+    def __init__(self, message, *, issue):
+        super().__init__(message)
+        self.issue = issue
+
+
+def _child_pending_disposition(state: dict, issue_number: int) -> "str | None":
+    """The receipt's `pending_disposition` for one child, or None. Never raises — by the time
+    selection runs the state is already schema-valid, so a malformed shape here means nothing
+    to gate on, not a crash mid-selection."""
+    reval = state.get("queue_revalidation")
+    if not isinstance(reval, dict):
+        return None
+    children = reval.get("children")
+    if not isinstance(children, dict):
+        return None
+    record = children.get(str(issue_number))
+    if not isinstance(record, dict):
+        return None
+    pending = record.get("pending_disposition")
+    return pending if isinstance(pending, str) else None
+
+
+def has_pending_dependents(state: dict, issue_number: int) -> bool:
+    """True when some NOT-YET-TERMINAL child in the queue depends on `issue_number` (#944).
+
+    Feeds the obsolete-child owner gate's supervision routing (design doc §2.4): a sleeping run
+    may recommend deferring an obsolete-marked child only when nothing left in the queue needs
+    it — otherwise deferring it would strand a dependent with no way to advance.
+    """
+    issues = state.get("issues", [])
+    numset = {i["number"] for i in issues if isinstance(i, dict) and _is_int(i.get("number"))}
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        if issue.get("status") in TERMINAL_STATUSES:
+            continue
+        if issue_number in _in_queue_deps(issue, numset):
+            return True
+    return False
 
 
 # #695 — statuses a child can never move AWAY from once recorded.
@@ -3074,6 +3187,11 @@ def fresh_session_handoff(state: dict, *, mode: str, project=None,
         nxt = next_ready_issue(state, campaign_deps_satisfied_by(state),
                                issue_state_probe=issue_state_probe,
                                observed_head=observed_head)
+    except ObsoletePendingChild as exc:
+        # #944, AC2: a recoverable, owner-gated refusal — never let it collapse into `blocked`,
+        # the same "never generic" principle #840 established for `revalidation_required`.
+        return {"outcome": "obsolete_pending", "issue": exc.issue,
+                "has_pending_dependents": has_pending_dependents(state, exc.issue)}
     except DriverStateError as exc:
         # Same widening as the pre-gate above (round-10 Medium 1): a recoverable receipt error
         # reaching selection must become the disposition, not a traceback.

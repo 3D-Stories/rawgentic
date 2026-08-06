@@ -294,6 +294,146 @@ def test_next_ready_issue_non_int_depends_on_entry_raises_driver_state_error():
 
 
 # --------------------------------------------------------------------------- #
+# The obsolete-child owner gate (#944, AC2) — next_ready_issue's pending-disposition raise
+# --------------------------------------------------------------------------- #
+_OBSOLETE_HEAD = "a" * 40
+
+
+def _valid_receipt_record(pending=None, head=_OBSOLETE_HEAD):
+    """A fully valid queue_revalidation.children[<n>] record, built via the real constructor —
+    `next_ready_issue`'s receipt-freshness gate (`_refuse_unrevalidated_queue`) runs the FULL
+    `validate_queue_revalidation` check whenever ANY receipt is present, so a hand-rolled partial
+    record fails structural validation before this new logic is ever reached."""
+    kind, verdict = ("cause", "broken") if pending else ("ac", "holds")
+    claim = {"kind": kind, "quoted_from_body": "irrelevant", "verdict": verdict,
+             "checked_against": "<no-file: gone>", "evidence": "x"}
+    kwargs = dict(body="a trivial body with no headings at all", from_sha=head, to_sha=head,
+                 extraction="none", depth="deep", claims=[claim], validated_at=1, resolves=set())
+    if pending:
+        kwargs["pending_disposition"] = pending
+    return driver_lib.build_revalidation_record(**kwargs)
+
+
+def _revalidated_state(specs, head=_OBSOLETE_HEAD):
+    """`specs`: [(number, status, pending_or_None), ...]. Every `queued` issue is stamped
+    `validated_against=head` and given a matching receipt record (the linkage
+    `_validate_queue_revalidation` requires); non-queued issues get neither, since the
+    per-child provenance clause only applies to ELIGIBLE (queued) children."""
+    issues = []
+    children = {}
+    for number, status, pending in specs:
+        entry = {"number": number, "status": status}
+        if status == "queued":
+            entry["validated_against"] = head
+            children[str(number)] = _valid_receipt_record(pending, head)
+        issues.append(entry)
+    state = {"schema_version": 2, "campaign": "c", "issues": issues,
+             "queue_revalidation": {"version": 1, "extractor_version": 1,
+                                    "validated_head": head, "children": children}}
+    return state, head
+
+
+class TestObsoletePendingChild:
+    def test_a_lone_obsolete_pending_candidate_raises(self):
+        state, head = _revalidated_state([(1, "queued", "issue_obsolete")])
+        with pytest.raises(driver_lib.ObsoletePendingChild) as exc:
+            driver_lib.next_ready_issue(state, observed_head=head)
+        assert exc.value.issue == 1
+
+    def test_an_unrelated_later_ready_candidate_is_selected_instead(self):
+        """The round-2 review's finding 4, and the reason this whole task exists: raising on
+        the FIRST obsolete-pending candidate stopped the entire scan, even when a completely
+        unrelated, independent, ready candidate exists later in queue order."""
+        state, head = _revalidated_state(
+            [(1, "queued", "issue_obsolete"), (2, "queued", None)])
+        assert driver_lib.next_ready_issue(state, observed_head=head) == 2
+
+    def test_raises_only_when_nothing_else_is_selectable(self):
+        state, head = _revalidated_state([(1, "queued", "issue_obsolete"), (2, "merged", None)])
+        with pytest.raises(driver_lib.ObsoletePendingChild) as exc:
+            driver_lib.next_ready_issue(state, observed_head=head)
+        assert exc.value.issue == 1
+
+    def test_a_deferred_child_never_raises_at_all(self):
+        """The moment an owner (or a future automation) calls record-child-outcome, the child
+        is no longer `queued` — next_ready_issue's existing status filter already skips it, with
+        no new 'exclude' mechanism needed."""
+        state, head = _revalidated_state(
+            [(1, "deferred", "issue_obsolete"), (2, "queued", None)])
+        assert driver_lib.next_ready_issue(state, observed_head=head) == 2
+
+    def test_a_merged_child_never_raises_either(self):
+        state, head = _revalidated_state([(1, "merged", "issue_obsolete")])
+        assert driver_lib.next_ready_issue(state, observed_head=head) is None
+
+    def test_dependency_satisfaction_still_gates_before_the_pending_check(self):
+        """An obsolete-pending child whose OWN deps are unsatisfied is simply not ready yet —
+        the pending-disposition raise only fires for a candidate that would otherwise BE
+        selected."""
+        state, head = _revalidated_state([(2, "queued", "issue_obsolete")])
+        # #1 is pr_open (not eligible, so it needs no stamp/receipt entry of its own) and #2
+        # depends on it — #2's dep is unsatisfied, so #2 is not ready regardless of the pending
+        # marker.
+        state["issues"].insert(0, _issue(1, status="pr_open"))
+        state["issues"][1]["depends_on"] = [1]
+        assert driver_lib.next_ready_issue(state, observed_head=head) is None
+
+    def test_first_obsolete_issue_is_the_one_named_when_several_exist(self):
+        state, head = _revalidated_state(
+            [(1, "queued", "issue_obsolete"), (2, "queued", "issue_obsolete")])
+        with pytest.raises(driver_lib.ObsoletePendingChild) as exc:
+            driver_lib.next_ready_issue(state, observed_head=head)
+        assert exc.value.issue == 1
+
+
+class TestHasPendingDependents:
+    def test_true_when_a_remaining_child_directly_depends_on_it(self):
+        state = {"issues": [_issue(1, status="queued"), _issue(2, [1], status="queued")]}
+        assert driver_lib.has_pending_dependents(state, 1) is True
+
+    def test_false_when_nothing_depends_on_it(self):
+        state = {"issues": [_issue(1, status="queued"), _issue(2, status="queued")]}
+        assert driver_lib.has_pending_dependents(state, 1) is False
+
+    def test_a_merged_dependent_does_not_count(self):
+        """A TERMINAL child will never run again — its historical dependency on the obsolete
+        issue is not something that still needs unblocking."""
+        state = {"issues": [_issue(1, status="queued"), _issue(2, [1], status="merged")]}
+        assert driver_lib.has_pending_dependents(state, 1) is False
+
+    def test_an_abandoned_dependent_does_not_count_either(self):
+        state = {"issues": [_issue(1, status="queued"), _issue(2, [1], status="abandoned")]}
+        assert driver_lib.has_pending_dependents(state, 1) is False
+
+    def test_a_deferred_dependent_still_counts(self):
+        """Deferred is NOT terminal — a parked child can legitimately be re-queued later, and
+        would then need issue 1 resolved."""
+        state = {"issues": [_issue(1, status="queued"), _issue(2, [1], status="deferred")]}
+        assert driver_lib.has_pending_dependents(state, 1) is True
+
+
+class TestFreshSessionHandoffObsoletePending:
+    def test_returns_the_obsolete_pending_outcome_not_blocked(self):
+        """Round-1's own principle, re-applied: a recoverable refusal must never collapse into
+        the generic 'blocked' outcome — the same reason revalidation_required exists."""
+        state, head = _revalidated_state([(1, "queued", "issue_obsolete")])
+        disposition = driver_lib.fresh_session_handoff(
+            state, mode=driver_lib.FRESH_SESSION_MODE, observed_head=head)
+        assert disposition["outcome"] == "obsolete_pending"
+        assert disposition["issue"] == 1
+        assert disposition["has_pending_dependents"] is False
+
+    def test_has_pending_dependents_is_true_when_something_depends_on_it(self):
+        state, head = _revalidated_state(
+            [(1, "queued", "issue_obsolete"), (2, "queued", None)])
+        state["issues"][1]["depends_on"] = [1]
+        disposition = driver_lib.fresh_session_handoff(
+            state, mode=driver_lib.FRESH_SESSION_MODE, observed_head=head)
+        assert disposition["outcome"] == "obsolete_pending"
+        assert disposition["has_pending_dependents"] is True
+
+
+# --------------------------------------------------------------------------- #
 # validate_driver_state (v1/v2 readability)
 # --------------------------------------------------------------------------- #
 def test_validate_driver_state_valid_v2():

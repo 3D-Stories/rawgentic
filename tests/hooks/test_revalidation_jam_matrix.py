@@ -118,7 +118,7 @@ def _simulate_revalidate_children(state, observed_head, probe=None):
     return dl.rebuild_receipt(state, observed_head, audited)
 
 
-def _apply_remedy(state, exc, observed_head, probe):
+def _apply_remedy(state, exc, observed_head, probe, *, owner_status=None):
     """Execute what the refusal tells the operator to do. Returns ``(new state, actions taken)``.
 
     **Dispatches on the STRUCTURAL `remedy` attribute, never on the message text (round-9 High
@@ -126,24 +126,38 @@ def _apply_remedy(state, exc, observed_head, probe):
     — a receipt whose `version` field held that literal string produced a refusal naming nothing
     runnable, and this harness scored it recoverable. The guard and its test shared one blind
     spot, so text matching is gone from both sides.
+
+    **`owner` restored (#944, the #848 rebuild).** `drive_to_open` already reserved this
+    vocabulary — it was unreachable until `next_ready_issue` could raise `ObsoletePendingChild`.
+    `owner_status` selects which of the message's own disclosed choices to execute
+    (`record-child-outcome --status deferred|abandoned|merged`); the matrix takes the first
+    (`deferred`), and `test_either_owner_choice_clears_the_gate` proves the others work too.
     """
     message = str(exc)
     declared = getattr(exc, "remedy", None)
-    if declared not in {"revalidate"}:
+    if declared not in {"revalidate", "owner", "both"}:
         raise AssertionError(
             f"the refusal declares no structural remedy ({declared!r}), so an operator has "
             f"nothing to act on:\n  {message}")
-    # While the owner gate is out (#848) `revalidate` is the ONLY remedy any clause produces.
-    # The owner branch was removed with it rather than left unreachable — a harness arm no
-    # refusal can reach is the same vacuous-guard class this file exists to catch.
-    if declared != "revalidate":
-        raise AssertionError(
-            f"unexpected remedy {declared!r}; the only gate clauses left are head freshness and "
-            f"per-child stamps, both cleared by revalidation:\n  {message}")
+    if declared == "owner":
+        match = _STATUS_RE.search(message)
+        if match is None:
+            raise AssertionError(
+                f"remedy 'owner' declared, but no record-child-outcome command is printed in "
+                f"the message an operator would have to guess from:\n  {message}")
+        issue_number = int(match.group(1))
+        choices = match.group(2).split("|")
+        status = owner_status if owner_status in choices else choices[0]
+        new_state = dl.record_child_outcome(state, issue_number, status)
+        if new_state is None:
+            raise AssertionError(
+                f"record-child-outcome --issue {issue_number} --status {status} was a no-op, "
+                f"so the printed remedy does not clear the refusal:\n  {message}")
+        return new_state, {"owner"}
     return _simulate_revalidate_children(state, observed_head, probe), {"revalidate"}
 
 
-def drive_to_open(state, observed_head=HEAD, probe=None, max_steps=3):
+def drive_to_open(state, observed_head=HEAD, probe=None, max_steps=3, *, owner_status=None):
     """Apply the printed remedy until the gate stops refusing. Returns the steps taken.
 
     `max_steps` is 3 rather than 1 because a genuinely two-part state (an owner decision AND a
@@ -158,7 +172,8 @@ def drive_to_open(state, observed_head=HEAD, probe=None, max_steps=3):
             return steps
         except dl.DriverStateError as exc:
             steps.append(str(exc))
-            state, actions = _apply_remedy(state, exc, observed_head, probe)
+            state, actions = _apply_remedy(state, exc, observed_head, probe,
+                                           owner_status=owner_status)
             # **Every action must have been DISCLOSED by the FIRST refusal (round-9 Medium 1).**
             # Bounding the chain at 3 proved only that it converges — a first message naming one
             # remedy, followed by a second naming another, converged happily and reproduced round
@@ -264,6 +279,20 @@ class TestEveryRefusalIsRecoverable:
                               + "\n".join(failures[:25])
                               + (f"\n… and {len(failures) - 25} more" if len(failures) > 25 else ""))
 
+    def test_either_owner_choice_clears_the_gate(self):
+        """The matrix always takes the FIRST disclosed choice (`deferred`) when a remedy is
+        `owner`. This proves the OTHER documented choice (`abandoned`) works too — the printed
+        remedy names three (`deferred|abandoned|merged`), and only one is exercised above."""
+        for status, stamp, record_kind, receipt_head, probe in itertools.product(
+                _STATUSES, _STAMPS, ["pending_current", "pending_stale"],
+                _RECEIPT_HEADS, _PROBES):
+            state = _build(status, stamp, record_kind, receipt_head)
+            callable_probe = (lambda _n, _p=probe: _p) if probe else None
+            try:
+                drive_to_open(state, HEAD, callable_probe, owner_status="abandoned")
+            except AssertionError as exc:
+                pytest.fail(f"{status}-{stamp}-{record_kind}-{receipt_head}-{probe}: {exc}")
+
 
 class TestTheMatrixIsNotVacuous:
     """A sweep that refuses nothing proves nothing. These pin that the matrix really does exercise
@@ -287,7 +316,7 @@ class TestTheMatrixIsNotVacuous:
         `drive_to_open` must FAIL rather than pass quietly."""
         state = _build("queued", None, "absent", None)
         with pytest.raises(AssertionError, match="never opened"):
-            _no_op = lambda s, _e, _h, _p: (s, set())               # noqa: E731
+            _no_op = lambda s, _e, _h, _p, **_kw: (s, set())         # noqa: E731
             saved, globals()["_apply_remedy"] = _apply_remedy, _no_op
             try:
                 drive_to_open(state, HEAD, None)
@@ -339,22 +368,21 @@ class TestTwoChildStatesWhereOneChildUnblocksAnother:
         drive_to_open(state, HEAD, callable_probe)
 
 
-class TestTheOwnerGateIsInert:
-    """**The `pending_disposition` owner gate is CUT from this PR and must stay inert (#848).**
+class TestTheOwnerGateIsRestored:
+    """**The `pending_disposition` owner gate, CUT in #840, is REBUILT here (#944, the #848
+    rebuild).** This class INVERTS its own predecessor (`TestTheOwnerGateIsInert`), the same way
+    that class already promised it would — its docstring said so explicitly: "This guard is the
+    inverse of the one #848 will write."
 
-    Owner decision 2026-08-02, after ten review rounds. The clause was added in round 6 and broke
-    in rounds 7, 8, 9 and 10 — four of round 10's six findings lived entirely inside it — while
-    head freshness and per-child stamps had been stable since round 5. So the stable half ships
-    and the owner gate is rebuilt in #848 behind ONE function that owns "what is wrong and what
-    clears it".
+    Owner decision 2026-08-02, after ten review rounds, explains why the gate was cut in the
+    first place: the clause was added in round 6 and broke in rounds 7-10 — four of round 10's
+    six findings lived entirely inside it. #944 rebuilds it behind ONE function
+    (`next_ready_issue`'s own selection loop) that owns "what is wrong and what clears it",
+    exactly as the owner's #848 ruling specified.
 
-    This guard is the inverse of the one #848 will write. It is deliberately INVERTED rather than
-    deleted, the same way PR 1's inertness pin was: a guard that no longer describes the code is
-    worse than none, and silently re-enabling this clause is exactly how the defect returns.
-
-    **What is knowingly open until #848 lands** — asserted here so it cannot be forgotten: an
-    obsolete child can still satisfy a dependent's dependency. That is PRE-EXISTING, not a
-    regression; nothing enforced it before #840 either.
+    **What stays knowingly open** — carried forward from the predecessor class, still true: an
+    obsolete `pr_open` child still satisfies its dependent under `deps_satisfied_by: "pr_open"`.
+    That is scoped OUT of #944 too (design doc §3.4's own scoping), not a regression.
     """
 
     def _marked(self, status="pr_open"):
@@ -367,20 +395,33 @@ class TestTheOwnerGateIsInert:
                     "version": 1, "extractor_version": 1, "validated_head": HEAD,
                     "children": {"1": _record(pending="issue_obsolete"), "2": _record()}}}
 
-    def test_a_pending_disposition_does_not_refuse_selection(self):
-        """#848 INVERTS this: it must then raise `QueueRevalidationRequired`.
-
-        #1 is STAMPED and attested here so the per-child provenance clause — which is still
-        enforced — cannot be what refuses. The marker is then the only thing left that could,
-        and it does not."""
+    def test_a_pending_disposition_now_refuses_selection(self):
+        """Inverted from the predecessor's `test_a_pending_disposition_does_not_refuse_
+        selection`: #1 is STAMPED and attested here so the per-child provenance clause cannot be
+        what refuses — the marker is now the only thing that can, and it does, raising
+        `ObsoletePendingChild` rather than the `QueueRevalidationRequired` the old docstring
+        guessed at (a distinct type, DELIBERATELY, so the CLI can map it to its own rc — design
+        doc §2.2)."""
         state = self._marked(status="queued")
         state["issues"][0]["validated_against"] = HEAD
-        assert dl.next_ready_issue(state, observed_head=HEAD) == 1
+        with pytest.raises(dl.ObsoletePendingChild) as exc:
+            dl.next_ready_issue(state, observed_head=HEAD)
+        assert exc.value.issue == 1
+
+    def test_the_write_back_clears_it(self):
+        """AC3's recoverability, exercised directly: the printed remedy is
+        `record-child-outcome --status deferred|abandoned|merged` — already lock-safe, already
+        existing (#695) — and running it actually opens the gate."""
+        state = self._marked(status="queued")
+        state["issues"][0]["validated_against"] = HEAD
+        cleared = dl.record_child_outcome(state, 1, "deferred")
+        assert cleared is not None
+        assert dl.next_ready_issue(cleared, observed_head=HEAD) is None  # #2 still deps-blocked
 
     @pytest.mark.parametrize("policy", ["merged", "pr_open"])
-    def test_the_known_open_hole_is_pinned_not_forgotten(self, policy):
-        """An obsolete `pr_open` child still satisfies its dependent under `pr_open`. #848 closes
-        this; until then it is recorded here rather than discovered later."""
+    def test_the_known_open_hole_is_still_pinned_not_forgotten(self, policy):
+        """An obsolete `pr_open` child still satisfies its dependent under `pr_open`. #944 scopes
+        this OUT deliberately (design doc §3.4) — recorded here rather than discovered later."""
         selected = dl.next_ready_issue(self._marked(), deps_satisfied_by=policy,
                                        observed_head=HEAD)
         assert selected == (2 if policy == "pr_open" else None)

@@ -1759,18 +1759,25 @@ class TestRound8RebuildReceiptIsTheArmingProcedure:
         assert rebuilt["issues"][0]["validated_against"] == HEAD
         assert dl.next_ready_issue(rebuilt, observed_head=HEAD) == 1
 
-    def test_a_pending_child_IS_stamped_while_the_owner_gate_is_out(self):
-        """**Inverted with the owner gate (#848).** The "an obsolete child stays unstamped" rule
-        existed only to keep it un-selectable; with nothing gating on the marker the rule stopped
-        protecting anything and started jamming the queue instead — the child was never stamped,
-        so the per-child provenance clause refused for ever and re-running the skill changed
-        nothing. Found by the jam sweep after the cut. #848 restores both together."""
+    def test_a_pending_child_IS_stamped_but_next_ready_issue_now_refuses_it(self):
+        """**Re-inverted for #944 (the #848 rebuild).** The "an obsolete child stays unstamped"
+        rule existed only to keep it un-selectable; with nothing gating on the marker the rule
+        stopped protecting anything and started jamming the queue instead — the child was never
+        stamped, so the per-child provenance clause refused for ever and re-running the skill
+        changed nothing. Found by the jam sweep after the cut.
+
+        `rebuild_receipt` itself is UNCHANGED by #944 — it still stamps a pending-disposition
+        child (this class's whole point). What changed is `next_ready_issue`, which now refuses
+        it at SELECTION time regardless of the stamp — the stamp keeps the receipt's own linkage
+        invariant intact; the NEW gate lives one layer up."""
         state = _state(_iss(1))
         rebuilt = dl.rebuild_receipt(
             state, HEAD, {1: _receipt_child(pending="issue_obsolete")})
         assert rebuilt["issues"][0]["validated_against"] == HEAD
         assert dl.validate_queue_revalidation(rebuilt) is True
-        assert dl.next_ready_issue(rebuilt, observed_head=HEAD) == 1
+        with pytest.raises(dl.ObsoletePendingChild) as exc:
+            dl.next_ready_issue(rebuilt, observed_head=HEAD)
+        assert exc.value.issue == 1
 
     def test_it_never_mutates_the_state_it_was_given(self):
         state = _state(_iss(1, validated_against=OLD), reval=_reval(OLD, {}))
