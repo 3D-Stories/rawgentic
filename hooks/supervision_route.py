@@ -232,3 +232,23 @@ def route_for(view: CampaignView, *, now: datetime, run_fatal: bool = False,
         return Route("ask_owner_and_wait",
                      "send not yet confirmed; nothing to compute a deadline from", None)
     return Route("ask_owner_and_wait", "deadline computed from confirmed_at", deadline)
+
+
+def authority_permits(action_kind: str, *, view: CampaignView) -> bool:
+    """The bounded-autonomous-authority decision (design §7). Takes ONLY the evaluated
+    `CampaignView` — no separately-passable `grant`, which is what closed round 2
+    finding 7: nothing else could pair a restrictive view with a foreign campaign's
+    permissive grant, because there is no second parameter to supply one through.
+
+    Checked in order: `attended` short-circuits True for EVERY `action_kind` (a human
+    is present to object, so authority questions don't arise); away/sleeping never
+    differ from each other (M4 design: "sleeping adds nothing"); `merge` is the ONLY
+    action_kind absence can ever permit, and only when the grant allows it AND no
+    override has denied it; every other action_kind is False in every absence state —
+    absence never WIDENS what's permitted.
+    """
+    if view.base.state == "attended":
+        return True
+    if action_kind == "merge":
+        return view.merge_permitted_by_grant and not view.merge_denied
+    return False

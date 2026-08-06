@@ -322,3 +322,62 @@ class TestRouteActionVocabulary:
             route = sr.route_for(_view(state="sleeping" if not kwargs.get("owner_only") else "away"),
                                  now=NOW, **kwargs)
             assert route.action in valid
+
+
+# ------------------------------------------------------------------- authority_permits (§7)
+
+def _attended_view():
+    base = sl.SupervisionView(
+        state="attended", declared="attended", until=None, expired=False, revision=1,
+        declared_at=None, load_status="valid", consult_providers=(), granted=False,
+        transport_verified=False, transport_verified_at=None,
+        transport_verified_session_id=None,
+    )
+    return sr.CampaignView(base=base, merge_denied=False, merge_permitted_by_grant=False,
+                           consult_providers=(), granted=False)
+
+
+class TestAuthorityPermits:
+    def test_attended_permits_everything_checked_first(self):
+        view = _attended_view()
+        assert sr.authority_permits("merge", view=view) is True
+        assert sr.authority_permits("install", view=view) is True
+        assert sr.authority_permits("anything_at_all", view=view) is True
+
+    def test_away_merge_true_only_when_granted_and_not_denied(self):
+        view = sr.CampaignView(base=_view(state="away").base, merge_denied=False,
+                               merge_permitted_by_grant=True, consult_providers=(),
+                               granted=False)
+        assert sr.authority_permits("merge", view=view) is True
+
+    def test_away_merge_false_when_denied_even_if_granted(self):
+        """The exact finding-5 regression: merge_denied=True makes authority_permits
+        False even when the grant says auto-merge-scoped-to-run."""
+        view = sr.CampaignView(base=_view(state="away").base, merge_denied=True,
+                               merge_permitted_by_grant=True, consult_providers=(),
+                               granted=False)
+        assert sr.authority_permits("merge", view=view) is False
+
+    def test_away_merge_false_when_no_grant(self):
+        view = sr.CampaignView(base=_view(state="away").base, merge_denied=False,
+                               merge_permitted_by_grant=False, consult_providers=(),
+                               granted=False)
+        assert sr.authority_permits("merge", view=view) is False
+
+    def test_sleeping_merge_true_only_when_granted_and_not_denied(self):
+        view = sr.CampaignView(base=_view(state="sleeping").base, merge_denied=False,
+                               merge_permitted_by_grant=True, consult_providers=(),
+                               granted=False)
+        assert sr.authority_permits("merge", view=view) is True
+
+    @pytest.mark.parametrize("action_kind", ["install", "delete", "publish", "deploy"])
+    def test_every_other_action_kind_always_false_away_or_sleeping(self, action_kind):
+        view = sr.CampaignView(base=_view(state="away").base, merge_denied=False,
+                               merge_permitted_by_grant=True, consult_providers=(),
+                               granted=True)
+        assert sr.authority_permits(action_kind, view=view) is False
+
+    def test_no_signature_variant_accepts_a_bare_grant(self):
+        import inspect
+        sig = inspect.signature(sr.authority_permits)
+        assert set(sig.parameters) == {"action_kind", "view"}
