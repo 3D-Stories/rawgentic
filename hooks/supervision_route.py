@@ -87,18 +87,33 @@ def _driver_state_path(project_root: str, campaign_id: str) -> str:
     return os.path.join(project_root, "claude_docs", ".driver-state", f"{campaign_id}.json")
 
 
-def _read_driver_state(project_root: str, campaign_id: str) -> dict:
-    """Best-effort read of the campaign's OWN driver-state file. A missing or
-    unreadable file is a SAFE pass-through (no grant, no override) — never a crash and
-    never a widened permission, matching this module's fail-safe-for-authority
-    direction."""
-    path = _driver_state_path(project_root, campaign_id)
+def _read_driver_state(project_root: str, campaign_id: str) -> "tuple[dict, bool]":
+    """(data, corrupt) for the campaign's OWN driver-state file.
+
+    `corrupt=True` means the file EXISTS but could not be read/parsed as a JSON
+    object — Step 8a cross-model review, High finding 5: the earlier version
+    returned `{}` on ANY failure, which drops a restrictive `supervision_override`
+    (and the merge grant check) exactly like a legitimately-absent file, WIDENING
+    permission via file corruption. `corrupt` lets the caller deny instead
+    (fail-safe for authority, matching `supervision_lib.installs_forbidden`'s own
+    established convention: a broken file must never unlock an outward action).
+    A missing file, or an invalid `campaign_id` itself, is genuinely absent — a
+    brand-new campaign that never had a policy is normal, not suspicious — and
+    reads as `({}, False)`."""
+    try:
+        path = _driver_state_path(project_root, campaign_id)
+    except ValueError:
+        return {}, False
+    if not os.path.exists(path):
+        return {}, False
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+        return {}, True
+    if not isinstance(data, dict):
+        return {}, True
+    return data, False
 
 
 def _effective_override_mode(override, *, now: datetime, current_revision: int) -> str:
@@ -134,17 +149,36 @@ def evaluate_campaign(*, workspace_root: str, campaign_id: str, project_root: st
     `session_id` threads through to Part A's `evaluate_workspace` for the
     `transport_verified` computation (T1 — tightened per owner decision D267); omitting
     it means `base.transport_verified` is correctly False (no current session to match).
+
+    Step 8a cross-model review fixes, both confirmed real gaps:
+
+    - **Critical finding 2:** the workspace-level consult grant is applied ONLY when
+      this campaign is actually GOVERNED by the current declaration
+      (`governed_campaign_ids` empty = every campaign; otherwise `campaign_id` must be
+      listed). Part A's own `supervision_lib.py` deliberately does NOT narrow by
+      `governed_campaign_ids` and says so explicitly ("the campaign-scoped evaluator is
+      #947") — this check was always meant to live here. `base.state` itself is left
+      untouched for an ungoverned campaign (Part A's workspace-global absence is real
+      regardless of which campaign the owner meant to cover); only the CONSULT grant,
+      which is not otherwise campaign-scoped, needed gating.
+    - **High finding 5:** a `corrupt` (not merely absent) driver-state file denies
+      merge AND consult, rather than silently reading as "no override, no grant".
     """
-    base = sl.evaluate_workspace(sl.read_state(workspace_root), now=now,
-                                 session_id=session_id)
-    state = _read_driver_state(project_root, campaign_id)
+    loaded = sl.read_state(workspace_root)
+    base = sl.evaluate_workspace(loaded, now=now, session_id=session_id)
+    governed_ids = list(loaded.record.get("governed_campaign_ids") or []) \
+        if loaded.load_status == "valid" else []
+    campaign_governed = not governed_ids or campaign_id in governed_ids
+
+    state, corrupt = _read_driver_state(project_root, campaign_id)
     policy = state.get("policy") or {}
-    merge_permitted_by_grant = policy.get("merge_policy") == "auto-merge-scoped-to-run"
+    merge_permitted_by_grant = (not corrupt) and \
+        policy.get("merge_policy") == "auto-merge-scoped-to-run"
 
     mode = _effective_override_mode(state.get("supervision_override"), now=now,
                                     current_revision=base.revision)
-    merge_denied = mode in _NO_MERGE_MODES
-    if mode in _NO_CONSULT_MODES:
+    merge_denied = corrupt or mode in _NO_MERGE_MODES
+    if corrupt or not campaign_governed or mode in _NO_CONSULT_MODES:
         consult_providers: tuple = ()
         granted = False
     else:
@@ -248,13 +282,21 @@ def authority_permits(action_kind: str, *, view: CampaignView) -> bool:
     finding 7: nothing else could pair a restrictive view with a foreign campaign's
     permissive grant, because there is no second parameter to supply one through.
 
-    Checked in order: `attended` short-circuits True for EVERY `action_kind` (a human
-    is present to object, so authority questions don't arise); away/sleeping never
-    differ from each other (M4 design: "sleeping adds nothing"); `merge` is the ONLY
+    Checked in order: an **invalid** supervision file (Step 8a cross-model review,
+    Critical finding 3) NEVER permits anything, even a merge under a grant — Part A's
+    own `evaluate_workspace` maps an invalid (corrupt/deleted-mid-session) state file to
+    `state="attended"` for AVAILABILITY reasons (never wedge a per-tool-call hook), but
+    `installs_forbidden` already establishes that this must NOT ALSO be fail-open for
+    AUTHORITY; this function follows the same rule. Then: `attended` (with a genuinely
+    valid or absent file) short-circuits True for EVERY `action_kind` (a human is
+    present to object, so authority questions don't arise); away/sleeping never differ
+    from each other (M4 design: "sleeping adds nothing"); `merge` is the ONLY
     action_kind absence can ever permit, and only when the grant allows it AND no
     override has denied it; every other action_kind is False in every absence state —
     absence never WIDENS what's permitted.
     """
+    if view.base.load_status == "invalid":
+        return False
     if view.base.state == "attended":
         return True
     if action_kind == "merge":

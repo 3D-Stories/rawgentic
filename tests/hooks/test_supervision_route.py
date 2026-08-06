@@ -78,6 +78,32 @@ class TestEvaluateCampaignBasics:
         assert view.merge_permitted_by_grant is False
         assert view.merge_denied is False
 
+    def test_corrupt_driver_state_denies_rather_than_widens(self, tmp_path):
+        """Step 8a cross-model review, High finding 5 (confirmed): a driver-state file
+        that EXISTS but is corrupt (as opposed to legitimately absent) used to read as
+        {} -- dropping a restrictive supervision_override AND the grant check, silently
+        WIDENING permission via file corruption. Must deny instead (fail-safe for
+        authority, matching installs_forbidden's own established convention)."""
+        rev = _declare(tmp_path)
+        path = Path(tmp_path) / "claude_docs" / ".driver-state" / "epic-871.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{not valid json")
+        view = sr.evaluate_campaign(workspace_root=str(tmp_path), campaign_id="epic-871",
+                                    project_root=str(tmp_path), now=NOW)
+        assert view.merge_denied is True
+        assert view.merge_permitted_by_grant is False
+        assert view.granted is False
+
+    def test_invalid_campaign_id_is_also_a_safe_pass_through_not_a_crash(self, tmp_path):
+        """Found by this task's own self-review: _driver_state_path's ValueError for an
+        unsafe campaign_id used to raise OUTSIDE _read_driver_state's try/except,
+        contradicting this same function's own "never a crash" docstring."""
+        _declare(tmp_path)
+        view = sr.evaluate_campaign(workspace_root=str(tmp_path), campaign_id="../escape",
+                                    project_root=str(tmp_path), now=NOW)
+        assert view.merge_permitted_by_grant is False
+        assert view.merge_denied is False
+
     def test_base_carries_part_a_view_untouched(self, tmp_path):
         _declare(tmp_path, state="sleeping", until="2099-01-01T00:00:00Z")
         _write_driver_state(tmp_path, "epic-871",
@@ -157,6 +183,49 @@ class TestEvaluateCampaignOverride:
                                     project_root=str(tmp_path), now=NOW)
         assert view.merge_denied is True
         assert view.granted is False
+
+
+class TestGovernedCampaignIds:
+    """Step 8a cross-model review, Critical finding 2 (confirmed): evaluate_campaign
+    copied the workspace-level consult grant into EVERY campaign, never checking
+    governed_campaign_ids -- a declaration scoped to campaign A leaked its consult
+    grant to campaign B. Part A's own supervision_lib.py deliberately does NOT narrow
+    by governed_campaign_ids and says so explicitly: "The campaign-scoped evaluator is
+    #947" -- meaning this check was ALWAYS meant to live here, and was simply missing."""
+
+    def test_ungoverned_campaign_gets_no_consult_grant(self, tmp_path):
+        sa.declare(str(tmp_path), state="away", until=None, session_id="sess-1",
+                  campaign_ids=["epic-871"], consult_providers=["gpt"],
+                  consult_granted=True, now=NOW)
+        _write_driver_state(tmp_path, "epic-906",
+                            {"schema_version": 2, "campaign": "epic-906", "issues": []})
+        view = sr.evaluate_campaign(workspace_root=str(tmp_path), campaign_id="epic-906",
+                                    project_root=str(tmp_path), now=NOW)
+        assert view.granted is False
+        assert view.consult_providers == ()
+
+    def test_governed_campaign_still_gets_the_grant(self, tmp_path):
+        sa.declare(str(tmp_path), state="away", until=None, session_id="sess-1",
+                  campaign_ids=["epic-871"], consult_providers=["gpt"],
+                  consult_granted=True, now=NOW)
+        _write_driver_state(tmp_path, "epic-871",
+                            {"schema_version": 2, "campaign": "epic-871", "issues": []})
+        view = sr.evaluate_campaign(workspace_root=str(tmp_path), campaign_id="epic-871",
+                                    project_root=str(tmp_path), now=NOW)
+        assert view.granted is True
+        assert view.consult_providers == ("gpt",)
+
+    def test_empty_governed_list_covers_every_campaign(self, tmp_path):
+        sa.declare(str(tmp_path), state="away", until=None, session_id="sess-1",
+                  campaign_ids=[], consult_providers=["gpt"], consult_granted=True,
+                  now=NOW)
+        _write_driver_state(tmp_path, "any-campaign-at-all",
+                            {"schema_version": 2, "campaign": "any-campaign-at-all",
+                             "issues": []})
+        view = sr.evaluate_campaign(workspace_root=str(tmp_path),
+                                    campaign_id="any-campaign-at-all",
+                                    project_root=str(tmp_path), now=NOW)
+        assert view.granted is True
 
 
 class TestNoCrossCampaignMismatch:
@@ -337,7 +406,34 @@ def _attended_view():
                            consult_providers=(), granted=False)
 
 
+def _invalid_view(*, merge_permitted_by_grant=True, merge_denied=False):
+    """A state==\"attended\" view whose load_status is \"invalid\" -- Part A's own
+    fail-open-for-AVAILABILITY convention (`evaluate_workspace` maps invalid/absent to
+    state="attended"), which must NOT also be fail-open for AUTHORITY."""
+    base = sl.SupervisionView(
+        state="attended", declared="invalid", until=None, expired=False, revision=0,
+        declared_at=None, load_status="invalid", consult_providers=(), granted=False,
+        transport_verified=False, transport_verified_at=None,
+        transport_verified_session_id=None,
+    )
+    return sr.CampaignView(base=base, merge_denied=merge_denied,
+                           merge_permitted_by_grant=merge_permitted_by_grant,
+                           consult_providers=(), granted=False)
+
+
 class TestAuthorityPermits:
+    def test_invalid_state_never_permits_even_with_a_grant(self):
+        """Step 8a cross-model review, Critical finding 3 (confirmed): authority_permits
+        keyed ONLY on view.base.state == "attended", and an invalid/corrupt/deleted
+        .supervision.json ALSO reads as state="attended" (Part A's own established
+        fail-open-for-AVAILABILITY convention) -- silently unlocking full autonomous
+        authority via file corruption. installs_forbidden already defends against this
+        exact class of bug by checking load_status separately; authority_permits must
+        too (fail-safe for AUTHORITY, matching that established convention)."""
+        view = _invalid_view(merge_permitted_by_grant=True, merge_denied=False)
+        assert sr.authority_permits("merge", view=view) is False
+        assert sr.authority_permits("install", view=view) is False
+
     def test_attended_permits_everything_checked_first(self):
         view = _attended_view()
         assert sr.authority_permits("merge", view=view) is True

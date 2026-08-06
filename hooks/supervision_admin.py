@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -44,6 +45,14 @@ _MAX_CONSUMED_PREFLIGHT_TOKENS = 500
 
 #: #947 Part B §5 — a transport-verify evidence file must be this fresh to be trusted.
 _TRANSPORT_VERIFY_EVIDENCE_WINDOW_MINUTES = 10
+
+#: The evidence file's own `token` field is used as a filesystem path component
+#: (`<hermes_state_dir>/asks/<token>.json`) but is READ FROM A CALLER-SUPPLIED FILE, not
+#: minted here — same charset as `hermes_bridge.mint_token()`'s real output ("RG-482913")
+#: but validated defensively rather than trusted, so a crafted evidence file cannot
+#: path-traverse to an arbitrary "ask record" outside asks/ (found in this task's own
+#: self-review; mirrors `supervision_lib._CAMPAIGN_ID_RE`'s own path-safety convention).
+_TRANSPORT_VERIFY_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 class DeclarationRefused(Exception):
@@ -110,6 +119,22 @@ def _persist(workspace_root, record):
     atomic_write_text(path, json.dumps(record, indent=2, sort_keys=True) + "\n",
                       prefix=".supervision.", mkdir=True, fsync=True)
     return record
+
+
+def _carry_forward_additive_fields(record: dict, current: dict) -> None:
+    """Copy every additive top-level field FORWARD from `current` into `record`, in
+    place. Step 8a cross-model review, Critical finding 1: `declare` and `mark_attended`
+    each build a brand-new record dict, so any additive field not explicitly re-listed
+    silently vanishes on the very next write -- this defeated
+    `mark_transport_verified`'s whole purpose (verify while attended, then declare away
+    -- if `declare` drops the verification, `route_for` never sees it) and would have
+    reset the consumed-preflight-token ledger across a `mark_attended` call, reopening
+    the exact round-2 finding 3 replay hole one level up. Callers apply their OWN
+    field-specific logic (e.g. `declare`'s preflight fold-in) AFTER this call, so this
+    only sets a field already absent from `record`."""
+    for field in ("transport_verification", "preflight_results", "consumed_preflight_tokens"):
+        if field in current and field not in record:
+            record[field] = current[field]
 
 
 def declare(workspace_root, *, state, until, session_id, campaign_ids,
@@ -199,6 +224,7 @@ def declare(workspace_root, *, state, until, session_id, campaign_ids,
             record["preflight_results"] = preflight_results
         if consumed:
             record["consumed_preflight_tokens"] = consumed
+        _carry_forward_additive_fields(record, current)
 
         persisted = _persist(workspace_root, record)
 
@@ -236,6 +262,7 @@ def mark_attended(workspace_root, *, session_id, reason, expected_revision, now=
             "consult_grant": {"providers": [], "granted": False},
             "attended_reason": reason,
         }
+        _carry_forward_additive_fields(record, current)
         return _persist(workspace_root, record)
 
 
@@ -297,6 +324,9 @@ def mark_transport_verified(workspace_root, *, evidence_path, session_id,
             "it cannot be self-granted by an unsupervised session")
 
     token = evidence.get("token")
+    if not isinstance(token, str) or not _TRANSPORT_VERIFY_TOKEN_RE.match(token):
+        raise DeclarationRefused(
+            f"evidence token is not a safe path component: {token!r}")
     ask_path = os.path.join(hermes_state_dir, "asks", f"{token}.json")
     ask_record = _read_json_file(ask_path, what="hermes ask-record")
     if ask_record.get("status") != "answered":
@@ -310,6 +340,15 @@ def mark_transport_verified(workspace_root, *, evidence_path, session_id,
 
     path = sl.supervision_path(workspace_root)
     with plan_lib.file_lock(path):
+        # Re-check "attended" HERE, under the lock, immediately before writing — the
+        # check above is a fast fail only. Without this, another session's
+        # declare(away/sleeping) landing in the TOCTOU window between that check and
+        # this write would let a transport_verification get stamped onto a record
+        # that is no longer attended (found this in this task's own self-review).
+        if sl.evaluate_workspace(sl.read_state(workspace_root), now=stamp).state != "attended":
+            raise DeclarationRefused(
+                "mark_transport_verified requires the CURRENT state to be 'attended' — "
+                "the state changed since this call started")
         current, found = _current(workspace_root)
         _check_fence(expected_revision, found)
         record = dict(current)
