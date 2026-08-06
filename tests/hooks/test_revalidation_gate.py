@@ -555,6 +555,7 @@ class TestPerformHandoffRefusesBeforeAnyEffect:
             runner=self._runner(calls), sleeper=lambda _s: None, read_text=lambda _p: "",
             prompt_marker="marker-x", steps=ll.mid_child_verification_steps(),
             teardown=False, on_successor=lambda _p, _s: True,
+            inflight={"items": [], "attested_none": True, "override": False},
             campaign_context={"driver_state_path": str(state_path),
                               "repo_root": str(repo_root)})
 
@@ -589,7 +590,8 @@ class TestPerformHandoffRefusesBeforeAnyEffect:
             registry_path=str(tmp_path / "reg.jsonl"), transcript_dir=str(tmp_path / "t"),
             runner=self._runner(calls), sleeper=lambda _s: None, read_text=lambda _p: "",
             prompt_marker="marker-x", steps=ll.mid_child_verification_steps(),
-            teardown=False, on_successor=lambda _p, _s: True)
+            teardown=False, on_successor=lambda _p, _s: True,
+            inflight={"items": [], "attested_none": True, "override": False})
         assert out["failed_step"] == "queue_revalidated", out
         assert not any(a[:3] == ["herdr", "pane", "split"] for a in calls)
 
@@ -1567,7 +1569,9 @@ class TestRound2Finding5TheMidChildContextIsPinnedAtRUNTIME:
             "--registry", str(tmp_path / "reg.jsonl"), "--transcript-dir", str(tmp_path),
             "--issue", "1", "--step", "8", "--branch", "main", "--test-baseline", "1/0",
             "--goal-condition-from", str(own), "--repo-root", str(work),
-            "--predecessor-session", "pred-1"])
+            "--predecessor-session", "pred-1",
+            # #726 — the CLI now requires a declaration; this test is about campaign_context.
+            "--inflight-none"])
         assert rc == 0, rc
         context = seen.get("campaign_context")
         assert isinstance(context, dict), f"campaign_context was {context!r} — None passes the old "\

@@ -165,6 +165,10 @@ def _handoff(runner, **over):
         expected_project=PROJECT, expected_project_path=PROJECT_PATH,
         registry_path=REGISTRY_PATH, transcript_dir="/tmp", prompt_marker=MARKER,
         teardown=False, sleeper=lambda _s: None, runner=runner,
+        # #726 — every handoff must declare the predecessor's in-flight work. These
+        # tests are not about that gate, so they attest to none; the gate's own tests
+        # live in tests/hooks/test_inflight_handoff_gate.py.
+        inflight={"items": [], "attested_none": True, "override": False},
     )
     kw.update(over)
     kw.setdefault("read_text", Artifacts(runner))
@@ -330,6 +334,9 @@ def _argv(tmp_path, **over) -> list[str]:
         # `herdr pane get` ownership probe before anything else. These cases are about argument
         # plumbing and refusals, so they opt out; the retirement path has its own class below.
         "--no-teardown": None,
+        # #726 — the CLI refuses without a declaration. These cases are about argument plumbing,
+        # so they attest to none; the gate's own tests live in test_inflight_handoff_gate.py.
+        "--inflight-none": None,
     }
     flags.update(over)
     argv = ["ad-hoc-handoff"]

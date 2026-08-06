@@ -173,6 +173,10 @@ def _handoff(**over):
         # disagree about one operation. These tests are the ones that prove teardown is BLOCKED
         # until every check passes, so they must ASK for it — otherwise they pass vacuously.
         teardown=True,
+        # #726 — every handoff must declare the predecessor's in-flight work. These
+        # tests are not about that gate, so they attest to none; the gate's own tests
+        # live in tests/hooks/test_inflight_handoff_gate.py.
+        inflight={"items": [], "attested_none": True, "override": False},
     )
     kw.update(over)
     return kw
@@ -683,10 +687,15 @@ def _handoff_argv(state, tmp_path, **over):
           "--project-root": work, "--project": PROJECT, "--cwd": str(REPO_ROOT),
           "--registry": "/reg.jsonl", "--transcript-dir": str(tmp_path),
           "--goal-condition": "keep going", "--launch-mode": "fresh",
-          "--herdr-mode": "herdr"}
+          "--herdr-mode": "herdr",
+          # #726 — the boundary CLI now declares the predecessor's in-flight work. These cases
+          # are about the fence and the launch ladder, so they attest to none.
+          "--inflight-none": None}
     kw.update(over)
     argv = ["handoff"]
     for k, v in kw.items():
+        if v is False:          # an explicit drop, so a case can replace a defaulted flag
+            continue
         argv += [k] if v is None else [k, v]
     return argv
 
@@ -2247,7 +2256,7 @@ class TestBoundaryFenceWiring:
         monkeypatch.setenv(ll.ISSUE_PROBE_ENV, "0")
 
     def _run(self, tmp_path, monkeypatch, *, state=None, probe=(True, True, "probe_ok"),
-             handoff=None, extra=None, panes_after=None, inventory=("w1:p1",)):
+             handoff=None, extra=None, panes_after=None, inventory=("w1:p1",), argv_over=None):
         """Drive `handoff` in-process. Returns (rc, state_after, splits_seen).
 
         `splits_seen` captures the driver-state AS IT WAS ON DISK when the launch was attempted,
@@ -2268,13 +2277,32 @@ class TestBoundaryFenceWiring:
                 "session_id": "s1", "truncated": False, "cleanup": None, "failure_code": None}
 
         monkeypatch.setattr(ll, "perform_handoff", _fake_perform)
-        argv = _handoff_argv(state_path, tmp_path, **{"--launcher-armed": None,
-                                                     "--fresh-launch-supported": None})
+        over = {"--launcher-armed": None, "--fresh-launch-supported": None}
+        over.update(argv_over or {})
+        argv = _handoff_argv(state_path, tmp_path, **over)
         if extra:
             argv += extra
         rc = ll.main(argv)
         after = json.loads(state_path.read_text(encoding="utf-8"))
         return rc, after, calls
+
+    def test_the_inflight_gate_refuses_before_the_generation_is_claimed(
+            self, tmp_path, monkeypatch, capsys) -> None:
+        """#726 SR-3. `_cmd_handoff` records `mark_split_attempted` durably BEFORE it calls
+        `perform_handoff`, and `_classify_launch` maps an unrecognised failed_step to 'append no
+        terminal event'. So a refusal raised INSIDE `perform_handoff` would leave this campaign
+        with `split_attempted: true` and nothing terminal — parked, not retryable. The gate
+        therefore lives beside the rc-6 and rc-8 gates, and this asserts nothing was written."""
+        state_path = _state(tmp_path)
+        before = json.loads(state_path.read_text(encoding="utf-8"))
+        rc, after, calls = self._run(
+            tmp_path, monkeypatch, state=state_path,
+            argv_over={"--inflight-none": False,
+                       "--inflight": "dispatch:step4-regate2:running:design re-gate"})
+        assert rc == ll.INFLIGHT_REQUIRED_RC, capsys.readouterr()
+        assert calls == [], "nothing may launch while the predecessor has work running"
+        assert after == before, "a refusal must write NOTHING — not a claim, not split_attempted"
+        assert "step4-regate2" in capsys.readouterr().err
 
     def test_a_refused_claim_stops_this_contender_with_rc_7_and_writes_nothing(
             self, tmp_path, monkeypatch, capsys) -> None:

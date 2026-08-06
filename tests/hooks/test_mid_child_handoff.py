@@ -1090,7 +1090,10 @@ class TestMidChildHandoffCommand:
               "branch": BRANCH, "test_baseline": "5362 passed", "project": "rawgentic",
               "project_path": "./projects/rawgentic", "repo_root": str(tmp_path / "repo"),
               "predecessor_session": PRED, "launch_mode": "fresh", "goal_condition": None,
-              "goal_condition_from": self._transcript(tmp_path)}
+              "goal_condition_from": self._transcript(tmp_path),
+              # #726 — every handoff CLI now declares the predecessor's in-flight work. These
+              # tests are not about that gate, so they attest to none.
+              "inflight": None, "inflight_none": True, "allow_inflight": False}
         kw.update(over)
         return SimpleNamespace(**kw)
 
@@ -1815,6 +1818,7 @@ class TestAnUnrecordableSuccessorIsAFailedLaunch:
             runner=runner, sleeper=lambda _s: None, read_text=lambda p: "",
             prompt_marker="marker-x", steps=ll.mid_child_verification_steps(),
             teardown=False, on_successor=lambda pane, sess: False,
+            inflight={"items": [], "attested_none": True, "override": False},
             campaign_context={"driver_state_path": str(state_path),
                               "repo_root": str(tmp_path)})
         assert out["failed_step"] == "successor_not_recorded", out
