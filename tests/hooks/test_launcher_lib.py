@@ -20,6 +20,7 @@ watching. `test_split_never_uses_current` exists for that.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -551,9 +552,31 @@ def test_cli_derives_the_capability_and_still_needs_the_launcher_to_advertise() 
     assert "single_session" in proc.stdout
 
 
-def test_cli_with_launcher_support_selects_herdr(monkeypatch) -> None:
-    proc = _cli("select-mode", "--terminal-backend", "herdr", "--launcher-herdr")
-    assert proc.returncode == 0 and "herdr\t" in proc.stdout
+def test_cli_derives_the_capability_from_PATH_not_from_the_environment(tmp_path) -> None:
+    """#927 PR 2 removed `--herdr-available`, so `select-mode` derives the capability with
+    `shutil.which`. That makes this assertion environment-DEPENDENT unless the environment is
+    controlled: it passed locally (herdr installed) and failed in CI (herdr absent) before this
+    fixture existed. A fake `herdr` on PATH tests the derivation itself rather than the host.
+    """
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "herdr").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (fake / "herdr").chmod(0o755)
+    env = {**os.environ, "PATH": f"{fake}:{os.environ.get('PATH', '')}"}
+    proc = subprocess.run([sys.executable, str(CLI), "select-mode", "--terminal-backend", "herdr",
+                           "--launcher-herdr"], capture_output=True, text=True, check=False,
+                          env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert "herdr" in proc.stdout and "single_session" not in proc.stdout
+
+    # And with NOTHING named herdr reachable, the same invocation degrades — no flag involved.
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    bare = subprocess.run([sys.executable, str(CLI), "select-mode", "--terminal-backend", "herdr",
+                           "--launcher-herdr"], capture_output=True, text=True, check=False,
+                          env={**os.environ, "PATH": str(empty)})
+    assert bare.returncode == 0, bare.stderr
+    assert "single_session" in bare.stdout
 
 
 def test_cli_build_split_emits_argv_without_current() -> None:
