@@ -48,6 +48,89 @@ The anchor: **Traycer replaces the custom-built pane-handoff machinery.** What t
 6 | Retirement + dispositions | Retire Herdr only after step 4 passes plus stable weeks of operation. Undo stays cheap: the herdr pin, runbook, and transport survive in git history. herdr-dashboard: usage half superseded by Traycer's tracking; the inspector gets an explicit owner disposition (port, park, or run inside a Traycer terminal panel — its follow-me dock behavior does not carry over). | must
 ```
 
+### Milestone roadmap
+
+Five epics. **M0 is the MVP** — the smallest thing that delivers the owner's actual want: Traycer as the daily console with rawgentic intact. Everything after M0 buys depth, and each milestone is independently abandonable.
+
+```chips
+M0 MVP — rawgentic inside Traycer | wip
+M1 Handoff transport | blocked
+M2 Epic-run on Traycer | blocked
+M3 Peripherals | blocked
+M4 Retirement + closeout | blocked
+```
+
+M1 through M4 are blocked on one thing only: **M0.2**, the go/no-go. Nothing downstream is worth starting until that answer exists.
+
+*None of these are filed as GitHub issues. The D179 throttle means a roadmap item becomes an issue only on owner confirmation.*
+
+#### M0 — MVP: rawgentic runs inside Traycer
+
+**Goal.** Traycer Desktop is the daily console. Every rawgentic workflow runs unchanged inside a Traycer Terminal Agent. Herdr still owns handoffs, so nothing is retired and the exit stays free.
+**Exit criteria.** One complete WF2 run finishes inside a Traycer Terminal Agent with every mandatory gate firing, and the owner has driven the UI for a week without wanting to go back.
+
+```steps
+M0.1 | Vet and pin the three components | Supply-chain vet of Desktop, Host and CLI on the #609 pattern: pinned versions, recorded checksums, Sentry and PostHog defaults audited, BYOA local-only confirmed. | must
+M0.2 | Delivery spike (a) — THE GO/NO-GO | Does a message to a Claude Code Terminal Agent arrive as USER INPUT, so `/rawgentic:switch` and `/goal` actually expand? A "no" stops the roadmap at console-only, and M1 to M4 never start. | must
+M0.3 | Delivery spike (b) — envelope integrity | Does a ~200-byte pointer envelope arrive byte-exact, under a busy agent and under a duplicate send? Record the largest payload that survives intact, as a measurement rather than a gate. | must
+M0.4 | Terminal Agent config parity | Carry rawgentic's CLI arguments and environment through Traycer's Providers settings, including `CLAUDE_CODE_AUTO_COMPACT_WINDOW` so the compaction floor is set per provider. | must
+M0.5 | Hook coexistence | Prove rawgentic's registered hooks still fire inside a Terminal Agent, and that Traycer's own `title-from-hook`, `activity-from-hook` and `turn-ended-from-hook` coexist rather than collide. | must
+M0.6 | System-prompt collision assessment | Traycer injects its own system prompt, artifact instructions, skills and agent-to-agent tools into every Terminal Agent. Measure whether that degrades WF2 instruction compliance, which already sits near the cliff. | should
+M0.7 | MVP acceptance run | One full WF2 issue, start to finish, inside a Terminal Agent. All gates fire, the run-record persists, the PR opens. | must
+```
+
+#### M1 — Handoff transport
+
+**Goal.** Replace the herdr-specific spawn and delivery layer with a Traycer backend, keeping the verification ladder untouched.
+**Exit criteria.** A `traycer` transport passes the same three-rung artifact ladder that `pane_chain` passes today.
+
+```steps
+M1.1 | RuntimeTransport contract | Specify probe, create, send with an idempotency key, status, notify-target and close. Immutable runtime IDs, structured errors, bounded retries, and no name-based cleanup. (Consult-sourced.) | must
+M1.2 | Pointer-envelope format and receipt | The four-field envelope plus a successor-written receipt carrying the sha256 of the brief it actually read. This is what makes delivery self-verifying. | must
+M1.3 | `traycer` transport backend | Add it beside `pane_chain` and `inline` in `driver_lib` and `launcher_lib`. The pane-handoff and epic-run skills keep their invariants; only the backend changes. | must
+M1.4 | Transport probe learns traycer | `transport resolve-creation` answers `traycer` when the Host responds, preserving #927's probed-not-asserted rule. | must
+M1.5 | Typed failure taxonomy | Map `agent create --json` failures onto the established retry and fallback classes, replacing scraped pane text. | should
+M1.6 | Teardown verb | No CLI stop verb is documented. Find it, or build predecessor retirement another way, before any run depends on it. | must
+```
+
+#### M2 — Epic-run on Traycer
+
+**Goal.** The epic pane drives child agents, while rawgentic keeps deciding what a child is and when it is done.
+**Exit criteria.** One full epic completes on the Traycer transport, measured against a herdr baseline.
+
+```steps
+M2.1 | Epic pane hosts the driver | A Claude Code Terminal Agent running `/rawgentic:epic-run`, with children spawned as sibling agents under it in the lineage tree. | must
+M2.2 | Generated briefs per child | Each child gets a standalone brief, matching Traycer's own observed pattern of spawning a fresh titled agent rather than resuming a dead one. | must
+M2.3 | GitHub stays the only queue | Traycer's ticket and spec surfaces stay off, enforced rather than assumed. Two queue stores would drift, and revalidation depends on issue bodies. | must
+M2.4 | Fallback asymmetry | Auto-fallback to herdr only BEFORE successor creation. After partial creation, fail closed and require identified recovery. (Consult-sourced.) | must
+M2.5 | Proving epic | Compare handoff success, recovery behavior, context boundaries, operator effort and usage attribution against the herdr baseline. | must
+```
+
+#### M3 — Peripherals
+
+**Goal.** Move the remaining herdr-coupled channels across.
+**Exit criteria.** No rawgentic code path depends on a herdr primitive.
+
+```steps
+M3.1 | Context meter delivery channel | Replace `launcher_lib insert-prompt --pane` with `traycer agent send`. The measure and emit halves need no port at all. | must
+M3.2 | Blocked-agent watcher | Re-point `pane_watch` at Traycer's notification hooks, which call a URL or run a command filtered by severity. | should
+M3.3 | mid-turn-questions re-route | Spawn the sibling question agent through Traycer instead of a herdr pane. | may
+M3.4 | Worktree strategy alignment | Decide whether per-dispatch worktrees keep using rawgentic's own machinery or Traycer's `worktree create`. | should
+```
+
+#### M4 — Retirement and closeout
+
+**Goal.** Retire what the switch replaced, and close the recovery work it made obsolete.
+**Exit criteria.** Herdr is removed only after stable weeks of Traycer operation, with the undo still documented.
+
+```steps
+M4.1 | Herdr retirement | Only after M2.5 passes plus stable operation. The pin, runbook and pane-chain transport stay in git history as the undo. | must
+M4.2 | herdr-dashboard disposition | The usage half is superseded by Traycer's tracking. The gated tools-off inspector has no equivalent and needs an explicit owner decision: port, park, or re-host. | must
+M4.3 | Close the superseded recovery work | #835 obsolete, the #729 residual mostly obsolete, #726 half absorbed, #731 mostly absorbed, #586 partly absorbed. Each gets an explicit close-or-keep decision, never a silent drop. | must
+M4.4 | Runbook rewrite | `docs/runbooks/herdr.md` is 631 lines of measured behavior. Its Traycer equivalent has to be earned the same way, by falsification rather than by reading docs. | should
+M4.5 | Multi-account evaluation | Traycer offers several accounts per provider with a manual picker, not automatic failover. Evaluate as a separate capability purchase against the #586 pain. | may
+```
+
 ### Closing the delivery gap: the pointer-envelope proposal (owner-directed 2026-08-06)
 
 **The gap.** Spike question (d) asks whether `traycer agent send` carries a multi-KB message intact. No size limit is documented anywhere. Today's herdr path pushes 2,500-character prompts through a keystroke channel, and a 1,400-character paste that silently never submitted is the bug behind #696 and #835.
