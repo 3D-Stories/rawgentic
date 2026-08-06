@@ -2138,3 +2138,83 @@ def test_body_hash_is_not_part_of_the_record():
         assessments=[dict(_assessment(769), body_hash="deadbeef"), _assessment(726),
                      _assessment(586)], now_ts=1)
     assert "body_hash" not in new[dl.BOUNDARY_SWEEPS_KEY][0]["assessments"][0]
+
+
+# --------------------------------------------------------------------------- #
+# _extract_section (#944 — claim-inventory coverage binding, AC1)
+# --------------------------------------------------------------------------- #
+class TestExtractSection:
+    """`_extract_section(lines, heading_re)` -> (items, unclassified). Shared by the `ac` and
+    `cause` claim-inventory extraction (design doc §1.3): a heading match, top-level list items
+    collected with their wrapped continuations, and — fail-closed — any non-blank content the
+    parser could not attribute to a real item, kept SEPARATE from the deliberate free-prose
+    fallback (a section with no list at all is not an error; a section that mixes a real list
+    with something the parser cannot classify is)."""
+
+    def _lines(self, text):
+        return text.split("\n")
+
+    def test_clean_numbered_list(self):
+        text = "## Acceptance criteria\n\n1. First thing.\n2. Second thing.\n\n## Next section\n"
+        items, unclassified = dl._extract_section(self._lines(text), dl._AC_HEADING_RE)
+        assert items == ["First thing.", "Second thing."]
+        assert unclassified == []
+
+    def test_wrapped_continuation_lines_join_the_item(self):
+        text = ("## Acceptance criteria\n\n"
+                "1. First thing that wraps\n"
+                "   onto a second physical line.\n"
+                "2. Second thing.\n")
+        items, unclassified = dl._extract_section(self._lines(text), dl._AC_HEADING_RE)
+        assert items == ["First thing that wraps onto a second physical line.", "Second thing."]
+        assert unclassified == []
+
+    def test_heading_with_no_list_falls_back_to_one_whole_section_item(self):
+        text = "## Root cause\n\nThe cause is a race between two writers.\n\n## Next\n"
+        items, unclassified = dl._extract_section(self._lines(text), dl._CAUSE_HEADING_RE)
+        assert items == ["The cause is a race between two writers."]
+        assert unclassified == []
+
+    def test_list_plus_a_stray_unlisted_paragraph_is_unclassified(self):
+        """The round-2 review's finding 1: a section mixing a real list with unattributed
+        prose must fail closed, not silently drop the stray paragraph."""
+        text = ("## Acceptance criteria\n\n"
+                "1. First thing.\n\n"
+                "Some extra unlisted requirement floats here.\n\n"
+                "2. Second thing.\n")
+        items, unclassified = dl._extract_section(self._lines(text), dl._AC_HEADING_RE)
+        assert items == ["First thing.", "Second thing."]
+        assert unclassified == ["Some extra unlisted requirement floats here."]
+
+    def test_no_heading_at_all_is_empty_with_no_error(self):
+        text = "Just some prose with no relevant heading at all.\n"
+        items, unclassified = dl._extract_section(self._lines(text), dl._AC_HEADING_RE)
+        assert items == []
+        assert unclassified == []
+
+    def test_bulleted_list_with_dash_and_star(self):
+        text = "## Problem\n\n- First cause.\n* Second cause.\n"
+        items, unclassified = dl._extract_section(self._lines(text), dl._CAUSE_HEADING_RE)
+        assert items == ["First cause.", "Second cause."]
+
+    def test_stops_at_the_next_heading_of_any_level(self):
+        text = "## Acceptance criteria\n\n1. Only thing.\n\n### Unrelated subsection\n\nOther stuff.\n"
+        items, unclassified = dl._extract_section(self._lines(text), dl._AC_HEADING_RE)
+        assert items == ["Only thing."]
+        assert unclassified == []
+
+    def test_944s_own_problem_section_is_a_two_item_numbered_list(self):
+        """The exact real-world case that drove the round-1 Critical finding: #944's own body
+        itemizes two distinct causes under '## Problem'."""
+        text = (
+            "## Problem\n\n"
+            "Two documented holes in the queue-revalidation machinery, both stated in\n"
+            "`skills/revalidate-children/SKILL.md` rather than fixed:\n\n"
+            "1. **Coverage gap.** The receipt attests that a look happened.\n"
+            "2. **The obsolete-child marker gates nothing.** It is informational only.\n\n"
+            "## Acceptance criteria\n")
+        items, unclassified = dl._extract_section(self._lines(text), dl._CAUSE_HEADING_RE)
+        assert len(items) == 2
+        assert "Coverage gap" in items[0]
+        assert "obsolete-child marker gates nothing" in items[1]
+        assert unclassified == []

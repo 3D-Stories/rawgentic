@@ -255,6 +255,86 @@ def cited_paths(body: str, resolves) -> tuple[list[str], str]:
     return (resolved, "paths")
 
 
+# --------------------------------------------------------------------------- #
+# #944 — claim-inventory coverage binding, AC1
+# --------------------------------------------------------------------------- #
+_AC_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*acceptance criteria\b", re.IGNORECASE)
+_CAUSE_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*(?:problem|root cause|cause)\b", re.IGNORECASE)
+_ANY_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
+_TOP_LEVEL_LIST_ITEM_RE = re.compile(r"^\s{0,3}(?:[-*]|\d+[.)])\s+(\S.*)$")
+
+
+def _normalize_section_item(fragments: list) -> str:
+    """Join a list item's marker text and its continuation lines into one normalized string."""
+    return " ".join(f for f in (s.strip() for s in fragments) if f)
+
+
+def _extract_section(lines: list, heading_re) -> tuple:
+    """(items, unclassified) for the section following the first line matching `heading_re`.
+
+    Shared by the `ac` and `cause` claim-inventory extraction (design doc §1.3). A top-level
+    list item's WRAPPED continuation lines (no blank line before them) join its text. Once a
+    blank line closes an item, any FURTHER non-blank content before the next marker or heading
+    is `unclassified` — but ONLY once at least one marker has been seen: lead-in prose BEFORE
+    the first list item (e.g. "Two documented holes, both stated in X:") is an ordinary
+    introduction, not something the parser failed to account for.
+
+    A section with NO list at all (`saw_marker` never true) degrades to ONE whole-section item
+    from its non-blank text — a deliberate, honest fallback (§1.3), never an error: unstructured
+    narrative cannot be split further than "it exists" without real NLP. `unclassified` is
+    reserved for a section that DOES have a list but also has content the parser could not
+    attribute to any item — the fail-closed case (#944, Step-4 review round 2, finding 1).
+
+    A heading that is never found returns `([], [])` — nothing to require, not an error either;
+    the caller (`extract_claim_inventory`) is responsible for the SEPARATE "the concept is
+    mentioned by bare phrase but no recognized heading matched" fail-closed signal.
+    """
+    start = None
+    for index, line in enumerate(lines):
+        if heading_re.match(line):
+            start = index + 1
+            break
+    if start is None:
+        return [], []
+
+    section_lines = []
+    for line in lines[start:]:
+        if _ANY_HEADING_RE.match(line):
+            break
+        section_lines.append(line)
+
+    items: list = []
+    pre_marker: list = []       # non-blank content before the first marker (or, if no marker
+    post_marker: list = []      # ever appears, ALL of it) — the fallback source, never "stray"
+    current: "list | None" = None
+    item_open = False
+    saw_marker = False
+    for line in section_lines:
+        stripped = line.strip()
+        marker = _TOP_LEVEL_LIST_ITEM_RE.match(line)
+        if marker:
+            saw_marker = True
+            if current is not None:
+                items.append(_normalize_section_item(current))
+            current = [marker.group(1)]
+            item_open = True
+            continue
+        if not stripped:
+            item_open = False
+            continue
+        if item_open and current is not None:
+            current.append(stripped)
+            continue
+        (post_marker if saw_marker else pre_marker).append(stripped)
+    if current is not None:
+        items.append(_normalize_section_item(current))
+
+    if not saw_marker:
+        whole = _normalize_section_item(pre_marker)
+        return ([whole] if whole else [], [])
+    return items, post_marker
+
+
 class DriverStateError(ValueError):
     """Raised on a malformed driver-state or an invalid driver operation."""
 
