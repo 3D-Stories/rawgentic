@@ -13,8 +13,10 @@ override from one single, unambiguous set of real files.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import sys
 from collections import namedtuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -307,3 +309,57 @@ def validate_supervision_override(value, *, current, now: datetime) -> "tuple[bo
             f"{sorted(current_restrictions)} are not a subset of {mode!r}'s "
             f"restrictions {sorted(new_restrictions)}")
     return True, ""
+
+
+def consult_check(*, workspace_root: str, project_root: str, campaign_id: str,
+                  backend: str, session_id=None, now: "datetime | None" = None) -> dict:
+    """The ONE integration point the skill prose (implement-feature Step 3, WF2's
+    invocation reference, peer-consult WF13) calls before dispatching
+    `review_runner.py consult` (Step-6 finding 1 / design §1a's AC6 commitment) —
+    evaluates the campaign, then `consult_permitted`, and returns everything the caller
+    needs to either skip the dispatch or append `--allowed-backends`.
+
+    `allowed_backends` is a LIST (JSON-friendly for the CLI), derived from the
+    evaluated view's OWN `consult_providers` — never a hardcoded default — so a mid-
+    flight 429 switch inside the runner can only land on a provider this campaign was
+    ALSO granted.
+    """
+    view = evaluate_campaign(workspace_root=workspace_root, campaign_id=campaign_id,
+                             project_root=project_root, now=now or datetime.now(timezone.utc),
+                             session_id=session_id)
+    permitted, reason = consult_permitted(view, backend)
+    return {
+        "permitted": permitted, "reason": reason,
+        "allowed_backends": sorted(view.consult_providers),
+    }
+
+
+def _cmd_consult_check(args) -> int:
+    result = consult_check(workspace_root=args.workspace_root, project_root=args.project_root,
+                           campaign_id=args.campaign_id, backend=args.backend,
+                           session_id=args.session_id)
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result["permitted"] else 1
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="supervision_route",
+        description="Campaign-scoped supervision decisions (#947 Part B).")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_cc = sub.add_parser("consult-check",
+                          help="evaluate consult_permitted for a campaign+backend")
+    p_cc.add_argument("--workspace-root", required=True)
+    p_cc.add_argument("--project-root", required=True)
+    p_cc.add_argument("--campaign-id", required=True)
+    p_cc.add_argument("--backend", required=True)
+    p_cc.add_argument("--session-id", default=None)
+    p_cc.set_defaults(fn=_cmd_consult_check)
+
+    args = parser.parse_args(argv)
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

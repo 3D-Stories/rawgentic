@@ -381,3 +381,167 @@ class TestAuthorityPermits:
         import inspect
         sig = inspect.signature(sr.authority_permits)
         assert set(sig.parameters) == {"action_kind", "view"}
+
+
+# --------------------------------------------------------------- consult_permitted (§8)
+
+class TestConsultPermitted:
+    def test_not_granted_refuses_zero_calls_into_review_runner(self, monkeypatch):
+        called = []
+        monkeypatch.setattr(sr.review_runner, "backend_available",
+                            lambda name: called.append(name) or True)
+        view = sr.CampaignView(base=_view().base, merge_denied=False,
+                               merge_permitted_by_grant=False, consult_providers=("gpt",),
+                               granted=False)
+        ok, reason = sr.consult_permitted(view, "gpt")
+        assert ok is False
+        assert "not granted" in reason
+        assert called == []
+
+    def test_backend_not_in_granted_providers_refuses(self, monkeypatch):
+        called = []
+        monkeypatch.setattr(sr.review_runner, "backend_available",
+                            lambda name: called.append(name) or True)
+        view = sr.CampaignView(base=_view().base, merge_denied=False,
+                               merge_permitted_by_grant=False, consult_providers=("gpt",),
+                               granted=True)
+        ok, reason = sr.consult_permitted(view, "glm")
+        assert ok is False
+        assert "glm" in reason
+        assert called == []
+
+    def test_readiness_false_refuses(self, monkeypatch):
+        monkeypatch.setattr(sr.review_runner, "backend_available", lambda name: False)
+        view = sr.CampaignView(base=_view().base, merge_denied=False,
+                               merge_permitted_by_grant=False, consult_providers=("gpt",),
+                               granted=True)
+        ok, reason = sr.consult_permitted(view, "gpt")
+        assert ok is False
+        assert "unavailable" in reason
+
+    def test_all_three_checks_pass_permits(self, monkeypatch):
+        monkeypatch.setattr(sr.review_runner, "backend_available", lambda name: True)
+        view = sr.CampaignView(base=_view().base, merge_denied=False,
+                               merge_permitted_by_grant=False, consult_providers=("gpt",),
+                               granted=True)
+        ok, reason = sr.consult_permitted(view, "gpt")
+        assert ok is True
+        assert reason == ""
+
+
+# --------------------------------------------------------- validate_supervision_override (§9)
+
+class TestValidateSupervisionOverride:
+    def _override(self, mode, rev=1, **kw):
+        value = {"mode": mode, "set_by_session": "s1", "set_at": _iso(NOW),
+                 "expires_at": None, "bound_revision": rev}
+        value.update(kw)
+        return value
+
+    def test_none_to_anything_is_a_legal_tighten(self):
+        ok, err = sr.validate_supervision_override(
+            self._override("no_merge"), current=None, now=NOW)
+        assert ok is True
+        assert err == ""
+
+    def test_legal_tighten_from_no_merge_to_attended_only(self):
+        ok, err = sr.validate_supervision_override(
+            self._override("attended_only"), current=self._override("no_merge"), now=NOW)
+        assert ok is True
+
+    def test_illegal_weakening_refused(self):
+        ok, err = sr.validate_supervision_override(
+            self._override("none"), current=self._override("attended_only"), now=NOW)
+        assert ok is False
+        assert err
+
+    def test_incomparable_transition_refused(self):
+        ok, err = sr.validate_supervision_override(
+            self._override("no_consult"), current=self._override("no_merge"), now=NOW)
+        assert ok is False
+
+    def test_expired_current_treated_as_none(self):
+        expired = self._override("attended_only", expires_at=_iso(NOW - timedelta(hours=1)))
+        ok, err = sr.validate_supervision_override(
+            self._override("no_merge"), current=expired, now=NOW)
+        assert ok is True
+
+    def test_invalid_new_value_shape_refused(self):
+        ok, err = sr.validate_supervision_override(
+            {"mode": "bogus"}, current=None, now=NOW)
+        assert ok is False
+        assert err
+
+    def test_mirrors_the_setters_transition_table(self):
+        """T2's set_supervision_override and this function must agree on every legal
+        and illegal transition -- kept in sync deliberately."""
+        import driver_lib
+        for frm in driver_lib.SUPERVISION_OVERRIDE_MODES:
+            for to in driver_lib.SUPERVISION_OVERRIDE_MODES:
+                current = None if frm == "none" else self._override(frm)
+                new_value = self._override(to)
+                ok, _ = sr.validate_supervision_override(new_value, current=current, now=NOW)
+
+                state = {"schema_version": 2, "campaign": "c", "issues": []}
+                if current is not None:
+                    state["supervision_override"] = current
+                try:
+                    driver_lib.set_supervision_override(state, new_value, now=_iso(NOW))
+                    setter_ok = True
+                except driver_lib.DriverStateError:
+                    setter_ok = False
+                assert ok == setter_ok, f"{frm} -> {to}: validate={ok}, setter={setter_ok}"
+
+
+# --------------------------------------------------------- consult call-site wiring (T9b)
+#
+# Step-6 finding 1: consult_permitted (§8) existed but nothing called it at the three
+# real `review_runner.py consult` call sites this issue's own AC6 names. `consult_check`
+# is the ONE integration point the skill prose (implement-feature, peer-consult) now
+# calls before dispatching -- testable here so the wiring isn't prose no test can verify.
+
+class TestConsultCheck:
+    def _grant(self, tmp_path, providers=("gpt",), granted=True):
+        sa.declare(str(tmp_path), state="away", until=None, session_id="sess-1",
+                  campaign_ids=["epic-871"], consult_providers=list(providers),
+                  consult_granted=granted)
+
+    def test_denied_makes_zero_calls_into_review_runner(self, tmp_path, monkeypatch):
+        self._grant(tmp_path, granted=False)
+        called = []
+        monkeypatch.setattr(sr.review_runner, "backend_available",
+                            lambda name: called.append(name) or True)
+        result = sr.consult_check(workspace_root=str(tmp_path), project_root=str(tmp_path),
+                                  campaign_id="epic-871", backend="gpt")
+        assert result["permitted"] is False
+        assert called == []
+
+    def test_permitted_derives_allowed_backends_from_the_view_never_hardcoded(self, tmp_path, monkeypatch):
+        self._grant(tmp_path, providers=("gpt", "glm"), granted=True)
+        monkeypatch.setattr(sr.review_runner, "backend_available", lambda name: True)
+        result = sr.consult_check(workspace_root=str(tmp_path), project_root=str(tmp_path),
+                                  campaign_id="epic-871", backend="gpt")
+        assert result["permitted"] is True
+        assert sorted(result["allowed_backends"]) == ["glm", "gpt"]
+
+    def test_ungranted_backend_refused(self, tmp_path, monkeypatch):
+        self._grant(tmp_path, providers=("gpt",), granted=True)
+        monkeypatch.setattr(sr.review_runner, "backend_available", lambda name: True)
+        result = sr.consult_check(workspace_root=str(tmp_path), project_root=str(tmp_path),
+                                  campaign_id="epic-871", backend="glm")
+        assert result["permitted"] is False
+
+    def test_cli_exit_code_reflects_permitted(self, tmp_path, monkeypatch):
+        self._grant(tmp_path, granted=False)
+        rc = sr.main(["consult-check", "--workspace-root", str(tmp_path),
+                     "--project-root", str(tmp_path), "--campaign-id", "epic-871",
+                     "--backend", "gpt"])
+        assert rc == 1
+
+    def test_cli_exit_zero_when_permitted(self, tmp_path, monkeypatch):
+        self._grant(tmp_path, granted=True)
+        monkeypatch.setattr(sr.review_runner, "backend_available", lambda name: True)
+        rc = sr.main(["consult-check", "--workspace-root", str(tmp_path),
+                     "--project-root", str(tmp_path), "--campaign-id", "epic-871",
+                     "--backend", "gpt"])
+        assert rc == 0

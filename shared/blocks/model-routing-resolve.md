@@ -28,6 +28,20 @@ python3 hooks/review_runner.py consult --artifact <problem.md> \
   --out <result.json> --project-root .
 ```
 
+**The `consult` verb is supervision-gated when unattended (#947 Part B AC6).** If this session
+is running away/sleeping (`supervision_lib.py nobody-to-ask` exits 0), run the check FIRST —
+zero payload construction on a refusal:
+
+```bash
+python3 hooks/supervision_route.py consult-check --workspace-root <workspace root> \
+  --project-root . --campaign-id <campaign id> --backend <gpt|glm>
+```
+
+Exit 0 → permitted; append `--allowed-backends` from the printed JSON's `allowed_backends` to
+the `consult` invocation above (so a mid-flight 429 switch cannot land on an ungranted
+provider). Exit 1 → refused; skip the dispatch and report the printed `reason` — never egress
+anyway. An ATTENDED session skips this check entirely (a human is present to object).
+
 **Reviewer identity is pinned, never inherited.** The current default reviewer id is
 **`gpt-5.6-sol`** (single-sourced HERE — a retired id fails loudly at invocation and is updated
 on this one line). The alternate backend is `--backend glm` (model `glm-5.2`). The runner
