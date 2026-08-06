@@ -309,9 +309,170 @@ def test_read_never_raises_on_an_unreadable_file(tmp_path):
         assert loaded.load_status == "invalid"
 
 
+# ------------------------------------- the durable declaration marker (#963 AC2)
+#
+# The defect this section exists to catch: before #963, DELETING `.supervision.json`
+# during an absence read as `absent` -> `attended` -> `authority_permits` returned True
+# for EVERY action kind (#947 Step 11 findings 1/4/7, all deferred to here). The marker
+# distinguishes "never declared" from "declared, then the state file vanished or was
+# left crash-stale", and every existing consumer already denies on `invalid`.
+
+
+def _marker(declared=True, revision=3, state="away"):
+    return {
+        "schema_version": 1,
+        "declared": declared,
+        "revision": revision,
+        "state": state,
+        "ts": _iso(EARLIER),
+    }
+
+
+def _write_marker(root, marker):
+    p = Path(sl.declared_marker_path(str(root)))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(marker))
+    return p
+
+
+def test_marker_path_sits_beside_the_state_file(tmp_path):
+    assert sl.declared_marker_path(str(tmp_path)) == os.path.join(
+        str(tmp_path), "claude_docs", ".supervision.declared.json")
+
+
+def test_declared_then_deleted_reads_invalid_not_absent(tmp_path):
+    """THE #963 AC2 defect, stated as a test.
+
+    A live declaration whose state file is removed must never read as 'nobody ever
+    declared anything' — that is the path that granted every action kind.
+    """
+    _write_marker(tmp_path, _marker(declared=True, revision=3))
+    loaded = sl.read_state(str(tmp_path))
+    assert loaded.load_status == "invalid"
+    assert loaded.record == {}
+
+
+def test_never_declared_workspace_is_untouched(tmp_path):
+    """Back-compat: no marker file at all means today's semantics, byte for byte."""
+    assert sl.read_state(str(tmp_path)).load_status == "absent"
+    _write(tmp_path, _record())
+    assert sl.read_state(str(tmp_path)).load_status == "valid"
+
+
+def test_marker_true_over_a_valid_ATTENDED_record_is_invalid(tmp_path):
+    """The declare() crash window: marker written, state replacement never landed.
+
+    `mark_attended` KEEPS the attended record, so a re-declaration starts from one.
+    Reading only-on-absence would leave that stale attended record governing while the
+    owner is already away.
+    """
+    _write(tmp_path, _record(state="attended", revision=3))
+    _write_marker(tmp_path, _marker(declared=True, revision=4))
+    assert sl.read_state(str(tmp_path)).load_status == "invalid"
+
+
+def test_marker_revision_ahead_of_the_state_record_is_invalid(tmp_path):
+    """A state record older than the marker is a torn write, not a declaration."""
+    _write(tmp_path, _record(state="away", revision=3))
+    _write_marker(tmp_path, _marker(declared=True, revision=5))
+    assert sl.read_state(str(tmp_path)).load_status == "invalid"
+
+
+def test_matching_marker_and_away_record_pass_through(tmp_path):
+    """The ordinary live-absence case stays exactly as it was."""
+    _write(tmp_path, _record(state="away", revision=4))
+    _write_marker(tmp_path, _marker(declared=True, revision=4))
+    loaded = sl.read_state(str(tmp_path))
+    assert loaded.load_status == "valid"
+    assert loaded.record["state"] == "away"
+
+
+def test_state_revision_ahead_of_the_marker_passes(tmp_path):
+    """A corrupt-file revision jump (`supervision_admin._current`) mints a time-based
+    revision far ahead of the marker's. That is the writer's own recovery path, not a
+    tampered read — it must not fail closed."""
+    _write(tmp_path, _record(state="away", revision=99))
+    _write_marker(tmp_path, _marker(declared=True, revision=4))
+    assert sl.read_state(str(tmp_path)).load_status == "valid"
+
+
+def test_cleared_marker_lets_the_state_govern(tmp_path):
+    """`declared: false` is a positive 'the owner is back' record.
+
+    Deleting an ATTENDED record widens nothing (attended already permits everything), so
+    denying there would be a pure fail-closed outage.
+    """
+    _write_marker(tmp_path, _marker(declared=False, revision=5, state="attended"))
+    assert sl.read_state(str(tmp_path)).load_status == "absent"
+    _write(tmp_path, _record(state="attended", revision=5))
+    assert sl.read_state(str(tmp_path)).load_status == "valid"
+
+
+@pytest.mark.parametrize("body", [
+    "{not json",
+    json.dumps({"schema_version": 1}),                       # no `declared`
+    json.dumps({"declared": True, "revision": 3}),           # no schema_version
+    json.dumps({"schema_version": 1, "declared": "yes", "revision": 3}),  # wrong type
+    json.dumps({"schema_version": 1, "declared": True, "revision": "3"}),  # wrong type
+    json.dumps(["not", "an", "object"]),
+])
+def test_a_corrupt_marker_denies_even_over_a_valid_record(tmp_path, body):
+    """A security boundary that cannot evaluate fails CLOSED (repo convention)."""
+    _write(tmp_path, _record(state="away", revision=3))
+    p = Path(sl.declared_marker_path(str(tmp_path)))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(body)
+    assert sl.read_state(str(tmp_path)).load_status == "invalid"
+
+
+def test_an_oversize_marker_is_invalid(tmp_path):
+    _write_marker(tmp_path, _marker())
+    p = Path(sl.declared_marker_path(str(tmp_path)))
+    p.write_text("x" * (sl.READ_CAP_BYTES + 10))
+    assert sl.read_state(str(tmp_path)).load_status == "invalid"
+
+
+def test_a_dangling_marker_symlink_is_invalid(tmp_path):
+    _write(tmp_path, _record(state="away", revision=3))
+    p = Path(sl.declared_marker_path(str(tmp_path)))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.symlink_to(tmp_path / "claude_docs" / "nothing-here.json")
+    assert sl.read_state(str(tmp_path)).load_status == "invalid"
+
+
+def test_marker_read_never_raises_on_an_unreadable_marker(tmp_path):
+    """Same never-raises contract as the state read — this runs per tool call."""
+    p = _write_marker(tmp_path, _marker())
+    os.chmod(p, 0o000)
+    try:
+        loaded = sl.read_state(str(tmp_path))
+    finally:
+        os.chmod(p, 0o600)
+    if os.geteuid() != 0:
+        assert loaded.load_status == "invalid"
+
+
+def test_no_workspace_root_never_consults_a_marker():
+    """The unset-env default is unchanged: no workspace context, no marker to read."""
+    for empty in (None, ""):
+        assert sl.read_state(empty).load_status == "absent"
+
+
+def test_deleted_declaration_denies_every_downstream_consumer(tmp_path):
+    """The whole point of mapping to `invalid`: existing consumers already deny there."""
+    _write_marker(tmp_path, _marker(declared=True, revision=3))
+    view = _view(tmp_path)
+    assert view.load_status == "invalid"
+    assert view.declared == "invalid"
+    assert sl.installs_forbidden(view) is True
+
+
 # --------------------------------------------------------------- evaluation
 
 def test_absent_state_is_attended_and_permits_everything(tmp_path):
+    """NOTE (#963): 'absent' now means NEVER-declared — no marker file present.
+    A declared-then-deleted state file reads `invalid` instead; see the marker
+    section above."""
     view = _view(tmp_path)
     assert view.state == "attended"
     assert view.load_status == "absent"
