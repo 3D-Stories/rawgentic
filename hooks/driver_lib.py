@@ -1671,11 +1671,20 @@ TERMINAL_OUTCOMES = frozenset({
     "successor_acked",        # a successor is running and acknowledged
     "inline_continued",       # resolved inline; the predecessor carries on
     "launch_failed",          # provably nothing started; retryable
+    "no_split_attempted",     # #927 PR 2: herdr was unlistable, so no split was ever called
     "start_failed",           # a pane exists but no agent runs in it
     "reconciled_no_action",   # reclaim proved there was nothing to do
     "created",                # campaign creation recorded a preference
     "parked_unreconcilable",  # a human must look; never auto-reclaimed
 })
+
+#: #927 PR 2, §16.4. Which `launch_failed` shapes may downgrade `preferred_transport`. A DATA
+#: constant, because Step-4 pass-2 finding F5 established that the trigger must be an enumerated
+#: SPIKED refusal code and never an inferred failure shape: an empty inventory diff proves no
+#: successor survived the observation, not that creation was refused, and a transient service error
+#: produces the identical shape. `pane_not_found` is the only code a live probe has measured
+#: end-to-end (design §17, run 2026-08-06). Adding a code here requires a spike, not an inference.
+CREATION_REFUSAL_CODES = frozenset({"pane_not_found"})
 
 
 def transition_events(state) -> list:
@@ -1880,6 +1889,140 @@ def advisory_due(transition_id: str, already_emitted) -> bool:
     a generation, so a generation key would make them collide and silently suppress one.
     """
     return transition_id not in (already_emitted or set())
+
+
+#: #927 PR 2 §16.7 — the append-only advisory DELIVERY record.
+ADVISORY_DELIVERIES_KEY = "advisory_deliveries"
+
+#: Cap on operator-supplied audit text (self-review S2). Long enough for a real reason, short
+#: enough that a pasted transcript cannot become the durable record.
+OPERATOR_NOTE_MAX = 200
+
+
+def advisory_deliveries(state) -> list:
+    """Every advisory delivery event, oldest first. PURE, and never raises on a malformed state."""
+    if not isinstance(state, dict):
+        return []
+    events = state.get(ADVISORY_DELIVERIES_KEY)
+    return [e for e in events if isinstance(e, dict)] if isinstance(events, list) else []
+
+
+def claim_advisory(state: dict, transition_id: str, *, now_ts: int) -> tuple[bool, dict]:
+    """Claim the right to print this transition's advisory exactly once. PURE.
+
+    #927 AC 4, and Step-4 pass-2 finding F4 is why this exists rather than a bare predicate.
+    `advisory_due` is pure over a caller-SUPPLIED set, and nothing persisted that set — so two
+    surfaces (`handoff` at the boundary, `next-child` in the in-session loop) could each pass their
+    own empty set and both print the same line.
+
+    The claim and the record are ONE operation on purpose: separating them is what allows a double
+    print. The caller persists the returned state under the driver-state lock BEFORE printing, so a
+    competing claimant sees the `pending` event.
+
+    **This buys AT-MOST-ONCE printing, not exactly-once delivery, and the asymmetry is deliberate**
+    (F4). A durable claim plus a non-transactional print cannot do better: recording first can
+    suppress a line that never appeared, printing first can duplicate it after a crash. Recording
+    first is the correct side to fail on, because the durable event is the authoritative surface and
+    a `pending` that never reaches a delivery state is itself the visible defect
+    (`undelivered_advisories`) — whereas a duplicate line is indistinguishable from a second real
+    degradation.
+    """
+    if not isinstance(transition_id, str) or not transition_id.strip():
+        raise DriverStateError("an advisory claim needs a non-empty transition_id")
+    if any(e.get("transition_id") == transition_id for e in advisory_deliveries(state)):
+        return (False, state)
+    new = dict(state)
+    new[ADVISORY_DELIVERIES_KEY] = advisory_deliveries(state) + [
+        {"transition_id": transition_id, "state": "pending", "observed_at": now_ts}]
+    return (True, new)
+
+
+def record_advisory_delivery(state: dict, *, transition_id: str, delivered: bool,
+                             now_ts: int) -> dict:
+    """Close an advisory claim with what actually happened at the sink. PURE.
+
+    Appended, never a rewrite of the `pending` event: the pair is the audit trail of a print that
+    was authorised and then either landed or did not.
+    """
+    new = dict(state)
+    new[ADVISORY_DELIVERIES_KEY] = advisory_deliveries(state) + [
+        {"transition_id": transition_id, "state": "emitted" if delivered else "failed",
+         "observed_at": now_ts}]
+    return new
+
+
+def undelivered_advisories(state) -> list:
+    """Transition ids that were CLAIMED but never delivered. PURE.
+
+    The visibility backstop §16.7 promises: a claim with no `emitted` event means an operator was
+    told nothing, either because the print failed or because the process died between the two. Both
+    a bare `pending` and an explicit `failed` count — the point is that nobody saw the line.
+    """
+    claimed, delivered = [], set()
+    for event in advisory_deliveries(state):
+        tid, phase = event.get("transition_id"), event.get("state")
+        if phase == "pending":
+            claimed.append(tid)
+        elif phase == "emitted":
+            delivered.add(tid)
+    return [t for t in claimed if t not in delivered]
+
+
+def validate_operator_note(text, *, what: str) -> str:
+    """A bounded, control-character-free operator string bound for durable state. PURE.
+
+    Self-review S2. `transport unpark` records who cleared a park and why, and those strings are
+    rendered back on later reads — so an escape sequence in a durable audit record would reach a
+    console that never asked for it. The same reasoning as the probe's fixed reason tokens.
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise DriverStateError(f"{what} must be a non-empty string")
+    if len(text) > OPERATOR_NOTE_MAX:
+        raise DriverStateError(
+            f"{what} is {len(text)} characters; the cap is {OPERATOR_NOTE_MAX}")
+    if any(ch < " " or ch == "\x7f" for ch in text):
+        raise DriverStateError(f"{what} contains control characters")
+    return text
+
+
+def handoff_claim_release(state: dict, generation: int, *, claimant: str) -> tuple[bool, dict]:
+    """Release a boundary claim whose transition has REACHED a terminal outcome. PURE.
+
+    #927 PR 2, Step-4 pass-2 finding F1 — confirmed against this module: **nothing here released a
+    claim.** `handoff_claim` writes one, `handoff_ack_started` only flips `started`, and the comment
+    at `handoff_claim_completion_unprovable` records that completion is never written at all (#846).
+    So a boundary that resolved `inline` and simply returned left its claim live for the full 1800 s
+    lease — blocking `transport set` and handing every later contender a refusal for half an hour
+    after the work was done.
+
+    Three refusals, and each protects something specific:
+
+    - a claim whose generation or claimant does not match: releasing another session's claim is the
+      two-successors condition with extra steps;
+    - a claim whose resolution carries NO terminal event: that is the INDETERMINATE launch, and its
+      lease is exactly what protects a possibly-live successor until reconciliation runs;
+    - no claim at all: a no-op, never an error, so a retry after a crash is safe.
+
+    Scoped to the boundary path deliberately. `handoff_claim_is_live` and the mid-child flow are
+    untouched, so the mid-child suite passing unchanged stays the regression signal.
+    """
+    claim = state.get("handoff_claim") if isinstance(state, dict) else None
+    if not isinstance(claim, dict):
+        return (False, state)
+    if claim.get("generation") != generation or claim.get("claimant") != claimant:
+        return (False, state)
+    # The terminal event is the completion record. Any resolution of this generation having one is
+    # enough: the boundary appends exactly one resolution per attempt, and a reclaim attempt carries
+    # its own `r:` id whose terminal event closes its own work.
+    closed = any(_terminal_for(state, e["resolution_id"]) is not None
+                 for e in transition_events(state)
+                 if "outcome" not in e and e.get("generation") == generation
+                 and e.get("resolution_id"))
+    if not closed:
+        return (False, state)
+    new = dict(state)
+    new.pop("handoff_claim", None)
+    return (True, new)
 
 
 #: What a reclaimer may do with an unterminated boundary resolution.

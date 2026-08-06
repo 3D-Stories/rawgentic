@@ -211,6 +211,61 @@
         "single-session"
       ]
     },
+    "advisory_deliveries": {
+      "description": "#927 PR 2. Append-only advisory DELIVERY record. A `pending` event is the CLAIM to print a transition's degradation advisory -- written under the lock before the print, so two surfaces (`handoff`, `next-child`) cannot both emit it. An `emitted` or `failed` event closes the claim. This buys at-most-once PRINTING, not exactly-once delivery: a `pending` with no `emitted` means nobody saw the line, and that is deliberately the visible defect rather than a risk of duplicate output.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "transition_id",
+          "state"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "transition_id": {
+            "type": "string",
+            "description": "Keyed on transition_id, NOT generation: `creation` and `boundary_resume` do not bump a generation and would collide."
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "emitted",
+              "failed"
+            ]
+          },
+          "observed_at": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "transport_audit": {
+      "description": "#927 PR 2. Who changed `preferred_transport` by the sanctioned `transport set` command, when, and why. Operator-supplied strings are bounded and control-character-free before they land here.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "transport": {
+            "enum": [
+              "pane_chain",
+              "inline"
+            ]
+          },
+          "operator": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "observed_at": {
+            "type": "integer"
+          }
+        }
+      }
+    },
     "transitions": {
       "description": "#927. Append-only two-event log. A `resolution` lands BEFORE any action; a `terminal_outcome` closes it afterwards, correlated by `resolution_id`. A resolution with no terminal event is the crash signature reconciliation keys on -- so events are appended, never rewritten.",
       "type": "array",
@@ -231,6 +286,7 @@
               "successor_acked",
               "inline_continued",
               "launch_failed",
+              "no_split_attempted",
               "start_failed",
               "reconciled_no_action",
               "created",

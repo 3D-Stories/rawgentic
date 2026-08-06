@@ -1148,9 +1148,15 @@ class TestTransitionLog:
         assert dl.unterminated_resolutions(st) == []
 
     def test_the_terminal_vocabulary_is_closed(self) -> None:
+        """#927 PR 2 added `no_split_attempted`, and this guard is why that had to be deliberate.
+
+        It exists so a new outcome cannot be introduced by accident: `no_split_attempted` splits
+        "herdr was unlistable, nothing was attempted" out of `launch_failed`, because §16.4's
+        downgrade must be able to tell an OBSERVATION failure from a creation REFUSAL.
+        """
         assert dl.TERMINAL_OUTCOMES == frozenset({
-            "successor_acked", "inline_continued", "launch_failed", "start_failed",
-            "reconciled_no_action", "created", "parked_unreconcilable"})
+            "successor_acked", "inline_continued", "launch_failed", "no_split_attempted",
+            "start_failed", "reconciled_no_action", "created", "parked_unreconcilable"})
 
     def test_launch_indeterminate_is_NOT_a_terminal_outcome(self) -> None:
         """It was, in an earlier draft, while other sections required the same transition to
@@ -1589,3 +1595,111 @@ class TestStep11Fixes:
         assert dl.transport_set_blocked(None, now_ts=1)[0] is True
         assert dl.transport_set_blocked({}, now_ts=1)[0] is True
         assert dl.transport_set_blocked({"issues": "not a list"}, now_ts=1)[0] is True
+
+
+# --- #927 PR 2 — the pure additions the boundary wiring needs -------------------------------
+#
+# Design authority: docs/planning/2026-08-05-927-epic-run-transport-rework.md §16.
+# F1 (Step-4 pass 2) is why `handoff_claim_release` exists at all: NOTHING in this module
+# released a claim, so an inline continuation left one live for its full 1800 s lease.
+
+
+def _boundary_state(*, generation=4, claimant="sess-A", terminal=None):
+    """A campaign mid-boundary: a claim held, a resolution appended, optionally closed."""
+    state = {
+        "campaign": "epic-1", "epic": 1, "generation": generation,
+        "issues": [{"number": 10, "status": "queued", "depends_on": []}],
+        "handoff_claim": {"generation": generation, "claimant": claimant,
+                          "claimed_at": 1000, "started": False},
+    }
+    rid = dl.append_resolution(
+        state, transition_id=f"b:epic-1:{generation}", generation=generation,
+        trigger="child_boundary", kind="child_boundary", preferred="pane_chain",
+        effective="pane_chain", probe_reason="probe_ok", probe_ms=12,
+        pane_ref="w1:pAA", panes_before=["w1:pAA"], now_ts=1001)
+    if terminal is not None:
+        dl.append_terminal_outcome(state, resolution_id=rid, outcome=terminal, now_ts=1002)
+    return state, rid
+
+
+def test_no_split_attempted_is_a_terminal_outcome():
+    """§16.3: 'herdr was unlistable' must not share a name with 'creation was refused'."""
+    assert "no_split_attempted" in dl.TERMINAL_OUTCOMES
+    state, rid = _boundary_state()
+    dl.append_terminal_outcome(state, resolution_id=rid, outcome="no_split_attempted",
+                               now_ts=1003)
+    assert dl._terminal_for(state, rid)["outcome"] == "no_split_attempted"
+
+
+def test_handoff_claim_release_clears_a_matching_closed_claim():
+    state, _rid = _boundary_state(terminal="inline_continued")
+    released, new = dl.handoff_claim_release(state, 4, claimant="sess-A")
+    assert released is True
+    assert new.get("handoff_claim") is None
+    assert state.get("handoff_claim") is not None, "PURE — the input must not be mutated"
+
+
+def test_handoff_claim_release_refuses_while_the_resolution_is_still_open():
+    """An INDETERMINATE launch must keep its lease: the lease is what protects a live successor."""
+    state, _rid = _boundary_state(terminal=None)
+    released, new = dl.handoff_claim_release(state, 4, claimant="sess-A")
+    assert released is False
+    assert new is state or new.get("handoff_claim") is not None
+
+
+def test_handoff_claim_release_refuses_a_foreign_claimant_and_generation():
+    state, _rid = _boundary_state(terminal="successor_acked")
+    assert dl.handoff_claim_release(state, 4, claimant="sess-B")[0] is False
+    assert dl.handoff_claim_release(state, 9, claimant="sess-A")[0] is False
+    assert state["handoff_claim"]["claimant"] == "sess-A"
+
+
+def test_handoff_claim_release_on_a_state_with_no_claim_is_a_no_op():
+    released, new = dl.handoff_claim_release({"generation": 1}, 1, claimant="x")
+    assert released is False
+    assert "handoff_claim" not in new
+
+
+def test_claim_advisory_is_one_shot_per_transition_id():
+    """§16.7: the check and the record happen in ONE mutation, so two callers cannot both print."""
+    state = {"campaign": "epic-1"}
+    claimed, state = dl.claim_advisory(state, "b:epic-1:4", now_ts=10)
+    assert claimed is True
+    again, state = dl.claim_advisory(state, "b:epic-1:4", now_ts=11)
+    assert again is False
+    other, state = dl.claim_advisory(state, "b:epic-1:5", now_ts=12)
+    assert other is True
+
+
+def test_claim_advisory_records_pending_then_a_delivery_state():
+    state = {"campaign": "epic-1"}
+    _claimed, state = dl.claim_advisory(state, "b:epic-1:4", now_ts=10)
+    pending = dl.advisory_deliveries(state)
+    assert [e["state"] for e in pending] == ["pending"]
+    state = dl.record_advisory_delivery(state, transition_id="b:epic-1:4", delivered=True,
+                                        now_ts=11)
+    assert [e["state"] for e in dl.advisory_deliveries(state)] == ["pending", "emitted"]
+
+
+def test_a_failed_print_leaves_a_failed_delivery_and_is_observable():
+    """AC 4 as at-most-once printing: a `pending` with no terminal state IS the visible defect."""
+    state = {"campaign": "epic-1"}
+    _c, state = dl.claim_advisory(state, "b:epic-1:4", now_ts=10)
+    state = dl.record_advisory_delivery(state, transition_id="b:epic-1:4", delivered=False,
+                                        now_ts=11)
+    assert dl.advisory_deliveries(state)[-1]["state"] == "failed"
+    assert dl.undelivered_advisories(state) == ["b:epic-1:4"]
+    state2 = {"campaign": "epic-1"}
+    _c2, state2 = dl.claim_advisory(state2, "b:epic-1:9", now_ts=10)
+    assert dl.undelivered_advisories(state2) == ["b:epic-1:9"], "a bare pending counts as undelivered"
+
+
+def test_validate_operator_note_caps_length_and_rejects_control_characters():
+    """S2 (self-review): operator text lands in a durable audit record."""
+    assert dl.validate_operator_note("adopting w1:pAB", what="reason") == "adopting w1:pAB"
+    with pytest.raises(dl.DriverStateError):
+        dl.validate_operator_note("x" * 201, what="reason")
+    with pytest.raises(dl.DriverStateError):
+        dl.validate_operator_note("line\x1b[31m", what="reason")
+    with pytest.raises(dl.DriverStateError):
+        dl.validate_operator_note("", what="operator")
