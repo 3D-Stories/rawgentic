@@ -24,6 +24,12 @@ SESSION CONTINUITY & UNSUPERVISED MODES (away · sleeping) and moved up to run N
 and #726 fold into it, #888 moves up from M2.5, and new children #943 (supervision core) and #944
 (revalidate hardening) were filed. Full plan: https://rawgentic-plan-871.vercel.app/ and
 `2026-08-05-871-m4-session-continuity-away-mode.md`. M2's remaining ten children resume after.
+Updated 2026-08-06 — M4 (epic #871) is COMPLETE. All 8 children merged and closed: #888, #943
+(supervision core, split into Part A/#948 + Part B/#947), #927, #769, #726 (issue stays open by
+owner decision — two ACs unsatisfiable, noted on the issue itself), #586, #944. Final version
+3.137.0, full suite 6087/6087. Epic #871 closed 2026-08-06 with a summary comment listing every
+child, PR, version and merge SHA. M2 (epic #906, PAUSED above) is the next milestone to resume —
+that resume is a separate, later, owner-started run, not automatic.
 ```
 
 ## The roadmap
@@ -55,14 +61,14 @@ M3 — TRUST THE NEW MACHINERY | epic #936 · runner · review loop · config | 
   RH | Runner hardening (siblings, not merged): #876 trusted --brief · #894 death/OOM evidence · #365 contaminated returns · #893 engagement evidence | note
   RL | Review loop: #889 clean-round token refund · #892 re-litigation flag · #891 retire fail-open riskLevel default · #895 blindness guard | note
   CFG | #884 + #883 config pair · roadmap tail: #860 consult-on-exhaustion · #808 WF3 close · #750 registry helper · #759 deferral registry | note
-M4 — SESSION CONTINUITY & UNSUPERVISED MODES | epic #871 · NEXT UP (D185, re-scoped) | crit
-  #888 | Records first: run-records that land exactly once (moved up from M2.5) | note
-  #943 | Supervision core: away/sleep/attended declaration, departure sweep, blocker routing; replaces RAWGENTIC_HEADLESS ×3 | crit
-  #927 | Epic-run rework: two-question setup, transport derived from herdr, mode-change command, #845 fence, generated successor prompts | crit
-  #769 | Child-boundary learnings sweep, mechanized state | note
-  #726 | In-flight-work gate + durable-path check | note
-  #586 | Resume rewrite: measured resets_at one-shot (+60 s), --continue behind an identity check, pane-aware | crit
-  #944 | Revalidate hardening: claim-inventory coverage + obsolete-child owner gate | note
+M4 — SESSION CONTINUITY & UNSUPERVISED MODES | epic #871 · SHIPPED 2026-08-06 · v3.137.0 | ok
+  #888 | Records first: run-records that land exactly once (moved up from M2.5) — SHIPPED PR #946 | ok
+  #943 | Supervision core: Part A SHIPPED PR #948; Part B split to #947, SHIPPED PR #961 — issue closed | ok
+  #927 | Epic-run rework — SHIPPED PRs #950/#951 | ok
+  #769 | Child-boundary learnings sweep, mechanized state — SHIPPED PR #953 | ok
+  #726 | In-flight-work gate + durable-path check — SHIPPED PR #954; issue stays open, two ACs unsatisfiable (noted on the issue) | ok
+  #586 | Resume rewrite — SHIPPED PRs #955–#958 | ok
+  #944 | Revalidate hardening — SHIPPED PR #959 | ok
 M5 — IDENTITY & CONCURRENCY + WF HYGIENE | epic #937 · grouped pairs | note
   P1 | #345 + #346 one keying design, two migrations · #593 + #594 concurrent same-project sessions | note
   P2 | #372 WF14-vs-guard · #364 doc-only resume state · #370 + #379 ambiguity-breaker pair | note
