@@ -749,6 +749,22 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.136.0 (2026-08-06)
+- **Claim-inventory coverage and the obsolete-child owner gate (#944, epic #871).**
+  `rebuild-receipt --bodies` now refuses, before writing anything, when a revalidation record's
+  claims do not cover its issue body's mechanical inventory (`extract_claim_inventory` /
+  `missing_claim_coverage`, maximum bipartite matching, exact-match on ac/cause text) — the
+  constructor alone had zero production callers, so this is the first REAL enforcement point
+  (AC1). Restores the pending-disposition owner gate #840 cut and #848 was meant to rebuild:
+  `next-child`/`handoff` now refuse a child marked `issue_obsolete` with rc 11, naming the
+  `record-child-outcome` write-back remedy, in every supervision state, with no automatic
+  continuation of any kind — the scan skips past a lone obsolete-pending candidate to any other
+  genuinely ready child and raises only when nothing else is selectable (AC2-4). Closes the
+  preflight/locked-commit race in `child_boundary_precondition` and the `_open_and_claim` recheck
+  under the same lock. `skills/revalidate-children/SKILL.md` and `docs/multi-issue-driver.md`
+  updated to describe the live gate and the `--bodies` contract with a fully worked example.
+  no diagram REV. Suite 5888→5888.
+
 ### v3.135.2 (2026-08-06)
 - **Resume launcher gets a measured-not-guessed reset clock, Part 2 (#586, epic #871).** Part 1
   (v3.135.1) shipped the measurement/lineage-check library with no caller. Part 2 wires it in:
