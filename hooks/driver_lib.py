@@ -2201,6 +2201,272 @@ def legacy_session_mode(transport: str) -> "str | None":
     return _TRANSPORT_TO_LEGACY.get(transport)
 
 
+#: #769 — the child-boundary learnings SWEEP: the owner's standing order, mechanized.
+#:
+#: Revalidation asks "do the remaining issue bodies still describe reality at this head?".  The
+#: owner's D181 order (epic #906, 2026-08-05, verbatim: "in between each issue, make sure you
+#: revalidate future issues in the epic based on learnings") asks the wider question — re-assess
+#: every remaining child against what the completed child LEARNED.  That judgment is not
+#: observable from state, so nothing here pretends to verify it.  What IS mechanically checkable
+#: is COVERAGE, and that is exactly what this validates: a record naming every remaining child,
+#: each with a reason.  Design: docs/planning/2026-08-06-769-child-boundary-learnings-sweep.md.
+BOUNDARY_SWEEPS_KEY = "boundary_sweeps"
+
+#: Closed, because every consumer compares these words exactly.  `blocked` was in the design draft
+#: and was DELETED at the Step-4 gate: nothing consumed it, so a child recorded as needing a
+#: decision would still have been handed out — the unwired-machinery defect D233 recorded against
+#: #927 PR 1.  Blocking a child belongs to `pending_disposition` and the #944 owner gate, and a
+#: second weaker channel would give two answers to one question.
+SWEEP_OUTCOMES = frozenset({"unaffected", "commented", "rescoped"})
+
+#: An outcome other than `unaffected` claims a child CHANGED, so it must point at the artifact.
+_SWEEP_OUTCOMES_NEEDING_REF = frozenset({"commented", "rescoped"})
+
+#: The statuses `boundary_sweep_status` can return.  There is deliberately no `conflict`: the
+#: writer refuses a differing replay without writing, so no durable contradiction can exist to
+#: report — a status the designed writer cannot reach is a promise the reader cannot keep.
+SWEEP_STATUSES = frozenset({"not_due", "swept", "missing", "unreadable"})
+
+#: A `ref` must be a durable pointer, not prose.  Checking only length and control characters let
+#: `"done"` satisfy a field whose entire purpose is "point at the artifact" (Step-4 pass-3
+#: finding): the contract claimed more than the validator delivered.
+_SWEEP_REF_RE = re.compile(r"\Ahttps://[^\s]+\Z|\A(?:docs|claude_docs)/[A-Za-z0-9._/-]+\Z")
+
+
+def boundary_sweeps(state) -> list:
+    """Every boundary-sweep record, oldest first. PURE, and never raises on a malformed state.
+
+    A FENCE consults this (`boundary_sweep_status`), so a crash here would turn a corrupt state
+    file into an outage instead of a refusal — the same reasoning as `advisory_deliveries`.
+    """
+    if not isinstance(state, dict):
+        return []
+    records = state.get(BOUNDARY_SWEEPS_KEY)
+    return [r for r in records if isinstance(r, dict)] if isinstance(records, list) else []
+
+
+def sweep_eligible_children(state) -> list[int]:
+    """The children a sweep must cover: everything not disposed. PURE, never raises.
+
+    `_DISPOSED_STATUSES` and not `TERMINAL_STATUSES`, deliberately and in BOTH places this rule is
+    used (here and in `boundary_sweep_status`'s `not_due`).  A `deferred` child is a real boundary
+    that produced real learnings — usually that is *why* it was deferred — and `TERMINAL_STATUSES`
+    excludes it.  The design draft used the two definitions interchangeably; they are not.
+    """
+    if not isinstance(state, dict):
+        return []
+    issues = state.get("issues")
+    if not isinstance(issues, list):
+        return []
+    return [i["number"] for i in issues
+            if isinstance(i, dict) and _is_int(i.get("number"))
+            and i.get("status") not in _DISPOSED_STATUSES]
+
+
+def _validate_sweep_assessments(state: dict, assessments) -> list[dict]:
+    """Validate the per-child assessments and return them normalized. PURE.
+
+    Coverage is set EQUALITY in BOTH directions — a missing eligible child and a foreign one are
+    equally refused.  That is the one property of a sweep a machine can actually check, so it is
+    the one this fence is allowed to claim.
+    """
+    if not isinstance(assessments, list) or not assessments and sweep_eligible_children(state):
+        raise DriverStateError("a sweep needs one assessment per remaining eligible child")
+    seen, normalized = [], []
+    for entry in assessments:
+        if not isinstance(entry, dict):
+            raise DriverStateError(f"each assessment must be an object, got {type(entry).__name__}")
+        number = entry.get("issue")
+        if not _is_int(number):
+            raise DriverStateError(f"assessment issue must be an integer, got {number!r}")
+        outcome = _enum(entry.get("outcome"), SWEEP_OUTCOMES, "a sweep outcome")
+        note = validate_operator_note(entry.get("note"), what=f"the note for #{number}")
+        record = {"issue": int(number), "outcome": outcome, "note": note}
+        ref = entry.get("ref")
+        if outcome in _SWEEP_OUTCOMES_NEEDING_REF:
+            ref = validate_operator_note(ref, what=f"the ref for #{number}")
+            if not _SWEEP_REF_RE.match(ref):
+                raise DriverStateError(
+                    f"the ref for #{number} must be an https:// URL or a repository-relative "
+                    f"docs/ or claude_docs/ path, got {ref!r} — an outcome of {outcome!r} claims "
+                    "the child changed, so it has to point at the artifact that says so")
+            record["ref"] = ref
+        elif ref is not None:
+            record["ref"] = validate_operator_note(ref, what=f"the ref for #{number}")
+        # NO `body_hash`. The design drafted one so a future check could detect an issue body
+        # edited after the sweep, but nothing computes it and no CLI example supplies it, so it
+        # would have been an optional field that is always absent — a claim of evidence with no
+        # evidence behind it (Step-11 finding). The limitation it was meant to address is
+        # documented instead, and the field is deferred with the check that would use it.
+        seen.append(int(number))
+        normalized.append(record)
+    eligible = sweep_eligible_children(state)
+    if len(set(seen)) != len(seen):
+        raise DriverStateError(f"a sweep assesses each child once; duplicates: "
+                               f"{sorted({n for n in seen if seen.count(n) > 1})}")
+    if set(seen) != set(eligible):
+        missing, foreign = sorted(set(eligible) - set(seen)), sorted(set(seen) - set(eligible))
+        raise DriverStateError(
+            f"a sweep must cover exactly the remaining eligible children {sorted(eligible)}; "
+            f"missing {missing}, foreign {foreign}")
+    return normalized
+
+
+def sweep_record_is_intact(state, record) -> bool:
+    """Is this a STRUCTURALLY complete sweep record? PURE, never raises.
+
+    Step-11 finding, and the gate was hollow without it: `boundary_sweep_status` used to check the
+    head, that `assessments` was a list, and the issue-number SET — nothing else.  So a
+    hand-written or half-corrupt record carrying only matching issue numbers, with no `learnings`,
+    no outcomes, no notes and no required refs, read as `swept` and opened a gate whose whole
+    promise is record integrity.  Coverage without integrity is not evidence.
+
+    The write path (`_validate_sweep_assessments`) and this read path must agree, so this applies
+    the same rules non-mutatingly.  It also makes the reader total: an unhashable `issue` value
+    used to raise `TypeError` out of a function documented as never raising, turning a corrupt
+    state file into a `next-child` outage instead of the rc-8 repair refusal.
+    """
+    if not isinstance(record, dict):
+        return False
+    try:
+        validate_validated_against(record.get("swept_at_head"))
+        after = record.get("after_issue")
+        if after is not None and not _is_int(after):
+            return False
+        validate_operator_note(record.get("learnings"), what="learnings")
+        assessments = record.get("assessments")
+        if not isinstance(assessments, list):
+            return False
+        seen = []
+        for entry in assessments:
+            if not isinstance(entry, dict) or not _is_int(entry.get("issue")):
+                return False
+            if entry.get("outcome") not in SWEEP_OUTCOMES:
+                return False
+            validate_operator_note(entry.get("note"), what="note")
+            if entry["outcome"] in _SWEEP_OUTCOMES_NEEDING_REF:
+                ref = entry.get("ref")
+                if not isinstance(ref, str) or not _SWEEP_REF_RE.match(ref):
+                    return False
+            seen.append(int(entry["issue"]))
+        return len(set(seen)) == len(seen)
+    except DriverStateError:
+        return False
+    except (TypeError, ValueError):
+        return False
+
+
+def _sweep_replay_payload(record: dict) -> tuple:
+    """The comparable part of a record. PURE.
+
+    Equality is SEMANTIC, never bytewise: `observed_at` is excluded and assessments are sorted, so
+    an honest operational retry — same work, later clock, list built in a different order — is
+    idempotent rather than refused.
+    """
+    assessments = record.get("assessments") or []
+    return (record.get("swept_at_head"), record.get("after_issue"), record.get("learnings"),
+            tuple(sorted(tuple(sorted(a.items())) for a in assessments if isinstance(a, dict))))
+
+
+def record_boundary_sweep(state: dict, *, after_issue, swept_at_head: str, learnings,
+                          assessments, now_ts: int) -> "dict | None":
+    """Append one boundary-sweep record. PURE — returns a NEW state, or None to write nothing.
+
+    ``None`` is `_locked_state_update`'s abort signal, used here for the idempotent exact replay.
+
+    **Replay identity is `(swept_at_head, after_issue)`, NOT the head alone**, and that distinction
+    closes a real defect the Step-4 review found.  A `deferred` or `abandoned` child moves no
+    commit, so two genuine boundaries can share one head; keying on the head alone made the second
+    one's record look like a conflicting replay of the first.  What the GATE asks is a different
+    question — see `boundary_sweep_status`.
+
+    A DIFFERING payload at an existing identity is REFUSED rather than appended, so state stays
+    single-valued and no reader ever has to pick between two contradictory records.
+
+    ``now_ts`` is injected: this module does no I/O and takes no clock.
+    """
+    validate_validated_against(swept_at_head)
+    if after_issue is not None:
+        if not _is_int(after_issue):
+            raise DriverStateError(
+                f"after_issue must be an issue number or None, got {after_issue!r}")
+        disposed = {i["number"] for i in state.get("issues", [])
+                    if isinstance(i, dict) and _is_int(i.get("number"))
+                    and i.get("status") in _DISPOSED_STATUSES}
+        if int(after_issue) not in disposed:
+            raise DriverStateError(
+                f"after_issue #{after_issue} is not a disposed child of this campaign "
+                f"{sorted(disposed)} — provenance nothing validates is provenance that can name "
+                "any number and still open the gate. Pass None when the head moved with no child "
+                "completing")
+    learnings = validate_operator_note(learnings, what="a sweep's learnings")
+    record = {"swept_at_head": swept_at_head,
+              "after_issue": None if after_issue is None else int(after_issue),
+              "learnings": learnings,
+              "assessments": _validate_sweep_assessments(state, assessments),
+              "observed_at": now_ts}
+    identity = (record["swept_at_head"], record["after_issue"])
+    for existing in boundary_sweeps(state):
+        if (existing.get("swept_at_head"), existing.get("after_issue")) != identity:
+            continue
+        if _sweep_replay_payload(existing) == _sweep_replay_payload(record):
+            return None                       # exact replay: write nothing, keep the first stamp
+        raise DriverStateError(
+            f"a different sweep is already recorded for head {swept_at_head[:8]} / after_issue "
+            f"{record['after_issue']} — refusing to store a second, contradictory record for one "
+            "boundary. Re-read the existing record; if it is wrong, repair the state file")
+    new = dict(state)
+    new[BOUNDARY_SWEEPS_KEY] = boundary_sweeps(state) + [record]
+    return new
+
+
+def boundary_sweep_status(state, observed_head) -> str:
+    """Has this boundary been swept? PURE, never raises. One of `SWEEP_STATUSES`.
+
+    **The gate asks a different question from the replay key.** Replay asks "is this the same write
+    twice?"; the gate asks "has the CURRENT world been assessed?".  So a record satisfies the gate
+    only when it attests ``observed_head`` AND its assessments cover exactly the children eligible
+    *right now*.  Disposing another child shrinks that set, which retires the stale record
+    automatically — no boundary counter, no ordering invariant to keep.
+
+    Fails toward doing the work, like `child_boundary_precondition`: anything unreadable is
+    `unreadable`, never `missing` and never `swept`, because "I cannot read it" must not be
+    reported as "it was done".  The two are kept apart because the remedies differ — perform the
+    sweep, versus repair the state.
+    """
+    if not isinstance(state, dict):
+        return "unreadable"
+    raw = state.get(BOUNDARY_SWEEPS_KEY)
+    if raw is None:
+        # **Grandfathered: a campaign with NO sweep key predates this contract.** Found while
+        # writing the CLI tests, and it is a migration question rather than a test inconvenience:
+        # gating retroactively would refuse `next-child` for every campaign already in flight at
+        # upgrade — including a PAUSED one whose un-swept boundary is months past and cannot now
+        # be swept honestly. A gate that blocks work over a boundary nobody can revisit is a
+        # regression. New campaigns are seeded with `[]` at creation, so they ARE gated; an
+        # existing campaign adopts the contract by recording its first sweep.
+        return "not_due"
+    if not isinstance(raw, list) or any(not isinstance(r, dict) for r in raw):
+        return "unreadable"
+    records = boundary_sweeps(state)
+    # EVERY record must be structurally intact, not merely the one that happens to match this
+    # head: a corrupt neighbour means the field cannot be trusted, and a fence that reads around
+    # corruption is a fence that reports "done" it has not verified.
+    if any(not sweep_record_is_intact(state, r) for r in records):
+        return "unreadable"
+    issues = state.get("issues") if isinstance(state.get("issues"), list) else []
+    if not any(isinstance(i, dict) and i.get("status") in _DISPOSED_STATUSES for i in issues):
+        return "not_due"
+    eligible = set(sweep_eligible_children(state))
+    for record in records:
+        if record.get("swept_at_head") != observed_head:
+            continue
+        covered = {int(a["issue"]) for a in record["assessments"]}
+        if covered == eligible:
+            return "swept"
+    return "missing"
+
+
 BIND_DIRECTIVE = "/rawgentic:switch"
 
 # A bind directive WITH a project argument. The argument is the whole point: Step-4 review finding,

@@ -1801,3 +1801,340 @@ def test_validate_claimant_id_rejects_prompt_shaped_and_oversized_values():
     for bad in ("has space", "line\nIGNORE PREVIOUS INSTRUCTIONS", "x" * 129, "", "tab\tsep"):
         with pytest.raises(dl.DriverStateError):
             dl.validate_claimant_id(bad)
+
+
+# --------------------------------------------------------------------------- #
+# #769 — child-boundary learnings sweep
+# --------------------------------------------------------------------------- #
+def _sweep_campaign(statuses=None, sweeps=None):
+    """A campaign whose children carry the given statuses. Default: one merged, three queued."""
+    statuses = statuses or {927: "merged", 769: "queued", 726: "queued", 586: "queued"}
+    state = {"schema_version": 2, "campaign": "epic-871",
+             "issues": [{"number": n, "status": s} for n, s in statuses.items()]}
+    if sweeps is not None:
+        state["boundary_sweeps"] = sweeps
+    return state
+
+
+def _assessment(issue, outcome="unaffected", note="re-read; unrelated", ref=None):
+    entry = {"issue": issue, "outcome": outcome, "note": note}
+    if ref is not None:
+        entry["ref"] = ref
+    return entry
+
+
+HEAD_A = "a" * 40
+HEAD_B = "b" * 40
+
+
+def test_boundary_sweeps_never_raises_on_a_malformed_state():
+    """The reader is consulted by a FENCE; a crash there turns a corrupt file into an outage."""
+    for bad in (None, 7, "nope", [], {"boundary_sweeps": None},
+                {"boundary_sweeps": "not-a-list"}, {"boundary_sweeps": 3},
+                {"boundary_sweeps": [1, "two", None]}, {}):
+        assert isinstance(dl.boundary_sweeps(bad), list)
+
+
+def test_boundary_sweeps_keeps_only_dict_entries():
+    state = _sweep_campaign(sweeps=[{"swept_at_head": HEAD_A}, "junk", None, 5])
+    assert dl.boundary_sweeps(state) == [{"swept_at_head": HEAD_A}]
+
+
+def test_sweep_eligible_children_excludes_every_disposed_status():
+    state = _sweep_campaign({1: "merged", 2: "deferred", 3: "abandoned",
+                             4: "queued", 5: "in_progress", 6: "pr_open"})
+    assert dl.sweep_eligible_children(state) == [4, 5, 6]
+
+
+def test_sweep_eligible_children_tolerates_a_stateless_campaign():
+    assert dl.sweep_eligible_children({}) == []
+    assert dl.sweep_eligible_children({"issues": "nope"}) == []
+
+
+def test_record_boundary_sweep_writes_a_record_covering_every_eligible_child():
+    state = _sweep_campaign()
+    new = dl.record_boundary_sweep(
+        state, after_issue=927, swept_at_head=HEAD_A, learnings="#927 rewrote the boundary prose",
+        assessments=[_assessment(769), _assessment(726), _assessment(586)], now_ts=1000)
+    assert len(dl.boundary_sweeps(new)) == 1
+    record = dl.boundary_sweeps(new)[0]
+    assert record["swept_at_head"] == HEAD_A
+    assert record["after_issue"] == 927
+    assert record["observed_at"] == 1000
+    assert dl.boundary_sweeps(state) == []          # PURE: the input is untouched
+
+
+def test_record_boundary_sweep_refuses_a_missing_eligible_child():
+    """Coverage is set EQUALITY. This is the whole mechanically-checkable claim of the design."""
+    state = _sweep_campaign()
+    with pytest.raises(dl.DriverStateError):
+        dl.record_boundary_sweep(state, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+                                 assessments=[_assessment(769), _assessment(726)], now_ts=1)
+
+
+def test_record_boundary_sweep_refuses_a_foreign_child():
+    state = _sweep_campaign()
+    with pytest.raises(dl.DriverStateError):
+        dl.record_boundary_sweep(
+            state, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+            assessments=[_assessment(769), _assessment(726), _assessment(586),
+                         _assessment(4242)], now_ts=1)
+
+
+def test_record_boundary_sweep_refuses_a_duplicate_assessment():
+    state = _sweep_campaign()
+    with pytest.raises(dl.DriverStateError):
+        dl.record_boundary_sweep(
+            state, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+            assessments=[_assessment(769), _assessment(769), _assessment(726),
+                         _assessment(586)], now_ts=1)
+
+
+def test_record_boundary_sweep_refuses_an_unknown_outcome():
+    state = _sweep_campaign()
+    with pytest.raises(dl.DriverStateError):
+        dl.record_boundary_sweep(
+            state, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+            assessments=[_assessment(769, outcome="blocked", ref="https://x/1"),
+                         _assessment(726), _assessment(586)], now_ts=1)
+
+
+def test_record_boundary_sweep_requires_a_ref_when_a_child_changed():
+    state = _sweep_campaign()
+    for outcome in ("commented", "rescoped"):
+        with pytest.raises(dl.DriverStateError):
+            dl.record_boundary_sweep(
+                state, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+                assessments=[_assessment(769, outcome=outcome), _assessment(726),
+                             _assessment(586)], now_ts=1)
+
+
+def test_record_boundary_sweep_checks_the_ref_GRAMMAR_not_merely_its_presence():
+    """Step-4 pass-3 Medium: `ref` exists to point at an artifact, so "done" must not satisfy it."""
+    state = _sweep_campaign()
+    for bad in ("done", "see the comment", "ftp://x/1", "/etc/passwd", "../escape"):
+        with pytest.raises(dl.DriverStateError):
+            dl.record_boundary_sweep(
+                state, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+                assessments=[_assessment(769, outcome="commented", ref=bad),
+                             _assessment(726), _assessment(586)], now_ts=1)
+    for good in ("https://github.com/o/r/issues/1#issuecomment-2",
+                 "docs/planning/x.md", "claude_docs/session_notes.md"):
+        assert dl.record_boundary_sweep(
+            state, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+            assessments=[_assessment(769, outcome="commented", ref=good),
+                         _assessment(726), _assessment(586)], now_ts=1) is not None
+
+
+def test_record_boundary_sweep_refuses_empty_learnings_or_note():
+    state = _sweep_campaign()
+    with pytest.raises(dl.DriverStateError):
+        dl.record_boundary_sweep(state, after_issue=927, swept_at_head=HEAD_A, learnings="  ",
+                                 assessments=[_assessment(769), _assessment(726),
+                                              _assessment(586)], now_ts=1)
+    with pytest.raises(dl.DriverStateError):
+        dl.record_boundary_sweep(
+            state, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+            assessments=[_assessment(769, note=""), _assessment(726), _assessment(586)], now_ts=1)
+
+
+def test_record_boundary_sweep_bounds_every_operator_string_including_ref():
+    """Self-review High: the draft guarded `note` and left `ref` — equally durable, equally rendered."""
+    state = _sweep_campaign()
+    for kwargs in ({"learnings": "x" * 5000},
+                   {"assessments": [_assessment(769, note="n" * 5000), _assessment(726),
+                                    _assessment(586)]},
+                   {"assessments": [_assessment(769, outcome="commented",
+                                                ref="https://x/" + "y" * 5000),
+                                    _assessment(726), _assessment(586)]},
+                   {"learnings": "bad\x1b[31mescape"},
+                   {"assessments": [_assessment(769, note="tab\tsep"), _assessment(726),
+                                    _assessment(586)]}):
+        call = {"after_issue": 927, "swept_at_head": HEAD_A, "learnings": "x",
+                "assessments": [_assessment(769), _assessment(726), _assessment(586)],
+                "now_ts": 1}
+        call.update(kwargs)
+        with pytest.raises(dl.DriverStateError):
+            dl.record_boundary_sweep(state, **call)
+
+
+def test_record_boundary_sweep_refuses_a_malformed_head():
+    state = _sweep_campaign()
+    for bad in ("abc", "A" * 40, True, None, 7, HEAD_A[:39]):
+        with pytest.raises(dl.DriverStateError):
+            dl.record_boundary_sweep(
+                state, after_issue=927, swept_at_head=bad, learnings="x",
+                assessments=[_assessment(769), _assessment(726), _assessment(586)], now_ts=1)
+
+
+def test_after_issue_accepts_null_for_a_head_move_with_no_completion():
+    """Self-review High: PR #949 moved main between children with nothing completing."""
+    state = _sweep_campaign()
+    new = dl.record_boundary_sweep(
+        state, after_issue=None, swept_at_head=HEAD_A,
+        learnings="main moved via an unplanned blocker fix; no child completed",
+        assessments=[_assessment(769), _assessment(726), _assessment(586)], now_ts=1)
+    assert dl.boundary_sweeps(new)[0]["after_issue"] is None
+
+
+def test_after_issue_must_name_a_DISPOSED_child_of_this_queue():
+    """Adversarial High: an unvalidated provenance field let any number open the gate."""
+    state = _sweep_campaign()
+    for bad in (4242, 769, "927", True, 0.5):     # foreign, still-active, wrong type
+        with pytest.raises(dl.DriverStateError):
+            dl.record_boundary_sweep(
+                state, after_issue=bad, swept_at_head=HEAD_A, learnings="x",
+                assessments=[_assessment(769), _assessment(726), _assessment(586)], now_ts=1)
+
+
+def test_an_exact_replay_writes_nothing_even_with_a_different_clock():
+    """Replay equality is SEMANTIC: `observed_at` is excluded, assessments are order-insensitive."""
+    state = _sweep_campaign()
+    first = dl.record_boundary_sweep(
+        state, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+        assessments=[_assessment(769), _assessment(726), _assessment(586)], now_ts=1000)
+    assert dl.record_boundary_sweep(
+        first, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+        assessments=[_assessment(586), _assessment(769), _assessment(726)], now_ts=9999) is None
+    assert dl.boundary_sweeps(first)[0]["observed_at"] == 1000   # first record keeps its stamp
+
+
+def test_a_DIFFERING_replay_at_one_identity_is_refused_so_state_stays_single_valued():
+    state = _sweep_campaign()
+    first = dl.record_boundary_sweep(
+        state, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+        assessments=[_assessment(769), _assessment(726), _assessment(586)], now_ts=1)
+    with pytest.raises(dl.DriverStateError):
+        dl.record_boundary_sweep(
+            first, after_issue=927, swept_at_head=HEAD_A, learnings="DIFFERENT",
+            assessments=[_assessment(769), _assessment(726), _assessment(586)], now_ts=2)
+    assert len(dl.boundary_sweeps(first)) == 1
+
+
+def test_two_sweeps_at_one_head_with_different_after_issue_are_different_boundaries():
+    """Pass-3 High: a deferral moves no commit, so a second boundary can share a head."""
+    state = _sweep_campaign({927: "merged", 769: "deferred", 726: "queued", 586: "queued"})
+    first = dl.record_boundary_sweep(
+        state, after_issue=927, swept_at_head=HEAD_A, learnings="from 927",
+        assessments=[_assessment(726), _assessment(586)], now_ts=1)
+    second = dl.record_boundary_sweep(
+        first, after_issue=769, swept_at_head=HEAD_A, learnings="from the 769 deferral",
+        assessments=[_assessment(726), _assessment(586)], now_ts=2)
+    assert second is not None and len(dl.boundary_sweeps(second)) == 2
+
+
+def test_boundary_sweep_status_is_not_due_before_any_child_is_disposed():
+    state = _sweep_campaign({769: "queued", 726: "in_progress"})
+    assert dl.boundary_sweep_status(state, HEAD_A) == "not_due"
+
+
+def test_boundary_sweep_status_is_swept_only_at_the_observed_head():
+    state = _sweep_campaign()
+    new = dl.record_boundary_sweep(
+        state, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+        assessments=[_assessment(769), _assessment(726), _assessment(586)], now_ts=1)
+    assert dl.boundary_sweep_status(new, HEAD_A) == "swept"
+    assert dl.boundary_sweep_status(new, HEAD_B) == "missing"
+
+
+def test_a_sweep_stops_covering_once_another_child_is_disposed_at_the_SAME_head():
+    """Pass-3 High, the defect head-as-sole-key created: a second deferral at one head.
+
+    Without the current-eligible-set comparison the stored record still reads `swept`, so the
+    second boundary is silently skipped AND its record would be refused as a differing replay.
+    """
+    state = _sweep_campaign()
+    swept = dl.record_boundary_sweep(
+        state, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+        assessments=[_assessment(769), _assessment(726), _assessment(586)], now_ts=1)
+    assert dl.boundary_sweep_status(swept, HEAD_A) == "swept"
+    deferred = dict(swept, issues=[dict(i, status="deferred") if i["number"] == 769 else dict(i)
+                                   for i in swept["issues"]])
+    assert dl.boundary_sweep_status(deferred, HEAD_A) == "missing"
+
+
+def test_boundary_sweep_status_fails_CLOSED_on_a_malformed_field():
+    for bad in ("nope", 7, [1, 2], [{"swept_at_head": "short"}], [{}]):
+        state = _sweep_campaign(sweeps=bad)
+        assert dl.boundary_sweep_status(state, HEAD_A) == "unreadable"
+
+
+def test_boundary_sweep_status_never_returns_the_deleted_conflict_status():
+    """`conflict` was designed at pass 2 and deleted at pass 3 as unreachable and unrepairable."""
+    assert "conflict" not in dl.SWEEP_STATUSES
+
+
+def test_a_campaign_with_no_sweep_key_is_grandfathered_not_gated():
+    """Migration, not a loophole: gating retroactively would refuse `next-child` for every
+    campaign in flight at upgrade, over a boundary that is already past and cannot be swept
+    honestly now. New campaigns are seeded with [] at creation, so they ARE gated."""
+    state = _sweep_campaign()                    # has a merged child, no boundary_sweeps key
+    assert "boundary_sweeps" not in state
+    assert dl.boundary_sweep_status(state, HEAD_A) == "not_due"
+
+
+def test_an_EMPTY_sweep_list_opts_the_campaign_IN():
+    """The seeded-at-creation value. Present-but-empty means 'gated, and nothing swept yet'."""
+    state = _sweep_campaign(sweeps=[])
+    assert dl.boundary_sweep_status(state, HEAD_A) == "missing"
+
+
+def test_an_opted_in_campaign_is_still_not_due_before_the_first_disposal():
+    state = _sweep_campaign({769: "queued", 726: "in_progress"}, sweeps=[])
+    assert dl.boundary_sweep_status(state, HEAD_A) == "not_due"
+
+
+# --- Step-11 review fixes ---------------------------------------------------
+def test_the_reader_does_not_RAISE_on_an_unhashable_issue_value():
+    """Step-11 High: `{"issue": []}` made a set comprehension raise TypeError out of a function
+    documented as never raising — a corrupt file became a next-child OUTAGE, not an rc-8 refusal."""
+    state = _sweep_campaign(sweeps=[{"swept_at_head": HEAD_A, "learnings": "x",
+                                     "assessments": [{"issue": []}]}])
+    assert dl.boundary_sweep_status(state, HEAD_A) == "unreadable"
+
+
+def test_a_record_with_matching_issue_numbers_but_no_evidence_is_NOT_swept():
+    """Step-11 High: the fence checked head + issue-number set and nothing else, so a
+    hand-written record with no learnings, no outcomes and no notes opened a gate whose whole
+    promise is record integrity."""
+    hollow = {"swept_at_head": HEAD_A, "assessments": [{"issue": 769}, {"issue": 726},
+                                                       {"issue": 586}]}
+    assert dl.boundary_sweep_status(_sweep_campaign(sweeps=[hollow]), HEAD_A) == "unreadable"
+
+
+def test_a_record_missing_a_required_ref_is_not_accepted_by_the_READER_either():
+    """Write-path and read-path must agree, or the gate trusts what the writer would refuse."""
+    bad = {"swept_at_head": HEAD_A, "after_issue": 927, "learnings": "x",
+           "assessments": [{"issue": 769, "outcome": "commented", "note": "n"},
+                           {"issue": 726, "outcome": "unaffected", "note": "n"},
+                           {"issue": 586, "outcome": "unaffected", "note": "n"}]}
+    assert dl.boundary_sweep_status(_sweep_campaign(sweeps=[bad]), HEAD_A) == "unreadable"
+
+
+def test_one_corrupt_record_makes_the_WHOLE_field_unreadable():
+    """Reading around corruption is a fence reporting 'done' it never verified."""
+    state = _sweep_campaign()
+    good = dl.record_boundary_sweep(
+        state, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+        assessments=[_assessment(769), _assessment(726), _assessment(586)], now_ts=1)
+    good[dl.BOUNDARY_SWEEPS_KEY] = good[dl.BOUNDARY_SWEEPS_KEY] + [{"swept_at_head": "junk"}]
+    assert dl.boundary_sweep_status(good, HEAD_A) == "unreadable"
+
+
+def test_sweep_record_is_intact_is_total_over_arbitrary_garbage():
+    for junk in (None, 7, "x", [], {}, {"swept_at_head": HEAD_A},
+                 {"swept_at_head": HEAD_A, "learnings": "x", "assessments": {}},
+                 {"swept_at_head": HEAD_A, "learnings": "x",
+                  "assessments": [{"issue": 1, "outcome": "nope", "note": "n"}]}):
+        assert dl.sweep_record_is_intact({}, junk) is False
+
+
+def test_body_hash_is_not_part_of_the_record():
+    """Step-11 Medium: the design claimed every assessment records one, nothing computed it, and
+    no example supplied it — an optional field that would always be absent."""
+    state = _sweep_campaign()
+    new = dl.record_boundary_sweep(
+        state, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+        assessments=[dict(_assessment(769), body_hash="deadbeef"), _assessment(726),
+                     _assessment(586)], now_ts=1)
+    assert "body_hash" not in new[dl.BOUNDARY_SWEEPS_KEY][0]["assessments"][0]

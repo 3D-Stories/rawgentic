@@ -247,3 +247,57 @@ def test_doc_documents_the_probed_transport_and_the_closed_fence():
     assert "rc 7" in text, "the losing contender's distinct exit code belongs in the contract"
     assert "no generation counter and no exactly-one-successor fence at the child boundary" \
         not in text, "the pre-#927 absence claim must be gone"
+
+
+# --------------------------------------------------------------------------- #
+# #769 — the boundary-sweep schema declaration
+# --------------------------------------------------------------------------- #
+def _queue_schema():
+    import json as _json
+    from pathlib import Path as _Path
+    root = _Path(__file__).resolve().parent.parent.parent
+    return _json.loads((root / "docs" / "driver-state" / "queue.schema.json").read_text())
+
+
+def test_boundary_sweeps_is_declared_in_the_committed_schema():
+    """The live state file is gitignored, so the schema IS the contract-of-record."""
+    props = _queue_schema()["properties"]
+    assert "boundary_sweeps" in props, "the sweep record must be part of the tracked contract"
+    assert props["boundary_sweeps"]["type"] == "array"
+
+
+def test_boundary_sweeps_did_not_bump_the_schema_version():
+    """Additive top-level field; the precedent is campaign_wait / advisory_deliveries /
+    transport_audit / transitions, none of which bumped it either."""
+    assert _queue_schema()["properties"]["schema_version"]["enum"] == [1, 2]
+
+
+def test_the_declared_sweep_outcomes_match_the_code():
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent.parent / "hooks"))
+    import driver_lib as _dl
+    declared = _queue_schema()["properties"]["boundary_sweeps"]["items"]["properties"][
+        "assessments"]["items"]["properties"]["outcome"]["enum"]
+    assert set(declared) == set(_dl.SWEEP_OUTCOMES)
+    assert "blocked" not in declared, "deleted at the Step-4 gate; nothing consumed it"
+
+
+def test_the_doc_carries_the_boundary_sweep_contract():
+    """#769 AC 2. The doc is the durable contract; the skill is the procedure. Both, or a
+    fresh-session successor reading only the doc never learns the step exists."""
+    from pathlib import Path as _Path
+    root = _Path(__file__).resolve().parent.parent.parent
+    text = " ".join((root / "docs" / "multi-issue-driver.md").read_text().split())
+    assert "After every merged, deferred, or abandoned child" in text
+    assert "without a completion" in text
+    assert "before selecting or handing off the next child" in text
+    assert "boundary_sweeps" in text
+    assert "D181" in text
+
+
+def test_the_doc_states_the_gate_checks_coverage_not_judgment():
+    from pathlib import Path as _Path
+    root = _Path(__file__).resolve().parent.parent.parent
+    text = " ".join((root / "docs" / "multi-issue-driver.md").read_text().split()).lower()
+    assert "coverage and record integrity" in text

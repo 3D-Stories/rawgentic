@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>#769 — the child-boundary learnings sweep, mechanized</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-design{background:radial-gradient(1200px 600px at 50% -10%,rgba(124,156,255,.10),transparent 60%),var(--bg)}
+.tpl-design .wrap{max-width:1080px;padding:0 clamp(16px,4vw,32px) 64px}
+.tpl-design header{padding:clamp(24px,4vw,56px) 0 12px;border-bottom:none;margin-bottom:18px}
+.tpl-design h1{font-size:clamp(26px,3.4vw,40px)}
+.tpl-design h2{font-size:20.8px;margin:1.9em 0 .6em}
+
+/* #76 — the frame's companions only. Two rules, deliberately few.
+   An earlier draft of this PR also added a two-column `.dz-options` grid "so the wide measure
+   pays for itself". Both wrong: the grid was DEAD (the `.dz-options` rule further down sets
+   `display:block` at equal specificity and later source order), and it contradicted a decision
+   this file already records — cards stack FULL WIDTH because "a trade-off you have to READ is
+   not a 220px tile". The width pays for itself inside each card, where the for/against grid is
+   two columns and needs the room. Deleted rather than reconciled. */
+.tpl-design h1{line-height:1.2;max-width:22ch}
+.tpl-design header .eyebrow{font-size:11px;letter-spacing:.14em}
+.tpl-design .dz-lead{background:var(--surface);border:1px solid var(--line);
+border-left:4px solid var(--accent);border-radius:12px;padding:4px 20px 14px;margin:6px 0 26px}
+.tpl-design .dz-lead>p:first-child{font-size:17.5px;line-height:1.55;color:var(--ink);font-weight:550}
+/* Option cards. Stacked full-width, because a trade-off you have to READ is not a 220px tile;
+   the shared layer's flex row is overridden here at higher specificity. */
+.tpl-design .dz-options{margin:22px 0;display:block;counter-reset:dz-opt}
+.tpl-design .dz-options .blk-opt{counter-increment:dz-opt;display:grid;gap:10px 14px;
+grid-template-columns:1fr 1fr;grid-template-areas:"head head" "pro con";
+background:var(--surface);border:1px solid var(--line);border-radius:14px;
+padding:16px 18px;margin:0 0 16px;flex:none}
+.tpl-design .dz-options .blk-opt>.blk-title{grid-area:head;display:flex;gap:12px;
+align-items:baseline;font-size:19px;letter-spacing:-.01em;margin:0}
+.tpl-design .dz-options .blk-opt>.blk-title::before{content:counter(dz-opt,decimal-leading-zero);
+font:700 22px/1.1 ui-monospace,Menlo,Consolas,monospace;color:var(--accent);flex:none}
+.tpl-design .dz-options .blk-for{grid-area:pro;background:var(--req-c-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+.tpl-design .dz-options .blk-against{grid-area:con;background:var(--sev-high-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+/* #134 SETTLED THE FOLLOW-UP THIS COMMENT USED TO NAME. It said these labels were CSS-generated
+   content, so not dependable semantic markup, that the reference uses real DOM text
+   (`<h4>Pros</h4>`), and that making it semantic "means changing the renderer, which moves every
+   style's bytes and so cannot ride in a per-template PR". That is exactly what #134 did: `_options`
+   now emits a real `.blk-lbl` element, every rich style's bytes moved, and `plain` did not.
+   So this is no longer a `::before` at all — it RESTYLES the markup label the renderer emits.
+   Only the typography is set here; the colours come from the shared layer, which reaches this
+   template because the wrapper carries both `blk-options` and `dz-options`. `text-transform`
+   keeps the visible form FOR/AGAINST while the accessible name stays the emitted "For"/"Against".
+   The space the renderer emits after the label collapses harmlessly against a block. */
+.tpl-design .dz-options .blk-lbl{display:block;font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;text-transform:uppercase}
+/* Restated at (0,4,0): the card rule above is (0,3,0) and was silently beating the shared
+   `.blk-options .is-chosen` (0,2,0), so the chosen card lost its accent border. Measured. */
+.tpl-design .dz-options .blk-opt.is-chosen{border-color:var(--accent);border-width:2px}
+.tpl-design .dz-options .blk-opt.is-rejected{opacity:.72}
+.tpl-design .dz-options .is-chosen>.blk-title::after{content:"CHOSEN";font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent);
+border:1px solid var(--accent);border-radius:999px;padding:1px 8px;margin-left:auto;flex:none}
+@media(max-width:640px){.tpl-design .dz-options .blk-opt{grid-template-columns:1fr;
+grid-template-areas:"head" "pro" "con"}}
+/* A today/proposed pair is TWO ROOTS in one `nodes compare` block, so the
+   grid goes on the top-level list. Two separate fences cannot pair — each is
+   its own wrapper with a single child. */
+@media(min-width:720px){.tpl-design .dz-compare>ul{grid-template-columns:1fr 1fr}}
+.tpl-design .dz-compare{background:var(--code);border-radius:12px;padding:10px 14px}
+/* The verdict band — `.recommend` in the reference. A gradient wash rather than a flat fill, so
+   the decision reads as the page's conclusion and not as one more callout. */
+.tpl-design .dz-decision{margin:24px 0 8px}
+.tpl-design .dz-decision>.blk-callout{border:1px solid var(--accent);border-left-width:1px;
+border-radius:14px;padding:16px 18px;
+background:linear-gradient(180deg,var(--accent-soft),transparent)}
+.tpl-design .dz-decision>.blk-callout>.blk-title::before{content:"DECISION";display:block;
+font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent)}
+/* Trade-off table. Styled, deliberately NOT markered: a markdown table emits a bare <table> with
+   no hook, and `section_class` is not a table marker — using it would flip `design` into
+   sectioned rendering and demote its h2s. */
+.tpl-design table{border-collapse:collapse;width:100%;margin:14px 0}
+.tpl-design thead th{font:700 11px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);
+border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
+.tpl-design tbody td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.tpl-design tbody tr:nth-child(even){background:var(--code)}
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+
+:root{--accent:#f2a65e;}
+:root[data-theme=dark]{--accent:#f2a65e;}
+:root[data-theme=light]{--accent:#a26211;}
+@media print{:root,:root[data-theme=dark]{--accent:#a26211;}}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-05 22:53 MDT</div>
+<h1>#769 — the child-boundary learnings sweep, mechanized</h1>
+<p class="sub">epic #871 M4 · rawgentic</p>
+</header>
+<main>
+<div class="dz-lead"><p><strong>Issue:</strong> <a href="https://github.com/3D-Stories/rawgentic/issues/769">#769</a> · <strong>Epic:</strong> <a href="https://github.com/3D-Stories/rawgentic/issues/871">#871</a> (M4 wave, child 4 of 8) · <strong>Design authority:</strong> <code>docs/planning/2026-08-05-871-m4-session-continuity-away-mode.md</code> §3.2 · <strong>Head at design:</strong> <code>224ddace</code> · <strong>Author model:</strong> <code>claude-opus-5</code></p>
+<hr></div>
+<h2>1. The problem in one paragraph</h2>
+<p>Between two children of an epic campaign the driver already runs a boundary sequence: verify the merge SHA, record the child&#x27;s outcome, revalidate the remaining children against the new <code>origin/main</code>, hand off to a successor. Revalidation asks a narrow, machine-checkable question — <em>do the remaining issue bodies still describe reality at this head?</em> The owner&#x27;s standing order asks a wider one, verbatim from epic #906 D181 (2026-08-05):</p>
+<blockquote>&quot;in between each issue, make sure you revalidate future issues in the epic based on learnings&quot;</blockquote>
+<p>That is a <strong>learnings sweep</strong>: take what the completed child <em>learned</em> — its review findings, its recorded decisions, the systemic discoveries it made — and re-assess every remaining child against them. A completed child routinely invalidates a sibling&#x27;s premise in a way no line-anchor check can see. Today the sweep is done by hand and done well, but <strong>nothing names it and nothing records it</strong>, so a fresh-session successor cannot tell whether the sweep for child N already ran. It either redoes it worse (it lacks the predecessor&#x27;s context) or drops it silently.</p>
+<h2>2. What exists today, verified at <code>224ddace</code></h2>
+<table>
+<thead><tr><th>Surface</th><th>State</th></tr></thead>
+<tbody>
+<tr><td><code>skills/epic-run/SKILL.md</code> Step 4 boundary section (<code>:125-230</code>)</td><td>No sweep step. Grep for <code>reassess</code>/<code>learnings sweep</code>/<code>boundary sweep</code> → <strong>zero</strong></td></tr>
+<tr><td><code>docs/multi-issue-driver.md</code></td><td>Same: zero</td></tr>
+<tr><td><code>hooks/driver_lib.py</code></td><td>No sweep state of any kind</td></tr>
+<tr><td>The by-hand procedure</td><td><code>claude_docs/session_notes/epic-906-autorun-log.md</code> (D181 sweeps, three boundaries) and this wave&#x27;s <code>epic-871-m4-wave-log.md</code></td></tr>
+</tbody>
+</table>
+<p><strong>Three append-only per-transition records already exist and are the template, not an analogy:</strong> <code>transitions</code> (a resolution event before the action, a terminal event after, correlated by <code>resolution_id</code>), <code>advisory_deliveries</code> (<code>driver_lib.py:1914-1988</code> — a key constant, a pure reader that never raises on a malformed state, a claim/close pair, and an <code>undelivered_advisories</code> visibility backstop), and <code>transport_audit</code>. Each is declared in <code>docs/driver-state/queue.schema.json</code> and <strong>none of them bumped <code>schema_version</code></strong> — the schema sets <code>additionalProperties: true</code> and <code>campaign_wait</code>&#x27;s own description (<code>:162</code>) states that an additive top-level field needs no bump.</p>
+<h2>3. The one decision that shapes everything: gate, or record?</h2>
+<p>This is the fork worth arguing, because getting it wrong in either direction is expensive.</p>
+<p><strong>The sweep&#x27;s substance is judgment no validator can verify.</strong> Whether an engineer genuinely re-read five issues against a finding is not observable from state. A gate on the <em>substance</em> can therefore only check that <em>something was written</em> — attestation, not proof. This repo already has the scar: the revalidation receipt stamps an audit <code>depth</code> that its own docstring calls &quot;an instruction to the auditor, not a property the validator checks&quot;, and closing that hole is a separate issue (#944) in this same wave.</p>
+<p><strong>But one property IS mechanically checkable: COVERAGE.</strong> A sweep that names three of the five remaining children is incomplete, and that is verifiable without any judgment at all. Coverage is the honest middle: it cannot prove the thinking happened, but it can refuse a record that demonstrably did not look at everything.</p>
+<p><strong>Decision: a coverage-validated RECORD, and a fail-closed GATE on handing out the next child.</strong></p>
+<p><strong>This reverses my own first draft, and the reversal is the most load-bearing thing in this document.</strong> I drafted record-plus-advisory (no hard gate) and argued three reasons for it; the independent peer proposal (<code>gpt-5.6-sol</code>, §9) argued the opposite, and two of my three reasons do not survive contact with it.</p>
+<table>
+<thead><tr><th>My original reason</th><th>Why it does not hold</th></tr></thead>
+<tbody>
+<tr><td>&quot;A second hard gate doubles the wedge surface&quot;</td><td><strong>The common refusal is self-clearable.</strong> <code>revalidation_required</code> can need corrections posted before it opens; a <code>missing</code> sweep is always writable by the run itself, by doing the work it was ordered to do, and the refusal names that command. <strong>Narrowed twice by Step-4 findings:</strong> this is true of <code>missing</code> ONLY. <code>unreadable</code> needs state repair, for which this PR ships no API (§5), so it DOES stop an unattended run — honestly, and §4.3 now names the concrete repair rather than gesturing at &quot;existing procedures&quot;. (A third status, <code>conflict</code>, existed in the pass-2 draft and was deleted at pass 3: it was both unreachable by the designed writer and unrepairable if reached.) The first draft claimed self-clearability for every rc-8 refusal, which was false.</td></tr>
+<tr><td>&quot;An attestation gate trains the empty attestation&quot;</td><td>Partly true, and it is why coverage plus a per-child one-line reason is required rather than a bare boolean. Naming every remaining child with a reason is real friction against a bogus record — not proof, but not a checkbox either.</td></tr>
+<tr><td>&quot;The design authority only asks for state&quot;</td><td>It asks for a minimum, and does not forbid a gate.</td></tr>
+</tbody>
+</table>
+<p>What decided it is the <strong>asymmetry of the two failure modes</strong>. If the gate fires wrongly, the cost is that the run does the work the owner ordered. If the advisory is ignored, the standing order lapses silently — which is precisely the defect this issue exists to fix, and an autonomous run skipping a step under context pressure is this repo&#x27;s own catalogued mistake #8. There is also a consistency argument: revalidation, the <em>weaker</em> check, already gates. Mechanizing the owner&#x27;s <em>stronger</em> order more weakly than the weaker one is backwards.</p>
+<p><strong>What the gate honestly checks, stated in the docs so nobody over-reads it:</strong> coverage and record integrity — that a record exists for this head and names every remaining child with a reason. It does <strong>not</strong> and cannot verify that the judgment behind it was any good. That limitation is written into the contract prose deliberately, because this repo already has one audit stamp whose docstring admits &quot;depth is an instruction to the auditor, not a property the validator checks&quot; (#944 in this same wave exists to close that hole). Claiming more than coverage here would repeat it.</p>
+<h2>4. Design</h2>
+<h3>4.1 State: one new append-only top-level field, <code>boundary_sweeps</code></h3>
+<pre><code>{
+  &quot;boundary_sweeps&quot;: [
+    {
+      &quot;swept_at_head&quot;: &quot;224ddace…&quot;,   // 40-char sha; with after_issue, the replay identity
+      &quot;after_issue&quot;: 927,             // the disposed child whose learnings drove this sweep,
+                                      //   or null when the head moved with no child completing
+      &quot;learnings&quot;: &quot;…what child #927 taught, non-empty…&quot;,
+      &quot;assessments&quot;: [                // EVERY remaining eligible child, exactly once
+        {&quot;issue&quot;: 769, &quot;outcome&quot;: &quot;commented&quot;,  &quot;note&quot;: &quot;…&quot;, &quot;ref&quot;: &quot;https://…&quot;},
+        {&quot;issue&quot;: 726, &quot;outcome&quot;: &quot;unaffected&quot;, &quot;note&quot;: &quot;…&quot;}
+      ],
+      &quot;observed_at&quot;: 1754450000
+    }
+  ]
+}</code></pre>
+<p><strong>The GATE keys on the head, not on the completed child</strong> — the correction the peer proposal&#x27;s reasoning forced, and it makes the whole design smaller. What matters is not &quot;did somebody sweep after #927&quot; but &quot;has the remaining queue been assessed against the world as it is <em>now</em>&quot;. Head identity gives that directly, needs no &quot;which child completed last&quot; derivation (driver-state does not timestamp merges, so that derivation would have been guesswork), and makes the sweep the exact sibling of the revalidation receipt, which already keys on <code>validated_head</code>.</p>
+<p><strong>Replay identity is <code>(swept_at_head, after_issue)</code>, which is a different question from what the gate asks.</strong> Keeping the two apart is what closes the pass-2 defect below: the gate asks &quot;is the current world assessed?&quot;, replay asks &quot;is this the same write twice?&quot;, and one field cannot answer both.</p>
+<p><strong>A head alone is NOT a boundary identity — pass-2 adversarial High, <code>correctness</code>, CONFIRMED against my own two rules.</strong> The reviewer showed that head-as-sole-key and refuse-differing-replay combine into a silent skip. Worked through:</p>
+<ol>
+<li>At head <code>H</code>, child A is <strong>deferred</strong>. A deferral moves no commit, so the head stays <code>H</code>. A sweep</li>
+</ol>
+<p>   is recorded at <code>H</code> covering the then-eligible set <code>{B, C, D}</code>. The gate passes.</p>
+<ol start="2">
+<li>Later, still at head <code>H</code>, child B is <strong>deferred</strong> too. That is a genuine new boundary with its</li>
+</ol>
+<p>   own learnings.</p>
+<ol start="3">
+<li>Under the draft: the gate finds a valid record at <code>H</code> and reports <code>swept</code>, so B&#x27;s boundary is</li>
+</ol>
+<p>   <strong>silently skipped</strong> — and an attempt to record it would be refused as a conflicting replay at    the same key. Both halves fail at once.</p>
+<p>This is real because §4.3 makes <code>deferred</code>/<code>abandoned</code> boundaries, and those dispositions do not have to advance <code>origin/main</code>. Two changes fix it, and neither needs a new identifier:</p>
+<ul>
+<li><strong>Replay/conflict identity is <code>(swept_at_head, after_issue)</code>, not the head alone.</strong> Two sweeps at</li>
+</ul>
+<p>  one head with different <code>after_issue</code> are different boundaries and both may exist.</p>
+<ul>
+<li>**The gate compares coverage against the CURRENT eligible set, not merely against the recorded</li>
+</ul>
+<p>  one.<strong> A record is <code>swept</code> only when <code>swept_at_head == observed_head</code> AND its assessment   issue-set equals <code>sweep_eligible_children(state)</code> </strong>as it is now**. In the scenario above,   disposing B shrinks the eligible set to <code>{C, D}</code> while the stored record covers <code>{B, C, D}</code> — the   mismatch makes the gate report <code>missing</code>, exactly as it should.</p>
+<p><strong>Why not the reviewer&#x27;s <code>boundary_id</code> counter.</strong> Its recommendation was a monotonically ordered boundary id minted whenever a child is disposed or the head moves. That works, but it introduces a second identifier, a minting site, and an ordering invariant to keep — and §9 already rejected a composite id as a second representation of one fact. The coverage comparison above is not a new mechanism at all: it is the property this design already validates at write time, now also read at gate time. Same defect closed, nothing new to keep consistent.</p>
+<p><strong>Replay policy, one rule, stated once (pass-1 adversarial High, <code>internal-consistency</code>).</strong> The first draft was self-contradictory: §4.1 said a second call at the same head returns <code>None</code>, while §9 permitted a second, differing record at that key. That buys two contradictory authoritative records with no defined winner and a gate that passes anyway. The rule:</p>
+<ul>
+<li><strong>Exact payload match at the same <code>(head, after_issue)</code> → <code>None</code></strong>, write nothing — the</li>
+</ul>
+<p>  idempotent replay <code>record_child_outcome</code> already models.</p>
+<ul>
+<li><strong>Differing payload at the same <code>(head, after_issue)</code> → refuse the WRITE</strong> (<code>DriverStateError</code>,</li>
+</ul>
+<p>  CLI rc 2, nothing persisted). State therefore never holds two contradictory records for one   replay identity: the contradiction is <strong>prevented, not recorded</strong>.</p>
+<p><strong><code>conflict</code> was a status in the pass-2 draft and is DELETED — pass-3 High, <code>internal-consistency</code>.</strong> The reviewer showed the two halves could not both be true: if a differing replay writes nothing, no durable evidence of it exists, so <code>boundary_sweep_status</code> could never return <code>conflict</code>. The table promised a state unreachable by the designed writer. Two repairs were available — append a non-authoritative conflict marker so the status becomes reachable, or drop the status and rely on the refusal. <strong>Dropping is correct</strong>, and a second pass-3 finding (High, <code>feasibility</code>) is why: a durable <code>conflict</code> is a state that cannot self-clear, and this PR ships no repair API for it, so making it reachable would manufacture an unrecoverable wedge to solve a problem the writer already prevents. Refusing the write keeps state single-valued by construction.</p>
+<p><strong>&quot;Exact payload&quot; is defined SEMANTICALLY, not bytewise (pass-2 Medium, flagged ambiguous).</strong> A bytewise rule would refuse an honest operational retry, because <code>observed_at</code> differs on the second call and an equivalent assessment list may be ordered differently. Equality therefore: exclude <code>observed_at</code>; sort <code>assessments</code> by <code>issue</code>; compare the remaining fields exactly. The FIRST stored record keeps its timestamp — a retry never rewrites it.</p>
+<p><strong>This reverses §9&#x27;s &quot;not adopted&quot; line on conflicting replays, and the reversal is correct.</strong> I rejected refusal because it hands an operator a jam with no in-PR repair path. The objection was real but mis-weighted: the alternative is not &quot;no jam&quot;, it is a silently wrong authoritative record, which is worse and much harder to notice.</p>
+<h3>4.2 Outcome vocabulary — closed, THREE words</h3>
+<table>
+<thead><tr><th>Outcome</th><th>Meaning</th><th>Extra requirement</th></tr></thead>
+<tbody>
+<tr><td><code>unaffected</code></td><td>Re-read against the completed child&#x27;s learnings; nothing changes for it</td><td>—</td></tr>
+<tr><td><code>commented</code></td><td>A correction or rescope comment was posted on it</td><td><code>ref</code> required</td></tr>
+<tr><td><code>rescoped</code></td><td>Its scope or approach materially changed</td><td><code>ref</code> required</td></tr>
+</tbody>
+</table>
+<p>Closed, because every consumer in this module compares status words exactly; free text would make the record unreadable. <code>note</code> is REQUIRED on every entry including <code>unaffected</code> — that is what keeps the negative result honest while staying cheap (&quot;does not touch the transport probe&quot; is a complete, truthful <code>unaffected</code> note). A <code>ref</code> is required for anything other than <code>unaffected</code>: a claim that a child <em>changed</em> must point at the artifact.</p>
+<p><strong><code>blocked</code> was in the draft and is DELETED — Step-4 finding (adversarial, High, <code>correctness</code>).</strong> The reviewer showed that nothing consumed it: a sweep could record a child as needing a decision first, and <code>next-child</code> would then hand out that very child. Shipping a vocabulary word no caller honors is exactly the unwired-machinery defect D233 recorded against #927 PR 1. There were two honest repairs — teach <code>next-child</code> to exclude <code>blocked</code> children, or remove the word — and removal is correct here, because <strong>a child that must not be handed out already has a mechanism</strong>: <code>pending_disposition</code> and the obsolete-child owner gate, which is #944&#x27;s scope in this same wave. A second, weaker blocking channel would collide with it and give two answers to one question. A sweep that discovers a genuine blocker records <code>rescoped</code> with the <code>ref</code>, and the blocking itself goes through #944&#x27;s gate.</p>
+<h3>4.3 Pure functions in <code>hooks/driver_lib.py</code></h3>
+<pre><code>BOUNDARY_SWEEPS_KEY = &quot;boundary_sweeps&quot;
+SWEEP_OUTCOMES = frozenset({&quot;unaffected&quot;, &quot;commented&quot;, &quot;rescoped&quot;})
+
+def boundary_sweeps(state) -&gt; list                    # never raises on a malformed state
+def sweep_eligible_children(state) -&gt; list[int]       # status not in _DISPOSED_STATUSES
+def record_boundary_sweep(state, *, after_issue, swept_at_head, learnings,
+                          assessments, now_ts) -&gt; dict | None   # None ⇒ write nothing
+def boundary_sweep_status(state, observed_head) -&gt; str</code></pre>
+<p><code>record_boundary_sweep</code> <strong>raises <code>DriverStateError</code></strong> — these are caller bugs, not states of the world — on: an outcome outside <code>SWEEP_OUTCOMES</code>; an assessment for a child not in the queue (foreign); a <strong>missing</strong> eligible child or a <strong>duplicate</strong> entry (the coverage rule is set EQUALITY, both directions); an empty <code>learnings</code> or an empty <code>note</code>; a missing <code>ref</code> on a non-<code>unaffected</code> outcome; a malformed <code>swept_at_head</code> (reuses <code>validate_validated_against</code>); any over-long or control-character operator string — <code>learnings</code>, <code>note</code> <strong>and <code>ref</code></strong> (reuses <code>validate_operator_note</code>; the draft guarded only <code>note</code>, which was a self-review High: <code>ref</code> is equally operator-supplied and equally rendered back on later reads). <code>now_ts</code> is injected — this module takes no clock.</p>
+<p><strong><code>ref</code> is grammar-checked, not merely non-empty (pass-2 Medium, <code>correctness</code>).</strong> The draft required the field and then applied only length and control-character checks, so <code>&quot;done&quot;</code> would have satisfied a rule whose entire stated purpose is &quot;point at the artifact&quot; — the contract claimed more than the validator delivered, which is the same over-claiming this design criticizes elsewhere. <code>ref</code> must now match ONE of: an <code>https://</code> URL, or a repository-relative path to a durable record (<code>docs/…</code>, <code>claude_docs/…</code>). Anything else is refused before the write. The alternative the reviewer offered — weaken §4.2 to call <code>ref</code> an unchecked annotation — was rejected: the field exists precisely to carry evidence, so the honest repair is to check it.</p>
+<p><strong><code>after_issue</code> is validated, and it is nullable.</strong> The draft required it and validated it nowhere, which an adversarial finding showed lets an arbitrary or foreign number stand as provenance while the gate still opens. It is now: <strong>either <code>null</code>, or an int naming a child in this queue whose status is in <code>_DISPOSED_STATUSES</code></strong> — never absent, never anything else. <code>null</code> is a real and necessary value, not a loophole (self-review High): <code>origin/main</code> can move with NO child completing, which happened in this very wave when PR #949 landed an unplanned blocker fix between children. Without a nullable <code>after_issue</code> the gate would demand a record that could not be written truthfully, and the run would wedge with no honest way out. A <code>null</code> record&#x27;s <code>learnings</code> must say why the head moved.</p>
+<p><code>boundary_sweep_status(state, observed_head)</code> is the successor&#x27;s read path:</p>
+<table>
+<thead><tr><th>Status</th><th>When</th><th>Consequence</th></tr></thead>
+<tbody>
+<tr><td><code>not_due</code></td><td>No child has reached a disposed status yet — no boundary has happened</td><td>Proceed</td></tr>
+<tr><td><code>swept</code></td><td>A valid record exists with <code>swept_at_head == observed_head</code> <strong>whose assessment issue-set equals the CURRENT eligible set</strong></td><td>Proceed</td></tr>
+<tr><td><code>missing</code></td><td>No such record — none at this head, or the newest one&#x27;s coverage no longer matches the current eligible set</td><td><strong>Gate refuses</strong> — self-clearable by <code>sweep record</code></td></tr>
+<tr><td><code>unreadable</code></td><td><code>boundary_sweeps</code> is present but malformed</td><td><strong>Gate refuses</strong> — needs the state repair named below</td></tr>
+</tbody>
+</table>
+<p><code>not_due</code> uses <code>_DISPOSED_STATUSES</code> (<code>merged</code>/<code>deferred</code>/<code>abandoned</code>), the SAME rule as eligibility. The draft said &quot;terminal status&quot; in one place and used <code>_DISPOSED_STATUSES</code> in another — two incompatible definitions in one document (self-review Medium), and <code>TERMINAL_STATUSES</code> excludes <code>deferred</code>. A deferred child is a real boundary that produced real learnings; that is usually <em>why</em> it was deferred.</p>
+<p><code>unreadable</code> is deliberately distinct from <code>missing</code>. Both fail toward doing the work, matching the <code>boundary_consumed</code> fence — &quot;I cannot read it&quot; must never be reported as &quot;it was done&quot; — but they need different remedies, and §3&#x27;s self-clearable claim is true of <code>missing</code> ALONE.</p>
+<p><strong>The <code>unreadable</code> repair, named concretely rather than gestured at (pass-3 High, <code>feasibility</code>).</strong> The draft said &quot;the existing state-repair procedure&quot; and never said what it was, which the reviewer correctly called an unverifiable dependency underneath a hard gate. The concrete procedure, and it needs no new command: <code>claude_docs/.driver-state/&lt;campaign&gt;.json</code> is <strong>local, gitignored working state, not a shared artifact</strong> — the git-tracked contract-of-record is the schema, not the instance. So repair is (1) copy the file aside, (2) delete the malformed <code>boundary_sweeps</code> key with an editor or <code>jq</code>, (3) validate with <code>python3 -c &quot;import json;json.load(open(...))&quot;</code>, (4) re-run <code>sweep record</code>, which rebuilds the record from evidence. Removing the key is safe precisely because the field is additive and its absence reads as <code>missing</code>, never as <code>swept</code> — the fence direction is what makes deletion a legitimate repair rather than a data loss. This is the same rebuild-from-evidence posture <code>rebuild_receipt</code> takes toward unreadable revalidation records.</p>
+<h3>4.4 CLI in <code>hooks/launcher_lib.py</code>, and the gate</h3>
+<pre><code># 1. BEFORE assessing anything, capture the head the assessment will be about.
+#    `sweep begin` prints JSON, so the sha must be extracted — assigning the whole
+#    stdout would pass `{&quot;head&quot;: …}` to --expected-head and refuse every record.
+HEAD=$(python3 hooks/launcher_lib.py sweep begin --project-root . \
+       | python3 -c &#x27;import json,sys; print(json.load(sys.stdin)[&quot;head&quot;])&#x27;)
+
+# 2. …do the five-part sweep against that head…
+
+# 3. Record it, passing the captured head as a COMPARISON token:
+python3 hooks/launcher_lib.py sweep record --driver-state &lt;f&gt; --expected-head &quot;$HEAD&quot; \
+  --after-issue 927 --learnings &quot;…&quot; \
+  --assess &#x27;{&quot;issue&quot;:769,&quot;outcome&quot;:&quot;commented&quot;,&quot;note&quot;:&quot;…&quot;,&quot;ref&quot;:&quot;https://…&quot;}&#x27; \
+  --assess &#x27;{&quot;issue&quot;:726,&quot;outcome&quot;:&quot;unaffected&quot;,&quot;note&quot;:&quot;…&quot;}&#x27; --project-root .
+
+python3 hooks/launcher_lib.py sweep status --driver-state &lt;f&gt; --project-root .</code></pre>
+<p><strong><code>--assess</code> takes ONE JSON object, not a colon-delimited string.</strong> The draft wrote <code>769=commented:&quot;…&quot;:&lt;url&gt;</code>, and an adversarial finding (Medium, flagged ambiguous) pointed out that a <code>ref</code> is normally an <code>https://</code> URL, which contains the delimiter — so a conforming input parses into the wrong fields or is rejected. Notes contain colons too. JSON removes the grammar question entirely rather than inventing an escaping rule.</p>
+<p><strong>Compare-and-record, not observe-at-write (adversarial High, <code>correctness</code>).</strong> The draft had <code>sweep record</code> observe the head itself, reasoning by analogy with <code>--herdr-available</code>. The reviewer showed the analogy fails: observing at <em>write</em> time does not bind the record to the head the <em>analysis</em> was performed against. If main moves after the children are assessed but before the command runs, the old assessments get stamped with the new head and the gate accepts them as current — the exact staleness this gate exists to catch. So <code>--expected-head</code> is passed in and treated as a <strong>comparison token, never an authoritative assertion</strong>: <code>sweep record</code> re-observes the head under the state lock and refuses without writing unless it still equals <code>--expected-head</code>. A caller cannot widen the check by lying, only fail it.</p>
+<p><strong>Stdout contract for all THREE subcommands, specified rather than implied (pass-2 Medium, flagged ambiguous).</strong> The draft named three subcommands but gave an output contract for none of them, so implementation and tests could disagree about what is machine-readable and whether a replay is distinguishable from a new write:</p>
+<table>
+<thead><tr><th>Subcommand</th><th>stdout JSON</th><th>rc</th></tr></thead>
+<tbody>
+<tr><td><code>sweep begin</code></td><td><code>{&quot;head&quot;: &quot;&lt;40-char sha&gt;&quot;}</code></td><td>0; 5 if the head cannot be observed</td></tr>
+<tr><td><code>sweep record</code></td><td>`{&quot;result&quot;: &quot;recorded&quot; \</td><td>&quot;replayed&quot;, &quot;head&quot;: &quot;…&quot;, &quot;after_issue&quot;: &lt;int\</td><td>null&gt;}`</td><td>0 recorded or replayed; 2 caller/data error or refused validation (including a differing replay); 5 head unobservable; 9 <code>--expected-head</code> no longer matches</td></tr>
+<tr><td><code>sweep status</code></td><td>`{&quot;status&quot;: &quot;not_due\</td><td>swept\</td><td>missing\</td><td>unreadable&quot;, &quot;observed_head&quot;: &quot;…&quot;}`</td><td>0 <code>not_due</code>/<code>swept</code>; 3 otherwise</td></tr>
+</tbody>
+</table>
+<p><strong><code>--after-issue</code> is OPTIONAL, and omitting it means JSON <code>null</code> (pass-3 Medium, flagged ambiguous).</strong> The state contract makes <code>after_issue: null</code> load-bearing for a no-completion head move, but the draft&#x27;s only grammar showed an integer, leaving three incompatible guesses (omit, the string <code>&quot;null&quot;</code>, or a separate flag) for a case an operator must be able to express. So: omission maps to <code>null</code>; the literal text <code>null</code> is REJECTED, because accepting it would make a typo indistinguishable from the intended value. The no-completion example:</p>
+<pre><code>python3 hooks/launcher_lib.py sweep record --driver-state &lt;f&gt; --expected-head &quot;$HEAD&quot; \
+  --learnings &quot;origin/main moved via PR #949 (test-clock fix); no child completed.&quot; \
+  --assess &#x27;{&quot;issue&quot;:726,&quot;outcome&quot;:&quot;unaffected&quot;,&quot;note&quot;:&quot;unrelated to the test clock&quot;}&#x27; \
+  --project-root .</code></pre>
+<p><code>replayed</code> is deliberately distinguishable from <code>recorded</code>: a caller that cannot tell them apart cannot tell a no-op retry from a fresh boundary. Every operator line goes to <strong>stderr</strong> (the previous child broke two tests by ignoring that split).</p>
+<p><strong>The gate: <code>next-child</code> and <code>handoff</code> both refuse with a NEW <code>rc 8</code> when the sweep is <code>missing</code> or <code>unreadable</code>.</strong> rc 8 rather than 7, because <code>handoff</code> already spends 7 on the one-successor fence loser, and one return code must not mean two different things across the two commands that share this boundary. Implemented ONCE as a shared helper both commands call (self-review Low: two copies could drift on ordering), positioned after the <code>revalidation_required</code> check (rc 6) <strong>and after the not-ready check (rc 3)</strong> — so a fully merged campaign reports &quot;nothing ready&quot; and is never asked to sweep an empty queue. It performs no state write.</p>
+<p><strong>The refusal message differs by status, because the remedies differ:</strong> <code>missing</code> names the exact <code>sweep record</code> command; <code>unreadable</code> names the state-repair procedure of §4.3 and says that a sweep must be recorded again afterwards.</p>
+<p><strong>Any <code>observe_head</code> failure — launch, non-zero exit, or unparseable output — produces a non-zero rc, an actionable stderr diagnostic, and NO state write</strong> (adversarial Medium). It is never allowed to degrade into an empty or malformed observation.</p>
+<h3>4.5 Prose (the two ACs that are documentation)</h3>
+<p><code>skills/epic-run/SKILL.md</code> boundary section and <code>docs/multi-issue-driver.md</code> both gain the step with its five parts, anchored on ONE canonical sentence pinned by a drift guard:</p>
+<blockquote>**After every merged, deferred, or abandoned child — and whenever <code>origin/main</code> moves between</blockquote>
+<blockquote>children without a completion — sweep every remaining eligible child against the learnings for</blockquote>
+<blockquote>that boundary before selecting or handing off the next child.**</blockquote>
+<p><strong>The draft&#x27;s sentence said &quot;after every merged child&quot;, and that was a pass-2 High (<code>consistency</code>).</strong> The executable design treats <code>deferred</code> and <code>abandoned</code> as boundaries too, and requires a sweep after a no-completion head move (the <code>after_issue: null</code> case). An operator following the short sentence would omit sweeps the gate demands, and meet rc 8 with no idea why. The canonical sentence now covers exactly the conditions the code enforces — which is the only version worth pinning with a drift guard.</p>
+<p>Both carry the 5-part procedure (list the completed child&#x27;s findings/decisions/filed issues → sweep every remaining child&#x27;s CURRENT body against them → comment or rescope any child whose scope, approach or deps changed → log a decision entry → only then start the next child) and cite the field precedent: the D181 by-hand sweeps in <code>claude_docs/session_notes/epic-906-autorun-log.md</code> plus this wave&#x27;s log — <strong>not</strong> the issue body&#x27;s <code>epic-756-autorun-log.md</code> D6 pointer, which its own correction comment retires as unrecoverable (that log was trimmed 2026-08-02).</p>
+<h3>4.6 Known limitation shipped deliberately: a body edited after the sweep</h3>
+<p><strong>Pass-3 adversarial High, <code>correctness</code> — CONFIRMED, and NOT closed.</strong> The gate keys on the head and the eligible issue-number set, but the things assessed are mutable GitHub issue bodies. Editing a remaining child&#x27;s body without moving <code>origin/main</code> and without changing queue membership leaves the stored record satisfying the gate, so a stale assessment can authorize the next child even though the five-part procedure says each child&#x27;s CURRENT body was read.</p>
+<p><strong>What ships: nothing for this, deliberately.</strong> The pass-3 draft added a <code>body_hash</code> per assessment as partial evidence. <strong>The Step-11 review deleted it</strong>, and was right to: nothing computed it, no CLI example supplied it, and the schema made it optional — so it would have been a field that is always absent, advertising evidence that never exists. An optional-and-never-populated field is worse than no field, because the design&#x27;s own prose then over-claims.</p>
+<p><strong>What a real fix needs, and why it is not here:</strong> <code>boundary_sweep_status</code> would have to compare a recorded hash against the LIVE issue body, which means GitHub reads inside a pure state function. <code>driver_lib</code> promises no I/O and that promise is test-enforced by a source grep for <code>subprocess</code> (<code>tests/hooks/test_driver_state_write_back.py:295-301</code>). That is a capability decision deserving its own issue, not a side effect of this one.</p>
+<p><strong>The hole is SHARED with the gate this one mirrors, not introduced by it</strong> — verified rather than assumed: <code>build_revalidation_record</code> stores a <code>body_hash</code>, and <code>_receipt_covers_child</code> (<code>driver_lib.py:639</code>) compares only <code>to_sha == observed_head</code>, never the hash against a live body. A post-revalidation body edit already evades the existing gate the same way. Residual recorded as a run-record follow-up, not filed as an issue (D179).</p>
+<h2>5. What this deliberately does NOT build</h2>
+<ul>
+<li><strong>No auto-derived learnings.</strong> Nothing reads run-records to decide what a finding implies for a</li>
+</ul>
+<p>  sibling. That inference IS the judgment the owner&#x27;s order is about; a machine guess would be   worse than the human one and would launder the requirement.</p>
+<ul>
+<li><strong>No LLM judge of sweep quality</strong>, no issue-body semantic differ, no GitHub comment crawler, no</li>
+</ul>
+<p>  body-snapshot archive (all four named and rejected in the peer proposal too).</p>
+<ul>
+<li><strong>No pending/terminal two-event protocol.</strong> <code>transitions</code> needs one because a launch can die</li>
+</ul>
+<p>  mid-flight and leave an indeterminate successor. A sweep record is written after the work is   done, in one atomic locked append — there is no indeterminate window to model.</p>
+<ul>
+<li><strong>No <code>schema_version</code> bump.</strong> Additive top-level field; three precedents.</li>
+<li><strong>No edit-in-place repair API.</strong> A malformed record is repaired by the project&#x27;s existing state</li>
+</ul>
+<p>  procedures, not by a new mutation path in this PR — a second writer for a fence&#x27;s own record is   the parallel-mechanism trap #665 was rewritten to avoid.</p>
+<ul>
+<li><strong>No separate sweep log file.</strong> The driver-state file is already the campaign ledger.</li>
+<li><strong>No sweep of DISPOSED children.</strong> Nobody will be handed a merged or abandoned child.</li>
+</ul>
+<h2>6. Failure modes</h2>
+<table>
+<thead><tr><th>Failure</th><th>Behavior</th></tr></thead>
+<tbody>
+<tr><td><code>boundary_sweeps</code> malformed</td><td>Reader returns <code>[]</code>; status returns <code>unreadable</code>; the gate refuses (rc 8) naming the state-repair procedure, NOT the do-the-sweep command</td></tr>
+<tr><td>A differing record at one <code>(head, after_issue)</code></td><td>The WRITE is refused (rc 2); state stays single-valued. No durable <code>conflict</code> state exists to repair</td></tr>
+<tr><td>Coverage incomplete or duplicated</td><td><code>record_boundary_sweep</code> raises before any write; <code>_locked_state_update</code> writes nothing</td></tr>
+<tr><td><code>after_issue</code> names a non-existent, foreign, or still-active child</td><td>Refused before any write. <code>null</code> is the only non-child value accepted, and it means &quot;the head moved with no child completing&quot;</td></tr>
+<tr><td>Two processes record the same boundary</td><td>Exact match is idempotent (<code>None</code>, no write); a differing payload is refused. The state-file lock serializes them</td></tr>
+<tr><td>Head moves after a sweep</td><td>The old record no longer matches <code>observed_head</code>, so the gate refuses again — deliberately: the world changed under the assessment</td></tr>
+<tr><td><strong>Head moves between assessing and recording</strong></td><td><code>--expected-head</code> is re-compared under the lock and the write is REFUSED. This is the one the draft got wrong: observing at write time would have stamped stale assessments with a fresh head</td></tr>
+<tr><td><code>observe_head</code> fails (launch, exit code, or parse)</td><td>Non-zero rc, actionable stderr diagnostic, no state write. Never degrades to an empty observation</td></tr>
+<tr><td>Campaign fully merged</td><td><code>next-child</code> returns rc 3 (nothing ready) before the sweep gate is consulted, so a finished campaign is never asked to sweep an empty queue</td></tr>
+<tr><td>Gate fires in an unattended run</td><td><code>missing</code> is self-clearable — the refusal names the exact <code>sweep record</code> command. <code>unreadable</code> stops the run honestly and names the §4.3 repair procedure</td></tr>
+</tbody>
+</table>
+<h2>7. Security implications</h2>
+<p>The new attacker-adjacent surface is <strong>every operator-supplied string</strong> in the record — <code>learnings</code>, each assessment&#x27;s <code>note</code>, and each assessment&#x27;s <code>ref</code>. All three land in durable state and are rendered back on later reads, so all three go through <code>validate_operator_note</code> (200-char cap, no control characters) — the same guard <code>transport unpark</code> uses, and for the same reason: an escape sequence in an audit record would reach a console that never asked for it.</p>
+<p><strong>The draft guarded <code>note</code> and silently omitted <code>ref</code></strong>, which my own self-review caught as a High: the security section reasoned the hazard through for one field and then left an equally exposed sibling unguarded. A <code>ref</code> is the field most likely to be pasted from elsewhere, which makes the omission worse than arbitrary.</p>
+<p><code>after_issue</code> and every assessment <code>issue</code> are validated as canonical integers naming children of this queue before they become keys, so no body-derived text becomes a state key. No new egress and no new file path.</p>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: refreshing remote-tracking head observation via <code>launcher_lib.observe_head</code> —</li>
+</ul>
+<p>    <code>git -C &lt;root&gt; fetch &lt;remote&gt; +refs/heads/&lt;branch&gt;:refs/remotes/&lt;remote&gt;/&lt;branch&gt;</code>     followed by <code>git rev-parse</code>, BOTH return codes checked   feasibility: verified via existing-call-site — <code>hooks/launcher_lib.py:1743</code>, with the explicit     refspec at <code>:1786-1787</code> and the fail-closed fetch check at <code>:1788-1792</code>; already invoked on     this exact object kind and surface by <code>_cmd_next_child</code> (<code>launcher_lib.py:4249</code>) and     <code>_cmd_handoff</code> (<code>launcher_lib.py:4782</code>); <code>sweep record</code> and <code>sweep begin</code> call the SAME     function with the same argument shape   failure: fail-loud   surface: any launch failure, non-zero exit, or unparseable output raises <code>LauncherError</code>, which     the CLI turns into a non-zero rc plus a <code>refusing: …</code> stderr diagnostic and NO state write —     asserted by test, mirroring the existing rc-5 path</p>
+<ul>
+<li>api: advisory cross-process file locking on the driver-state file via</li>
+</ul>
+<p>  <code>launcher_lib._locked_state_update</code>   feasibility: verified via existing-call-site — <code>hooks/launcher_lib.py:3128</code>, the module&#x27;s ONLY     driver-state writer, already used for the receipt write (<code>:3672</code>), the claim (<code>:3527</code>) and the     transport writes (<code>:4531</code>, <code>:4565</code>); <code>sweep record</code> adds a caller, not a mechanism   failure: fail-loud   surface: the mutate function returns <code>None</code> to write nothing, and every refusal path in     <code>record_boundary_sweep</code> uses it — asserted by test that a refused record leaves the file     byte-identical</p>
+<p><strong>Why this replaced a bare <code>platform_apis: none</code> (adversarial Medium, <code>feasibility</code>).</strong> The draft declared <code>none</code> on the reasoning that both calls are already precedented, and the #226 working-precedent rule does exempt an exact call site. The reviewer&#x27;s point stands anyway: the design <em>relies</em> on git execution and on cross-process locking, and an omitted declaration hides which surface fails and how. Naming them with their exact call sites costs six lines and makes the <code>fail-loud</code> contract checkable. <strong>Not adopted</strong> from that finding: a new CI spike for lock contention. <code>_locked_state_update</code> is the module&#x27;s single existing writer with its own tests; a spike proving a shipped, tested mechanism still works would be ceremony, and <code>&lt;probe-before-design&gt;</code> requires a spike where a spike is the <em>evidence</em>, not where an exact call site already is.</p>
+<h2>8. Multi-PR assessment</h2>
+<p><strong>One PR.</strong> Estimated ~250-350 changed lines across two hooks, two prose files, one schema and four test files — well under the 500-line multi-PR threshold, and the prose contract and the state it describes must land together or the drift guards pin a sentence describing machinery that does not exist.</p>
+<h2>9. Peer consult provenance (WF13, cross-model, blind both ways)</h2>
+<p>An independent peer proposal was obtained through <code>hooks/review_runner.py consult</code> (backend <code>gpt</code>, reviewer <strong><code>gpt-5.6-sol</code></strong>, author <code>claude-opus-5</code>, status <code>success</code>, <code>diagnostic: true</code> — a consult never authorizes a fix round). My own draft was written to disk BEFORE the result file was opened, per the Step-3 blindness rule.</p>
+<p><strong>Independently converged</strong> (both designs, neither having seen the other): one append-only top-level field; the key binds the sweep to a head SHA, not to the completed child alone; validated coverage over exactly the remaining set; a closed disposition vocabulary in which the negative result stays cheap; a reader that never raises with <code>unreadable</code> kept distinct from <code>missing</code> and both failing closed; idempotent replay returning &quot;write nothing&quot;; CLI subcommands on the existing launcher with JSON on stdout and diagnostics on stderr; one canonical sentence pinned by a whitespace-normalizing drift guard; tests first; and the same four rejected over-engineerings (LLM quality judge, semantic body differ, comment crawler, schema-version bump).</p>
+<p><strong>Adopted FROM the peer, against my own first draft:</strong></p>
+<ol>
+<li><strong>The fail-closed gate</strong> (§3). Its argument that a self-clearable attestation gate enforces</li>
+</ol>
+<p>   ordering and gives the successor a durable answer beat my wedge-risk objection, because the    wedge is one command deep.</p>
+<ol start="2">
+<li><strong>A <code>ref</code> is required whenever a child is reported as changed.</strong> A &quot;this child changed&quot; claim</li>
+</ol>
+<p>   with nothing to point at is the weakest possible evidence, and my draft would have accepted it.</p>
+<ol start="3">
+<li>**An explicit statement in the contract prose that the validator checks coverage and record</li>
+</ol>
+<p>   integrity only** — never the quality of the judgment. Writing the limitation down is what stops    the next reader over-trusting the stamp, which is exactly how the <code>depth</code> hole (#944) happened.</p>
+<ol start="4">
+<li><strong><code>learnings</code> as a required non-empty field.</strong> My draft recorded what was swept but not what it</li>
+</ol>
+<p>   was swept <em>against</em>, which makes the record far less useful to a successor.</p>
+<p><strong>Not adopted, with reasons:</strong></p>
+<ul>
+<li><strong><code>revalidation_receipt_id</code> as a record field.</strong> There is no receipt <em>id</em> in this schema to bind</li>
+</ul>
+<p>  to; the receipt is keyed by <code>validated_head</code>. Keying the sweep on the same head achieves the   intended coupling with no new identifier.</p>
+<ul>
+<li><strong><code>boundary_id</code> as a derived <code>issue-&lt;N&gt;@&lt;sha&gt;</code> string.</strong> A composite string alongside the</li>
+</ul>
+<p>  authoritative component fields is a second representation of one fact, and the peer&#x27;s own note   concedes the components stay authoritative. Dropped as redundant.</p>
+<ul>
+<li><strong>A <code>learnings</code> sub-object of <code>summary</code>/<code>findings</code>/<code>decisions</code>/<code>filed_issues</code>.</strong> Four fields where</li>
+</ul>
+<p>  the honest content is one paragraph. A required non-empty string carries the same evidence at a   fraction of the ceremony, and the campaign&#x27;s D-entries and run-records already hold the   structured versions.</p>
+<ul>
+<li><strong><code>disposition: unchanged|changed</code>.</strong> Two words lose which action was taken. The FINAL vocabulary</li>
+</ul>
+<p>  is the three words <code>unaffected</code> / <code>commented</code> / <code>rescoped</code> (§4.2), which keep the action visible.   <strong>Corrected at pass 2 (Medium, <code>internal-consistency</code>):</strong> this bullet previously still advertised a   four-word vocabulary including <code>blocked</code>, contradicting §4.2&#x27;s explicit deletion of it — an   implementer could not tell which contract the design authorized. Blocking a child is represented   ONLY through <code>pending_disposition</code> and the #944 obsolete-child owner gate, never through a sweep   outcome.</p>
+<ul>
+<li>~~<strong>Refusing a conflicting replay at the same key.</strong>~~ **REVERSED at the Step-4 gate — the peer</li>
+</ul>
+<p>  was right and I was wrong.<strong> I had kept idempotence on an exact match but tolerated a second,   differing record at the same head, reasoning that refusing hands an operator a jam with no in-PR   repair path. The adversarial design review showed what tolerance actually buys: two contradictory   authoritative records at one head, no defined winner, and a gate that passes anyway. A jam an   operator can see beats a wrong answer nobody can. §4.1 now carries the single executable rule, and   the reader reports <code>conflict</code> as a fail-closed status. </strong>Superseded at pass 3:** the refusal stands, but the <code>conflict</code> STATUS was deleted — a refused write leaves nothing durable to report, so the contradiction is prevented rather than recorded (§4.1).</p>
+<h2>10. Step-4 design gate — pass 1 dispositions</h2>
+<p>Pass 1 merged an inline self-review (security lens, 5 findings) with a cross-model adversarial review of this document (<code>review_runner.py review-artifact --type design</code>, reviewer <code>gpt-5.6-sol</code>, author <code>claude-opus-5</code>, <code>status: success</code>, 7 findings). Merged severity: <strong>7 High, 4 Medium, 1 Low</strong> — over the <code>High: 5</code> volume threshold, so one <code>design</code> loop-back was consumed (<code>design</code> 1/2, global 1/3) and the design was revised rather than waved through.</p>
+<p><strong>Dispatch honesty:</strong> the first adversarial dispatch DIED with no result file and no <code>END</code> line. Under the vacuous-result gate that is a FAILED dispatch, not a slow one, so it was retried once in the foreground per <code>&lt;model-routing-resolve&gt;</code>; the retry returned rc 0. Its <code>input_sha256</code> was checked against this file on disk before any finding was consumed.</p>
+<table>
+<thead><tr><th>#</th><th>Source</th><th>Sev</th><th>Disposition</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>adversarial</td><td>High</td><td><strong>Applied</strong> — <code>after_issue</code> is now validated (a disposed child of this queue, or <code>null</code>), §4.3</td></tr>
+<tr><td>2</td><td>adversarial</td><td>High</td><td><strong>Applied, by DELETING <code>blocked</code></strong> rather than by adding a scheduling rule — §4.2</td></tr>
+<tr><td>3</td><td>adversarial</td><td>High</td><td><strong>Applied</strong> — compare-and-record via <code>--expected-head</code>, re-observed under the lock, §4.4</td></tr>
+<tr><td>4</td><td>adversarial</td><td>High</td><td><strong>Applied</strong> — §3&#x27;s self-clearable claim narrowed to <code>missing</code> (pass 3 narrowed it again; <code>conflict</code> was later deleted)</td></tr>
+<tr><td>5</td><td>adversarial</td><td>High</td><td><strong>Applied</strong> — one executable replay rule. Reverses §9. (The <code>conflict</code> STATUS introduced here was deleted at pass 3; the write refusal it protected remains)</td></tr>
+<tr><td>6</td><td>adversarial</td><td>Medium (ambiguous)</td><td><strong>Applied</strong> — <code>--assess</code> takes one JSON object; the colon grammar is gone</td></tr>
+<tr><td>7</td><td>adversarial</td><td>Medium</td><td><strong>Applied in part</strong> — git + locking declared with exact call sites and fail-loud surfaces. The extra CI spike is declined, with the reason recorded in the Platform section</td></tr>
+<tr><td>S1</td><td>self-review</td><td>High</td><td><strong>Applied</strong> — <code>after_issue</code> nullable (folded into #1)</td></tr>
+<tr><td>S2</td><td>self-review</td><td>High</td><td><strong>Applied</strong> — <code>ref</code> guarded by <code>validate_operator_note</code>, §7</td></tr>
+<tr><td>S3</td><td>self-review</td><td>Medium</td><td><strong>Applied</strong> — <code>_DISPOSED_STATUSES</code> used for both eligibility and <code>not_due</code></td></tr>
+<tr><td>S4</td><td>self-review</td><td>Medium</td><td><strong>Applied</strong> — self-application called out below and destined for the PR body</td></tr>
+<tr><td>S5</td><td>self-review</td><td>Low</td><td><strong>Applied</strong> — the gate is ONE shared helper both commands call</td></tr>
+</tbody>
+</table>
+<p><strong>Ambiguity circuit breaker: fired once, on finding 6, and resolved WITHOUT escalation.</strong> The reviewer flagged it ambiguous because it could not tell how the colon grammar was meant to parse. Reading the draft&#x27;s own text answers it — <code>--assess 769=commented:&quot;…&quot;:&lt;url&gt;</code> genuinely breaks on the <code>://</code> in any URL — so the finding is correct and the remedy is a syntax choice with one sensible answer, not an owner decision. This follows the D238/D240 pattern established earlier in this wave: when a reviewer flags an ambiguity, read the code or text it is about.</p>
+<h3>Self-application: this change gates the campaign that ships it</h3>
+<p><code>next-child</code> is how the #871 M4 wave selects every remaining child. The moment this merges, the wave&#x27;s own driver-state — which has no <code>boundary_sweeps</code> — makes the next <code>next-child</code> call refuse with <strong>rc 8</strong>. That is correct dogfooding and the first real exercise of the gate, but a successor pane that has not read this document would reasonably read the refusal as a regression in the tool it depends on. It is therefore called out here, in the boundary prose, and in the PR body, and the rc-8 message names the exact command that clears it.</p>
+<h2>11. Step-4 design gate — pass 2 dispositions</h2>
+<p>Pass 2 ran a fresh cross-model review against the REVISED document (reviewer <code>gpt-5.6-sol</code>, <code>status: success</code>, <code>input_sha256</code> re-checked against the file on disk). <strong>6 findings: 2 High, 4 Medium</strong> — under the <code>High: 5</code> volume threshold, so no volume loop-back; the Critical/High fold returned <code>design</code> (one <code>design-flaw</code> + one <code>spec-tightening</code>), consuming the second and last <code>design</code> loop-back (<strong><code>design</code> 2/2, global 2/3</strong>).</p>
+<table>
+<thead><tr><th>#</th><th>Sev</th><th>Disposition</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>High <code>consistency</code></td><td><strong>Applied</strong> — the canonical sentence covered only <em>merged</em> children while the code makes <code>deferred</code>/<code>abandoned</code>/no-completion-head-moves boundaries too. Rewritten to match what the gate enforces (§4.5)</td></tr>
+<tr><td>2</td><td>High <code>correctness</code></td><td><strong>Applied, by a different mechanism than recommended</strong> — see below</td></tr>
+<tr><td>3</td><td>Medium (ambiguous)</td><td><strong>Applied</strong> — &quot;exact payload&quot; now defined semantically: exclude <code>observed_at</code>, sort assessments by issue, first record keeps its timestamp</td></tr>
+<tr><td>4</td><td>Medium (ambiguous)</td><td><strong>Applied</strong> — an explicit stdout JSON contract and rc table for all three subcommands; <code>replayed</code> distinguishable from <code>recorded</code>; §9&#x27;s stale &quot;two CLI verbs&quot; corrected</td></tr>
+<tr><td>5</td><td>Medium <code>correctness</code></td><td><strong>Applied</strong> — <code>ref</code> is grammar-checked (<code>https://</code> URL or repo-relative durable path), not merely non-empty. The offered alternative (weaken the contract to call <code>ref</code> an unchecked annotation) was rejected</td></tr>
+<tr><td>6</td><td>Medium <code>internal-consistency</code></td><td><strong>Applied</strong> — §9 still advertised the four-word vocabulary including <code>blocked</code> that §4.2 had deleted</td></tr>
+</tbody>
+</table>
+<p><strong>Finding 2 is the one worth reading.</strong> It proved that head-as-sole-key plus refuse-differing-replay combine into a silent skip: a <code>deferred</code> child moves no commit, so a second deferral at the same head is a real boundary the gate would report as already swept, while the record for it would be refused as a conflicting replay. Confirmed by walking my own two rules, not taken on trust.</p>
+<p><strong>Adopted the defect, not the remedy.</strong> The reviewer proposed a monotonically ordered <code>boundary_id</code> minted at every disposal or head transition. The fix shipped instead is smaller and adds no new identifier: replay identity becomes <code>(swept_at_head, after_issue)</code>, and the gate compares the record&#x27;s coverage against the <strong>current</strong> eligible set rather than only the recorded one. Disposing another child shrinks that set, so a stale record stops satisfying the gate automatically. This reuses a property the design already validates at write time instead of introducing a counter with its own ordering invariant to maintain.</p>
+<p><strong>Ambiguity circuit breaker: fired on findings 3 and 4, resolved WITHOUT escalation</strong> — both were under-specification in my own text (what &quot;exact payload&quot; means; what the subcommands print), each with one sensible answer readable from the document itself. Same D238/D240 pattern as pass 1. That makes six ambiguity-breaker firings across this wave, all resolved from code or text, none escalated to the owner.</p>
+<h2>12. Step-4 design gate — pass 3, and the budget-exhausted CLOSE</h2>
+<p>Pass 3 reviewed the twice-revised document (reviewer <code>gpt-5.6-sol</code>, <code>status: success</code>, <code>input_sha256</code> re-checked). <strong>6 findings: 1 Critical, 3 High, 2 Medium.</strong> The Critical/High fold returned <code>design</code>, whose cap was already spent (2/2) while the global cap was not (2/3), the ambiguity breaker completed <code>clear</code>, and every Critical/High finding carries a terminal disposition — so the gate <strong>CLOSED budget-exhausted</strong> per the #798 carve-out rather than escalating to the owner. Recorded with <code>plan_lib.py close-design-gate --issue 769 --gate 4 … --breaker-result clear</code> (rc 0); the ledger is <code>claude_docs/.wf2-state/769/dispositions.jsonl</code> and the run-record <code>extra</code> row is <code>design_gate_close</code>. <strong>This is a legitimate close, not an ERROR.</strong></p>
+<table>
+<thead><tr><th>#</th><th>Sev</th><th>Disposition</th><th>Substance</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><strong>Critical</strong> <code>correctness</code></td><td>applied</td><td>The §4.4 example assigned <code>sweep begin</code>&#x27;s whole stdout to <code>$HEAD</code>, but that stdout is <code>{&quot;head&quot;: …}</code> — so every documented <code>--expected-head</code> would have been JSON and every record refused, leaving the rc-8 gate permanently uncleared. A real bug in a copy-pasteable command. Fixed, and the three-command sequence is now an end-to-end test</td></tr>
+<tr><td>2</td><td>High <code>correctness</code></td><td><strong>deferred</strong></td><td>Issue bodies are mutable: a body edited without moving the head or changing queue membership leaves a stale record satisfying the gate. §4.6</td></tr>
+<tr><td>3</td><td>High <code>feasibility</code></td><td>applied</td><td><code>conflict</code>/<code>unreadable</code> were hard-gate states with no named repair. <code>conflict</code> is deleted entirely; <code>unreadable</code>&#x27;s repair is now spelled out concretely</td></tr>
+<tr><td>4</td><td>High <code>internal-consistency</code></td><td>applied</td><td><code>conflict</code> was unreachable by the designed writer — a refused write leaves no evidence to report it. Deleted rather than made reachable</td></tr>
+<tr><td>5</td><td>Medium <code>ambiguity</code></td><td>applied</td><td><code>--after-issue</code> omission maps to <code>null</code>; the literal string <code>null</code> is rejected; a full no-completion example added</td></tr>
+<tr><td>6</td><td>Medium <code>feasibility</code></td><td><strong>REFUTED</strong></td><td>See below</td></tr>
+</tbody>
+</table>
+<p><strong>Finding 6 is refuted with evidence, not waved off.</strong> It claimed the design proves only local <code>rev-parse</code> execution and never establishes that the remote-tracking ref is refreshed, so a stale local ref could let an old sweep authorize selection. Read at source, that is wrong about the shipped code: <code>observe_head</code> builds an explicit refspec (<code>launcher_lib.py:1786-1787</code>) and runs <code>git -C &lt;root&gt; fetch &lt;remote&gt; +refs/heads/&lt;branch&gt;:refs/remotes/&lt;remote&gt;/&lt;branch&gt;</code> BEFORE the <code>rev-parse</code>, checking BOTH return codes and failing closed on the fetch (<code>:1788-1792</code>). Its own docstring records that #840 round-13 introduced exactly that refspec to kill exactly this stale-ref hazard. The grain of truth — my Platform block described the call as &quot;rev-parse-based&quot;, understating it — IS applied: the declaration now names the fetch, the refspec, and the fail-closed check with file:line.</p>
+<p><strong>Ambiguity breaker across the whole gate: fired on 6 findings over three passes and resolved every one from code or text, none escalated.</strong> Pass 3&#x27;s three flagged items were an unnamed repair path (resolved by deleting the unrepairable state and naming the remaining one&#x27;s procedure), the <code>--after-issue</code> null grammar (one sensible answer), and the fetch-freshness claim (settled by reading <code>observe_head</code>). Consistent with D238/D240, established earlier in this wave.</p>
+<p><strong>Gate outcome:</strong> design ACCEPTED as amended, with one documented deferred limitation (§4.6). Three adversarial passes produced <strong>1 Critical + 7 High + 8 Medium + 1 Low across 18 findings; 17 applied (one partly), 1 refuted.</strong></p>
+<h2>13. Step-11 pre-PR review — dispositions</h2>
+<p>One cross-model pass over the committed diff (<code>review_runner.py review-code --base origin/main</code>, reviewer <code>gpt-5.6-sol</code>, author <code>claude-opus-5</code>, <code>status: success</code>, <code>diagnostic: false</code>, <code>head_sha</code> verified equal to HEAD before any finding was consumed). <strong>6 findings: 4 High, 2 Medium — all six CONFIRMED, two of them by running the code, and all six fixed.</strong></p>
+<table>
+<thead><tr><th>#</th><th>Sev</th><th>Finding</th><th>Fix</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>High <code>completeness</code></td><td>The prose claimed campaign creation seeds <code>boundary_sweeps: []</code>, but the only seeding anywhere was <strong>in a test helper</strong> — so every NEW campaign would have inherited the migration exemption and the gate would never have fired for anyone</td><td>Seed it in the real creation seam, <code>transport resolve-creation</code>, with a test that drives the production path</td></tr>
+<tr><td>2</td><td>High <code>correctness</code></td><td><code>boundary_sweep_status</code>, documented as never raising, threw <code>TypeError</code> on an unhashable <code>issue</code> value — a corrupt file became a <code>next-child</code> OUTAGE instead of an rc-8 refusal. <strong>Reproduced before fixing</strong></td><td>Total validation; every failure becomes <code>unreadable</code></td></tr>
+<tr><td>3</td><td>High <code>security</code></td><td>Key absence is the grandfathering marker, and <strong>my own documented repair told operators to DELETE the key</strong> — turning the repair into a permanent bypass of the gate</td><td>Repair now RESETS the field to <code>[]</code>; both the CLI refusal text and the two prose surfaces say so, with the reason attached</td></tr>
+<tr><td>4</td><td>High <code>security</code></td><td>The reader checked head + issue-number set and nothing else, so a hand-written record with no <code>learnings</code>, no outcomes and no notes read as <code>swept</code>. <strong>Reproduced: it returned <code>swept</code></strong></td><td><code>sweep_record_is_intact</code>, shared with the write path; one corrupt record makes the whole field <code>unreadable</code></td></tr>
+<tr><td>5</td><td>Medium <code>correctness</code></td><td><code>observe_head</code> and the <code>--expected-head</code> comparison ran BEFORE the lock, so the head could move between the check and the append — the exact staleness compare-and-record promises to refuse</td><td>The authoritative comparison moved INSIDE <code>_locked_state_update</code>; a move there returns <code>None</code>, so nothing is written</td></tr>
+<tr><td>6</td><td>Medium <code>internal-consistency</code></td><td><code>body_hash</code> was optional in code and &quot;always recorded&quot; in the design; no caller computed it</td><td>The field is <strong>removed</strong> and §4.6 rewritten to say plainly that nothing ships for that limitation</td></tr>
+</tbody>
+</table>
+<p><strong>Note on findings 1, 3 and 6: all three are the same class of defect — prose that claimed more than the code delivered.</strong> Seeding that existed only in a test, a repair procedure that disarmed the thing it repaired, and a field advertised as evidence that nothing populated. That is worth recording as the lesson of this review, because each individually reads as a small slip and together they are a pattern: the design was written before the code, and three claims were never re-checked against what actually shipped.</p>
+<p><strong>Ambiguity breaker: fired once (finding 1) and resolved from the code</strong> — the question was whether a production creation path existed to seed; <code>transport resolve-creation</code> is it. Not escalated, consistent with D238/D240.</p>
+<p><strong>Loop-back budget after this round: <code>design</code> 2/2, <code>review</code> 1/1, global 3/3 — fully spent.</strong> The Step-11 reopen token was minted before the review (which is what debited <code>review</code>), so this fix round is authorized; there is no budget for another. Any further finding must be dispositioned without a loop-back.</p>
+
+</main>
+<footer>Last updated: 2026-08-05 22:53 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

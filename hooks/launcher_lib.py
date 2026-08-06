@@ -4220,6 +4220,165 @@ def resume_prompt_for_state(state: dict, project: str | None = None, *,
     return result
 
 
+#: #769 — the sweep gate's own return code, shared by `next-child` and `handoff`.
+#:
+#: 8 rather than 7 deliberately: `handoff` already spends 7 on the one-successor fence loser, and
+#: one return code must not mean two different things across the two commands that share this
+#: boundary. 9 is the compare-and-record refusal, which only `sweep record` can produce.
+SWEEP_REQUIRED_RC = 8
+SWEEP_HEAD_MOVED_RC = 9
+
+
+def _sweep_gate(state, observed_head) -> "tuple[int, dict] | None":
+    """The rc-8 boundary-sweep gate, in ONE place both callers use.
+
+    Returned as (rc, payload) when the run must stop, or None when it may proceed. Implemented
+    once rather than inlined twice so `next-child` and `handoff` cannot drift on the ordering —
+    both consult it AFTER their revalidation check and AFTER their not-ready check, so a finished
+    campaign reports "nothing ready" instead of being asked to sweep an empty queue.
+    """
+    status = _driver_lib().boundary_sweep_status(state, observed_head)
+    if status in ("not_due", "swept"):
+        return None
+    return (SWEEP_REQUIRED_RC, {"outcome": "sweep_required", "status": status,
+                                "observed_head": observed_head})
+
+
+def _sweep_refusal_text(status: str, driver_state: str) -> str:
+    """What an operator should DO about it — which differs by status, so the message must too.
+
+    `missing` is self-clearable by doing the ordered work. `unreadable` is not: this PR ships no
+    repair API, and telling a run to re-record over a corrupt field would loop it. Naming the
+    wrong remedy is worse than naming none.
+    """
+    if status == "unreadable":
+        return ("refusing: the campaign's `boundary_sweeps` field is unreadable, so whether the "
+                "boundary was swept cannot be determined — and a fence must never read that as "
+                f"'it was done'. REPAIR the state file ({driver_state}): copy it aside, RESET the "
+                'malformed field to an empty list (`"boundary_sweeps": []`), check the file '
+                "parses, then record the sweep again. RESET it — do not DELETE the key: an "
+                "absent key means 'campaign predates this contract' and disarms the gate "
+                "permanently, so deleting it would turn a repair into a silent bypass")
+    return ("refusing: the remaining queue has not been swept against this boundary's learnings "
+            "(the owner's standing order — see docs/multi-issue-driver.md). Do the sweep, then "
+            "record it:\n"
+            "  HEAD=$(python3 hooks/launcher_lib.py sweep begin --project-root . "
+            "| python3 -c 'import json,sys; print(json.load(sys.stdin)[\"head\"])')\n"
+            f"  python3 hooks/launcher_lib.py sweep record --driver-state {driver_state} "
+            "--expected-head \"$HEAD\" --after-issue <the child that just finished> "
+            "--learnings '<what it taught>' --assess '{\"issue\":<n>,\"outcome\":\"unaffected\","
+            "\"note\":\"<why it is unaffected>\"}' --project-root .")
+
+
+def _cmd_sweep(args) -> int:
+    """#769 — `sweep begin | record | status`.
+
+    `begin` prints the head the assessment is about to be made against; `record` re-observes it
+    under the state lock and refuses if it moved (compare-and-record — observing only at WRITE
+    time would stamp stale assessments with a fresh head, which is the staleness the gate exists
+    to catch); `status` answers the successor's question.
+
+    Machine output on stdout, operator text on stderr — `next-child` publishes a data contract on
+    stdout and two tests already broke on that boundary once.
+    """
+    driver_lib = _driver_lib()
+    project_root = getattr(args, "project_root", None) or "."
+    try:
+        observed_head = observe_head(project_root)
+    except LauncherError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 5
+    if args.verb == "begin":
+        print(json.dumps({"head": observed_head}))
+        return 0
+
+    try:
+        with open(args.driver_state, encoding="utf-8") as fh:
+            state = _load_state_strict(fh, source=args.driver_state)
+    except (OSError, ValueError) as exc:
+        print(f"refusing: cannot read {args.driver_state}: {exc}", file=sys.stderr)
+        return 2
+
+    if args.verb == "status":
+        status = driver_lib.boundary_sweep_status(state, observed_head)
+        print(json.dumps({"status": status, "observed_head": observed_head}, indent=2))
+        return 0 if status in ("not_due", "swept") else 3
+
+    # verb == "record". The expected-head comparison happens INSIDE the lock below, not here:
+    # comparing before acquiring it leaves a window in which the head moves and the record is
+    # appended anyway, which is precisely the staleness the compare-and-record rule promises to
+    # refuse (Step-11 finding). This early check is only a cheap reject of an obviously stale
+    # caller; the authoritative one is under the lock.
+    if args.expected_head != observed_head:
+        print(json.dumps({"outcome": "head_moved", "expected_head": args.expected_head,
+                          "observed_head": observed_head}, indent=2))
+        print("refusing: origin/main moved between the sweep and this record, so the assessments "
+              "describe a head that is no longer current. Re-run `sweep begin`, re-assess against "
+              "the new head, and record again", file=sys.stderr)
+        return SWEEP_HEAD_MOVED_RC
+    # `--after-issue` is OPTIONAL and OMISSION is how the no-completion head move is expressed.
+    # The literal text "null" is REJECTED rather than treated as that case: accepting it would
+    # make a typo indistinguishable from the intended value. Validated here rather than by
+    # `type=int` so the caller gets a return code and a sentence, not an argparse SystemExit.
+    after_issue = getattr(args, "after_issue", None)
+    if after_issue is not None:
+        try:
+            after_issue = int(after_issue)
+        except (TypeError, ValueError):
+            print(f"refusing: --after-issue must be an issue NUMBER, got {after_issue!r}. To "
+                  "record a boundary where origin/main moved with no child completing, OMIT the "
+                  "flag entirely — the literal text 'null' is not accepted, because a typo must "
+                  "not pass for that case", file=sys.stderr)
+            return 2
+    assessments = []
+    for raw in (args.assess or []):
+        try:
+            entry = json.loads(raw)
+        except ValueError as exc:
+            print(f"refusing: --assess must be one JSON object, got {raw!r}: {exc}",
+                  file=sys.stderr)
+            return 2
+        if not isinstance(entry, dict):
+            print(f"refusing: --assess must be a JSON OBJECT, got {type(entry).__name__}",
+                  file=sys.stderr)
+            return 2
+        assessments.append(entry)
+
+    outcome = {}
+
+    def _record(state):
+        # RE-OBSERVE under the lock. This is the authoritative half of compare-and-record: the
+        # pre-lock check above can go stale between its comparison and this mutation, and
+        # appending then would stamp assessments with a head that had already moved.
+        locked_head = observe_head(project_root)
+        if locked_head != args.expected_head:
+            outcome["head_moved"] = locked_head
+            return None                      # None ⇒ _locked_state_update writes nothing
+        new = driver_lib.record_boundary_sweep(
+            state, after_issue=after_issue, swept_at_head=locked_head,
+            learnings=args.learnings, assessments=assessments, now_ts=int(time.time()))
+        outcome["result"] = "replayed" if new is None else "recorded"
+        return new
+
+    try:
+        _locked_state_update(args.driver_state, _record)
+    except driver_lib.DriverStateError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 2
+    except LauncherError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 5
+    if "head_moved" in outcome:
+        print(json.dumps({"outcome": "head_moved", "expected_head": args.expected_head,
+                          "observed_head": outcome["head_moved"]}, indent=2))
+        print("refusing: origin/main moved while the record was being written, so nothing was "
+              "written. Re-run `sweep begin`, re-assess, and record again", file=sys.stderr)
+        return SWEEP_HEAD_MOVED_RC
+    print(json.dumps({"result": outcome.get("result"), "head": observed_head,
+                      "after_issue": after_issue}, indent=2))
+    return 0
+
+
 def _cmd_next_child(args) -> int:
     """#840 Step-11 finding 2 — the gated selection path for the IN-SESSION loop.
 
@@ -4291,6 +4450,14 @@ def _cmd_next_child(args) -> int:
     if outcome != "ready":
         print(json.dumps({"outcome": outcome, "observed_head": observed_head}, indent=2))
         return 3
+    # #769 — the boundary-sweep gate, AFTER the not-ready check so a finished campaign is never
+    # asked to sweep an empty queue.
+    gate = _sweep_gate(state, observed_head)
+    if gate is not None:
+        rc, payload = gate
+        print(json.dumps(payload, indent=2))
+        print(_sweep_refusal_text(payload["status"], args.driver_state), file=sys.stderr)
+        return rc
     # #927 AC 4, the in-session half. A `ready` here under an `inline` campaign means the run is
     # about to take the next child IN THIS SESSION — a choice the campaign recorded, not a
     # degradation. `boundary_advisory_line` cannot speak for it (preferred and effective agree),
@@ -4477,6 +4644,13 @@ def _cmd_transport(args) -> int:
             projected = driver_lib.legacy_session_mode(transport)
             if projected is not None:
                 new["session_mode"] = projected
+            # #769 — SEED the sweep contract here, at the one production point where a campaign
+            # is created. `boundary_sweep_status` grandfathers a campaign with no
+            # `boundary_sweeps` key, so without this seeding every NEW campaign would inherit the
+            # migration exemption meant for campaigns already in flight, and the gate would never
+            # fire for anyone (Step-11 finding: the only seeding in the first draft was in a test
+            # helper). Empty list = "gated, nothing swept yet".
+            new.setdefault(driver_lib.BOUNDARY_SWEEPS_KEY, [])
             now = int(time.time())
             rid = driver_lib.append_resolution(
                 new, transition_id=f"c:{new.get('campaign', 'campaign')}:0",
@@ -4804,6 +4978,14 @@ def _cmd_handoff(args) -> int:
         print(f"no handoff: campaign disposition is {disposition.get('outcome')!r} "
               f"(session_mode {mode!r})")
         return 3
+    # #769 — the same gate `next-child` consults, in the same position, from the one helper. A
+    # boundary handoff that skipped the learnings sweep is exactly the case this exists to catch.
+    gate = _sweep_gate(state, observed_head)
+    if gate is not None:
+        rc, payload = gate
+        print(json.dumps(payload, indent=2))
+        print(_sweep_refusal_text(payload["status"], args.driver_state), file=sys.stderr)
+        return rc
 
     # Probes are DERIVED or asserted by the launcher about itself — never hardcoded True. A
     # launcher that does not pass --launcher-armed/--fresh-launch-supported is telling us it
@@ -5643,6 +5825,34 @@ def main(argv: list[str] | None = None) -> int:
     adopt.add_argument("--discard", action="store_true",
                        help="nothing survives worth adopting")
 
+    # #769 — the child-boundary learnings sweep. `begin` captures the head the assessment will be
+    # about; `record` re-compares it under the state lock; `status` answers the successor.
+    p_sw = sub.add_parser("sweep",
+                          help="record or query the child-boundary learnings sweep (#769)")
+    sw_sub = p_sw.add_subparsers(dest="verb", required=True)
+    p_sw_b = sw_sub.add_parser("begin",
+                               help="print the head to assess against, as {\"head\": <sha>}")
+    p_sw_b.add_argument("--project-root", default=".")
+    p_sw_r = sw_sub.add_parser("record", help="record one boundary sweep (coverage-validated)")
+    p_sw_r.add_argument("--driver-state", required=True)
+    p_sw_r.add_argument("--project-root", default=".")
+    p_sw_r.add_argument("--expected-head", required=True,
+                        help="the head from `sweep begin`; a COMPARISON token, never an "
+                             "authoritative assertion — it is re-observed under the lock")
+    p_sw_r.add_argument("--after-issue", default=None,
+                        help="the disposed child whose learnings drove this sweep. OMIT it when "
+                             "origin/main moved with no child completing; the literal text "
+                             "'null' is rejected so a typo cannot pass for that case")
+    p_sw_r.add_argument("--learnings", required=True, help="what this boundary taught")
+    p_sw_r.add_argument("--assess", action="append", default=[], metavar="JSON",
+                        help="one JSON object per remaining eligible child: "
+                             "{\"issue\":N,\"outcome\":\"unaffected|commented|rescoped\","
+                             "\"note\":\"…\"[,\"ref\":\"https://…\"]}. JSON rather than a "
+                             "delimited string because a ref contains '://'")
+    p_sw_s = sw_sub.add_parser("status", help="has this boundary been swept? (rc 0 yes, 3 no)")
+    p_sw_s.add_argument("--driver-state", required=True)
+    p_sw_s.add_argument("--project-root", default=".")
+
     p_rp = sub.add_parser("retire-predecessor",
                           help="retire the predecessor after a mid-child handoff (#665) — the "
                                "successor runs this, and only after its position is rebuilt")
@@ -5744,6 +5954,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_ad_hoc_handoff(args)
         if args.cmd == "transport":
             return _cmd_transport(args)
+        if args.cmd == "sweep":
+            return _cmd_sweep(args)
         if args.cmd == "mid-child-handoff":
             return _cmd_mid_child_handoff(args)
         if args.cmd == "retire-predecessor":

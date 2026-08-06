@@ -749,6 +749,27 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.134.0 (2026-08-06)
+- **The child-boundary learnings sweep is mechanized, and it is a gate (#769, epic #871).** The
+  owner's D181 standing order — *"in between each issue, make sure you revalidate future issues in
+  the epic based on learnings"* — was done by hand at every boundary and named NOWHERE: a grep of
+  `skills/epic-run/SKILL.md` and `docs/multi-issue-driver.md` for reassess / learnings sweep /
+  boundary sweep returned zero, so a fresh-session successor could not tell whether the sweep for
+  child N had run. New append-only `boundary_sweeps` driver-state field (`driver_lib`:
+  `boundary_sweeps`, `sweep_eligible_children`, `record_boundary_sweep`, `boundary_sweep_status`),
+  declared in `docs/driver-state/queue.schema.json` with no `schema_version` bump; three
+  `launcher_lib sweep` subcommands (`begin`/`record`/`status`); and a shared **rc 8** refusal on
+  both `next-child` and `handoff`. Coverage is validated as set EQUALITY against the non-disposed
+  children, so a sweep that skipped a child is refused — the gate checks coverage and record
+  integrity ONLY and says so in its own prose, never the quality of the judgment. Replay identity
+  is `(head, after_issue)` rather than the head alone, because a deferred child moves no commit and
+  two real boundaries can share one head; `--expected-head` is re-compared under the state lock so
+  assessments cannot be stamped with a head that moved under them. Campaigns predating the contract
+  are grandfathered (D242) — gating them would refuse work over a boundary already past. Three
+  adversarial design passes (1 Critical + 7 High + 8 Medium + 1 Low; 17 applied, 1 refuted from
+  source) closed the gate budget-exhausted per #798. No workflow-spine change → no diagram REV.
+  Suite 5636→5698.
+
 ### v3.133.0 (2026-08-06)
 - **The child boundary is now the DEFAULT, and the one-successor fence actually runs (#927, epic
   #871).** Part 2, and it is the part that makes the feature real: part 1 shipped machinery with no

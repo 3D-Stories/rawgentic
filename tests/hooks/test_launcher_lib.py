@@ -2683,3 +2683,245 @@ class TestAdvisoryEmission:
         # generation key let `handoff` and `next-child` each speak for the same boundary.
         assert [t for t in pending if t not in emitted] == ["bnd:epic-667:612"]
         assert rc in (0, 1), "advisory-only: a failed advisory never becomes the command's verdict"
+
+
+class TestBoundarySweepCommands:
+    """#769 — the child-boundary learnings sweep: three subcommands and the rc-8 gate."""
+
+    @pytest.fixture(autouse=True)
+    def _no_live_issue_probe(self, monkeypatch):
+        monkeypatch.setenv(ll.ISSUE_PROBE_ENV, "0")
+
+    @staticmethod
+    def _opted_in(tmp_path, **over):
+        """A campaign that has ADOPTED the sweep contract (the key is present)."""
+        over.setdefault("boundary_sweeps", [])
+        return _state(tmp_path, **over)
+
+    def _head(self, tmp_path):
+        _work, head = _local_repo_with_origin(tmp_path)
+        return head
+
+    # ---------------------------------------------------------------- begin
+    def test_sweep_begin_prints_the_head_as_JSON_on_stdout(self, tmp_path, capsys):
+        work, head = _local_repo_with_origin(tmp_path)
+        rc = ll.main(["sweep", "begin", "--project-root", work])
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert json.loads(out) == {"head": head}, "stdout is machine-readable"
+
+    # --------------------------------------------------------------- record
+    def test_sweep_record_writes_a_record_and_reports_recorded(self, tmp_path, capsys):
+        state = self._opted_in(tmp_path)
+        work, head = _local_repo_with_origin(tmp_path)
+        rc = ll.main(["sweep", "record", "--driver-state", str(state), "--project-root", work,
+                      "--expected-head", head, "--after-issue", "611",
+                      "--learnings", "#611 moved the boundary prose",
+                      "--assess", json.dumps({"issue": 612, "outcome": "unaffected",
+                                              "note": "unrelated to the prose"})])
+        assert rc == 0
+        assert json.loads(capsys.readouterr().out)["result"] == "recorded"
+        after = json.loads(state.read_text(encoding="utf-8"))
+        assert len(after["boundary_sweeps"]) == 1
+        assert after["boundary_sweeps"][0]["after_issue"] == 611
+
+    def test_an_exact_replay_reports_replayed_and_does_not_append(self, tmp_path, capsys):
+        state = self._opted_in(tmp_path)
+        work, head = _local_repo_with_origin(tmp_path)
+        argv = ["sweep", "record", "--driver-state", str(state), "--project-root", work,
+                "--expected-head", head, "--after-issue", "611", "--learnings", "x",
+                "--assess", json.dumps({"issue": 612, "outcome": "unaffected", "note": "n"})]
+        assert ll.main(argv) == 0
+        capsys.readouterr()
+        assert ll.main(argv) == 0
+        assert json.loads(capsys.readouterr().out)["result"] == "replayed", \
+            "a caller that cannot tell a replay from a fresh write cannot tell a no-op boundary"
+        assert len(json.loads(state.read_text(encoding="utf-8"))["boundary_sweeps"]) == 1
+
+    def test_omitting_after_issue_records_null_for_a_no_completion_head_move(
+            self, tmp_path, capsys):
+        state = self._opted_in(tmp_path)
+        work, head = _local_repo_with_origin(tmp_path)
+        rc = ll.main(["sweep", "record", "--driver-state", str(state), "--project-root", work,
+                      "--expected-head", head,
+                      "--learnings", "main moved via an unplanned blocker fix; nothing completed",
+                      "--assess", json.dumps({"issue": 612, "outcome": "unaffected", "note": "n"})])
+        assert rc == 0
+        after = json.loads(state.read_text(encoding="utf-8"))
+        assert after["boundary_sweeps"][0]["after_issue"] is None
+
+    def test_the_literal_string_null_is_rejected_rather_than_read_as_the_null_case(
+            self, tmp_path):
+        state = self._opted_in(tmp_path)
+        work, head = _local_repo_with_origin(tmp_path)
+        assert ll.main(["sweep", "record", "--driver-state", str(state), "--project-root", work,
+                        "--expected-head", head, "--after-issue", "null", "--learnings", "x",
+                        "--assess", json.dumps({"issue": 612, "outcome": "unaffected",
+                                                "note": "n"})]) == 2
+
+    def test_a_moved_head_refuses_the_write_instead_of_stamping_stale_assessments(
+            self, tmp_path):
+        """The compare-and-record property. Observing at write time would have accepted this."""
+        state = self._opted_in(tmp_path)
+        work, _head = _local_repo_with_origin(tmp_path)
+        stale = "c" * 40
+        rc = ll.main(["sweep", "record", "--driver-state", str(state), "--project-root", work,
+                      "--expected-head", stale, "--after-issue", "611", "--learnings", "x",
+                      "--assess", json.dumps({"issue": 612, "outcome": "unaffected", "note": "n"})])
+        assert rc == 9
+        assert json.loads(state.read_text(encoding="utf-8"))["boundary_sweeps"] == [], \
+            "a refused record writes nothing"
+
+    def test_incomplete_coverage_is_refused_and_writes_nothing(self, tmp_path):
+        state = self._opted_in(tmp_path, issues=[{"number": 611, "status": "merged"},
+                                                 {"number": 612, "status": "queued"},
+                                                 {"number": 613, "status": "queued"}])
+        work, head = _local_repo_with_origin(tmp_path)
+        rc = ll.main(["sweep", "record", "--driver-state", str(state), "--project-root", work,
+                      "--expected-head", head, "--after-issue", "611", "--learnings", "x",
+                      "--assess", json.dumps({"issue": 612, "outcome": "unaffected", "note": "n"})])
+        assert rc == 2
+        assert json.loads(state.read_text(encoding="utf-8"))["boundary_sweeps"] == []
+
+    def test_a_malformed_assess_payload_is_a_caller_error_not_a_crash(self, tmp_path):
+        state = self._opted_in(tmp_path)
+        work, head = _local_repo_with_origin(tmp_path)
+        for bad in ("not json", "[]", '{"issue": "x"}', "null"):
+            assert ll.main(["sweep", "record", "--driver-state", str(state),
+                            "--project-root", work, "--expected-head", head,
+                            "--after-issue", "611", "--learnings", "x", "--assess", bad]) == 2
+
+    # --------------------------------------------------------------- status
+    def test_sweep_status_reports_missing_then_swept(self, tmp_path, capsys):
+        state = self._opted_in(tmp_path)
+        work, head = _local_repo_with_origin(tmp_path)
+        assert ll.main(["sweep", "status", "--driver-state", str(state),
+                        "--project-root", work]) == 3
+        assert json.loads(capsys.readouterr().out)["status"] == "missing"
+        ll.main(["sweep", "record", "--driver-state", str(state), "--project-root", work,
+                 "--expected-head", head, "--after-issue", "611", "--learnings", "x",
+                 "--assess", json.dumps({"issue": 612, "outcome": "unaffected", "note": "n"})])
+        capsys.readouterr()
+        assert ll.main(["sweep", "status", "--driver-state", str(state),
+                        "--project-root", work]) == 0
+        assert json.loads(capsys.readouterr().out)["status"] == "swept"
+
+    # ----------------------------------------------------------- the rc-8 gate
+    def test_next_child_refuses_with_rc_8_when_the_boundary_is_unswept(self, tmp_path, capsys):
+        state = self._opted_in(tmp_path)
+        work, _head = _local_repo_with_origin(tmp_path)
+        rc = ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        streams = capsys.readouterr()
+        assert rc == 8
+        assert json.loads(streams.out)["status"] == "missing", "stdout stays parseable JSON"
+        assert "sweep record" in streams.err, "the refusal must name the command that clears it"
+
+    def test_next_child_proceeds_once_the_sweep_is_recorded(self, tmp_path, capsys):
+        state = self._opted_in(tmp_path)
+        work, head = _local_repo_with_origin(tmp_path)
+        ll.main(["sweep", "record", "--driver-state", str(state), "--project-root", work,
+                 "--expected-head", head, "--after-issue", "611", "--learnings", "x",
+                 "--assess", json.dumps({"issue": 612, "outcome": "unaffected", "note": "n"})])
+        capsys.readouterr()
+        rc = ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        assert rc == 0
+        assert json.loads(capsys.readouterr().out)["next_issue"] == 612
+
+    def test_a_grandfathered_campaign_is_NOT_gated(self, tmp_path, capsys):
+        """Every campaign in flight at upgrade has no sweep key; refusing them would be a
+        regression over a boundary already past."""
+        state = _state(tmp_path)                       # no boundary_sweeps key
+        work, _head = _local_repo_with_origin(tmp_path)
+        assert ll.main(["next-child", "--driver-state", str(state), "--project-root", work]) == 0
+        assert json.loads(capsys.readouterr().out)["next_issue"] == 612
+
+    def test_an_unreadable_sweep_field_refuses_with_the_REPAIR_message_not_the_sweep_one(
+            self, tmp_path, capsys):
+        state = self._opted_in(tmp_path, boundary_sweeps="corrupt")
+        work, _head = _local_repo_with_origin(tmp_path)
+        rc = ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        streams = capsys.readouterr()
+        assert rc == 8
+        assert json.loads(streams.out)["status"] == "unreadable"
+        assert "repair" in streams.err.lower()
+        assert "sweep record" not in streams.err, \
+            "an unreadable field is NOT self-clearable; saying so would send the run in a loop"
+
+    def test_a_finished_campaign_reports_nothing_ready_rather_than_demanding_a_sweep(
+            self, tmp_path, capsys):
+        state = self._opted_in(tmp_path, issues=[{"number": 611, "status": "merged"},
+                                                 {"number": 612, "status": "merged"}])
+        work, _head = _local_repo_with_origin(tmp_path)
+        rc = ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        assert rc == 3, "the sweep gate must sit AFTER the not-ready check"
+        assert "sweep" not in capsys.readouterr().err.lower()
+
+    def test_the_documented_three_command_sequence_runs_end_to_end(self, tmp_path, capsys):
+        """The Step-4 pass-3 CRITICAL was a broken copy-pasteable example: the doc assigned
+        `sweep begin`'s whole stdout to --expected-head, which is JSON, not a sha. The published
+        sequence is therefore under test."""
+        state = self._opted_in(tmp_path)
+        work, _head = _local_repo_with_origin(tmp_path)
+        assert ll.main(["sweep", "begin", "--project-root", work]) == 0
+        head = json.loads(capsys.readouterr().out)["head"]        # <- the extraction step
+        assert ll.main(["sweep", "record", "--driver-state", str(state), "--project-root", work,
+                        "--expected-head", head, "--after-issue", "611", "--learnings", "x",
+                        "--assess", json.dumps({"issue": 612, "outcome": "unaffected",
+                                                "note": "n"})]) == 0
+        capsys.readouterr()
+        assert ll.main(["sweep", "status", "--driver-state", str(state),
+                        "--project-root", work]) == 0
+        assert json.loads(capsys.readouterr().out)["status"] == "swept"
+
+
+class TestBoundarySweepReviewFixes:
+    """Step-11 findings on #769, each with the property it protects."""
+
+    @pytest.fixture(autouse=True)
+    def _no_live_issue_probe(self, monkeypatch):
+        monkeypatch.setenv(ll.ISSUE_PROBE_ENV, "0")
+
+    def test_campaign_creation_SEEDS_the_sweep_contract(self, tmp_path, monkeypatch):
+        """Without production seeding every NEW campaign inherits the migration exemption meant
+        for campaigns already in flight, and the gate never fires for anybody."""
+        work, _head = _local_repo_with_origin(tmp_path)
+        state = tmp_path / "fresh-campaign.json"
+        state.write_text(json.dumps({"campaign": "epic-new", "project": PROJECT,
+                                     "issues": [{"number": 1, "status": "queued"}]}),
+                         encoding="utf-8")
+        monkeypatch.setattr(ll, "resolve_creation_transport", lambda **k: ("inline", "probed"))
+        assert ll.main(["transport", "resolve-creation", "--driver-state", str(state),
+                        "--project-root", work]) == 0
+        after = json.loads(state.read_text(encoding="utf-8"))
+        assert after["boundary_sweeps"] == [], "a new campaign must be gated, not grandfathered"
+
+    def test_a_head_that_moves_before_the_LOCK_refuses_and_writes_nothing(self, tmp_path,
+                                                                         monkeypatch):
+        """Comparing before acquiring the lock leaves a window in which the head moves and the
+        record is appended anyway — the exact staleness compare-and-record promises to refuse."""
+        state = _state(tmp_path, boundary_sweeps=[])
+        work, head = _local_repo_with_origin(tmp_path)
+        calls = {"n": 0}
+        real = ll.observe_head
+
+        def _moving(root, **kw):
+            calls["n"] += 1
+            return real(root, **kw) if calls["n"] == 1 else "f" * 40
+
+        monkeypatch.setattr(ll, "observe_head", _moving)
+        rc = ll.main(["sweep", "record", "--driver-state", str(state), "--project-root", work,
+                      "--expected-head", head, "--after-issue", "611", "--learnings", "x",
+                      "--assess", json.dumps({"issue": 612, "outcome": "unaffected", "note": "n"})])
+        assert rc == 9
+        assert json.loads(state.read_text(encoding="utf-8"))["boundary_sweeps"] == []
+
+    def test_the_unreadable_refusal_says_RESET_and_never_says_delete(self, tmp_path, capsys):
+        """The first draft's repair text told operators to DELETE the key — which grandfathers the
+        campaign and disarms the gate permanently, turning the documented repair into a bypass."""
+        state = _state(tmp_path, boundary_sweeps="corrupt")
+        work, _head = _local_repo_with_origin(tmp_path)
+        assert ll.main(["next-child", "--driver-state", str(state), "--project-root", work]) == 8
+        err = capsys.readouterr().err.lower()
+        assert "reset" in err and '"boundary_sweeps": []' in err
+        assert "delete the malformed" not in err
+        assert "disarms the gate" in err, "the reason must travel with the instruction"
