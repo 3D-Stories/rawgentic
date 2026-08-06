@@ -1,16 +1,17 @@
 # Traycer × rawgentic × Herdr — decision analysis
 
-**Do not switch.** Traycer competes with Herdr and half of herdr-dashboard — not with rawgentic — and a switch today would discard the workspace's most battle-tested layer to re-buy its youngest one. Run a $0 BYOA trial of Traycer Desktop in parallel if curiosity warrants it; re-evaluate on a named trigger, not on a date.
+**Switch — on a sequenced, spike-gated plan.** Owner decision 2026-08-06: Traycer's user interface is strongly preferred over Herdr's ("1,000× better"), which inverts the console-layer weighting this analysis first rested on. rawgentic survives the switch unchanged. The anchor of the migration is replacing the custom-built pane-handoff machinery with Traycer's native orchestration, and one go/no-go spike gates that: verified multi-KB prompt delivery into a running Claude Code session. The plan is §"The switch plan" below.
 
 **Date:** 2026-08-06 · **Status:** decision document, report-only · **Author:** Claude Fable 5, owner-directed run
 **Scope:** should this workspace switch to, combine with, or ignore [Traycer](https://github.com/traycerai/traycer)?
 **Method:** three parallel inventory/research agents + first-hand verification of every load-bearing claim; live Claude Code docs for harness claims; cross-model Codex consult (see §Consult). Sources listed in §Sources.
 
 ```chips
+Owner decision 2026-08-06: full-switch plan | done
 Traycer Desktop/CLI/Host: MIT, verified first-hand | done
-Codex peer consult: obtained, converges | done
+Codex peer consult: obtained | done
 BYOA $0 permanence past 2026-08-31 | blocked
-Delivery-semantics spike | wip
+Delivery-semantics spike (go/no-go) | wip
 ```
 
 ---
@@ -18,10 +19,12 @@ Delivery-semantics spike | wip
 ## Recommendation (read this first)
 
 ```verdict
-ship | Keep rawgentic + Herdr + herdr-dashboard as the production stack; Traycer obsoletes almost none of the open roadmap.
-risk | Traycer's multi-account-per-provider is genuinely attractive for the 5-hour-window pain (#586) — evaluate it as a separate capability purchase, never as a reason to switch runtimes.
-risk | A switch would kill the just-shipped pane-handoff transport (#927), the herdr-dashboard whole, and terminal-native operation, for a GUI app from a ~10–20-person startup with promo-dependent pricing.
+ship | Switch: adopt Traycer as the console and orchestration runtime on the sequenced plan below (owner decision 2026-08-06, UI preference decisive). rawgentic stays the process engine, unchanged.
+risk | ONE go/no-go gate before any deep work: the delivery-semantics spike. If Traycer cannot verifiably deliver multi-KB prompts into a running Claude Code session, the switch stalls at console-only.
+risk | Herdr is NOT retired until a full epic proves the Traycer transport. The herdr-dashboard inspector has no Traycer equivalent and gets its own disposition decision.
 ```
+
+**Analysis provenance, stated plainly.** This document's first verdict (pre-owner-review) was "do not switch," resting partly on an *inferred* claim that the owner works terminal-first and would score Traycer's GUI as a loss. The owner falsified that inference on review: the UI preference runs strongly the other way, and the console is the surface touched all day. The facts below (matrix, gaps, effort, licensing) were not changed by that input — only the weighting was. The Codex consult (§Consult) advised the conservative track; the owner's decision supersedes its weighting, not its risk list, and its risks are folded into the plan's gates.
 
 The three decision-critical findings:
 
@@ -29,7 +32,38 @@ The three decision-critical findings:
 2. **A switch kills the just-shipped handoff transport and the whole herdr-dashboard, and obsoletes only a thin slice of the open roadmap.** The pane-handoff chain (#927 merged 2026-08-06, `origin/main` 224ddace) and its verification ladder are herdr-coupled at the spawn/delivery layer; herdr-dashboard (10,386 source LOC + 17,274 test LOC, 1123-test suite) is a herdr pane by GATE C decision. Of the 7 open milestone epics, Traycer meaningfully overlaps only the herdr-transport slice of M2/M4 and the usage half of herdr-dashboard. M2.5, M3, M5, M6, M7 are untouched. *(Confirmed: §Q7 epic-by-epic walk.)*
 3. **Traycer's one genuinely attractive, hard-to-replicate capability is multi-account-per-provider with in-app usage tracking** — several Claude/Codex accounts, choosing which account an agent uses, credit/usage UI. That lands squarely on this workspace's 5-hour-window pain (#586 resume rewrite, long-run-resume). It is the strongest single argument for the parallel trial. *(Confirmed: Traycer Host changelog via docs.traycer.ai/host/changelog.md; #586 scope from epic #871.)*
 
-**Re-evaluation triggers** (any one): Traycer ships a terminal-native (non-GUI) runtime; herdr development stalls (>8 weeks without a release); the M2/M4 handoff work fails its proving runs; BYOA tier survives past 2026-08-31 with local-only guarantees intact and the workspace starts a new machine/team context where cloud sync matters.
+---
+
+## The switch plan (owner-approved direction, 2026-08-06)
+
+The anchor: **Traycer replaces the custom-built pane-handoff machinery.** What that means precisely — the handoff *contract* (three separately-verified turns, proven by the successor's own on-disk artifacts) is transport-agnostic and stays ours; Traycer replaces the *substrate* (pane split, agent start, send-text, the herdr argv layer in `launcher_lib.py`). Traycer natively provides the parts Herdr never had: task-scoped agent creation in worktrees, agent-to-agent messaging, session resume, lineage, notifications.
+
+```steps
+0 | Vet + pin | Supply-chain vet of all three Traycer components (host/desktop/cli), the #609 pattern: pinned versions, checksums, analytics audit (Sentry/PostHog off or built from source), BYOA local-only confirmed. | must
+1 | Delivery spike (GO/NO-GO) | Prove Traycer can create a Claude Code agent and deliver the three handoff turns — bind, multi-KB prompt, /goal — each verified by the existing artifact ladder (registry line, goal_status attachment). Exercise busy-agent, duplicate-send, restart, timeout. Stop the plan here if submission cannot be proven deterministically. | must
+2 | Console adoption | Daily-drive Traycer Desktop (BYOA) as the console while ALL existing machinery keeps running on Herdr. Zero rawgentic code changes. Independently valuable; fully reversible. | should
+3 | Transport port | Add a `traycer` transport beside `pane_chain`/`inline` in `driver_lib`/`launcher_lib`, shaped by the consult's RuntimeTransport contract (probe/create/send-with-idempotency-key/status/notify/close, immutable IDs, no name-based cleanup). The pane-handoff and epic-run skills keep their invariants; only the backend changes. | must
+4 | Proving run | One full epic on the Traycer transport against the Herdr baseline. Fallback asymmetry (consult ⊕): auto-fallback to Herdr only BEFORE successor creation; after partial creation, fail closed. | must
+5 | Peripheral ports | Context-meter insert-prompt channel; pane_watch → Traycer notification hooks (URL/command); mid-turn-questions re-route. | should
+6 | Retirement + dispositions | Retire Herdr only after step 4 passes plus stable weeks of operation. Undo stays cheap: the herdr pin, runbook, and transport survive in git history. herdr-dashboard: usage half superseded by Traycer's tracking; the inspector gets an explicit owner disposition (port, park, or run inside a Traycer terminal panel — its follow-me dock behavior does not carry over). | must
+```
+
+### The epic-run crossover, rationalized (owner input 2026-08-06)
+
+The owner named the deepest overlap precisely: **Traycer's epic pane driving regular panes is the same shape as rawgentic's epic-run driving WF2 children.** The rationalization that keeps one owner per concern:
+
+| Concern | Owner after the switch | Why |
+|---|---|---|
+| The driving *substrate* — spawn a child agent, deliver its prompt, watch it, continue | **Traycer** (epic pane + agent-to-agent: create child, message, read transcript, lineage tree; `TRAYCER_EPIC_ID`/`TRAYCER_AGENT_ID` env — confirmed, docs.traycer.ai/concepts/agent-to-agent.md, traycer-cli README) | This is exactly the layer #927's pane-chain hand-built on Herdr. Traycer has it natively, with a UI (the lineage tree makes an epic run *visible*, which nothing in the Herdr stack does). |
+| The driving *session* — queue derivation, dependency parsing, merge policy, exactly-one-successor fence, revalidate-after-merge, the /goal contract | **rawgentic** — the epic pane simply hosts a Claude Code session running `/rawgentic:epic-run`; children are WF2-fresh sessions in Traycer-spawned panes | The driver's process semantics are plugin logic and survive unchanged (Q2). Only its transport enum gains a `traycer` member (plan step 3). |
+| The queue's source of truth | **GitHub epic issues, unchanged** — Traycer's own Epic-mode tickets/specs stay OFF | Same anti-duplication rule as the planning layer: two queue stores would drift, and the whole revalidation discipline (#840, #944) is built on issue bodies. |
+| Per-child process (WF2 gates, TDD, reviews, security scan, run-records) | **rawgentic**, inside each child session | Traycer's verification loop is advisory UX; the workspace's is enforced process. Nothing moves. |
+
+Put in one sentence: **the epic pane is the rawgentic driver wearing a Traycer face — Traycer supplies the panes, the messaging, and the visibility; rawgentic keeps deciding what a child is, when it is done, and what the queue says.** Plan step 3 covers the epic-run transport port; step 4's proving run is precisely one epic driven this way.
+
+**Effort for the full plan:** the Q6 MVP range (15–35 sessions) plus peripheral ports and retirement/UAT — roughly **20–45 focused sessions ≈ 4–9 calendar weeks**, same uncertainty drivers, dominated by steps 1 and 3. Steps 0–2 alone are ~3–6 sessions and deliver the UI win immediately.
+
+**Roadmap consequence to decide at epic level:** the M2 remainder (#835, and the meter items' insert-prompt channel) and parts of M4 target Herdr-coupled machinery this plan replaces. Re-plan those queues once step 1 returns, not before — a failed spike leaves them all still valid.
 
 ---
 
@@ -123,7 +157,7 @@ Assume: Herdr retired, Traycer Desktop hosts all agent sessions, rawgentic plugi
 | 2 | **Context-meter's mid-turn insert-prompt channel dead** (`context_meter.py:1017-1050` shells `launcher_lib insert-prompt --pane`). The meter still *emits*; the forced-handoff acting path breaks. | High | Same port; or accept advisory-only meter. |
 | 3 | **pane_watch blocked-agent watcher dead** (polls herdr snapshot — `pane_watch_lib.py`). | Medium | Traycer's notification hooks ("call a URL or run a command, filtered by severity" — Host changelog) are a plausible, likely *better* replacement. Inferred; a spike would confirm. |
 | 4 | **herdr-dashboard dead entirely** (a herdr pane by GATE C; dock, follow-me, inspector, attribution). Biggest sunk-cost casualty: 10,386 + 17,274 test LOC. | High | Usage half → Traycer's tracking. Inspector half → no replacement (Q3). |
-| 5 | **Terminal-native operation lost.** Herdr is a headless server whose panes survive lid-close/SSH; Traycer Desktop is a GUI app (native installers; its CLI manages the Host but the working surface is the GUI). Phone/SSH attach → replaced by $10/mo cloud sync, a different trust model. | Medium–High (owner works terminal-first) | None clean. |
+| 5 | **Terminal-native operation lost.** Herdr is a headless server whose panes survive lid-close/SSH; Traycer Desktop is a GUI app (native installers; its CLI manages the Host but the working surface is the GUI). Phone/SSH attach → replaced by $10/mo cloud sync, a different trust model. *Correction (owner input 2026-08-06): the severity here was calibrated on an inferred terminal-first preference the owner rejected — the GUI is preferred. The detach/SSH survival question stays real and is checked in switch-plan step 0.* | ~~Medium–High~~ Low (severity re-scored by owner input) | Cloud sync, or Host-on-server. |
 | 6 | **mid-turn-questions workspace skill dead** (spawns a sibling herdr pane). | Low | Re-route via Traycer agent-create, or answer inline. |
 | 7 | **Supply-chain posture resets.** herdr is pinned by sha256 with a vet doc (`hooks/herdr-pin.json`, #609); Traycer would need the same vetting from zero, on a 3-component (host/desktop/cli) weekly-RC release train. | Medium | Repeat the #609 process. |
 | 8 | **Workspace muscle memory + runbooks** (`docs/runbooks/herdr.md`, 631 lines of measured behaviors) all stale. | Medium | Rewrite against Traycer; the herdr one took weeks of live falsification. |
@@ -205,7 +239,7 @@ Excluded from the range: porting the dashboard inspector (add ~2–4 weeks if wa
 
 **What already-built work survives a switch:** the entire rawgentic plugin (all skills, hooks, 5,487 tests), mempalace, decision logs, goal machinery, run-records, the transport *architecture* (#927's enum + artifact ladder). **What dies:** launcher_lib's herdr argv layer, pane_watch_lib (1,546 lines), herdr-pin + vet, the herdr runbook, mid-turn-questions, the herdr workspace skill, and herdr-dashboard's shipped whole (its inspector concepts could be re-hosted later, at new cost).
 
-**The strategic asymmetry, plainly:** this workspace spent June–August making Herdr boring — vetted, pinned, runbooked, falsified, and now load-bearing (D176). Traycer at best re-buys that layer with a GUI, cloud options, and multi-account; at worst it re-opens every race-condition class that was just closed. The process layer, where the actual differentiation lives, gains nothing from the switch.
+**The strategic asymmetry, plainly:** this workspace spent June–August making Herdr boring — vetted, pinned, runbooked, falsified, and now load-bearing (D176). A switch re-buys that layer and re-opens the race-condition classes that were just closed, and the process layer gains nothing from it. *That cost is real and stands — the owner weighed it against the daily-driver UI preference and chose to pay it (Recommendation, 2026-08-06). The switch plan's step-1 gate and Herdr-as-fallback rule exist precisely to keep this cost bounded while it is paid.*
 
 ---
 
