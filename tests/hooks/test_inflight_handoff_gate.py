@@ -418,3 +418,52 @@ class TestEveryCallSiteDeclares:
             body = tail[:tail.index(")\n")]
             assert "inflight=" in body, \
                 f"a perform_handoff call site does not pass inflight=: {body[:200]}"
+
+
+# ---------------------------------------------------------------------------
+# Step-11 review findings, each with the case that proves the fix
+# ---------------------------------------------------------------------------
+
+class TestStep11Findings:
+    def test_a_doubled_leading_slash_does_not_evade_the_scan(self) -> None:
+        """F1 (High). `posixpath.normpath` PRESERVES exactly two leading slashes — the POSIX
+        implementation-defined case — so `//tmp/...` normalized to `//tmp/...`, whose first
+        component is empty, and rule 2's `parts[1] == "tmp"` test missed it. Measured before the
+        fix: this spelling returned clean while one and three slashes returned a hit."""
+        doubled = "/" + INCIDENT_PATH
+        assert doubled.startswith("//tmp/")
+        hits = ll.session_scoped_paths(f"read {doubled}")
+        assert [h["path"] for h in hits] == [INCIDENT_PATH]
+
+    @pytest.mark.parametrize("slashes", ["/", "//", "///", "////"])
+    def test_every_leading_slash_run_normalizes_to_the_same_path(self, slashes) -> None:
+        tail = INCIDENT_PATH.lstrip("/")
+        hits = ll.session_scoped_paths(f"see {slashes}{tail}")
+        assert [h["path"] for h in hits] == [INCIDENT_PATH]
+
+    def test_the_early_refusal_names_WHICH_check_refused(self) -> None:
+        """F2 (Medium). The two checks have different remedies, and `perform_handoff`'s backstop
+        already distinguishes them. A bare string made the campaign CLIs report `inflight` for a
+        path refusal, so a machine caller had to parse stderr to learn what to fix."""
+        step, reason = ll.inflight_early_refusal(
+            _decl(items=[_item()], attested_none=False), "a clean prompt")
+        assert step == "inflight" and "step4-regate2" in reason
+        step, reason = ll.inflight_early_refusal(_decl(), f"read {INCIDENT_PATH}")
+        assert step == "durable_path" and INCIDENT_PATH in reason
+        assert ll.inflight_early_refusal(_decl(), "a clean prompt") is None
+
+    @pytest.mark.parametrize("bad_item", [
+        {"kind": "bash", "ident": "x1", "state": "running", "detail": "a" * 500},
+        {"kind": "bash", "ident": "not a token", "state": "running", "detail": ""},
+        {"kind": "bash", "ident": 17, "state": "running", "detail": ""},
+        {"kind": "bash", "ident": "x1", "state": "running", "detail": None},
+        {"kind": "bash", "ident": "x1", "state": "running", "detail": "line\nbreak"},
+        {"kind": "bash", "ident": "x1", "state": "running", "detail": "/rawgentic:switch p"},
+    ])
+    def test_the_library_boundary_validates_items_exactly_like_the_cli(self, bad_item) -> None:
+        """F3 (Medium). A direct `perform_handoff` caller passing item dicts used to bypass every
+        check the CLI parser applies, and the unvalidated values were copied into the audit
+        payload. A closed contract that only one of its two entrances enforces is not closed."""
+        ok, reason, _record = ll.inflight_decision(
+            _decl(items=[bad_item], attested_none=False))
+        assert ok is False, reason

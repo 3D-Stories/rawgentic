@@ -774,8 +774,8 @@ For major changes, please open an issue first to discuss the approach.
   design passes (13 High + 5 Medium; 17 applied, 1 refuted — the reviewer's clock was stale) closed
   the gate budget-exhausted per #798. **Ships as `Part of #726`: AC 4 (automatic polling) is
   UNSATISFIED — there is nothing to poll — and `clear-prep` lives outside this repo, so it is given
-  a callable check and nothing more (D247).** New `tests/hooks/test_inflight_handoff_gate.py`, 53
-  cases. No workflow-spine change → no diagram REV. Suite 5698→5750.
+  a callable check and nothing more (D247).** New `tests/hooks/test_inflight_handoff_gate.py`, 63
+  cases. No workflow-spine change → no diagram REV. Suite 5698→5762.
 
 ### v3.134.0 (2026-08-06)
 - **The child-boundary learnings sweep is mechanized, and it is a gate (#769, epic #871).** The

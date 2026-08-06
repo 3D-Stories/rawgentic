@@ -64,7 +64,7 @@ reviewer raised it — and fixed by gating early, beside the rc-6 and rc-8 gates
 self-review High findings, all applied; two of them (the frozen-cache trap and untrusted text in
 the successor prompt) were independently corroborated by the reviewer a pass later.
 
-**Status.** Suite 5698→5750 (+52), exit 0. No workflow-spine change → no diagram REV. PR, CI and
+**Status.** Suite 5698→5762 (+64), exit 0. No workflow-spine change → no diagram REV. PR, CI and
 merge SHA filled by the next slot's pass, per the established convention here.
 
 ## Epic #871 M4 — #769: the learnings sweep stops being a habit · v3.134.0

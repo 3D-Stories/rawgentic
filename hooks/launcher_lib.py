@@ -1957,8 +1957,14 @@ def inflight_from_args(args) -> dict:
             "override": bool(getattr(args, "allow_inflight", False))}
 
 
-def inflight_early_refusal(declaration, resume_prompt, *, session_id=None) -> str | None:
-    """Both #726 checks with NO side effect. Returns the refusal text, or None to proceed.
+def inflight_early_refusal(declaration, resume_prompt, *,
+                           session_id=None) -> "tuple[str, str] | None":
+    """Both #726 checks with NO side effect. Returns `(failed_step, reason)`, or None to proceed.
+
+    TYPED, not a bare string: the two checks have different remedies, and `perform_handoff`'s own
+    backstop already distinguishes them as `inflight` and `durable_path`. Returning only prose
+    made the campaign CLIs report `inflight` for a path refusal, so a machine caller had to parse
+    stderr to learn which one to fix.
 
     The campaign CLIs call this BEFORE they claim a generation or record `mark_split_attempted`.
     That ordering is load-bearing, not tidiness: `_cmd_handoff` marks `split_attempted` durably
@@ -1971,16 +1977,18 @@ def inflight_early_refusal(declaration, resume_prompt, *, session_id=None) -> st
     """
     ok, reason, record = inflight_decision(declaration)
     if not ok:
-        return reason
+        return ("inflight", reason)
     try:
         text = (resume_prompt or "") + abandoned_work_block(record["declared"])
         flagged = session_scoped_paths(text, session_id=session_id)
     except Exception as exc:                      # pylint: disable=broad-except
-        return (f"the session-scoped path scan raised {type(exc).__name__} — refusing rather "
+        return ("durable_path",
+                f"the session-scoped path scan raised {type(exc).__name__} — refusing rather "
                 "than handing the successor a reference nothing checked")
     if flagged:
         listed = "; ".join(f"{h['path']} — {h['reason']}" for h in flagged)
-        return (f"the resume prompt points the successor at session-scoped path(s): {listed}. "
+        return ("durable_path",
+                f"the resume prompt points the successor at session-scoped path(s): {listed}. "
                 "Copy the artifact somewhere durable (in-repo) and reference that, or drop the "
                 "reference")
     return None
@@ -2005,6 +2013,34 @@ def _reject_inflight_text(field: str, value: str) -> None:
             f"in-flight {field} {value!r} contains {_driver_lib().BIND_DIRECTIVE!r} — refused")
 
 
+def validate_inflight_item(item) -> "str | None":
+    """Validate one item dict. Returns a refusal reason, or None when it is well-formed (#726).
+
+    Shared by `parse_inflight_item` (the CLI path) and `inflight_decision` (the library path),
+    because the library path was the hole: a direct `perform_handoff` caller passing item dicts
+    bypassed every check the CLI parser applies, and the unvalidated `ident`/`detail` were then
+    copied into the audit payload. A "closed contract" that only one of its two entrances enforces
+    is not closed.
+    """
+    if not isinstance(item, dict) or set(item) != _INFLIGHT_ITEM_KEYS:
+        return f"an in-flight item must carry exactly {sorted(_INFLIGHT_ITEM_KEYS)}"
+    if item["kind"] not in INFLIGHT_KINDS:
+        return f"in-flight kind {item['kind']!r} is not one of {'|'.join(INFLIGHT_KINDS)}"
+    if item["state"] not in INFLIGHT_STATES:
+        return f"in-flight state {item['state']!r} is not one of {'|'.join(INFLIGHT_STATES)}"
+    ident, detail = item["ident"], item["detail"]
+    if not isinstance(ident, str) or not _INFLIGHT_IDENT_RE.fullmatch(ident):
+        return f"in-flight ident {ident!r} is not a bare token"
+    if not isinstance(detail, str) or len(detail) > INFLIGHT_MAX_DETAIL:
+        return (f"in-flight detail must be a string of at most {INFLIGHT_MAX_DETAIL} characters")
+    for field, value in (("ident", ident), ("detail", detail)):
+        try:
+            _reject_inflight_text(field, value)
+        except LauncherError as exc:
+            return str(exc)
+    return None
+
+
 def parse_inflight_item(raw) -> dict:
     """`"<kind>:<ident>:<state>:<detail>"` → a validated item dict (#726).
 
@@ -2021,20 +2057,11 @@ def parse_inflight_item(raw) -> dict:
             f"state one of {'|'.join(INFLIGHT_STATES)}")
     kind, ident, state = parts[0], parts[1], parts[2]
     detail = parts[3] if len(parts) == 4 else ""
-    if kind not in INFLIGHT_KINDS:
-        raise LauncherError(f"--inflight kind {kind!r} is not one of {'|'.join(INFLIGHT_KINDS)}")
-    if state not in INFLIGHT_STATES:
-        raise LauncherError(f"--inflight state {state!r} is not one of {'|'.join(INFLIGHT_STATES)}")
-    if not _INFLIGHT_IDENT_RE.fullmatch(ident):
-        raise LauncherError(
-            f"--inflight ident {ident!r} is not a bare token — use the task id or job name, "
-            "not a path or a sentence")
-    if len(detail) > INFLIGHT_MAX_DETAIL:
-        raise LauncherError(
-            f"--inflight detail is {len(detail)} characters, over the {INFLIGHT_MAX_DETAIL} cap")
-    _reject_inflight_text("ident", ident)
-    _reject_inflight_text("detail", detail)
-    return {"kind": kind, "ident": ident, "state": state, "detail": detail}
+    item = {"kind": kind, "ident": ident, "state": state, "detail": detail}
+    problem = validate_inflight_item(item)
+    if problem is not None:
+        raise LauncherError(f"--inflight {raw!r}: {problem}")
+    return item
 
 
 def inflight_decision(declaration) -> tuple[bool, str, dict]:
@@ -2075,11 +2102,9 @@ def inflight_decision(declaration) -> tuple[bool, str, dict]:
     if len(items) > INFLIGHT_MAX_ITEMS:
         return (False, f"{len(items)} declared items is over the {INFLIGHT_MAX_ITEMS} cap", record)
     for i, item in enumerate(items):
-        if not isinstance(item, dict) or set(item) != _INFLIGHT_ITEM_KEYS:
-            return (False, f"in-flight item {i} must carry exactly "
-                           f"{sorted(_INFLIGHT_ITEM_KEYS)}", record)
-        if item["kind"] not in INFLIGHT_KINDS or item["state"] not in INFLIGHT_STATES:
-            return (False, f"in-flight item {i} has an unknown kind or state", record)
+        problem = validate_inflight_item(item)
+        if problem is not None:
+            return (False, f"in-flight item {i}: {problem}", record)
 
     record["declared"] = list(items)
     record["attested_none"] = attested_none
@@ -2163,7 +2188,12 @@ def session_scoped_paths(text, *, session_id: str | None = None) -> list[dict]:
         raw = match.group(0).rstrip(_TRAILING_PUNCT)
         if not raw:
             continue
-        path = posixpath.normpath(raw)
+        # Collapse the leading slash run BEFORE normalizing. `posixpath.normpath` deliberately
+        # PRESERVES exactly two leading slashes (the POSIX implementation-defined case), so
+        # `//tmp/claude-…/<uuid>/…` normalized to `//tmp/…`, whose first component is empty —
+        # and rule 2's `parts[1] == "tmp"` test then missed it entirely. Measured: the scan
+        # returned clean on that spelling while returning a hit on one and three slashes.
+        path = posixpath.normpath(re.sub(r"^/+", "/", raw))
         if path in seen:
             continue
         parts = path.split("/")
@@ -5363,9 +5393,10 @@ def _cmd_handoff(args) -> int:
     declaration = inflight_from_args(args)
     refusal = inflight_early_refusal(declaration, disposition.get("resume_prompt"))
     if refusal is not None:
-        print(json.dumps({"outcome": "inflight_required", "observed_head": observed_head},
-                         indent=2))
-        print(f"refusing: {refusal}", file=sys.stderr)
+        failed_step, reason = refusal
+        print(json.dumps({"outcome": "inflight_required", "failed_step": failed_step,
+                          "observed_head": observed_head}, indent=2))
+        print(f"refusing: {reason}", file=sys.stderr)
         return INFLIGHT_REQUIRED_RC
 
     # Probes are DERIVED or asserted by the launcher about itself — never hardcoded True. A
@@ -5941,8 +5972,9 @@ def _cmd_mid_child_handoff(args) -> int:
         refusal = inflight_early_refusal(declaration, pre_disposition.get("resume_prompt"),
                                          session_id=predecessor_session)
         if refusal is not None:
-            print(json.dumps({"ok": False, "failed_step": "inflight"}, indent=2))
-            print(f"refusing mid-child handoff: {refusal}", file=sys.stderr)
+            failed_step, reason = refusal
+            print(json.dumps({"ok": False, "failed_step": failed_step}, indent=2))
+            print(f"refusing mid-child handoff: {reason}", file=sys.stderr)
             return INFLIGHT_REQUIRED_RC
 
     # The disposition is computed INSIDE the lock so the generation it bumps is derived from the
@@ -6006,12 +6038,14 @@ def _cmd_mid_child_handoff(args) -> int:
     # an interactive handoff left the persisted generation uncancelled and claimable. A `finally`
     # is the only construct that actually makes the claim true.
     out = None
-    if declaration is None:
-        # The unlocked pre-read was not `ready` but the locked one is. Rare, and the gate must
-        # still run — inside the cancelling `try/finally` below, so a refusal here cancels the
-        # generation this path has already opened rather than stranding it.
-        declaration = inflight_from_args(args)
     try:
+        if declaration is None:
+            # The unlocked pre-read was not `ready` but the locked one is. Rare, and the gate must
+            # still run. INSIDE the try, deliberately: `open_handoff` has already bumped the
+            # generation by this point, and `inflight_from_args` RAISES on a missing declaration —
+            # raising outside the cancelling `finally` would strand that generation uncancelled,
+            # which is the exact failure the `finally` exists to prevent.
+            declaration = inflight_from_args(args)
         # Deliberately the SECOND run of this check, and the authoritative one: the early call
         # above scanned the UNLOCKED pre-read's prompt to avoid burning a generation, while this
         # one scans the prompt the successor will actually receive. Pure and idempotent, so a
@@ -6020,8 +6054,9 @@ def _cmd_mid_child_handoff(args) -> int:
         refusal = inflight_early_refusal(declaration, disposition["resume_prompt"],
                                          session_id=predecessor_session)
         if refusal is not None:
-            print(json.dumps({"ok": False, "failed_step": "inflight"}, indent=2))
-            print(f"refusing mid-child handoff: {refusal}", file=sys.stderr)
+            failed_step, reason = refusal
+            print(json.dumps({"ok": False, "failed_step": failed_step}, indent=2))
+            print(f"refusing mid-child handoff: {reason}", file=sys.stderr)
             return INFLIGHT_REQUIRED_RC
         out = perform_handoff(
             anchor_pane=args.anchor_pane, cwd=args.cwd, project_root=args.project_root,
