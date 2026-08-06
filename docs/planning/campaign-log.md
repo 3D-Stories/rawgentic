@@ -14,6 +14,59 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #871 M4 — #726: a handoff finally looks backward · v3.135.0
+
+**The gap.** Every gate in `perform_handoff` — split, agent start, project bind, prompt landed,
+goal armed — asks whether the SUCCESSOR is ready. Nothing asked whether the PREDECESSOR was
+finished. Measured 2026-07-30: a handoff ran with a design re-gate still dispatched, its 15 KB
+verdict (8 findings, 3 High) landed two minutes later in a scratchpad scoped to the session being
+retired, and the handoff reported every gate green.
+
+**What shipped, and what deliberately did not.** Two backward-looking preflights: a mandatory
+in-flight declaration on all three handoff CLIs, and a scan that refuses a resume prompt pointing
+the successor at a session-scoped path. **`Part of #726`, not `Closes`** — AC 4 (poll to completion
+and proceed automatically) is UNSATISFIED because there is nothing to poll, and `clear-prep` lives
+outside this repository so it gets a callable check and nothing more (D247). The issue stays OPEN
+with those two residuals named on it; the epic box is ticked, the same shape D226 set for #943
+Part A.
+
+**Three probes, and one of them refutes the issue body.** `/tmp/claude-<uid>` is `drwx------` owned
+by the single host user and 207 sibling session directories back to 2026-08-01 were listable — so a
+successor CAN read a predecessor's scratchpad. The issue's stated reason was wrong; the real one is
+untracked per-session temp state tied to a session being retired, addressed by an id the successor
+cannot derive. The second probe is negative and load-bearing: `<scratch-root>/tasks/<id>.output`
+exists per background task but carries only stdout, observed on the same task at 14, 49 and 69
+bytes with no sibling file at any point. That is why the gate ATTESTS rather than detects, and the
+design says so in those words rather than claiming more.
+
+**Decisions (this slot).**
+- **D245** — declined an ELIGIBLE small-standard lane, because the deliverable is a refusing gate on
+  the module's most safety-critical function and the lane drops the cross-model design layer. That
+  layer then found 13 High defects.
+- **D246** — the ambiguity breaker fired on four findings across three passes and was resolved from
+  MEASUREMENT every time, never escalated to an away owner. One finding was REFUTED: the reviewer
+  believed the date was 2026-08-05 and rejected the probes on that basis.
+- **D247** — `Part of #726` with the issue left open, and the in-flight gate enforced on ALL THREE
+  CLIs. Pass 2 demanded a rollout split for the frozen plugin cache; pass 3 objected that two
+  unenforced paths leave the defect live. Pass 3 won on evidence from this same campaign: #769's
+  rc-8 sweep gate shipped a mandatory refusal against that same frozen cache and the next boundary
+  read its printed remedy and cleared it.
+
+**The ordering IS the safety property, again.** `_cmd_handoff` records `mark_split_attempted`
+durably before it calls `perform_handoff`, and `_classify_launch` maps an unrecognised failed step
+to "append no terminal event". A refusal inside `perform_handoff` would therefore have parked a
+campaign with `split_attempted: true` and nothing terminal. Found by reading shipped code — neither
+reviewer raised it — and fixed by gating early, beside the rc-6 and rc-8 gates, plus two new
+`_classify_launch` rows so even the backstop cannot park a run.
+
+**Reviews.** One peer consult and three adversarial design passes (`gpt-5.6-sol`): 13 High +
+5 Medium, 17 applied and 1 refuted, gate CLOSED budget-exhausted at the `design` cap. Four
+self-review High findings, all applied; two of them (the frozen-cache trap and untrusted text in
+the successor prompt) were independently corroborated by the reviewer a pass later.
+
+**Status.** Suite 5698→5749 (+51), exit 0. No workflow-spine change → no diagram REV. PR, CI and
+merge SHA filled by the next slot's pass, per the established convention here.
+
 ## Epic #871 M4 — #769: the learnings sweep stops being a habit · v3.134.0
 
 **Issue:** [#769](https://github.com/3D-Stories/rawgentic/issues/769) ·

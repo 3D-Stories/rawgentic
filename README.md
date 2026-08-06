@@ -749,6 +749,34 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.135.0 (2026-08-06)
+- **A handoff now has to say what the predecessor left running (#726, epic #871).** Every gate in
+  `perform_handoff` looked FORWARD at the successor; nothing looked backward. Measured 2026-07-30: a
+  handoff ran with a design re-gate still dispatched and its 15 KB verdict — 8 findings, 3 High —
+  landed two minutes later in a scratchpad scoped to the session being retired, while the handoff
+  reported every gate green. Three CLIs (`ad-hoc-handoff`, `handoff`, `mid-child-handoff`) now take
+  `--inflight-none` or one `--inflight '<kind>:<ident>:<state>:<detail>'` per item; omission RAISES,
+  a `running` item refuses and `--allow-inflight` cannot pass it, abandoning work needs the flag and
+  is recorded, and an override of nothing is refused as a false audit record. It is an ATTESTATION
+  gate and the code says so: probed live, the harness writes `<scratch-root>/tasks/<id>.output` per
+  background task carrying only stdout — no status, no sibling — mid-run and after completion alike,
+  so nothing on disk can tell a running task from a finished one. The successor's abandoned-work
+  notice is written by the hook and carries a count and allowlisted kinds only; neither the caller's
+  `ident` nor its `detail` reaches the prompt, because the ident charset admits
+  `ignore_previous_instructions` and exclusion beats fencing. A second check refuses a resume prompt
+  that points the successor at a session-scoped path — and NOT for the reason the issue gives: probed,
+  `/tmp/claude-<uid>` is `0700` owned by the single host user, so a successor CAN read it; the defect
+  is untracked per-session temp state tied to a session being retired. Both fail CLOSED, the opposite
+  of the #731 preflight beside them, which fails open only because `agent start` is a second gate.
+  On the campaign paths both run BEFORE `mark_split_attempted`, and `_classify_launch` maps the two
+  new steps to `no_split_attempted`, so a refusal can never park a campaign. New
+  `check-handoff-prompt` subcommand (rc 0/3/2) for callers this repo cannot edit. Three adversarial
+  design passes (13 High + 5 Medium; 17 applied, 1 refuted — the reviewer's clock was stale) closed
+  the gate budget-exhausted per #798. **Ships as `Part of #726`: AC 4 (automatic polling) is
+  UNSATISFIED — there is nothing to poll — and `clear-prep` lives outside this repo, so it is given
+  a callable check and nothing more (D247).** New `tests/hooks/test_inflight_handoff_gate.py`, 53
+  cases. No workflow-spine change → no diagram REV. Suite 5698→5749.
+
 ### v3.134.0 (2026-08-06)
 - **The child-boundary learnings sweep is mechanized, and it is a gate (#769, epic #871).** The
   owner's D181 standing order — *"in between each issue, make sure you revalidate future issues in
