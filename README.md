@@ -762,7 +762,13 @@ For major changes, please open an issue first to discuss the approach.
   tie, or empty transcript listing refuses the shortcut in favor of the generated fresh `-p`
   prompt). The scheduler wiring, the `overnight-resume.sh` template rewrite, and the watchdog-to-
   reconciler demotion are workspace-root changes outside any git repo and ship in a follow-up PR
-  (D250). No workflow-spine change → no diagram REV. Suite 5762→5788.
+  (D250). Step-11 cross-model review (gpt-5.6-sol) found 2 High + 3 Medium — all fixed in this
+  PR: the freshness check now also bounds observation age against a live clock, the
+  session-lineage docstring makes explicit that Part 2 must resume via `--resume
+  <verified-tail>` immediately rather than a separately-resolved `--continue`, malformed
+  payload/state shapes return clean failures instead of raising, and the `read` CLI's failure
+  JSON moved to stdout to match its own documented contract.
+  No workflow-spine change → no diagram REV. Suite 5762→5804.
 
 ### v3.135.0 (2026-08-06)
 - **A handoff now has to say what the predecessor left running (#726, epic #871).** Every gate in
