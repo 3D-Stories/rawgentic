@@ -3203,3 +3203,340 @@ class TestAC3WriteBackClearsTheObsoletePendingGate:
             "611 is merged, 612 is now deferred (not merged) — the campaign is neither "
             "complete nor does anything else remain ready, so it must read as blocked, "
             "never silently as 'complete' or as the same obsolete_pending refusal again")
+
+
+# --------------------------------------------------------------------------- #
+# #963 — broker-merge: the supervised merge path
+#
+# The whole point of the issue: #871's authority/claims core had ZERO live callers, the
+# same unreachable-machinery signature that killed the executor (D174). This command is
+# that caller. Every test here drives the real handler with a fake runner, so the exact
+# argv reaching `gh` is asserted rather than assumed.
+# --------------------------------------------------------------------------- #
+
+import argparse                            # noqa: E402
+import supervision_admin as _sa            # noqa: E402
+import supervision_claims as _sc           # noqa: E402
+import supervision_lib as _sl              # noqa: E402
+import supervision_telemetry as _stel      # noqa: E402
+
+BROKER_REFUSED_RC = 12
+BROKER_PARKED_RC = 13
+
+_MERGED_JSON = json.dumps({"state": "MERGED", "mergeCommit": {"oid": "d5f1683e"}})
+_OPEN_JSON = json.dumps({"state": "OPEN", "mergeCommit": None})
+_BINDING_JSON = json.dumps({
+    "closingIssuesReferences": [{"number": 963}],
+    "body": "Closes #963", "title": "feat: thing (#963)"})
+
+
+class BrokerRunner(Runner):
+    """Replays `gh pr merge` and the two `gh pr view --json` reads by field list."""
+
+    def __init__(self, *, merge_rc=0, merge_stdout="", pr_state=_MERGED_JSON,
+                 binding=_BINDING_JSON, merge_raises=None):
+        super().__init__()
+        self.merge_rc = merge_rc
+        self.merge_stdout = merge_stdout
+        self.pr_state = pr_state
+        self.binding = binding
+        self.merge_raises = merge_raises
+        self.merge_calls = 0
+
+    def __call__(self, argv, timeout=180):
+        assert isinstance(argv, list) and all(isinstance(a, str) for a in argv)
+        self.calls.append(list(argv))
+        joined = " ".join(argv)
+        if "pr merge" in joined:
+            self.merge_calls += 1
+            if self.merge_raises:
+                raise self.merge_raises
+            return FakeProc(self.merge_rc, self.merge_stdout)
+        if "closingIssuesReferences" in joined:
+            return FakeProc(0, self.binding)
+        if "mergeCommit" in joined:
+            return FakeProc(0, self.pr_state)
+        return FakeProc(0, "")
+
+
+def _broker_workspace(tmp_path, *, campaign="epic-963", issue=963,
+                      merge_policy=None, declared=None):
+    """A workspace + project root with a campaign whose queue names `issue`."""
+    Path(tmp_path, ".rawgentic_workspace.json").write_text("{}", encoding="utf-8")
+    Path(tmp_path, ".rawgentic.json").write_text(json.dumps({
+        "version": 1, "project": {"name": "p"},
+        "repo": {"provider": "github", "fullName": "o/r", "defaultBranch": "main"},
+    }), encoding="utf-8")
+    state_dir = Path(tmp_path, "claude_docs", ".driver-state")
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state = {"campaign": campaign, "children": [{"issue": issue, "status": "in_progress"}]}
+    if merge_policy:
+        state["policy"] = {"merge_policy": merge_policy}
+    (state_dir / f"{campaign}.json").write_text(json.dumps(state), encoding="utf-8")
+    if declared:
+        _sa.declare(str(tmp_path), state=declared, until=None, session_id="s1",
+                    campaign_ids=[], consult_providers=["gpt"], consult_granted=True)
+    return str(tmp_path)
+
+
+def _broker(root, *, runner, pr=970, issue=963, campaign="epic-963", capsys=None):
+    """Run the handler; return (rc, parsed stdout JSON or None)."""
+    rc = ll._cmd_broker_merge(argparse.Namespace(
+        pr=pr, issue=issue, campaign=campaign, project_root=root,
+        workspace_root=root, repo=None, runner=runner))
+    out = None
+    if capsys is not None:
+        captured = capsys.readouterr().out.strip().splitlines()
+        for line in reversed(captured):
+            if line.startswith("{"):
+                out = json.loads(line)
+                break
+    return rc, out
+
+
+class TestBrokerMergeAuthority:
+
+    def test_an_attended_workspace_merges_through(self, tmp_path, capsys):
+        """AC3: attended passes through unchanged — now with execute-once protection."""
+        root = _broker_workspace(tmp_path)
+        runner = BrokerRunner()
+        rc, out = _broker(root, runner=runner, capsys=capsys)
+        assert rc == 0
+        assert out["status"] == "merged"
+        assert out["merge_sha"] == "d5f1683e"
+        merge_argv = [a for a in runner.calls if "merge" in " ".join(a)][0]
+        assert merge_argv == ["gh", "pr", "merge", "970", "--repo", "o/r",
+                              "--squash", "--delete-branch"]
+
+    def test_an_absence_without_a_grant_is_refused_and_never_merges(self, tmp_path, capsys):
+        """The truth table's whole point: absence permits a merge ONLY under a recorded
+        auto-merge-scoped-to-run grant."""
+        root = _broker_workspace(tmp_path, declared="away")
+        runner = BrokerRunner()
+        rc, out = _broker(root, runner=runner, capsys=capsys)
+        assert rc == BROKER_REFUSED_RC
+        assert out["status"] == "refused"
+        assert runner.merge_calls == 0
+
+    def test_an_absence_WITH_the_recorded_grant_merges(self, tmp_path, capsys):
+        root = _broker_workspace(tmp_path, merge_policy="auto-merge-scoped-to-run",
+                                 declared="away")
+        rc, out = _broker(root, runner=BrokerRunner(), capsys=capsys)
+        assert rc == 0
+        assert out["status"] == "merged"
+
+    def test_a_deleted_declaration_refuses_even_with_the_grant(self, tmp_path, capsys):
+        """#963 AC2 reaching the merge path: the exact hole this issue closes."""
+        root = _broker_workspace(tmp_path, merge_policy="auto-merge-scoped-to-run",
+                                 declared="away")
+        os.unlink(_sl.supervision_path(root))
+        runner = BrokerRunner()
+        rc, out = _broker(root, runner=runner, capsys=capsys)
+        assert rc == BROKER_REFUSED_RC
+        assert runner.merge_calls == 0
+        assert "declar" in out["reason"].lower()
+
+    def test_a_tightening_override_denies_the_grant(self, tmp_path, capsys):
+        root = _broker_workspace(tmp_path, merge_policy="auto-merge-scoped-to-run",
+                                 declared="away")
+        path = Path(root, "claude_docs", ".driver-state", "epic-963.json")
+        state = json.loads(path.read_text())
+        state["supervision_override"] = {"mode": "no_merge"}
+        path.write_text(json.dumps(state))
+        runner = BrokerRunner()
+        rc, _out = _broker(root, runner=runner, capsys=capsys)
+        assert rc == BROKER_REFUSED_RC
+        assert runner.merge_calls == 0
+
+
+class TestBrokerMergeTargetBinding:
+
+    def test_an_issue_outside_the_campaign_is_refused_before_any_authority_read(
+            self, tmp_path, capsys):
+        """A grant scoped to one campaign must not authorize an unrelated merge."""
+        root = _broker_workspace(tmp_path)
+        runner = BrokerRunner()
+        rc, out = _broker(root, runner=runner, issue=999, capsys=capsys)
+        assert rc == BROKER_REFUSED_RC
+        assert out["reason"].startswith("binding")
+        assert runner.merge_calls == 0
+
+    def test_a_pr_that_does_not_reference_the_issue_is_refused(self, tmp_path, capsys):
+        root = _broker_workspace(tmp_path)
+        runner = BrokerRunner(binding=json.dumps({
+            "closingIssuesReferences": [], "body": "unrelated", "title": "other"}))
+        rc, out = _broker(root, runner=runner, capsys=capsys)
+        assert rc == BROKER_REFUSED_RC
+        assert out["reason"].startswith("binding")
+        assert runner.merge_calls == 0
+
+    def test_a_Part_of_body_reference_binds(self, tmp_path, capsys):
+        """Repo convention: only the LAST PR of a multi-PR child says Closes; the earlier
+        ones say 'Part of', which does NOT populate closingIssuesReferences."""
+        root = _broker_workspace(tmp_path)
+        runner = BrokerRunner(binding=json.dumps({
+            "closingIssuesReferences": [],
+            "body": "Some prose.\nPart of #963\n", "title": "feat: part one"}))
+        rc, _out = _broker(root, runner=runner, capsys=capsys)
+        assert rc == 0
+
+    def test_a_quoted_mention_does_not_bind(self, tmp_path, capsys):
+        """The match is line-anchored, so a historical or quoted mention is not evidence."""
+        root = _broker_workspace(tmp_path)
+        runner = BrokerRunner(binding=json.dumps({
+            "closingIssuesReferences": [],
+            "body": "> we discussed Part of #963 last week", "title": "unrelated"}))
+        rc, _out = _broker(root, runner=runner, capsys=capsys)
+        assert rc == BROKER_REFUSED_RC
+
+    def test_a_foreign_repo_is_refused(self, tmp_path, capsys):
+        """--repo must equal the project's configured canonical repo."""
+        root = _broker_workspace(tmp_path)
+        runner = BrokerRunner()
+        rc, out = _broker_with_repo(root, runner=runner, repo="someone/else",
+                                    capsys=capsys)
+        assert rc == BROKER_REFUSED_RC
+        assert runner.merge_calls == 0
+        assert "repo" in out["reason"]
+
+
+def _broker_with_repo(root, *, runner, repo, capsys, pr=970, issue=963,
+                      campaign="epic-963"):
+    rc = ll._cmd_broker_merge(argparse.Namespace(
+        pr=pr, issue=issue, campaign=campaign, project_root=root,
+        workspace_root=root, repo=repo, runner=runner))
+    out = None
+    for line in reversed(capsys.readouterr().out.strip().splitlines()):
+        if line.startswith("{"):
+            out = json.loads(line)
+            break
+    return rc, out
+
+
+class TestBrokerMergeOutcomes:
+
+    def test_a_success_the_probe_cannot_confirm_is_never_recorded_as_merged(
+            self, tmp_path, capsys):
+        """rc 0 from `gh` is not evidence: the SHA comes from the probe, so an
+        unconfirmable success takes the ambiguous path instead of a false 'merged'."""
+        root = _broker_workspace(tmp_path)
+        runner = BrokerRunner(pr_state=_OPEN_JSON)
+        rc, out = _broker(root, runner=runner, capsys=capsys)
+        assert rc in (BROKER_REFUSED_RC, BROKER_PARKED_RC)
+        assert out["status"] != "merged"
+
+    def test_an_ambiguous_timeout_that_actually_merged_resolves(self, tmp_path, capsys):
+        """The reason claims exist: GitHub's merge API takes no idempotency key."""
+        root = _broker_workspace(tmp_path)
+        runner = BrokerRunner(merge_raises=subprocess.TimeoutExpired("gh", 180))
+        rc, out = _broker(root, runner=runner, capsys=capsys)
+        assert rc == 0
+        assert out["status"] == "merged"
+        assert out["merge_sha"] == "d5f1683e"
+        assert runner.merge_calls == 1                 # reconciled, never re-merged
+
+    def test_an_ambiguous_outcome_with_an_unreadable_probe_parks(self, tmp_path, capsys):
+        root = _broker_workspace(tmp_path)
+        runner = BrokerRunner(merge_raises=subprocess.TimeoutExpired("gh", 180),
+                              pr_state="{not json")
+        rc, out = _broker(root, runner=runner, capsys=capsys)
+        assert rc == BROKER_PARKED_RC
+        assert out["status"] == "parked"
+        assert out["claim_id"]
+
+    def test_a_definitive_refusal_leaves_the_pr_open_and_refuses(self, tmp_path, capsys):
+        root = _broker_workspace(tmp_path)
+        runner = BrokerRunner(merge_rc=1, pr_state=_OPEN_JSON)
+        rc, out = _broker(root, runner=runner, capsys=capsys)
+        assert rc == BROKER_REFUSED_RC
+        assert out["status"] == "refused"
+
+    def test_a_rerun_after_a_completed_merge_is_terminal_and_never_merges_twice(
+            self, tmp_path, capsys):
+        root = _broker_workspace(tmp_path)
+        first = BrokerRunner()
+        assert _broker(root, runner=first, capsys=capsys)[0] == 0
+        second = BrokerRunner()
+        rc, out = _broker(root, runner=second, capsys=capsys)
+        assert rc == 0
+        assert out["merge_sha"] == "d5f1683e"
+        assert second.merge_calls == 0
+
+    def test_a_rerun_after_a_park_reconciles_instead_of_re_merging(self, tmp_path, capsys):
+        root = _broker_workspace(tmp_path)
+        parked = BrokerRunner(merge_raises=subprocess.TimeoutExpired("gh", 180),
+                              pr_state="{not json")
+        assert _broker(root, runner=parked, capsys=capsys)[0] == BROKER_PARKED_RC
+        resumed = BrokerRunner()                       # probe now answers MERGED
+        rc, out = _broker(root, runner=resumed, capsys=capsys)
+        assert rc == 0
+        assert out["status"] == "merged"
+        assert resumed.merge_calls == 0
+
+
+class TestBrokerMergeTelemetry:
+
+    def _events(self, root):
+        return _stel.read_events(root)
+
+    def test_a_clean_merge_records_the_whole_sequence(self, tmp_path, capsys):
+        root = _broker_workspace(tmp_path)
+        _broker(root, runner=BrokerRunner(), capsys=capsys)
+        events = self._events(root)
+        assert [e["transition"] for e in events if e["kind"] == "claim"] == \
+            ["minted", "executing", "executed"]
+        authority = [e for e in events if e["kind"] == "authority"]
+        assert authority[0]["action"] == "merge"
+        assert authority[0]["decision"] == "permitted"
+        assert authority[0]["pr"] == 970
+        assert authority[0]["issue"] == 963
+
+    def test_a_denial_records_its_reason_and_nothing_else(self, tmp_path, capsys):
+        root = _broker_workspace(tmp_path, declared="away")
+        _broker(root, runner=BrokerRunner(), capsys=capsys)
+        events = self._events(root)
+        assert [e for e in events if e["kind"] == "claim"] == []
+        assert events[-1]["decision"] == "denied"
+        assert events[-1]["reason"]
+
+    def test_an_unrecordable_decision_aborts_before_any_merge(self, tmp_path, capsys):
+        """Fail-CLOSED before the side effect: an unmeasurable outward action is the
+        exact failure this store exists to prevent."""
+        root = _broker_workspace(tmp_path)
+        Path(_stel.telemetry_path(root)).mkdir(parents=True)
+        runner = BrokerRunner()
+        rc, out = _broker(root, runner=runner, capsys=capsys)
+        assert rc == BROKER_REFUSED_RC
+        assert runner.merge_calls == 0
+        assert "telemetry" in out["reason"]
+
+
+class TestBrokerMergeMarkerSelfHeal:
+
+    def test_a_valid_record_with_no_marker_is_migrated_before_evaluating(
+            self, tmp_path, capsys):
+        """So a workspace that declared before #963 shipped cannot sit unprotected
+        waiting for an unrelated admin write."""
+        root = _broker_workspace(tmp_path, merge_policy="auto-merge-scoped-to-run",
+                                 declared="away")
+        os.unlink(_sl.declared_marker_path(root))
+        _broker(root, runner=BrokerRunner(), capsys=capsys)
+        marker, status = _sl.read_marker(root)
+        assert status == "valid"
+        assert marker["declared"] is True
+
+
+class TestBrokerMergeCLI:
+
+    def test_help_exits_zero(self):
+        r = subprocess.run([sys.executable, str(HOOKS / "launcher_lib.py"),
+                            "broker-merge", "--help"],
+                           capture_output=True, text=True, check=False)
+        assert r.returncode == 0
+        assert "broker" in r.stdout.lower()
+
+    def test_a_missing_required_argument_is_a_usage_error(self):
+        r = subprocess.run([sys.executable, str(HOOKS / "launcher_lib.py"),
+                            "broker-merge", "--pr", "1"],
+                           capture_output=True, text=True, check=False)
+        assert r.returncode == 2
