@@ -2356,6 +2356,20 @@ class TestExtractSection:
         items, unclassified = dl._extract_section(self._lines(text), dl._CAUSE_HEADING_RE)
         assert items == ["First cause.", "Second cause."]
 
+    def test_a_markdown_checkbox_prefix_is_stripped_from_the_item_text(self):
+        """Step-8a review finding 3: `_TOP_LEVEL_LIST_ITEM_RE` captures everything after the
+        marker, so `- [ ] X` extracted as `[ ] X` — which then fails EXACT-match claim coverage
+        against a claim quoting only `X`. This is the skill's OWN fully-worked example
+        (`skills/revalidate-children/SKILL.md`), so the documented step was not executable."""
+        text = "## Acceptance criteria\n\n- [ ] X is checked before Y runs.\n"
+        items, unclassified = dl._extract_section(self._lines(text), dl._AC_HEADING_RE)
+        assert items == ["X is checked before Y runs."]
+
+    def test_checked_and_uppercase_checkbox_variants_are_also_stripped(self):
+        text = "## Acceptance criteria\n\n- [x] Done thing.\n- [X] Also done.\n"
+        items, unclassified = dl._extract_section(self._lines(text), dl._AC_HEADING_RE)
+        assert items == ["Done thing.", "Also done."]
+
     def test_stops_at_the_next_heading_of_any_level(self):
         text = "## Acceptance criteria\n\n1. Only thing.\n\n### Unrelated subsection\n\nOther stuff.\n"
         items, unclassified = dl._extract_section(self._lines(text), dl._AC_HEADING_RE)
@@ -2391,6 +2405,26 @@ class TestExtractSection:
         assert "Coverage gap" in items[0]
         assert "obsolete-child marker gates nothing" in items[1]
         assert unclassified == []
+
+    def test_a_second_matching_heading_is_aggregated_not_ignored(self):
+        """Step-8a review finding 1: `_CAUSE_HEADING_RE` treats 'Problem', 'Root cause' and
+        'Cause' as synonyms, but a body can legitimately carry BOTH a '## Problem' section and a
+        separate later '## Root cause' section. The original version stopped at the FIRST
+        matching heading, so the second section's claims silently never entered the inventory —
+        a claim set could omit them entirely and still pass coverage."""
+        text = ("## Problem\n\n1. First cause.\n\n"
+                "## Root cause\n\n2. Second cause.\n\n"
+                "## Acceptance criteria\n")
+        items, unclassified = dl._extract_section(self._lines(text), dl._CAUSE_HEADING_RE)
+        assert items == ["First cause.", "Second cause."]
+        assert unclassified == []
+
+    def test_unclassified_content_in_a_later_matching_section_is_not_lost_either(self):
+        state = ("## Problem\n\n1. First.\n\nStray unlisted content.\n\n2. Second.\n\n"
+                 "## Root cause\n\n1. Third.\n\nMore stray content.\n\n2. Fourth.\n")
+        items, unclassified = dl._extract_section(self._lines(state), dl._CAUSE_HEADING_RE)
+        assert items == ["First.", "Second.", "Third.", "Fourth."]
+        assert unclassified == ["Stray unlisted content.", "More stray content."]
 
 
 # --------------------------------------------------------------------------- #

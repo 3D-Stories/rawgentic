@@ -33,3 +33,12 @@ def test_bodies_carries_only_the_raw_body_no_resolves_field():
     """The security property design doc §1.5/§4 finding 3 fixed: `--bodies` must never carry a
     caller-suppliable `resolves`, or citation coverage could be fabricated."""
     assert "no `resolves` field, nothing for a caller to" in CORPUS
+
+
+def test_never_claims_this_skill_clears_every_gate_clause():
+    """Step-8a review finding 9: the intro used to say "This skill clears both clauses above" —
+    true when there were two, false once the restored pending-disposition clause made it three.
+    Re-running this skill rediscovers the same marker forever; only an owner write-back clears
+    it. A future edit must not silently restore the false "clears everything" claim."""
+    assert "clears both clauses" not in CORPUS
+    assert "clears the first two provenance clauses" in CORPUS

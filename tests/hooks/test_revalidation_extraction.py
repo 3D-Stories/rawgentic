@@ -190,18 +190,24 @@ class TestCitedCandidatesCharacterization:
     ways), and separately proves `_cited_candidates` exposes what `cited_paths` was hiding."""
 
     def test_cited_paths_output_is_unchanged_by_the_refactor(self):
+        """Step-8a review finding 8: the original version compared `cited_paths(body, resolves)`
+        against ITSELF, which passes for every deterministic output regardless of what it
+        actually is — it protected nothing. Each expected value below was confirmed by running
+        the real function before pinning it (never hand-derived)."""
         # A table spanning all-resolved, all-unresolved, mixed, none, and the single-component
         # root-level-file case — the exact dimensions `cited_paths`'s own docstring distinguishes.
         cases = [
-            ("hooks/a.py and hooks/b.py", {"hooks/a.py", "hooks/b.py"}),
-            ("hooks/ghost.py and lib/gone.py", set()),
-            ("hooks/real.py and hooks/ghost.py", {"hooks/real.py"}),
-            ("purely prose, no citations at all.", set()),
-            ("README.md changed", {"README.md"}),
-            ("bare_word_not_a_real_file.py mentioned in prose", set()),
+            ("hooks/a.py and hooks/b.py", {"hooks/a.py", "hooks/b.py"},
+             (["hooks/a.py", "hooks/b.py"], "paths")),
+            ("hooks/ghost.py and lib/gone.py", set(), ([], "ambiguous")),
+            ("hooks/real.py and hooks/ghost.py", {"hooks/real.py"},
+             (["hooks/real.py"], "ambiguous")),
+            ("purely prose, no citations at all.", set(), ([], "none")),
+            ("README.md changed", {"README.md"}, (["README.md"], "paths")),
+            ("bare_word_not_a_real_file.py mentioned in prose", set(), ([], "none")),
         ]
-        for body, resolves in cases:
-            assert dl.cited_paths(body, resolves) == dl.cited_paths(body, resolves)
+        for body, resolves, expected in cases:
+            assert dl.cited_paths(body, resolves) == expected, body
 
     def test_unresolved_multi_component_candidate_is_dropped_by_cited_paths(self):
         """The behavior #944 needed to see named explicitly: a citation to a path that does

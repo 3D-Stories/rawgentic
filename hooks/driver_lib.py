@@ -273,21 +273,32 @@ _AC_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*acceptance criteria\b", re.IGNORE
 _CAUSE_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*(?:problem|root cause|cause)\b", re.IGNORECASE)
 _ANY_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
 _TOP_LEVEL_LIST_ITEM_RE = re.compile(r"^\s{0,3}(?:[-*]|\d+[.)])\s+(\S.*)$")
+_TASK_MARKER_RE = re.compile(r"^\[[ xX]\]\s+")
 
 
 def _normalize_section_item(fragments: list) -> str:
-    """Join a list item's marker text and its continuation lines into one normalized string."""
-    return " ".join(f for f in (s.strip() for s in fragments) if f)
+    """Join a list item's marker text and its continuation lines into one normalized string,
+    stripping a leading Markdown task-checkbox (`[ ]`, `[x]`, `[X]`) from the first fragment.
+
+    `_TOP_LEVEL_LIST_ITEM_RE` does not distinguish a checkbox item from an ordinary one, so the
+    raw capture for `- [ ] X` is `[ ] X` — which then fails EXACT-match claim coverage against a
+    claim quoting only `X` (Step-8a review finding 3; the skill's own fully-worked example uses
+    a checkbox, so the documented step was not executable as written)."""
+    parts = [s.strip() for s in fragments]
+    if parts:
+        parts[0] = _TASK_MARKER_RE.sub("", parts[0], count=1)
+    return " ".join(f for f in parts if f)
 
 
-def _extract_section(lines: list, heading_re) -> tuple:
-    """(items, unclassified) for the section following the first line matching `heading_re`.
+def _extract_one_section(section_lines: list) -> tuple:
+    """(items, unclassified) for ONE already-sliced section's lines. Factored out of
+    `_extract_section` so multiple headings matching the same `heading_re` can each be
+    processed independently and combined (Step-8a review finding 1).
 
-    Shared by the `ac` and `cause` claim-inventory extraction (design doc §1.3). A top-level
-    list item's WRAPPED continuation lines (no blank line before them) join its text. Once a
-    blank line closes an item, any FURTHER non-blank content before the next marker or heading
-    is `unclassified` — but ONLY once at least one marker has been seen: lead-in prose BEFORE
-    the first list item (e.g. "Two documented holes, both stated in X:") is an ordinary
+    A top-level list item's WRAPPED continuation lines (no blank line before them) join its
+    text. Once a blank line closes an item, any FURTHER non-blank content before the next
+    marker is `unclassified` — but ONLY once at least one marker has been seen: lead-in prose
+    BEFORE the first list item (e.g. "Two documented holes, both stated in X:") is an ordinary
     introduction, not something the parser failed to account for.
 
     A section with NO list at all (`saw_marker` never true) degrades to ONE whole-section item
@@ -295,25 +306,7 @@ def _extract_section(lines: list, heading_re) -> tuple:
     narrative cannot be split further than "it exists" without real NLP. `unclassified` is
     reserved for a section that DOES have a list but also has content the parser could not
     attribute to any item — the fail-closed case (#944, Step-4 review round 2, finding 1).
-
-    A heading that is never found returns `([], [])` — nothing to require, not an error either;
-    the caller (`extract_claim_inventory`) is responsible for the SEPARATE "the concept is
-    mentioned by bare phrase but no recognized heading matched" fail-closed signal.
     """
-    start = None
-    for index, line in enumerate(lines):
-        if heading_re.match(line):
-            start = index + 1
-            break
-    if start is None:
-        return [], []
-
-    section_lines = []
-    for line in lines[start:]:
-        if _ANY_HEADING_RE.match(line):
-            break
-        section_lines.append(line)
-
     # The LAST marker's position decides what counts as "unclassified" versus an ordinary
     # closing note (#944 real-body regression: #944's own "## Problem" section has a trailing
     # citation line AFTER its two-item cause list, before "## Acceptance criteria" — flagging
@@ -360,6 +353,40 @@ def _extract_section(lines: list, heading_re) -> tuple:
         whole = _normalize_section_item(pre_marker)
         return ([whole] if whole else [], [])
     return items, unclassified
+
+
+def _extract_section(lines: list, heading_re) -> tuple:
+    """(items, unclassified), aggregated over EVERY section whose heading matches `heading_re`.
+
+    Shared by the `ac` and `cause` claim-inventory extraction (design doc §1.3). `heading_re`
+    (`_CAUSE_HEADING_RE` in particular) treats several heading spellings as SYNONYMS for one
+    concept — "Problem", "Root cause" and "Cause" — but a body can legitimately carry more than
+    one of them as SEPARATE headings. The original version stopped at the FIRST match, so a
+    later matching section's items never entered the inventory at all — a claim set could omit
+    that section's claims entirely and still pass coverage (Step-8a review finding 1). Each
+    matching heading's own span is extracted independently by `_extract_one_section` and the
+    results are combined in document order.
+
+    No matching heading anywhere returns `([], [])` — nothing to require, not an error either;
+    the caller (`extract_claim_inventory`) is responsible for the SEPARATE "the concept is
+    mentioned by bare phrase but no recognized heading matched" fail-closed signal.
+    """
+    starts = [index + 1 for index, line in enumerate(lines) if heading_re.match(line)]
+    if not starts:
+        return [], []
+
+    all_items: list = []
+    all_unclassified: list = []
+    for start in starts:
+        section_lines = []
+        for line in lines[start:]:
+            if _ANY_HEADING_RE.match(line):
+                break
+            section_lines.append(line)
+        items, unclassified = _extract_one_section(section_lines)
+        all_items.extend(items)
+        all_unclassified.extend(unclassified)
+    return all_items, all_unclassified
 
 
 _AC_BARE_PHRASE_RE = re.compile(r"acceptance criteria", re.IGNORECASE)

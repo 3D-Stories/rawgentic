@@ -2380,3 +2380,34 @@ class TestRebuildReceiptBodiesEnforcement:
         bodies_path = self._bodies_path(tmp_path, {"1": "body text"})
         raw = json.loads(bodies_path.read_text(encoding="utf-8"))
         assert raw == {"1": "body text"}, "the --bodies schema must carry ONLY the body string"
+
+    def test_an_unresolvable_endpoint_commit_refuses_rather_than_reading_as_unresolved(
+            self, tmp_path):
+        """Step-8a review finding 7: `_probe_path_exists` treats EVERY nonzero `git cat-file`
+        result as "path absent" — including a bad commit, a repo error, or a permission failure.
+        Because an unresolved single-component path is then excluded from `_cited_candidates`,
+        an operational probe failure could silently narrow the required inventory instead of
+        refusing. A record naming an endpoint commit that does not exist in this repo at all
+        must refuse, not quietly report every citation against it as unresolved."""
+        body = "See f.txt for the cause.\n\n## Acceptance criteria\n\n1. The AC.\n"
+        claims = [
+            {"kind": "citation", "quoted_from_body": "f.txt", "checked_against": "f.txt@ghost",
+             "evidence": "x", "verdict": "holds"},
+            {"kind": "ac", "quoted_from_body": "The AC.", "checked_against": "<no-file: n/a>",
+             "evidence": "x", "verdict": "holds"},
+        ]
+        work, head, path, audited_path = self._campaign(
+            tmp_path, lambda h: self._record_for(body, h, claims))
+        # Corrupt from_sha to a well-formed-but-nonexistent commit AFTER building the record —
+        # body_hash still matches (computed from `body`, not from_sha), so this isolates the
+        # probe-failure path from the hash-mismatch path Finding 6 already covers.
+        audited = json.loads(audited_path.read_text(encoding="utf-8"))
+        audited["1"]["from_sha"] = "f" * 40
+        audited_path.write_text(json.dumps(audited), encoding="utf-8")
+        bodies_path = self._bodies_path(tmp_path, {"1": body})
+        before = path.read_text(encoding="utf-8")
+        rc = ll.main(["rebuild-receipt", "--driver-state", str(path),
+                      "--project-root", str(work), "--audited", str(audited_path),
+                      "--bodies", str(bodies_path)])
+        assert rc == 2, rc
+        assert path.read_text(encoding="utf-8") == before, "nothing must be written on refusal"

@@ -37,8 +37,11 @@ state (design doc `2026-08-06-944-revalidate-hardening-design.md` §2.4). The sc
 at the first marked child either — it skips past a lone obsolete-pending candidate to any OTHER
 genuinely ready child, and raises only when nothing else is selectable.
 
-**This skill clears both clauses above.** Every refusal it can meet is cleared by re-running it
-and rebuilding the receipt.
+**This skill clears the first two provenance clauses** (stale `validated_head`, an unstamped
+eligible child) by re-running it and rebuilding the receipt. **It records and carries forward the
+third clause, but only an owner running `record-child-outcome` can clear a live
+`pending_disposition`** — re-running this skill rediscovers the same marker for ever (Step-8a
+review finding 9).
 
 It is also the producer for the `queue_revalidated` rung on the
 pane-handoff ladder — `teardown_allowed` refuses to retire a predecessor until the receipt is current.

@@ -3053,6 +3053,22 @@ class TestObsoletePendingGate:
         assert "record-child-outcome --issue 612" in captured.err
         assert "ask the owner" in captured.err.lower()
 
+    def test_next_child_remedy_is_shell_safe_and_names_the_real_driver_state(
+            self, tmp_path, capsys):
+        """Step-8a review finding 5: the old text printed ONE line with UNQUOTED `|`
+        characters — an ordinary shell interprets them as a pipeline, so the printed remedy was
+        not actually copy-pasteable — and omitted `--driver-state` entirely, so even a
+        hand-corrected command could act on the wrong campaign."""
+        state, work = _pending_state(tmp_path)
+        rc = ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        captured = capsys.readouterr()
+        assert rc == 11
+        err = captured.err
+        assert "|" not in err, "an unquoted pipe breaks an ordinary shell"
+        assert "--driver-state" in err and str(state) in err
+        for status in ("deferred", "abandoned", "merged"):
+            assert f"--status {status}" in err
+
     def test_next_child_sleeping_no_dependents_is_recommendation_only(self, tmp_path, capsys):
         state, work = _pending_state(tmp_path)
         _declare_supervision(tmp_path, "sleeping", until="2099-01-01T00:00:00Z")
@@ -3165,7 +3181,8 @@ class TestAC3WriteBackClearsTheObsoletePendingGate:
         rc1 = ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
         first = capsys.readouterr()
         assert rc1 == 11
-        assert "record-child-outcome --issue 612 --status deferred|abandoned|merged" in first.err
+        assert "record-child-outcome --issue 612 --status deferred" in first.err
+        assert f"--driver-state {state}" in first.err
 
         rc2 = ll.main(["record-child-outcome", "--issue", "612", "--status", "deferred",
                        "--driver-state", str(state), "--project-root", work])
