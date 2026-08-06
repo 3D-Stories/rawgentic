@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>#726 — In-flight-work declaration gate + session-scoped-path check for pane handoff</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-design{background:radial-gradient(1200px 600px at 50% -10%,rgba(124,156,255,.10),transparent 60%),var(--bg)}
+.tpl-design .wrap{max-width:1080px;padding:0 clamp(16px,4vw,32px) 64px}
+.tpl-design header{padding:clamp(24px,4vw,56px) 0 12px;border-bottom:none;margin-bottom:18px}
+.tpl-design h1{font-size:clamp(26px,3.4vw,40px)}
+.tpl-design h2{font-size:20.8px;margin:1.9em 0 .6em}
+
+/* #76 — the frame's companions only. Two rules, deliberately few.
+   An earlier draft of this PR also added a two-column `.dz-options` grid "so the wide measure
+   pays for itself". Both wrong: the grid was DEAD (the `.dz-options` rule further down sets
+   `display:block` at equal specificity and later source order), and it contradicted a decision
+   this file already records — cards stack FULL WIDTH because "a trade-off you have to READ is
+   not a 220px tile". The width pays for itself inside each card, where the for/against grid is
+   two columns and needs the room. Deleted rather than reconciled. */
+.tpl-design h1{line-height:1.2;max-width:22ch}
+.tpl-design header .eyebrow{font-size:11px;letter-spacing:.14em}
+.tpl-design .dz-lead{background:var(--surface);border:1px solid var(--line);
+border-left:4px solid var(--accent);border-radius:12px;padding:4px 20px 14px;margin:6px 0 26px}
+.tpl-design .dz-lead>p:first-child{font-size:17.5px;line-height:1.55;color:var(--ink);font-weight:550}
+/* Option cards. Stacked full-width, because a trade-off you have to READ is not a 220px tile;
+   the shared layer's flex row is overridden here at higher specificity. */
+.tpl-design .dz-options{margin:22px 0;display:block;counter-reset:dz-opt}
+.tpl-design .dz-options .blk-opt{counter-increment:dz-opt;display:grid;gap:10px 14px;
+grid-template-columns:1fr 1fr;grid-template-areas:"head head" "pro con";
+background:var(--surface);border:1px solid var(--line);border-radius:14px;
+padding:16px 18px;margin:0 0 16px;flex:none}
+.tpl-design .dz-options .blk-opt>.blk-title{grid-area:head;display:flex;gap:12px;
+align-items:baseline;font-size:19px;letter-spacing:-.01em;margin:0}
+.tpl-design .dz-options .blk-opt>.blk-title::before{content:counter(dz-opt,decimal-leading-zero);
+font:700 22px/1.1 ui-monospace,Menlo,Consolas,monospace;color:var(--accent);flex:none}
+.tpl-design .dz-options .blk-for{grid-area:pro;background:var(--req-c-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+.tpl-design .dz-options .blk-against{grid-area:con;background:var(--sev-high-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+/* #134 SETTLED THE FOLLOW-UP THIS COMMENT USED TO NAME. It said these labels were CSS-generated
+   content, so not dependable semantic markup, that the reference uses real DOM text
+   (`<h4>Pros</h4>`), and that making it semantic "means changing the renderer, which moves every
+   style's bytes and so cannot ride in a per-template PR". That is exactly what #134 did: `_options`
+   now emits a real `.blk-lbl` element, every rich style's bytes moved, and `plain` did not.
+   So this is no longer a `::before` at all — it RESTYLES the markup label the renderer emits.
+   Only the typography is set here; the colours come from the shared layer, which reaches this
+   template because the wrapper carries both `blk-options` and `dz-options`. `text-transform`
+   keeps the visible form FOR/AGAINST while the accessible name stays the emitted "For"/"Against".
+   The space the renderer emits after the label collapses harmlessly against a block. */
+.tpl-design .dz-options .blk-lbl{display:block;font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;text-transform:uppercase}
+/* Restated at (0,4,0): the card rule above is (0,3,0) and was silently beating the shared
+   `.blk-options .is-chosen` (0,2,0), so the chosen card lost its accent border. Measured. */
+.tpl-design .dz-options .blk-opt.is-chosen{border-color:var(--accent);border-width:2px}
+.tpl-design .dz-options .blk-opt.is-rejected{opacity:.72}
+.tpl-design .dz-options .is-chosen>.blk-title::after{content:"CHOSEN";font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent);
+border:1px solid var(--accent);border-radius:999px;padding:1px 8px;margin-left:auto;flex:none}
+@media(max-width:640px){.tpl-design .dz-options .blk-opt{grid-template-columns:1fr;
+grid-template-areas:"head" "pro" "con"}}
+/* A today/proposed pair is TWO ROOTS in one `nodes compare` block, so the
+   grid goes on the top-level list. Two separate fences cannot pair — each is
+   its own wrapper with a single child. */
+@media(min-width:720px){.tpl-design .dz-compare>ul{grid-template-columns:1fr 1fr}}
+.tpl-design .dz-compare{background:var(--code);border-radius:12px;padding:10px 14px}
+/* The verdict band — `.recommend` in the reference. A gradient wash rather than a flat fill, so
+   the decision reads as the page's conclusion and not as one more callout. */
+.tpl-design .dz-decision{margin:24px 0 8px}
+.tpl-design .dz-decision>.blk-callout{border:1px solid var(--accent);border-left-width:1px;
+border-radius:14px;padding:16px 18px;
+background:linear-gradient(180deg,var(--accent-soft),transparent)}
+.tpl-design .dz-decision>.blk-callout>.blk-title::before{content:"DECISION";display:block;
+font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent)}
+/* Trade-off table. Styled, deliberately NOT markered: a markdown table emits a bare <table> with
+   no hook, and `section_class` is not a table marker — using it would flip `design` into
+   sectioned rendering and demote its h2s. */
+.tpl-design table{border-collapse:collapse;width:100%;margin:14px 0}
+.tpl-design thead th{font:700 11px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);
+border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
+.tpl-design tbody td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.tpl-design tbody tr:nth-child(even){background:var(--code)}
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+
+.blk-options{display:flex;flex-wrap:wrap;gap:12px}
+.blk-options .blk-opt{flex:1 1 220px;background:var(--surface);border:1px solid var(--line);
+border-radius:12px;padding:12px 14px}
+.blk-options .is-chosen{border-color:var(--accent);border-width:2px}
+.blk-options .is-rejected{opacity:.72}
+.blk-options .blk-title{display:block;font-weight:700;margin-bottom:6px}
+.blk-options .blk-for,.blk-options .blk-against{display:block;font-size:13px}
+/* #134 — the stance label is MARKUP now (`_options` emits `.blk-lbl`), not `content:"+ "`/`"- "`
+   on a pseudo-element. Generated content is not dependable semantic markup, and keeping a copy
+   here beside the real one would both drift and double-announce. A word also beats a bare sign at
+   a glance and does not lean on colour alone — the argument `design.py` had already made for its
+   own labels. Styled, never hidden: with the glyphs gone, hiding this leaves no stance signal.
+
+   The gap between label and prose is a REAL SPACE in the markup, not a margin here. The old
+   `content:"+ "` carried its own trailing space; an early version of this dropped it and leaned on
+   `margin-right`, which separates the label visually while leaving the DOM text fused as
+   "Forfewest files" — so text extraction, copy-paste, and any consumer that concatenates text nodes
+   got the exact failure this change exists to prevent. One space does both jobs, so there is no
+   margin here to keep in sync with it. Found twice independently: in a browser, and by review. */
+.blk-options .blk-lbl{font-weight:700}
+.blk-options .blk-for .blk-lbl{color:var(--req-c)}
+.blk-options .blk-against .blk-lbl{color:var(--sev-high)}
+
+:root{--accent:#f2a65e;}
+:root[data-theme=dark]{--accent:#f2a65e;}
+:root[data-theme=light]{--accent:#a26211;}
+@media print{:root,:root[data-theme=dark]{--accent:#a26211;}}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-06 00:23 MDT</div>
+<h1>#726 — In-flight-work declaration gate + session-scoped-path check for pane handoff</h1>
+
+</header>
+<main>
+<div class="dz-lead"><p><strong>Issue:</strong> <a href="https://github.com/3D-Stories/rawgentic/issues/726">#726</a> (bug, severity: high) · <strong>Epic:</strong> #871 (M4 wave, child 5 of 8) · <strong>Date:</strong> 2026-08-06 · <strong>Complexity:</strong> standard_feature <strong>Design context:</strong> <code>docs/planning/2026-08-05-871-m4-session-continuity-away-mode.md</code> §4 — &quot;#726 scope as filed&quot;. <strong>Revision 4 (final)</strong> — two <code>design</code> loop-backs consumed (the source cap), so the Step-4 gate closes budget-exhausted per #798 after applying this pass&#x27;s findings. §8 records every finding from one peer consult, THREE adversarial design passes and three self-reviews, with its disposition.</p>
+<hr></div>
+<h2>1. The defect, and exactly what this change does about it</h2>
+<p><code>perform_handoff</code> gates on the <strong>successor&#x27;s</strong> readiness — split, agent start, project bind, prompt landed, goal armed. Every one of those checks looks FORWARD. Nothing looks BACKWARD at the predecessor&#x27;s own unfinished work. Observed live 2026-07-30: a handoff ran while a design re-gate was still dispatched; its 15 KB verdict (8 findings, 3 High) landed two minutes later in <code>/tmp/claude-1000/&lt;slug&gt;/&lt;PREDECESSOR-SESSION-UUID&gt;/scratchpad/step4-regate2.out</code>. The predecessor tried to preserve the artifact by copying it into the repo, but the file was still 0 bytes at copy time, so what survived was an empty file.</p>
+<p><strong>The two holes are named precisely, because an earlier revision of this document overclaimed and the adversarial review was right to say so:</strong></p>
+<ul>
+<li><strong>H1 — nothing REQUIRES the question &quot;is anything of mine still running?&quot; to be asked.</strong> This</li>
+</ul>
+<p>  change makes the answer a mandatory, recorded input. It does <strong>not</strong> discover running work   (§2 explains why that is not available), so it is an <strong>attestation gate</strong>, not a detector. A   caller that answers falsely still passes.</p>
+<ul>
+<li><strong>H2 — nothing rejects a successor reference that is scoped to the predecessor&#x27;s session.</strong> This</li>
+</ul>
+<p>  change rejects exactly that path shape. It does <strong>not</strong> prove durability, and it does <strong>not</strong>   catch the empty-file half of the 2026-07-30 incident. Both limits are restated in §8 and in the   PR body.</p>
+<p>Together they close the <em>procedural</em> failure (nobody looked) and the <em>addressing</em> failure (an unusable reference), which is the whole of what the issue&#x27;s ACs can mechanically buy.</p>
+<h2>2. What the hook can and cannot see — probed, not assumed</h2>
+<p>The question &quot;can a subprocess enumerate the orchestrator&#x27;s background work?&quot; was <strong>probed live in this session on 2026-08-06</strong> (<code>date -u</code> → <code>2026-08-06T05:45:52Z</code>, quoted because pass 2 of the review believed the date was 2026-08-05 and rejected the evidence on that basis):</p>
+<ul>
+<li><strong>Harness background bash tasks DO leave one artifact:</strong> <code>&lt;scratch-root&gt;/tasks/&lt;task-id&gt;.output</code>.</li>
+<li>**It carries only the command&#x27;s stdout — no status, no exit code, no completion marker, and no</li>
+</ul>
+<p>  sibling file.<strong> Measured on the SAME task at three points, which is what the review asked for:   task <code>biiftwaky</code> read 14 bytes mid-run (<code>tick 1 / tick 2</code>), 49 bytes still mid-run, and 69 bytes   once the harness reported it complete — with <code>ls</code> showing exactly one matching file every time. A   running task and a finished one are therefore </strong>indistinguishable** by this surface.</p>
+<ul>
+<li><strong><code>Monitor</code> watches leave nothing on disk at all</strong> — they are harness-internal, not OS processes.</li>
+<li>The session scratch root contains exactly two subdirectories: <code>tasks/</code> and <code>scratchpad/</code>.</li>
+</ul>
+<p>So a probe exists and <strong>cannot answer the only question this gate asks</strong>. That is why the design declares. It also settles the apparent conflict with #951, which deleted a caller-asserted <code>--herdr-available</code> flag in favour of a probe: the rule is <em>&quot;do not assert what you can probe&quot;</em>, and the probe here was attempted and cannot carry the load.</p>
+<p><strong>The honest bound, repeated in the PR body:</strong> no hook can prove the enumeration was truthful. A caller that types <code>--inflight-none</code> reflexively passes. What is mechanical is that the question cannot be <em>skipped</em>, that every answer is <em>reported in the result payload</em>, and that an override is <em>visible</em> there. The payload is stdout plus the WF2 run-record the orchestrator writes; this change adds no new durable store of its own, and §8 records that bound.</p>
+<h2>3. Approaches considered</h2>
+<div class="blk blk-options dz-options"><div class="blk-opt is-rejected"><span class="blk-title">Process-tree probe</span><span class="blk-for"><span class="blk-lbl">For</span> Needs no declaration at all</span><span class="blk-against"><span class="blk-lbl">Against</span> Blind to Monitor watches; cannot tell a stranded waiter from a deliberate pytest run; zero ps//proc precedent in hooks/</span></div><div class="blk-opt is-rejected"><span class="blk-title">On-disk probe of dispatch artifacts</span><span class="blk-for"><span class="blk-lbl">For</span> Would be authoritative if it existed</span><span class="blk-against"><span class="blk-lbl">Against</span> The executor surface AC 1 names was deleted in #866 M0d; review_runner writes its receipt only at the end</span></div><div class="blk-opt is-rejected"><span class="blk-title">Producer-owned completion receipts</span><span class="blk-for"><span class="blk-lbl">For</span> Would satisfy both holes properly</span><span class="blk-against"><span class="blk-lbl">Against</span> The producers are harness tasks this repo cannot instrument; a separate design</span></div><div class="blk-opt is-chosen"><span class="blk-title">Mandatory caller declaration</span><span class="blk-for"><span class="blk-lbl">For</span> Converts &#x27;nobody looked&#x27; into a hard stop; every answer recorded</span><span class="blk-against"><span class="blk-lbl">Against</span> Cannot catch a caller that answers falsely</span></div></div>
+<p><strong>A — Process-tree probe.</strong> <em>Rejected.</em> No <code>ps</code>/<code>/proc</code> precedent anywhere in <code>hooks/</code> (grep: zero). It cannot see <code>Monitor</code> watches. It cannot separate the handoff&#x27;s own subprocess chain, or a deliberate pytest run, from a stranded waiter. A probe that is frequently wrong teaches operators to pass the override reflexively — which is how AC 3 becomes a rubber stamp.</p>
+<p><strong>B — On-disk probe of rawgentic&#x27;s own dispatch artifacts.</strong> <em>Rejected, reason recorded.</em> AC 1 names &quot;executor dispatches ... <code>routing-audit.jsonl</code> / <code>executor_routing_lib.py status</code>&quot;. That surface <strong>no longer exists</strong>: the M0 executor retreat (#866 M0d, D174) deleted the executor phase package, and a retirement tripwire test fails on those identifiers. Its successor <code>hooks/review_runner.py</code> writes its <code>--out</code> receipt only at the END and <em>removes a stale one at the start</em> (<code>review_runner.py:545-548</code>), so &quot;out file absent&quot; is indistinguishable from &quot;never dispatched&quot;. <strong>This is the largest way the issue body is stale, and the PR body says so.</strong></p>
+<p><strong>C — Producer-owned completion receipts the hook verifies</strong> (pass-2 review&#x27;s preferred fix for both H1 and H2). <em>Out of scope, recorded as declined.</em> The producers are harness tasks and external review backends; this repo cannot instrument them. A receipt contract is a separate design, and &quot;scope as filed&quot; (epic design §4) settles it for this child.</p>
+<p><strong>D — Mandatory caller declaration. CHOSEN</strong>, with the claims narrowed to what it actually delivers (§1). Precedent in the same function: <code>perform_handoff</code> already REQUIRES an explicit <code>expected_predecessor_goal</code> snapshot under <code>strict_goal_binding</code>, because <code>None</code> is itself a valid state and &quot;an omitted snapshot is indistinguishable from an unvalidated one&quot; (<code>launcher_lib.py:1993-1997</code>).</p>
+<h2>4. The design</h2>
+<h3>4.1 Pure functions</h3>
+<pre><code>INFLIGHT_KINDS  = (&quot;bash&quot;, &quot;dispatch&quot;, &quot;watch&quot;, &quot;other&quot;)
+INFLIGHT_STATES = (&quot;running&quot;, &quot;completed&quot;, &quot;abandoned&quot;)
+_INFLIGHT_IDENT_RE = re.compile(r&quot;^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$&quot;)
+_UNSET_INFLIGHT = object()
+
+def parse_inflight_item(raw: str) -&gt; dict              # &quot;&lt;kind&gt;:&lt;ident&gt;:&lt;state&gt;:&lt;detail&gt;&quot;
+def inflight_decision(declaration: dict) -&gt; (ok, reason, record)
+def abandoned_work_block(items) -&gt; str                 # &quot;&quot; when nothing was abandoned
+def session_scoped_paths(text, *, session_id=None) -&gt; list[dict]</code></pre>
+<p><strong>The declaration is a closed object with exactly one alternative selected</strong>, because &quot;unspecified&quot; is how a mandatory question gets bypassed. It is <code>{&quot;items&quot;: [...], &quot;attested_none&quot;: bool, &quot;override&quot;: bool}</code>, and it must satisfy <strong>exactly one</strong> of <code>attested_none is True</code> (with <code>items</code> empty) or a <strong>non-empty</strong> <code>items</code> list. A <code>None</code>, a missing key, an unknown key, a non-list <code>items</code>, both alternatives, or neither is refused. So a future caller cannot satisfy the call-site guard by handing over a bare <code>[]</code>.</p>
+<h3>4.2 The declaration and its decision table (ACs 1–3)</h3>
+<p>Each item carries <code>kind</code>, a charset-restricted <code>ident</code>, a <code>state</code>, and a free-text <code>detail</code>. The state makes AC 4&#x27;s wait auditable: an operator who waited declares the item <code>completed</code> rather than declaring nothing, so the record still shows the work existed.</p>
+<p><strong><code>abandoned</code> is a DISPOSITION, not an execution state.</strong> Declaring it does not and cannot stop the task — a hook cannot terminate a harness job (§2). It means: <em>the successor will neither receive nor wait for this result.</em></p>
+<table>
+<thead><tr><th>declaration</th><th><code>--allow-inflight</code></th><th>outcome</th></tr></thead>
+<tbody>
+<tr><td>omitted at the library boundary (<code>_UNSET</code>)</td><td>any</td><td><strong><code>LauncherError</code></strong> — caller-contract violation, refused before anything runs</td></tr>
+<tr><td><code>--inflight-none</code> (explicit empty)</td><td>no</td><td><strong>PASS</strong>, recorded as <code>attested_none</code></td></tr>
+<tr><td>all items <code>completed</code></td><td>no</td><td><strong>PASS</strong>, items recorded (the waited case)</td></tr>
+<tr><td>any item <code>running</code></td><td>any</td><td><strong>REFUSE</strong>, every running item named</td></tr>
+<tr><td>≥1 <code>abandoned</code>, none <code>running</code></td><td>no</td><td><strong>REFUSE</strong> — abandonment needs the flag</td></tr>
+<tr><td>≥1 <code>abandoned</code>, none <code>running</code></td><td>yes</td><td><strong>PASS</strong>, override recorded</td></tr>
+<tr><td>no <code>abandoned</code> item</td><td>yes</td><td><strong>REFUSE</strong> — a vacuous override is a false audit record</td></tr>
+<tr><td><code>--inflight-none</code> with <code>--inflight</code></td><td>any</td><td><strong>REFUSE</strong> at argparse and again in the function</td></tr>
+</tbody>
+</table>
+<p>Row 4 is stricter than the issue&#x27;s <code>--allow-inflight</code> sketch: an item declared <code>running</code> cannot be admitted by the flag. To proceed, the operator re-declares it <code>abandoned</code> — a positive statement about that job rather than a blanket &quot;let me past&quot;. Row 7 mirrors an existing refusal exactly: <code>--goal-rewrite-approved</code> with <code>--no-teardown</code> is refused because &quot;an approval flag there could only ever mint a FALSE audit record&quot; (<code>launcher_lib.py:5272-5276</code>).</p>
+<div class="blk blk-callout dz-decision"><div class="blk-callout is-decision"><div class="blk-title">Enforce on all three CLIs, and place the campaign check early</div><p>Revision 3 enforced only where the caller shipped in this PR. Pass 3 objected that two
+unenforced paths leave the defect live, and this campaign had already measured the
+counter-example: #769&#x27;s rc-8 sweep gate shipped a mandatory refusal against the same frozen
+plugin cache, and the next boundary read its printed remedy and cleared it. For an LLM-driven
+caller a self-explaining refusal IS migration. The liveness half is kept structurally instead,
+by refusing before <code>mark_split_attempted</code> rather than inside <code>perform_handoff</code>.</p></div></div>
+<p><strong>Enforced on all three handoff CLIs — the rollout split from revision 3 is DROPPED.</strong> Revision 3 enforced only on <code>ad-hoc-handoff</code>, on the argument that the campaign CLIs are driven by a cached <code>epic-run</code> skill (D230 bars a plugin refresh this campaign) and that &quot;refusal text is not caller migration&quot;. Pass 3 objected that two unenforced paths leave the defect live, and pass 3 is right, because <strong>this campaign already measured the counter-example</strong>: #769 shipped the rc-8 boundary-sweep gate as a mandatory refusal against the same frozen cache, and the next boundary met it, read the remedy the refusal printed, and cleared it. For an LLM-driven caller a self-explaining refusal IS migration.</p>
+<p>The liveness half of the earlier concern is kept structurally rather than by weakening the gate: on the campaign paths the check runs EARLY, before <code>mark_split_attempted</code> (§4.5), so a refusal can never park a campaign — it is re-runnable the moment the flag is added. Every refusal prints the exact flag that clears it, and <code>skills/epic-run/SKILL.md</code> is updated for sessions that load the new build.</p>
+<h3>4.3 AC 6 is written by the HOOK — and carries NO caller text at all</h3>
+<p>When any item is <code>abandoned</code>, <code>abandoned_work_block(items)</code> builds a fenced block and <code>perform_handoff</code> <strong>appends it to the resume prompt</strong>:</p>
+<pre><code>--- ABANDONED WORK (predecessor handoff) ---
+2 background items were abandoned at this handoff (kinds: dispatch, watch). They may still finish
+in the predecessor session, but their results will NOT reach you and must NOT be waited for.
+Re-dispatch anything you need.
+--- END ABANDONED WORK ---</code></pre>
+<p><strong>Every byte of that block is hook-authored.</strong> The only variables are a COUNT and the allowlisted <code>kind</code> values. Revision 3 also carried the operator&#x27;s <code>ident</code>, and pass 3 was right that this was not good enough: <code>_INFLIGHT_IDENT_RE</code> happily admits <code>ignore_previous_instructions</code>, so an identifier is semantic text reaching a model. <code>ident</code> and <code>detail</code> now live ONLY in the audit payload. The successor loses nothing it needs — it is not correlating the predecessor&#x27;s internal job ids; it needs to know that something was abandoned and that waiting is pointless.</p>
+<p>This is the invariant <code>driver_lib.with_boundary_clause</code> already states for the boundary clause: &quot;nothing here is interpolated from a probe or an issue body — every value is generated by this process from durable state, which is what keeps untrusted text out of a successor&#x27;s prompt.&quot; Exclusion, not fencing: fencing prose as data does not stop a model reading it as instruction.</p>
+<p>Ordering inside <code>perform_handoff</code> is load-bearing: the marker check and the bind-directive refusal run on the ORIGINAL prompt and are unaffected by an append; <code>validate_inserted_prompt</code> refuses text <em>starting</em> with <code>/</code>, which an append cannot change. The path scan (§4.4) runs on the <strong>augmented</strong> prompt.</p>
+<p>Caller fields are still validated even though they never reach the prompt — <code>kind</code> and <code>state</code> against their vocabularies, <code>ident</code> against <code>_INFLIGHT_IDENT_RE</code>, <code>detail</code> length-capped, control characters and <code>/rawgentic:switch</code> refused anywhere. A malformed declaration should fail at the boundary, not merely be filtered later.</p>
+<h3>4.4 <code>session_scoped_paths</code> — the exact contract (AC 5)</h3>
+<p><strong>Tokenizer, stated precisely because &quot;token&quot; was ambiguous in revision 2.</strong> A candidate is the longest run matching <code>/[A-Za-z0-9._\-/]+</code> — an absolute path of unreserved characters. Trailing <code>.</code>/<code>,</code>/<code>)</code>/<code>]</code> are stripped. This deliberately does <strong>not</strong> attempt quoted paths with spaces, percent-encoding, or environment-variable aliases; those are stated non-goals, not oversights, and §8 records them as an evasion bound. <code>file:///tmp/claude-…</code> needs no decoder: it contains the plain path as a substring, so the same scan matches it.</p>
+<p>Each candidate is normalized (lexical <code>.</code>/<code>..</code> collapse, no filesystem access) and <strong>flagged</strong> when:</p>
+<ol>
+<li>any path component equals the predecessor&#x27;s session id (when known); <strong>or</strong></li>
+<li>the path lies under <code>/tmp/claude-*/</code> <strong>and</strong> carries a component matching the UUID shape</li>
+</ol>
+<p>   <code>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}</code>.</p>
+<p>Rule 2 exists because rule 1 alone fails where it matters most: a <code>--no-teardown</code> ad-hoc handoff passes no predecessor session.</p>
+<p><strong>Test vectors (all shipped as cases).</strong> Positive: the canonical incident path; the same path inside a Markdown link; the same as a <code>file://</code> URL; a <code>/tmp/claude-1000/&lt;slug&gt;/&lt;uuid&gt;/</code> directory with no file part; a path with <code>/./</code> and <code>/../</code> segments that normalizes onto one. Negative: an in-repo <code>docs/planning/...</code> path; <code>/tmp/claude-1000/&lt;slug&gt;</code> with no UUID component; a UUID appearing in ordinary prose with no leading <code>/</code>; a non-<code>/tmp</code> absolute path carrying a UUID.</p>
+<p><strong>Why such a path is a defect — corrected against a live probe, because the issue body&#x27;s stated reason is wrong.</strong> The issue says the successor &quot;could not have read the file even knowing the path&quot;. Probed 2026-08-06: <code>/tmp/claude-1000</code> is <code>drwx------</code> owned by the single host user, every Claude session on this host runs as that user, and 207 sibling session directories (oldest 2026-08-01) were listable from this session. A successor <strong>can</strong> read a predecessor scratchpad. The real reasons are:</p>
+<ul>
+<li>it is untracked per-session temp state with no durability guarantee, outside the repo;</li>
+<li>it is scoped to a session the default handoff is <strong>about to retire</strong>; and</li>
+<li>the successor is never given the predecessor&#x27;s session id, so the path is usable only if pasted</li>
+</ul>
+<p>  verbatim — exactly the fragile hand-off this refuses.</p>
+<p><strong>No override.</strong> Revision 1 added <code>--allow-session-path</code> for the case where AC 6 forces the operator to paste a stranded path; §4.3 dissolved that by generating the notice. What remains is an ordinary false positive whose fix is always available and is named in the refusal: copy the artifact somewhere durable, or drop the reference.</p>
+<p><strong>ReDoS:</strong> one bounded character class, one quantifier, no nesting or alternation — linear.</p>
+<h3>4.5 Where the checks run — early at the CLI, backstopped in <code>perform_handoff</code></h3>
+<p><code>_cmd_handoff</code> durably records <code>mark_split_attempted</code> at <code>launcher_lib.py:5135</code> <strong>before</strong> calling <code>perform_handoff</code>, and <code>_classify_launch</code> (<code>:4763</code>) maps an unrecognised <code>failed_step</code> to &quot;append no terminal event&quot;. A new refusal <em>inside</em> <code>perform_handoff</code> on the campaign path would therefore leave <code>split_attempted: true</code> with no terminal outcome — a permanently parked campaign. That is why:</p>
+<ul>
+<li><strong><code>_cmd_handoff</code> and <code>_cmd_mid_child_handoff</code> run the checks EARLY</strong>, beside the existing rc-6</li>
+</ul>
+<p>  revalidation and rc-8 sweep gates (both of which already sit before the claim and before   <code>mark_split_attempted</code>), and pass the resulting declaration down for the record.</p>
+<ul>
+<li><strong><code>perform_handoff</code> keeps both checks as a backstop</strong>, positioned after the <code>queue_revalidated</code></li>
+</ul>
+<p>  rung and before the #731 name preflight — purely local work, so refusing there costs no <code>herdr</code>   subprocess and creates nothing to clean up.</p>
+<ul>
+<li><strong><code>_classify_launch</code> additionally maps <code>inflight</code> and <code>durable_path</code> to <code>no_split_attempted</code></strong>, so</li>
+</ul>
+<p>  even a backstop refusal on the campaign path is classified as &quot;nothing was created&quot; rather than   left indeterminate.</p>
+<p>Both follow the #731 template: recorded in <code>out[&quot;steps&quot;]</code> via <code>record(...)</code> on every path, structured <code>failed_step</code> + <code>failure_detail</code>, refusal before anything exists.</p>
+<h3>4.6 Fail-mode — CLOSED on both, deliberately opposite to the #731 preflight</h3>
+<p>The name preflight fails <strong>open</strong> because a second gate exists downstream: <code>agent start</code> still refuses a taken name. <strong>Neither new check has a downstream gate.</strong> So both fail CLOSED:</p>
+<ul>
+<li><code>inflight_decision</code>: an absent declaration raises; a blocking declaration refuses, on every CLI.</li>
+</ul>
+<p>  A caller-contract violation is not an unavailable probe fact, so the fail-open idiom does not apply.</p>
+<ul>
+<li><code>session_scoped_paths</code>: an unexpected exception <strong>refuses</strong> with <code>failed_step=&quot;durable_path&quot;</code> and a</li>
+</ul>
+<p>  reason naming the exception class. Revision 1 had this failing open, contradicting this design&#x27;s   own doctrine. Refusing strands nothing: no pane exists yet.</p>
+<p>This matches <code>projects/rawgentic/CLAUDE.md</code> §3 — a data-loss boundary that cannot evaluate fails closed.</p>
+<h3>4.7 The gate cannot be dropped by a future caller</h3>
+<p><code>perform_handoff(inflight=_UNSET_INFLIGHT)</code>; <strong>a sentinel that reaches the function raises</strong>, in the same class as an empty <code>resume_prompt</code>. Measured cost of doing this properly: the three heavy test modules each build kwargs through ONE <code>_handoff(...)</code> helper (<code>test_launcher_lib.py:164</code>, <code>test_adhoc_pane_handoff.py:161</code>, <code>test_adhoc_teardown_guard.py:136</code>), so it is one edit per file.</p>
+<p>Belt and braces, because a new caller is born in source: a guard test enumerates every <code>perform_handoff(</code> call site under <code>hooks/</code> and asserts each passes <code>inflight=</code>. There are three today — <code>_cmd_handoff</code> (<code>:5138</code>), <code>_cmd_ad_hoc_handoff</code> (<code>:5372</code>), <code>_cmd_mid_child_handoff</code> (<code>:5607</code>).</p>
+<h3>4.8 CLI surface, and what is NOT covered</h3>
+<p>Added to all three handoff subcommands:</p>
+<pre><code>--inflight &#x27;&lt;kind&gt;:&lt;ident&gt;:&lt;state&gt;:&lt;detail&gt;&#x27;   repeatable
+--inflight-none                                affirmative attestation: nothing is running
+--allow-inflight                               proceed with abandoned items (recorded)</code></pre>
+<p>New standalone subcommand:</p>
+<pre><code>python3 hooks/launcher_lib.py check-handoff-prompt --prompt-file &lt;f&gt; [--session-id &lt;id&gt;]</code></pre>
+<p>rc <code>0</code> clean · <code>3</code> offending paths (JSON naming each path and why) · <code>2</code> caller error.</p>
+<p><strong><code>clear-prep</code> is NOT covered, and this PR therefore says <code>Part of #726</code>, not <code>Closes</code>.</strong> The issue&#x27;s scope names it, but it lives at <code>~/.claude/skills/clear-prep</code>, outside this repository. Editing the owner&#x27;s personal skill directory from inside a repo PR would be an unreviewed out-of-band change to their environment, so this PR gives <code>clear-prep</code> something to call and nothing more. <strong>#726 stays OPEN</strong> with a comment enumerating what landed and what remains; the epic #871 checkbox is ticked because the wave&#x27;s scheduled work on this child is delivered — the same shape D226 set in this wave for #943 Part A (merged, box ticked, issue deliberately open). No follow-up ISSUE is filed: D179 requires owner confirmation, so the residual rides the run-record <code>follow_ups</code> and is led with when the owner returns (D247).</p>
+<h3>4.9 Result payload</h3>
+<p><code>out[&quot;inflight&quot;] = {&quot;declared&quot;: [...], &quot;attested_none&quot;: bool, &quot;override&quot;: bool}</code> and <code>out[&quot;session_paths&quot;] = {&quot;flagged&quot;: [...]}</code> — both surfaced by the CLI payload, so an override stays visible even when a later delivery step fails (AC 3).</p>
+<p><strong>What &quot;recorded&quot; means here, stated exactly.</strong> The payload is stdout, plus whatever the caller persists — for a WF2 run that is the run-record. This change adds <strong>no durable store of its own</strong>, so a caller that discards stdout and then dies loses the declaration. Building one would mean a new persistence surface, which the epic design&#x27;s §7 ruling (&quot;no new enforcement state machines&quot;) forbids. The bound is recorded in §8 rather than papered over.</p>
+<h3>4.10 AC 4 is NOT satisfied by this change</h3>
+<p>AC 4 asks that &quot;when the operator waits, the skill polls to completion and then proceeds automatically&quot;. Revision 3 called this &quot;prose-satisfied&quot;; pass 3 rejected that, correctly. There is nothing to poll: §2&#x27;s probe shows the harness exposes no task status surface, so neither the hook nor a skill can observe a terminal state, and an instruction to &quot;wait for your notification&quot; has no assertion behind it and fails silently if the notification never arrives.</p>
+<p>So AC 4 is recorded as <strong>UNSATISFIED</strong>. The refusal names the blocking items and the operator re-runs after the work lands, re-declaring each item <code>completed</code> so the wait stays in the record — that is a manual loop, not an automatic one, and the PR body says so under what this change does not do. Satisfying AC 4 needs the producer-owned receipt surface declined in §3 C.</p>
+<h2>5. File changes</h2>
+<table>
+<thead><tr><th>File</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td><code>hooks/launcher_lib.py</code></td><td>4 pure functions, 2 backstop preflights, early CLI gates, flags on 3 subcommands, 1 new subcommand, <code>_classify_launch</code> rows, payload fields</td></tr>
+<tr><td><code>skills/pane-handoff/SKILL.md</code></td><td>enumeration prose (AC 1), the flags, the wait-and-re-declare instruction (AC 4), new <code>failed_step</code> rows</td></tr>
+<tr><td><code>skills/epic-run/SKILL.md</code></td><td>one boundary line: the boundary handoff must pass a declaration, and what the refusal looks like</td></tr>
+<tr><td><code>tests/hooks/test_inflight_handoff_gate.py</code></td><td>new — pure-function, vector, preflight, CLI and call-site-completeness tests</td></tr>
+<tr><td><code>tests/hooks/test_launcher_lib.py</code>, <code>test_adhoc_pane_handoff.py</code>, <code>test_adhoc_teardown_guard.py</code></td><td>one <code>_handoff(...)</code> helper edit each</td></tr>
+<tr><td><code>README.md</code></td><td>changelog entry (both tail tokens)</td></tr>
+<tr><td><code>.claude-plugin/plugin.json</code>, <code>plugins/rawgentic/.codex-plugin/plugin.json</code>, <code>tests/hooks/test_adversarial_review_registration.py</code></td><td>version bump, all three surfaces</td></tr>
+<tr><td><code>docs/planning/campaign-log.md</code></td><td>this child&#x27;s roadmap slot</td></tr>
+</tbody>
+</table>
+<p><code>plan_lib.lane_decision</code> returned <code>lane</code>; the lane was <strong>declined</strong> (D245) because the deliverable is a refusing gate on the most safety-critical function in the module — and the cross-model layer the lane drops then found nine High defects across two passes.</p>
+<h2>6. Error handling and failure modes</h2>
+<table>
+<thead><tr><th>Failure</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td><code>inflight</code> omitted at the library boundary</td><td><code>LauncherError</code> before anything runs</td></tr>
+<tr><td>No declaration flags on any handoff CLI</td><td><code>LauncherError</code> naming the three flags</td></tr>
+<tr><td>Any item <code>running</code></td><td>REFUSE, every running item named</td></tr>
+<tr><td><code>abandoned</code> without the override</td><td>REFUSE</td></tr>
+<tr><td>Override with no <code>abandoned</code> item</td><td>REFUSE — a false audit record</td></tr>
+<tr><td>Any of the above on <code>handoff</code> / <code>mid-child-handoff</code></td><td>Same REFUSAL, raised EARLY — before <code>mark_split_attempted</code>, so nothing is parked and the re-run is clean</td></tr>
+<tr><td><code>--inflight-none</code> plus <code>--inflight</code></td><td>REFUSE at argparse and in the function</td></tr>
+<tr><td>Bad kind/state/ident, control chars, over-length, bind directive in a field</td><td><code>LauncherError</code> before anything runs</td></tr>
+<tr><td>Session-scoped path in the augmented prompt</td><td>REFUSE <code>durable_path</code>, each path named with its reason and the two fixes</td></tr>
+<tr><td>Path scanner raises unexpectedly</td><td>REFUSE <code>durable_path</code>, reason names the exception class</td></tr>
+</tbody>
+</table>
+<h2>7. Security implications</h2>
+<p>Read-only regex over operator-supplied text; nothing is executed, opened, or resolved on the filesystem. No new egress, no new file writes, no new credential surface. Three security-relevant properties: the ReDoS bound (§4.4); <strong>no free-text reaches the successor&#x27;s prompt</strong> (§4.3, the strongest available answer to prompt injection — exclusion, not fencing); and both new gates fail CLOSED (§4.6).</p>
+<h2>8. Review provenance and dispositions</h2>
+<p><strong>Peer consult (gpt-5.6-sol) — adopted:</strong> the hook writes the abandoned-work block; item <code>state</code> with the stricter override rule; dropping <code>--allow-session-path</code>; the <code>_UNSET</code> sentinel; treating declared text as untrusted; path normalization. <strong>Declined:</strong> a separate artifact manifest (a second declaration burden, no measured failure behind it); a versioned JSON schema (capped repeatable flags carry the same fields).</p>
+<p><strong>Adversarial pass 1 (gpt-5.6-sol) — 4 High, 1 Medium, all applied.</strong> <code>abandoned</code> recast as a disposition; the sentinel now raises; §2 backed by a probe; the scanner fails closed; the readability claim probed and corrected.</p>
+<p><strong>Adversarial pass 2 (gpt-5.6-sol) — 5 High, 2 Medium.</strong></p>
+<table>
+<thead><tr><th>#</th><th>Sev</th><th>Finding</th><th>Disposition</th></tr></thead>
+<tbody>
+<tr><td>F1</td><td>High</td><td><code>clear-prep</code> is claimed in scope but not integrated</td><td><strong>applied</strong> — §4.8 defers it explicitly; the PR body states it is not covered</td></tr>
+<tr><td>F2</td><td>High</td><td>The gate attests, it does not detect — stop calling H1 solved</td><td><strong>applied</strong> — §1 restates H1 as an attestation gate and names what is not bought. The recommended producer registry is <strong>declined</strong> (§3 C): the producers cannot be instrumented from this repo</td></tr>
+<tr><td>F3</td><td>High</td><td>The path check proves neither durability nor completeness</td><td><strong>applied</strong> — §1 restates H2 to exactly &quot;rejects predecessor-session-scoped references&quot;. Receipts <strong>declined</strong> as a separate contract</td></tr>
+<tr><td>F4</td><td>High</td><td>The 2026-08-06 probe post-dates the review&#x27;s context, so it is not yet evidence</td><td><strong>refuted</strong> — the reviewer&#x27;s clock is stale. <code>date -u</code> in the probing session printed <code>2026-08-06T05:45:52Z</code>. Its fair sub-request WAS honoured: §2 now reports the same task observed mid-run and after completion</td></tr>
+<tr><td>F5</td><td>High</td><td>Mandatory enforcement ships while the cached caller cannot be updated</td><td><strong>applied, then SUPERSEDED by P3-F1</strong> — revision 3 split the rollout; revision 4 drops the split and keeps the safety requirement structurally instead (early placement, self-explaining refusal, the measured rc-8 precedent)</td></tr>
+<tr><td>F6</td><td>Medium</td><td>&quot;Token&quot; and &quot;Markdown punctuation&quot; have no defined grammar</td><td><strong>applied</strong> — §4.4 states the exact pattern, the normalization, the non-goals, and ten test vectors</td></tr>
+<tr><td>F7</td><td>Medium</td><td>Fencing does not isolate untrusted text from a model</td><td><strong>applied</strong> — §4.3 removes free text from the prompt entirely</td></tr>
+</tbody>
+</table>
+<p><strong>Self-reviews (security lens) — 4 High across two passes, all applied:</strong> the frozen-cache liveness trap (converged with F5); untrusted text in the successor prompt (converged with F7); the <code>mark_split_attempted</code> parking hazard on the campaign path (§4.5 — found by reading shipped code, not raised by either reviewer); and the missing <code>_classify_launch</code> rows for the new failed steps.</p>
+<p><strong>Adversarial pass 3 (gpt-5.6-sol) — 4 High, 2 Medium, all applied.</strong> The gate then CLOSED budget-exhausted at the <code>design</code> source cap (#798); no third loop-back was consumed.</p>
+<table>
+<thead><tr><th>#</th><th>Sev</th><th>Finding</th><th>Disposition</th></tr></thead>
+<tbody>
+<tr><td>P3-F1</td><td>High</td><td>The rollout split leaves two commands able to retire a predecessor with work pending</td><td><strong>applied</strong> — the split is dropped; all three enforce. Pass 2&#x27;s liveness concern is met structurally (early placement, §4.5) rather than by weakening the gate, and this campaign&#x27;s own rc-8 sweep gate is the measured evidence that a self-explaining refusal migrates an LLM caller (D247)</td></tr>
+<tr><td>P3-F2</td><td>High</td><td>AC 4 was claimed prose-satisfied while nothing polls</td><td><strong>applied</strong> — §4.10 records AC 4 as UNSATISFIED</td></tr>
+<tr><td>P3-F3</td><td>High</td><td><code>clear-prep</code> is in scope and unintegrated, so the issue cannot close</td><td><strong>applied</strong> — the PR says <code>Part of #726</code>, the issue stays OPEN with a residual comment (D247)</td></tr>
+<tr><td>P3-F4</td><td>High</td><td><code>ident</code> is caller text in the prompt; the regex admits <code>ignore_previous_instructions</code></td><td><strong>applied</strong> — §4.3&#x27;s block is now 100% hook-authored: a count and allowlisted kinds only</td></tr>
+<tr><td>P3-F5</td><td>Medium</td><td>The declaration contract does not define <code>items=[]</code> vs <code>None</code> vs omission</td><td><strong>applied</strong> — §4.1 makes it a closed object with exactly one alternative selected; <code>None</code>, bare <code>[]</code>, both and neither all refuse</td></tr>
+<tr><td>P3-F6</td><td>Medium</td><td>The payload has no durable sink, so &quot;every answer is recorded&quot; overclaims</td><td><strong>applied</strong> — §2 and §4.9 narrow the claim to the result payload plus the caller&#x27;s run-record; a new store is declined under the epic design&#x27;s no-new-state-machines ruling</td></tr>
+</tbody>
+</table>
+<p><strong>Known bounds, stated not fixed:</strong> a caller can attest falsely; a non-session <code>/tmp</code> path or an empty in-repo file passes; the tokenizer does not handle quoted, percent-encoded or variable-aliased paths; AC 5 only sees paths that appear in the prompt; <code>clear-prep</code> is uncovered; AC 4 is unsatisfied; and the declaration has no durable sink beyond the caller&#x27;s own record.</p>
+<h2>Platform / external dependencies</h2>
+<pre><code>platform_apis:
+- api: harness session scratch root — /tmp/claude-&lt;uid&gt;/&lt;cwd-slug&gt;/&lt;session-uuid&gt;/
+  feasibility: verified via spike — probed live 2026-08-06. `ls -d
+    /tmp/claude-1000/-home-rocky00717-rawgentic/f4545f82-f0cb-47d5-abbf-de07d4b29911/scratchpad`
+    succeeded; the 4th component is byte-equal to `printenv CLAUDE_CODE_SESSION_ID`. That is the
+    exact shape rule 2 of §4.4 matches on.
+  failure: fail-loud
+- api: harness background-task artifacts — &lt;scratch-root&gt;/tasks/&lt;task-id&gt;.output
+  feasibility: verified via spike — the SAME task observed twice on 2026-08-06. Mid-run, task
+    `biiftwaky` read 14 bytes of its own stdout with no sibling file; after its later ticks the
+    same path read 49 bytes, still with no sibling, no status and no exit code. Three earlier
+    tasks matched. NEGATIVE result, load-bearing: it is why §2 declares rather than probes.
+  failure: fail-loud
+- api: cross-session readability of /tmp/claude-&lt;uid&gt;
+  feasibility: verified via spike — 2026-08-06 `stat` reported `drwx------ rocky00717:rocky00717`
+    on `/tmp/claude-1000`, and 207 sibling session directories (oldest 2026-08-01) were listable
+    from this session. REFUTES the issue body&#x27;s stated reason; §4.4 carries the corrected one.
+  failure: fail-loud</code></pre>
+<p>No dependency, migration, or new cross-service surface is introduced.</p>
+<h2>9. Multi-PR assessment</h2>
+<p>Single PR. One module, two skill files, one new test file, three one-line test-helper edits.</p>
+
+</main>
+<footer>Last updated: 2026-08-06 00:23 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
