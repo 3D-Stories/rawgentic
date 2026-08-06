@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "_comment": "Single machine-readable source of truth for the Traycer toolchain pin (#965, epic #964; M0 supply-chain vet, same pattern as the herdr vet #609 — hooks/herdr-pin.json). Traycer ships three separately-versioned components (Desktop, Host, CLI) on a roughly weekly release-candidate cadence with no stated back-compat guarantee, so the pin covers all three or a partial upgrade can drift them apart. Verify an install with: dpkg -s traycer (Desktop), and sha256sum against the recorded hashes below for the CLI and Host binaries. Full first-hand findings and evidence: https://github.com/3D-Stories/rawgentic/issues/965.",
+  "pin": {
+    "version": "1.1.10",
+    "verified_at": "2026-08-06",
+    "components": {
+      "desktop": {
+        "kind": "electron-shell",
+        "install_path": "/opt/Traycer/traycer-desktop",
+        "package_manager": "dpkg",
+        "package_name": "traycer",
+        "license": "MIT",
+        "license_source": "dpkg package Description field (`dpkg -s traycer`) — CONFIRMED first-hand. No bundled app-level LICENSE file found under /opt/Traycer (only third-party LICENSE.electron.txt, LICENSES.chromium.html, and a vendored font-list LICENSE).",
+        "sha256": {
+          "traycer-desktop-linux-amd64.deb": "d4ac30be4704d50c6a2b8bca41fb97615d6a7bf2e5cdd1c27923bc6fcec4a2b7",
+          "/opt/Traycer/traycer-desktop": "e54fdcc5a39a9200c368033965b719406abce42b9e5b7e09a0347e650f48575f"
+        }
+      },
+      "host": {
+        "kind": "node-runtime-bundle",
+        "install_path": "/home/chris/.traycer/host/install/host-runtime/traycer-host",
+        "version_source": "/home/chris/.traycer/host/install/host-runtime/version.json",
+        "license": null,
+        "license_source": "NOT CONFIRMED — no LICENSE file and no `license` field in host-runtime/package.json (keys present: name, private, type, description only). The issue's blanket 'MIT for Desktop/CLI/Host' claim could not be independently reproduced for Host from installed artifacts; only the Desktop dpkg metadata confirms MIT first-hand.",
+        "sha256": {
+          "traycer-host": "aedaa7d03c6ff93d152d93d9b0f105e214e94b0a8cb88e196be4887c13a4c2c9"
+        }
+      },
+      "cli": {
+        "kind": "node-binary",
+        "install_path": "/home/chris/.traycer/cli/bin/traycer",
+        "version_source": "/home/chris/.traycer/cli/manifest.json",
+        "license": null,
+        "license_source": "NOT CONFIRMED — no bundled LICENSE file found under ~/.traycer/cli. Same gap as Host: the issue's MIT claim is not independently reproduced here.",
+        "sha256": {
+          "traycer": "302d7534992378379ed6fca4157c5ce0c586a4d74a9ffdfc3be86e24f46bf055"
+        }
+      }
+    },
+    "checksum_verification": {
+      "status": "recorded_not_independently_verifiable",
+      "_comment": "Unlike herdr's public GitHub releases (a `.digest` sidecar to diff against, hooks/herdr-pin.json's model), Traycer ships through its own closed update channel — no public releases page or checksum manifest was found via static string search of the installed binaries, and `traycer host doctor` reports no issues but surfaces no checksum data. The hashes above are what is INSTALLED on this machine right now, not diffed against an independent upstream source. This is a real supply-chain gap versus the herdr pin's stronger guarantee: a compromised update channel would not be caught by re-hashing the same install. Flagged for the owner; no fix attempted here (would need Traycer to publish checksums, which is outside this repo's control)."
+    },
+    "telemetry": {
+      "sentry_crash_reporting": {
+        "status": "enabled_by_default",
+        "evidence": "CONFIRMED live — ~/.config/Traycer/sentry/session.json, scope_v3.json, and Crashpad/settings.dat + Crashpad/client_id all exist and are populated on this install with zero explicit opt-in taken. CLI binary carries a hardcoded DSN (https://<redacted>@o4507249693229056.ingest.us.sentry.io/4511598018625536).",
+        "disable_mechanism": "CONFIRMED present in the Host binary's compiled bundle: `DISABLE_TELEMETRY`, `DO_NOT_TRACK`, and `DISABLE_ERROR_REPORTING` env vars are checked in code (the latter gates the crash-report send with an early return). NOT independently confirmed end-to-end via a live network capture with the var set — that would need a host restart with the var exported, which was not done here to avoid disrupting an in-use install."
+      },
+      "posthog_analytics": {
+        "status": "vendored_no_live_key_found",
+        "evidence": "The @posthog/core package IS present inside the compiled Host bundle (2 string matches: a Sentry 'PostHog' integration tag, and a source-map vendor path). NO live PostHog project key (`phc_...` prefix pattern) or ingest endpoint (`i.posthog.com` / `us.i.posthog.com` / `eu.i.posthog.com`) was found in any of the three binaries. As shipped in v1.1.10, PostHog does not appear to be actively wired with credentials — a more precise, less alarming finding than the README's blanket 'may be enabled' hedge suggests. Not proven absent in every code path; only that no key/endpoint surfaced under static string search."
+      },
+      "statsig_footnote": {
+        "status": "vendored_dependency_unused",
+        "evidence": "@statsig/js-client (including session-replay + web-analytics bundles) is present under the Host's node_modules but the string 'statsig' never appears in the compiled/bundled traycer-host binary itself — i.e. it is an unused transitive dependency on disk, not a live telemetry surface. Not disclosed in the repo README's telemetry hedge (which names only Sentry and PostHog). Worth watching across version bumps since presence-without-wiring can change silently."
+      }
+    },
+    "byoa_local_only": {
+      "status": "confirmed_for_model_traffic",
+      "evidence": "The `claude` CLI process Traycer launches for a Terminal Agent (and for this GUI session) carries no ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY, or similar override in its process environment (checked via /proc/<pid>/environ) — it authenticates exactly as a hand-launched `claude` would. Traycer's Host process (traycer-host, PID confirmed live) does hold its own external connections (172.20.214.40 -> 34.107.161.217:443, reverse-DNS googleusercontent.com), consistent with host.log's own 'Tiptap room' collaborative-doc-sync entries (artifact/comment sync) — this is Traycer's own backend traffic, separate from and not in the path of the model provider call.",
+      "caveat": "Not verified: a live packet capture of an in-flight Anthropic API request confirming its destination IP/host directly. The absence of a base-URL override is strong indirect evidence, not a wire-level trace."
+    }
+  }
+}
