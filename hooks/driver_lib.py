@@ -1777,6 +1777,62 @@ def unterminated_resolutions(state) -> list:
             if "outcome" not in e and e.get("resolution_id") not in closed]
 
 
+#: What a reclaimer may do with an unterminated boundary resolution.
+RECONCILE_VERDICTS = frozenset({
+    "relaunch_permitted",   # PROVEN nothing survives
+    "adopt_successor",      # a live, running successor exists — never displace it
+    "start_failed",         # a pane exists but no agent runs in it
+    "park",                 # cannot prove either way; a human decides
+})
+
+
+def reconcile_boundary(record, *, fresh_panes, panes_with_agents,
+                       anchor_pane) -> tuple[str, str]:
+    """May a reclaimer relaunch this boundary transition? ``(verdict, reason)``. PURE.
+
+    This is where #927's Critical is actually enforced. The rule it exists to make impossible:
+    reading ``successor_pane: null`` as proof that nothing was created. With the amendment
+    ordering from `mark_split_attempted`, ``null`` has TWO meanings and only one of them is safe:
+
+    ``split_attempted`` False  -> the split was never called; relaunch is proven safe.
+    ``split_attempted`` True   -> INDETERMINATE. A pane may exist under a null. The question is
+                                  answered by DIFFING a fresh inventory against the recorded
+                                  ``panes_before``, never by trusting the null.
+
+    Everything unprovable parks. That is a deliberate liveness-for-safety trade: a stalled run a
+    human can restart beats two successors nobody notices.
+    """
+    if not isinstance(record, dict):
+        return ("park", "no_baseline_to_diff")
+    # An unreadable inventory can never authorise anything — checked before every other branch,
+    # because each of them depends on the inventory being trustworthy.
+    if fresh_panes is None:
+        return ("park", "inventory_unreadable")
+    agents = panes_with_agents if panes_with_agents is not None else set()
+
+    successor = record.get("successor_pane")
+    if successor is not None:
+        if successor not in fresh_panes:
+            return ("relaunch_permitted", "successor_gone")
+        if successor not in agents:
+            # A pane is not a running agent. Acking an empty pane as a live successor would
+            # stall the campaign forever with nothing to notice it.
+            return ("start_failed", "pane_without_agent")
+        return ("adopt_successor", "successor_alive")
+
+    if not record.get("split_attempted"):
+        return ("relaunch_permitted", "never_started")
+
+    # Indeterminate: prove by diff or park. Never by the null.
+    panes_before = record.get("panes_before")
+    if panes_before is None:
+        return ("park", "no_baseline_to_diff")
+    appeared = set(fresh_panes) - set(panes_before) - {anchor_pane}
+    if appeared:
+        return ("park", "indeterminate_pane_appeared")
+    return ("relaunch_permitted", "diff_proves_nothing_created")
+
+
 def child_boundary_precondition(state, next_issue) -> tuple[bool, str]:
     """May a CHILD-BOUNDARY handoff open right now? Returns ``(ok, reason)``. PURE.
 

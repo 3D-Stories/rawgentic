@@ -1305,3 +1305,103 @@ class TestChildBoundaryFence:
         st = self._st(issues=[{"number": 7, "status": "in_progress"}])
         ok, _ = dl.child_boundary_precondition(st, next_issue=7)
         assert ok is False
+
+
+class TestBoundaryReconciliation:
+    """#927: the Critical, enforced. `null` must NEVER be read as "nothing was created".
+
+    An earlier draft let a crash between `pane split` returning and the amendment landing leave
+    `successor_pane: null`, and treated that as proof no successor existed -- authorising a
+    relaunch beside a live pane. The fix is ordering plus an inventory diff, and these tests are
+    what hold it.
+    """
+
+    def _rec(self, **kw):
+        base = {"resolution_id": "b:camp:3#1", "panes_before": ["w1:anchor", "w1:old"],
+                "split_attempted": False, "successor_pane": None}
+        base.update(kw)
+        return base
+
+    def test_a_split_never_attempted_permits_a_relaunch(self) -> None:
+        verdict, reason = dl.reconcile_boundary(
+            self._rec(), fresh_panes={"w1:anchor", "w1:old"},
+            panes_with_agents=set(), anchor_pane="w1:anchor")
+        assert verdict == "relaunch_permitted"
+        assert reason == "never_started"
+
+    def test_an_INDETERMINATE_split_with_a_new_pane_REFUSES_a_relaunch(self) -> None:
+        """The Critical. split_attempted=True + null must not authorise a second successor."""
+        verdict, reason = dl.reconcile_boundary(
+            self._rec(split_attempted=True),
+            fresh_panes={"w1:anchor", "w1:old", "w1:orphan"},
+            panes_with_agents={"w1:orphan"}, anchor_pane="w1:anchor")
+        assert verdict != "relaunch_permitted", (
+            "a pane appeared after panes_before — relaunching would make two successors")
+        assert verdict == "park"
+        assert reason == "indeterminate_pane_appeared"
+
+    def test_an_indeterminate_split_with_NO_new_pane_permits_a_relaunch(self) -> None:
+        """Proven by diff, not assumed from a null."""
+        verdict, reason = dl.reconcile_boundary(
+            self._rec(split_attempted=True), fresh_panes={"w1:anchor", "w1:old"},
+            panes_with_agents=set(), anchor_pane="w1:anchor")
+        assert verdict == "relaunch_permitted"
+        assert reason == "diff_proves_nothing_created"
+
+    def test_the_anchor_is_excluded_from_the_diff(self) -> None:
+        """The predecessor's own pane must never look like a successor."""
+        verdict, _ = dl.reconcile_boundary(
+            self._rec(split_attempted=True, panes_before=["w1:old"]),
+            fresh_panes={"w1:anchor", "w1:old"},
+            panes_with_agents={"w1:anchor"}, anchor_pane="w1:anchor")
+        assert verdict == "relaunch_permitted"
+
+    def test_a_recorded_successor_that_is_alive_and_running_is_adopted(self) -> None:
+        verdict, reason = dl.reconcile_boundary(
+            self._rec(split_attempted=True, successor_pane="w1:new"),
+            fresh_panes={"w1:anchor", "w1:old", "w1:new"},
+            panes_with_agents={"w1:new"}, anchor_pane="w1:anchor")
+        assert verdict == "adopt_successor"
+        assert reason == "successor_alive"
+
+    def test_a_pane_with_NO_agent_is_start_failed_not_a_live_successor(self) -> None:
+        """`pane split` succeeding does not mean `agent start` did.
+
+        Acking an empty pane as a running successor would stall the campaign forever with
+        nothing to notice it.
+        """
+        verdict, reason = dl.reconcile_boundary(
+            self._rec(split_attempted=True, successor_pane="w1:new"),
+            fresh_panes={"w1:anchor", "w1:old", "w1:new"},
+            panes_with_agents=set(), anchor_pane="w1:anchor")
+        assert verdict == "start_failed"
+        assert reason == "pane_without_agent"
+
+    def test_a_recorded_successor_that_died_permits_a_relaunch(self) -> None:
+        verdict, reason = dl.reconcile_boundary(
+            self._rec(split_attempted=True, successor_pane="w1:new"),
+            fresh_panes={"w1:anchor", "w1:old"},
+            panes_with_agents=set(), anchor_pane="w1:anchor")
+        assert verdict == "relaunch_permitted"
+        assert reason == "successor_gone"
+
+    def test_an_unreadable_inventory_REFUSES_to_relaunch(self) -> None:
+        """A stalled run a human can restart beats two successors nobody notices."""
+        for record in (self._rec(), self._rec(split_attempted=True),
+                       self._rec(split_attempted=True, successor_pane="w1:new")):
+            verdict, reason = dl.reconcile_boundary(
+                record, fresh_panes=None, panes_with_agents=None, anchor_pane="w1:anchor")
+            assert verdict == "park"
+            assert reason == "inventory_unreadable"
+
+    def test_a_missing_panes_before_is_treated_as_unprovable(self) -> None:
+        """No baseline means no diff is possible, so nothing can be PROVEN absent."""
+        verdict, reason = dl.reconcile_boundary(
+            self._rec(split_attempted=True, panes_before=None),
+            fresh_panes={"w1:anchor"}, panes_with_agents=set(), anchor_pane="w1:anchor")
+        assert verdict == "park"
+        assert reason == "no_baseline_to_diff"
+
+    def test_every_verdict_is_from_the_closed_set(self) -> None:
+        assert dl.RECONCILE_VERDICTS == frozenset(
+            {"relaunch_permitted", "adopt_successor", "start_failed", "park"})
