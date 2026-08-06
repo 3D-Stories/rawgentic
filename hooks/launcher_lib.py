@@ -4699,10 +4699,14 @@ def _obsolete_pending_refusal_text(issue: int, has_pending_dependents: bool, vie
                 f"revalidate-children) — this is an owner-gated refusal, not self-clearing. Ask "
                 f"the owner which status applies, then run ONE of:\n{remedies}")
     if has_pending_dependents:
+        # Step 11 review: this branch printed rc 11 with no remedy at all, contradicting the
+        # claim that rc 11 names the write-back remedy in EVERY supervision state — parking is
+        # not permanent, and the human who eventually resolves #{issue} still runs one of these.
         return (f"refusing: child #{issue} is pending an owner disposition, and another queued "
                 f"child depends on it — nothing past it can advance either. Recommended, NOT "
                 f"executed automatically: PARK this run until a human resolves #{issue}; a "
-                f"sleeping run must not choose between deferred/abandoned/merged on its own.")
+                f"sleeping run must not choose between deferred/abandoned/merged on its own. "
+                f"Owner resolution still requires ONE of:\n{remedies}")
     return (f"refusing: child #{issue} is pending an owner disposition (marked obsolete by "
             f"revalidate-children). Recommended, NOT executed automatically: post the "
             f"ERROR-comment-protocol blocker on #{issue}, then run ONE of:\n{remedies}\n"
@@ -4981,15 +4985,20 @@ def _cmd_next_child(args) -> int:
     return 0
 
 
-def _probe_path_exists(path: str, sha: str, project_root: str, *, runner=_default_runner) -> bool:
-    """True when `path` exists at `sha` in the repo at `project_root`. rc 0 = present.
+def _probe_path_exists(path: str, sha: str, project_root: str,
+                       *, runner=_default_runner) -> "bool | None":
+    """True when `path` exists at `sha`; False when confirmed absent; **None when the probe
+    itself is indeterminate** (Step-11 review: the Finding-7 fix validated only the endpoint
+    COMMIT upfront — a valid commit does not guarantee every SUBSEQUENT path-level probe
+    succeeds too; a transient repo error at this layer must not read as "path absent" either).
 
-    Callers MUST confirm `sha` itself resolves (`_commit_exists`) before trusting a False
-    return here as "path absent" — `git cat-file -e <sha>:<path>` also returns nonzero for an
-    unresolvable commit, a repo error, or a permission failure, and this function cannot tell
-    those apart from a genuine miss (Step-8a review finding 7)."""
-    result = runner(["git", "-C", project_root, "cat-file", "-e", f"{sha}:{path}"])
-    return getattr(result, "returncode", 1) == 0
+    Uses `git ls-tree`, not `cat-file -e`, because `ls-tree` gives a genuine tri-state: rc 0
+    with EMPTY output is a confirmed absence (the pathspec matched nothing, which is not an
+    error to `ls-tree`); any NONZERO rc is a real operational failure, never "absent"."""
+    result = runner(["git", "-C", project_root, "ls-tree", "-r", "--name-only", sha, "--", path])
+    if getattr(result, "returncode", 1) != 0:
+        return None
+    return bool((getattr(result, "stdout", "") or "").strip())
 
 
 def _commit_exists(sha: str, project_root: str, *, runner=_default_runner) -> bool:
@@ -5025,8 +5034,16 @@ def _derive_resolves(driver, body: str, from_sha: str, to_sha: str, project_root
                 "resolves against an endpoint that does not exist")
     resolved = set()
     for path in candidates:
-        if _probe_path_exists(path, from_sha, project_root, runner=runner) \
-                or _probe_path_exists(path, to_sha, project_root, runner=runner):
+        at_from = _probe_path_exists(path, from_sha, project_root, runner=runner)
+        at_to = _probe_path_exists(path, to_sha, project_root, runner=runner)
+        if at_from is None or at_to is None:
+            # An indeterminate probe is not "absent" (Step-11 review): silently treating it as
+            # unresolved would let an operational failure narrow the required inventory instead
+            # of refusing the whole rebuild.
+            raise driver.DriverStateError(
+                f"cannot determine whether {path!r} exists at from_sha/to_sha — the path probe "
+                "itself failed, which is not the same as the path being absent")
+        if at_from or at_to:
             resolved.add(path)
     return resolved
 

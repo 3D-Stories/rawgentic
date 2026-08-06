@@ -2411,3 +2411,22 @@ class TestRebuildReceiptBodiesEnforcement:
                       "--bodies", str(bodies_path)])
         assert rc == 2, rc
         assert path.read_text(encoding="utf-8") == before, "nothing must be written on refusal"
+
+    def test_a_path_probe_operational_failure_refuses_rather_than_reading_as_unresolved(
+            self, tmp_path):
+        """Step-11 review: the Finding-7 fix validates only the ENDPOINT COMMITS upfront — a
+        SUBSEQUENT path-level probe failure (a transient repo error, not a bad commit) still
+        fell through to "path absent" once the commit itself was confirmed valid. `git cat-file
+        -e <sha>:<path>` cannot distinguish a genuine miss from an operational failure at the
+        path level; `_derive_resolves` must raise rather than silently narrow the inventory."""
+        work, head = _repo_with_origin(tmp_path)
+        real_runner = ll._default_runner
+
+        def _flaky_runner(argv):
+            if "ls-tree" in argv:
+                return subprocess.CompletedProcess(argv, 2, stdout="", stderr="simulated error")
+            return real_runner(argv)
+
+        with pytest.raises(dl.DriverStateError):
+            ll._derive_resolves(dl, "See f.txt for the cause.", head, head, str(work),
+                                runner=_flaky_runner)

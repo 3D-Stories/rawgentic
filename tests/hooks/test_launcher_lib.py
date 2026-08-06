@@ -3090,6 +3090,10 @@ class TestObsoletePendingGate:
         out = json.loads(captured.out)
         assert out["has_pending_dependents"] is True
         assert "park" in captured.err.lower()
+        # Step 11 review: this branch printed rc 11 with NO remedy command at all, contradicting
+        # the rest of the change's own claim that rc 11 names the write-back remedy in every
+        # supervision state. Parking is not permanent — a human resolving #612 still runs it.
+        assert "record-child-outcome --issue 612" in captured.err
 
     def test_next_child_attended_overdue_still_asks_the_owner(self, tmp_path, capsys):
         state, work = _pending_state(tmp_path)
