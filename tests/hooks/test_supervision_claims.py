@@ -3,13 +3,17 @@
 The claims lifecycle is the only mechanism in this design that authorizes an outward
 side effect. Its two load-bearing properties, each covered below:
 
-1. Identity EXCLUDES `bound_revision` — `(campaign_id, blocker_id, action_kind,
+1. Identity EXCLUDES `bound_revision` AND `blocker_id` — `(campaign_id, action_kind,
    action_target, action_digest)` is what makes two claims "the same real action"; the
    revision is an AUTHORIZATION FENCE checked separately, never part of what the action
-   IS (round 3 finding 6).
-2. `begin_execution` takes a FIXED lock order — the supervision-file lock, then the
-   claims-file lock — so it can never observe a revision `mark_attended`/`cancel_claims`
-   is mid-way through changing (round 3 finding 5).
+   IS (round 3 finding 6), and `blocker_id` is metadata about WHY a claim was minted,
+   never part of WHAT it is (Step 11 cross-model review, High finding 2 — a blocker
+   rename, or two blocker records describing the same real action, must still collide
+   on one claim).
+2. `claim_action` and `begin_execution` both take a FIXED lock order — the
+   supervision-file lock, then the claims-file lock — so neither can ever observe a
+   revision `mark_attended`/`cancel_claims` is mid-way through changing (round 3
+   finding 5; `claim_action`'s own ordering was Step 11 Medium finding 9).
 """
 
 import contextlib
@@ -161,6 +165,52 @@ class TestClaimAction:
                 action_target="pr:x/y#1", action_params=_params(), bound_revision=rev,
                 session_id="sess-1")
         assert not (tmp_path / "claude_docs" / ".supervision-claims").exists()
+
+    def test_identity_excludes_blocker_id_a_rename_still_collides_on_one_claim(
+            self, tmp_path):
+        """Step 11 cross-model review, High finding 2: two blocker records describing
+        the SAME real action (identical campaign/action_kind/target/digest) must mint
+        exactly one claim, even under different blocker_id values — a renamed or
+        duplicate blocker must not be able to authorize the same outward side effect
+        twice."""
+        rev = _declare_and_get_revision(tmp_path)
+        c1 = sc.claim_action(
+            project_root=str(tmp_path), workspace_root=str(tmp_path),
+            campaign_id="epic-871", blocker_id="blocker-a", action_kind="merge",
+            action_target="pr:x/y#1", action_params=_params(), bound_revision=rev,
+            session_id="sess-1")
+        c2 = sc.claim_action(
+            project_root=str(tmp_path), workspace_root=str(tmp_path),
+            campaign_id="epic-871", blocker_id="blocker-b", action_kind="merge",
+            action_target="pr:x/y#1", action_params=_params(), bound_revision=rev,
+            session_id="sess-2")
+        assert c1["claim_id"] == c2["claim_id"]
+
+    def test_negative_bound_revision_is_refused(self, tmp_path):
+        """Step 11 cross-model review, High finding 8: a real revision is never
+        negative. Rejecting a negative bound_revision at the only minting point closes
+        the loophole a caller could otherwise open by supplying the invalid-state
+        sentinel (-1) directly to mint under corrupt authorization state."""
+        with pytest.raises(sc.ClaimError):
+            sc.claim_action(
+                project_root=str(tmp_path), workspace_root=str(tmp_path),
+                campaign_id="epic-871", blocker_id="b1", action_kind="merge",
+                action_target="pr:x/y#1", action_params=_params(), bound_revision=-1,
+                session_id="sess-1")
+
+    def test_corrupt_supervision_state_refuses_every_claim_mint(self, tmp_path):
+        """Step 11 cross-model review, High finding 8: a corrupt supervision file must
+        never agree with any real bound_revision, so every claim_action against it
+        refuses rather than silently minting under revision 0."""
+        rev = _declare_and_get_revision(tmp_path)
+        (tmp_path / "claude_docs" / ".supervision.json").write_text(
+            "not json", encoding="utf-8")
+        with pytest.raises(sc.ClaimError):
+            sc.claim_action(
+                project_root=str(tmp_path), workspace_root=str(tmp_path),
+                campaign_id="epic-871", blocker_id="b1", action_kind="merge",
+                action_target="pr:x/y#1", action_params=_params(), bound_revision=rev,
+                session_id="sess-1")
 
 
 class TestBeginExecution:

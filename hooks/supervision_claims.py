@@ -88,7 +88,11 @@ def compute_action_digest(action_params: dict) -> str:
 
 
 def _identity(claim: dict) -> tuple:
-    return (claim["campaign_id"], claim["blocker_id"], claim["action_kind"],
+    """Execute-once identity. Deliberately EXCLUDES `blocker_id` (Step 11 cross-model
+    review, High finding 2): a blocker rename, or two blocker records describing the
+    same real-world action, must still collide on one claim — `blocker_id` is metadata
+    about WHY the claim was minted, never part of WHAT the action is."""
+    return (claim["campaign_id"], claim["action_kind"],
             claim["action_target"], claim["action_digest"])
 
 
@@ -110,8 +114,21 @@ def _write_claims(path: str, data: dict) -> None:
                       prefix=".supervision-claims.", mkdir=True, fsync=True)
 
 
+#: Step 11 cross-model review, High finding 8: a CORRUPT supervision file must never
+#: agree with any real `bound_revision` a claim could legitimately carry (revisions are
+#: always >= 0 — see `supervision_admin._current`'s own "absent" vs "invalid" split,
+#: which this mirrors). Returning the SAME 0 for "absent" and "invalid" let a caller
+#: mint or execute a claim under a corrupt/unreadable authorization state, because 0 is
+#: also the legitimate revision of a workspace that has genuinely never declared
+#: anything. `-1` can never equal a real revision, so every comparison against it
+#: denies, without changing any caller's raise/return contract.
+_INVALID_SUPERVISION_REVISION_SENTINEL = -1
+
+
 def _current_supervision_revision(workspace_root: str) -> int:
     loaded = sl.read_state(workspace_root)
+    if loaded.load_status == "invalid":
+        return _INVALID_SUPERVISION_REVISION_SENTINEL
     if loaded.load_status != "valid":
         return 0
     return int(loaded.record.get("revision", 0))
@@ -128,20 +145,25 @@ def claim_action(*, project_root: str, workspace_root: str, campaign_id: str,
         raise ClaimError("action_kind must be a non-empty string")
     if not isinstance(blocker_id, str) or not blocker_id.strip():
         raise ClaimError("blocker_id must be a non-empty string")
+    # A real revision is never negative (finding 8's own sentinel is -1, reserved to
+    # mean "supervision state is unreadable" and never a legitimate value to bind to):
+    # rejecting a negative bound_revision HERE, at the only minting point, closes the
+    # loophole a caller could otherwise open by simply supplying -1 itself to match the
+    # sentinel and mint under corrupt authorization state.
+    if int(bound_revision) < 0:
+        raise ClaimError(
+            f"bound_revision must be >= 0, got {bound_revision!r} — a negative value "
+            "can never be a real supervision revision")
     normalized_target = normalize_action_target(action_target)
     digest = compute_action_digest(action_params)
     path = claims_path(project_root, campaign_id)
 
-    with plan_lib.file_lock(path):
-        data = _read_claims(path)
-        wanted = {"campaign_id": campaign_id, "blocker_id": blocker_id,
-                  "action_kind": action_kind, "action_target": normalized_target,
-                  "action_digest": digest}
-        for existing in data["claims"]:
-            if _identity(existing) == _identity(wanted) \
-                    and existing["state"] in ("pending", "executing", "executed"):
-                return dict(existing)
-
+    # Step 11 cross-model review, Medium finding 9: the supervision-file lock is taken
+    # FIRST, then the claims-file lock — the SAME fixed order `begin_execution` and
+    # `reconcile_claim` use, so the revision this mint binds to can never change between
+    # being read and being written into the new claim.
+    supervision_path = sl.supervision_path(workspace_root)
+    with plan_lib.file_lock(supervision_path):
         current_revision = _current_supervision_revision(workspace_root)
         if int(bound_revision) != current_revision:
             raise ClaimError(
@@ -149,17 +171,26 @@ def claim_action(*, project_root: str, workspace_root: str, campaign_id: str,
                 f"supervision revision {current_revision} — re-read and decide again "
                 "rather than minting a claim under a stale revision")
 
-        claim = {
-            "claim_id": f"c-{os.urandom(6).hex()}",
-            "campaign_id": campaign_id, "blocker_id": blocker_id,
-            "action_kind": action_kind, "action_target": normalized_target,
-            "action_digest": digest, "action_params": action_params,
-            "bound_revision": current_revision, "created_at": _now_iso(),
-            "state": "pending", "session_id": session_id,
-        }
-        data["claims"].append(claim)
-        _write_claims(path, data)
-        return dict(claim)
+        with plan_lib.file_lock(path):
+            data = _read_claims(path)
+            wanted = {"campaign_id": campaign_id, "action_kind": action_kind,
+                      "action_target": normalized_target, "action_digest": digest}
+            for existing in data["claims"]:
+                if _identity(existing) == _identity(wanted) \
+                        and existing["state"] in ("pending", "executing", "executed"):
+                    return dict(existing)
+
+            claim = {
+                "claim_id": f"c-{os.urandom(6).hex()}",
+                "campaign_id": campaign_id, "blocker_id": blocker_id,
+                "action_kind": action_kind, "action_target": normalized_target,
+                "action_digest": digest, "action_params": action_params,
+                "bound_revision": current_revision, "created_at": _now_iso(),
+                "state": "pending", "session_id": session_id,
+            }
+            data["claims"].append(claim)
+            _write_claims(path, data)
+            return dict(claim)
 
 
 def begin_execution(*, project_root: str, workspace_root: str, campaign_id: str,

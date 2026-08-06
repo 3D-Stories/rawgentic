@@ -73,16 +73,24 @@ def _write(path: str, data: dict) -> None:
                       prefix=".supervision-preflight.", mkdir=True, fsync=True)
 
 
+#: Step 11 cross-model review, High finding 3: `declare`'s fold-in reads the staging
+#: file, then only DELETES it afterward — a `record_preflight_answer` landing in that
+#: window appends an answer that gets deleted, unread, along with the file. `"open"` is
+#: the only state that accepts a new answer; `declare` flips the token to `"consuming"`
+#: (via `begin_consuming`, below) UNDER THE SAME LOCK it reads the answers with, so any
+#: append attempted after that point is refused instead of silently lost.
+STATUSES = ("open", "consuming")
+
+
 def begin_preflight(workspace_root: str, *, session_id: str, campaign_ids: list) -> str:
-    """Create the staging file (locked, atomic write). Status is implicit in its
-    existence — no separate status field, since `abandon_preflight` deletes it."""
+    """Create the staging file (locked, atomic write), status `"open"`."""
     token = f"pf-{os.urandom(8).hex()}"
     path = preflight_path(workspace_root, token)
     with plan_lib.file_lock(path):
         _write(path, {
             "schema_version": SCHEMA_VERSION, "token": token,
             "session_id": session_id, "started_at": _now_iso(),
-            "campaign_ids": list(campaign_ids), "answers": [],
+            "campaign_ids": list(campaign_ids), "answers": [], "status": "open",
         })
     return token
 
@@ -93,6 +101,33 @@ def read_preflight(workspace_root: str, token: str) -> dict:
         raise PreflightError(f"no such preflight token: {token!r}")
     with plan_lib.file_lock(path):
         return _read(path)
+
+
+def begin_consuming(workspace_root: str, token: str) -> list:
+    """Seal the staging file against further answers and return its answers snapshot,
+    as ONE locked operation (Step 11 cross-model review, High finding 3). Called by
+    `declare`'s preflight fold-in instead of `read_preflight`, so the flip to
+    `"consuming"` and the read of what to fold happen under the SAME lock acquisition —
+    no `record_preflight_answer` can land between them.
+
+    Idempotent: a token already `"consuming"` (a retried/resumed `declare` after a
+    crash between this call and the deletion in `abandon_preflight`) returns the SAME
+    stored answers again rather than refusing — the caller's own idempotent-replay
+    check (declare's `consumed_preflight_tokens`) is what decides whether to act on
+    them twice, not this function."""
+    path = preflight_path(workspace_root, token)
+    if not os.path.exists(path):
+        raise PreflightError(f"no such preflight token: {token!r}")
+    with plan_lib.file_lock(path):
+        data = _read(path)
+        if data.get("status") not in ("open", "consuming"):
+            raise PreflightError(
+                f"preflight token {token!r} has status {data.get('status')!r}, "
+                "expected 'open' or 'consuming'")
+        if data.get("status") == "open":
+            data["status"] = "consuming"
+            _write(path, data)
+        return list(data["answers"])
 
 
 def record_preflight_answer(workspace_root: str, token: str, *, campaign_id: str,
@@ -107,7 +142,10 @@ def record_preflight_answer(workspace_root: str, token: str, *, campaign_id: str
     - `campaign_id` is not in this token's own `campaign_ids` list (finding 1), or
     - `disposition == "resolved"` with no `applied_ref` (round-2 finding 2) — a
       resolved-but-unapplied answer is a contradiction this module can catch cheaply,
-      even though it cannot verify the referenced write is semantically correct.
+      even though it cannot verify the referenced write is semantically correct, or
+    - the token is already `"consuming"` (Step 11 finding 3) — `declare`'s fold-in has
+      already taken its snapshot; an answer landing now would be silently lost when the
+      staging file is deleted, so it is refused instead, loudly, before that can happen.
     """
     if disposition not in DISPOSITIONS:
         raise PreflightError(
@@ -122,6 +160,11 @@ def record_preflight_answer(workspace_root: str, token: str, *, campaign_id: str
         raise PreflightError(f"no such preflight token: {token!r}")
     with plan_lib.file_lock(path):
         data = _read(path)
+        if data.get("status") == "consuming":
+            raise PreflightError(
+                f"preflight token {token!r} is already being consumed by a "
+                "declaration in progress — this answer would be lost, refusing "
+                "instead of accepting it silently")
         if campaign_id not in data["campaign_ids"]:
             raise PreflightError(
                 f"campaign_id {campaign_id!r} is not in this token's own campaign_ids "

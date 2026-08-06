@@ -487,6 +487,25 @@ class TestMarkTransportVerified:
                                        session_id="sess-1", hermes_state_dir=str(hermes_dir),
                                        now=NOW)
 
+    def test_hermes_state_dir_defaults_to_the_canonical_resolution(
+            self, tmp_path, monkeypatch):
+        """Step 11 cross-model review, High finding 6: a caller-selected
+        --hermes-state-dir let a caller supply its own forged ask-record. Omitting the
+        argument must resolve to hermes_bridge's OWN canonical state dir (the
+        HERMES_STATE_DIR env var, or its packaged default) rather than requiring — or
+        accepting — a caller-picked directory."""
+        sa.mark_attended(str(tmp_path), session_id="sess-1", reason="verify",
+                         expected_revision=0, now=NOW)
+        canonical_dir = tmp_path / "canonical-hermes-state"
+        monkeypatch.setenv("HERMES_STATE_DIR", str(canonical_dir))
+        run_id = "supervision-transport-verify-sess-1"
+        _hermes_ask_record(canonical_dir, "tok1", run_id)
+        evidence = _evidence_file(tmp_path, token="tok1", run_id=run_id,
+                                  date_created_ms=self._ms(NOW - timedelta(minutes=2)))
+        rec = sa.mark_transport_verified(
+            str(tmp_path), evidence_path=evidence, session_id="sess-1", now=NOW)
+        assert rec["transport_verification"]["evidence_token"] == "tok1"
+
     def test_state_change_between_the_fast_fail_and_the_write_is_caught_under_the_lock(
             self, tmp_path, monkeypatch):
         """Found by this task's own self-review: the fast-fail check reads the state

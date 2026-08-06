@@ -132,6 +132,56 @@ class TestRecordPreflightAnswer:
         assert record["answers"][0]["applied_ref"] == "D267"
 
 
+class TestBeginConsuming:
+    """Step 11 cross-model review, High finding 3: the staging file is not sealed
+    before the supervision record is persisted and is deleted only afterward, so a
+    concurrent `record_preflight_answer` can append after the fold snapshot and before
+    deletion — the new owner answer is then deleted without ever entering
+    `preflight_results`. `begin_consuming` closes this by sealing the token to
+    `"consuming"` and returning the answers snapshot as ONE locked operation."""
+
+    def test_returns_the_staged_answers(self, tmp_path):
+        token = sp.begin_preflight(str(tmp_path), session_id="sess-1",
+                                   campaign_ids=["epic-871"])
+        sp.record_preflight_answer(
+            str(tmp_path), token, campaign_id="epic-871", blocker_id="b1",
+            question_kind="merge_policy", answer="proceed", disposition="resolved",
+            authority_basis="owner-only", applied_ref="D267")
+        answers = sp.begin_consuming(str(tmp_path), token)
+        assert len(answers) == 1
+        assert answers[0]["blocker_id"] == "b1"
+
+    def test_seals_the_token_against_a_later_answer(self, tmp_path):
+        """The exact race this fixes: an answer landing AFTER the fold snapshot but
+        BEFORE the staging file is deleted must be refused, not silently lost."""
+        token = sp.begin_preflight(str(tmp_path), session_id="sess-1",
+                                   campaign_ids=["epic-871"])
+        sp.begin_consuming(str(tmp_path), token)
+        with pytest.raises(sp.PreflightError):
+            sp.record_preflight_answer(
+                str(tmp_path), token, campaign_id="epic-871", blocker_id="b1",
+                question_kind="merge_policy", answer="proceed",
+                disposition="resolved", authority_basis="owner-only",
+                applied_ref="D267")
+
+    def test_idempotent_replay_returns_the_same_snapshot(self, tmp_path):
+        """A `declare` retried after a crash between sealing and deletion must see the
+        SAME answers again, not an error and not a second, different snapshot."""
+        token = sp.begin_preflight(str(tmp_path), session_id="sess-1",
+                                   campaign_ids=["epic-871"])
+        sp.record_preflight_answer(
+            str(tmp_path), token, campaign_id="epic-871", blocker_id="b1",
+            question_kind="merge_policy", answer="proceed", disposition="resolved",
+            authority_basis="owner-only", applied_ref="D267")
+        first = sp.begin_consuming(str(tmp_path), token)
+        second = sp.begin_consuming(str(tmp_path), token)
+        assert first == second
+
+    def test_unknown_token_raises(self, tmp_path):
+        with pytest.raises(sp.PreflightError):
+            sp.begin_consuming(str(tmp_path), "pf-nope")
+
+
 class TestAbandonPreflight:
     def test_abandon_removes_the_staging_file(self, tmp_path):
         token = sp.begin_preflight(str(tmp_path), session_id="sess-1",

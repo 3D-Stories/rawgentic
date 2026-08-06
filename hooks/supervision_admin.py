@@ -213,11 +213,16 @@ def declare(workspace_root, *, state, until, session_id, campaign_ids,
         preflight_results = list(current.get("preflight_results") or [])
         if preflight_token is not None:
             try:
-                staged = spf.read_preflight(workspace_root, preflight_token)
+                # `begin_consuming`, not `read_preflight` (Step 11 cross-model review,
+                # High finding 3): seals the token against a concurrent
+                # `record_preflight_answer` in the SAME lock acquisition that reads
+                # the answers to fold in, closing the race a plain read-then-delete
+                # left open.
+                staged_answers = spf.begin_consuming(workspace_root, preflight_token)
             except spf.PreflightError as exc:
                 raise DeclarationRefused(
                     f"preflight_token {preflight_token!r} could not be read: {exc}") from exc
-            for answer in staged["answers"]:
+            for answer in staged_answers:
                 preflight_results.append(dict(answer, supervision_revision=new_revision))
             consumed = (consumed + [preflight_token])[-_MAX_CONSUMED_PREFLIGHT_TOKENS:]
         if preflight_results:
@@ -275,12 +280,21 @@ def _read_json_file(path, *, what):
 
 
 def mark_transport_verified(workspace_root, *, evidence_path, session_id,
-                            hermes_state_dir, expected_revision=None, now=None):
+                            hermes_state_dir=None, expected_revision=None, now=None):
     """Record that the transport (Hermes/BlueBubbles) round-trip is verified for THIS
     session (#947 Part B §5, AC3). Requires REAL evidence of a delivered round-trip,
     reusing `hermes_bridge`'s own single-use token as the freshness/binding mechanism
-    rather than inventing a parallel nonce protocol. Refuses (raises
-    `DeclarationRefused`, writes nothing) unless ALL of:
+    rather than inventing a parallel nonce protocol.
+
+    `hermes_state_dir` (Step 11 cross-model review, High finding 6): defaults to
+    `hermes_bridge._default_state_dir()` — the SAME canonical resolution
+    `hermes_bridge.py` itself uses (the `HERMES_STATE_DIR` env var, else
+    `claude_docs/.hermes-bridge` under this repo). A caller-selected directory was a
+    forgeable trust root: pass one explicitly ONLY from a test, never in production —
+    the whole point of check 4 below is that the ask-record lives somewhere the CALLER
+    does not get to pick.
+
+    Refuses (raises `DeclarationRefused`, writes nothing) unless ALL of:
 
     1. the evidence file's `run_id` matches `supervision-transport-verify-<session_id>`
        for THIS session;
@@ -296,6 +310,9 @@ def mark_transport_verified(workspace_root, *, evidence_path, session_id,
     """
     _require_workspace(workspace_root)
     stamp = _now(now)
+    if hermes_state_dir is None:
+        import hermes_bridge
+        hermes_state_dir = hermes_bridge._default_state_dir()
 
     evidence = _read_json_file(evidence_path, what="transport-verify evidence")
     expected_run_id = f"supervision-transport-verify-{session_id}"
@@ -470,7 +487,12 @@ def main(argv=None) -> int:
                       help="path to the delivered evidence file (hermes_bridge.py poll's "
                            "printed path on a matched disposition)")
     p_tv.add_argument("--session-id", required=True, dest="session_id")
-    p_tv.add_argument("--hermes-state-dir", required=True, dest="hermes_state_dir")
+    p_tv.add_argument("--hermes-state-dir", default=None, dest="hermes_state_dir",
+                      help="override the canonical hermes_bridge state dir (testing "
+                           "only — Step 11 cross-model review, High finding 6: a "
+                           "caller-selected directory lets a caller supply its own "
+                           "forged ask-record, so production callers must omit this "
+                           "and let it resolve to the trusted default)")
     p_tv.add_argument("--expected-revision", type=int, default=None,
                       dest="expected_revision")
     p_tv.set_defaults(fn=_cmd_mark_transport_verified)

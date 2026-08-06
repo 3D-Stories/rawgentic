@@ -767,7 +767,7 @@ For major changes, please open an issue first to discuss the approach.
   exhausted, escalated to the owner (D267): tightened `transport_verified` to require an
   exact session match; accepted the 500-token replay-cap edge case as documented risk.
   New `tests/test_askuserquestion_registration.py` guard (AC8). No workflow-spine change
-  → no diagram REV. Suite 5896→6062.
+  → no diagram REV. Suite 5896→6079.
 
 ### v3.136.0 (2026-08-06)
 - **Claim-inventory coverage and the obsolete-child owner gate (#944, epic #871).**
