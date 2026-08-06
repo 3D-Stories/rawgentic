@@ -329,6 +329,16 @@ def mark_transport_verified(workspace_root, *, evidence_path, session_id,
             f"evidence token is not a safe path component: {token!r}")
     ask_path = os.path.join(hermes_state_dir, "asks", f"{token}.json")
     ask_record = _read_json_file(ask_path, what="hermes ask-record")
+    # Step 8a cross-model review, High finding 7: checking status/answered_guid alone
+    # proves SOME real delivery happened, but not that it was for THIS purpose -- an
+    # evidence file can self-report the expected run_id (always attacker-settable) while
+    # pointing (via token+guid, both readable local files) at a real, unrelated,
+    # already-answered ask. The ask record's OWN run_id must independently agree.
+    if ask_record.get("run_id") != expected_run_id:
+        raise DeclarationRefused(
+            f"hermes ask-record for token {token!r} has run_id "
+            f"{ask_record.get('run_id')!r}, not the expected {expected_run_id!r} — "
+            "this is not the product of a real delivery for THIS purpose")
     if ask_record.get("status") != "answered":
         raise DeclarationRefused(
             f"hermes ask-record for token {token!r} is not 'answered' "

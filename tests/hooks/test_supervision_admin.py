@@ -548,6 +548,30 @@ class TestMarkTransportVerified:
                                        session_id="sess-1", hermes_state_dir=str(hermes_dir),
                                        now=NOW)
 
+    def test_ask_record_wrong_run_id_refused_even_with_matching_guid(self, tmp_path):
+        """Step 8a cross-model review, High finding 7 (confirmed): the cross-check
+        verified the ASK RECORD's status/answered_guid, but never that the ask record's
+        OWN run_id matched -- an evidence file naming an unrelated, already-answered
+        ask's token+guid (readable to anyone with local file access, same trust
+        boundary as declared_by_session) would pass every check. A real bridge
+        round-trip for THIS specific transport-verify purpose must be proven, not just
+        SOME real round-trip somewhere."""
+        sa.mark_attended(str(tmp_path), session_id="sess-1", reason="verify",
+                         expected_revision=0, now=NOW)
+        hermes_dir = tmp_path / "hermes"
+        # A real ask-record for a COMPLETELY UNRELATED purpose, answered long ago.
+        _hermes_ask_record(hermes_dir, "tok1", "some-other-unrelated-run-id",
+                           guid="guid-1")
+        # Evidence CLAIMS the expected run_id (self-reported, always attacker-settable)
+        # but the ask record it points at is for something else entirely.
+        evidence = _evidence_file(tmp_path, token="tok1",
+                                  run_id="supervision-transport-verify-sess-1",
+                                  date_created_ms=self._ms(NOW), guid="guid-1")
+        with pytest.raises(sa.DeclarationRefused):
+            sa.mark_transport_verified(str(tmp_path), evidence_path=evidence,
+                                       session_id="sess-1", hermes_state_dir=str(hermes_dir),
+                                       now=NOW)
+
     def test_missing_ask_record_refused(self, tmp_path):
         sa.mark_attended(str(tmp_path), session_id="sess-1", reason="verify", expected_revision=0, now=NOW)
         hermes_dir = tmp_path / "hermes"
