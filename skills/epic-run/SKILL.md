@@ -195,7 +195,16 @@ put a list up by hand).
   disposition and, when it is `ready`, goes straight into `perform_handoff`: it splits the pane,
   launches the successor and — unless `--no-teardown` — retires the predecessor, then prints an
   `ok` report (rc 0 ok, 4 the ladder refused, 3 nothing ready, 5 head unobservable, 6 revalidate
-  first). It returns no disposition object for you to persist, and there is no `disp` to pass on.
+  first, **10 declare your in-flight work first**).
+  **`handoff` also takes an in-flight declaration (#726), and refuses with rc 10 without one.**
+  Before the boundary, say what background work of YOURS is still running — harness background
+  bash tasks, dispatched review jobs, `Monitor` watches — and pass either `--inflight-none` or one
+  `--inflight '<kind>:<ident>:<state>:<detail>'` per item. A `running` item refuses and
+  `--allow-inflight` cannot pass it: wait and re-declare it `completed`, or re-declare it
+  `abandoned` and add `--allow-inflight`, which makes the command tell the successor not to wait
+  for it. The same call also refuses a resume prompt that points the successor at a session-scoped
+  path, and THAT has no override — copy the artifact in-repo and reference that. Both checks run
+  before the generation is claimed, so a refusal costs nothing and is cleared by re-running. It returns no disposition object for you to persist, and there is no `disp` to pass on.
   **The exactly-one-successor fence IS here now (#845, closed inside #927).** `handoff` opens the
   generation and takes a claim BEFORE it probes, so two invocations for one boundary cannot both
   launch: the loser exits **rc 7**, does no campaign work, and does NOT start the next child in

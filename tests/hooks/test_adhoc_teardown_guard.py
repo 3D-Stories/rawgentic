@@ -140,6 +140,10 @@ def _handoff(runner, **over):
         expected_project=PROJECT, expected_project_path=PROJECT_PATH,
         registry_path=REGISTRY_PATH, transcript_dir="/tmp", prompt_marker=MARKER,
         teardown=False, sleeper=lambda _s: None, runner=runner,
+        # #726 — every handoff must declare the predecessor's in-flight work. These
+        # tests are not about that gate, so they attest to none; the gate's own tests
+        # live in tests/hooks/test_inflight_handoff_gate.py.
+        inflight={"items": [], "attested_none": True, "override": False},
     )
     kw.update(over)
     kw.setdefault("read_text", Artifacts(runner))

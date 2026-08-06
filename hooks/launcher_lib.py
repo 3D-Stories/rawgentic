@@ -77,6 +77,7 @@ import argparse
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -97,6 +98,31 @@ _AGENT_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 # path, so it is constrained to a bare token: no separators, no `..`, no control characters.
 # Real ids are UUIDs; this is deliberately a little wider without admitting traversal.
 _SESSION_ID_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z_-]{0,63}$")
+
+# #726 — the in-flight declaration. The three classes an orchestrator can actually see, plus an
+# escape. `other` exists so an unforeseen kind is DECLARABLE rather than silently omitted.
+INFLIGHT_KINDS = ("bash", "dispatch", "watch", "other")
+# `abandoned` is a DISPOSITION, not an execution state: a hook cannot terminate a harness task, so
+# declaring it says "the successor will neither receive nor wait for this", never "it stopped".
+INFLIGHT_STATES = ("running", "completed", "abandoned")
+INFLIGHT_MAX_ITEMS = 32
+INFLIGHT_MAX_DETAIL = 200
+# Deliberately narrow. `detail` never reaches a prompt (see `abandoned_work_block`), and neither
+# does this — but a malformed declaration should fail at the boundary rather than be filtered later.
+_INFLIGHT_IDENT_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$")
+_INFLIGHT_KEYS = frozenset({"items", "attested_none", "override"})
+_INFLIGHT_ITEM_KEYS = frozenset({"kind", "ident", "state", "detail"})
+# Omission is NOT an empty declaration. Same reasoning as `_UNSET_GOAL_SNAPSHOT` below: "nothing is
+# running" is a real answer, so it must be distinguishable from never having been asked.
+_UNSET_INFLIGHT = object()
+
+# An absolute path of unreserved characters, not preceded by another path character so a fragment
+# of a relative path cannot match. ONE bounded class, ONE quantifier, no nesting and no
+# alternation — linear by construction, which is the whole ReDoS argument.
+_ABS_PATH_RE = re.compile(r"(?<![A-Za-z0-9._\-/])/[A-Za-z0-9._\-/]+")
+_TRAILING_PUNCT = ".,;:)]}"
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+                      r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 GOAL_MAX_CHARS = 4000
 _TRUNCATION_NOTE = " […truncated at the 4000-char cap…]"
@@ -1891,6 +1917,301 @@ def _tail(text: str, baseline: tuple[int, str]) -> str | None:
 _UNSET_GOAL_SNAPSHOT = object()
 
 
+def add_inflight_args(parser) -> None:
+    """The #726 declaration flags, added identically to every handoff subcommand.
+
+    One helper rather than three copies, so the three CLIs cannot drift on a safety gate — the
+    same reason `_sweep_gate` exists once for its two callers.
+    """
+    group = parser.add_mutually_exclusive_group(required=False)
+    group.add_argument("--inflight", action="append", default=None, metavar="ITEM",
+                       help="repeatable; '<kind>:<ident>:<state>[:<detail>]' with kind "
+                            f"{'|'.join(INFLIGHT_KINDS)} and state {'|'.join(INFLIGHT_STATES)}")
+    group.add_argument("--inflight-none", action="store_true", default=False,
+                       help="affirmative attestation that nothing of this session's is still "
+                            "running. Required when --inflight is not given: omission and "
+                            "'nothing is running' must not be the same argument (#726)")
+    parser.add_argument("--allow-inflight", action="store_true", default=False,
+                        help="proceed although items are declared `abandoned`. Recorded in the "
+                             "handoff result. It cannot pass an item still declared `running`")
+
+
+def inflight_from_args(args) -> dict:
+    """Build the declaration from the CLI flags, or refuse naming them (#726).
+
+    Refusing here rather than defaulting is the whole gate: a caller that never thought about
+    background work must be STOPPED and told what to check, not quietly treated as having
+    attested to none.
+    """
+    raw = getattr(args, "inflight", None)
+    if not raw and not getattr(args, "inflight_none", False):
+        raise LauncherError(
+            "no in-flight declaration. Before handing off, enumerate this session's own "
+            "background work — harness background bash tasks, dispatched review jobs, and any "
+            "Monitor watches — then pass EITHER --inflight-none (nothing is running) OR one "
+            "--inflight '<kind>:<ident>:<state>:<detail>' per item "
+            f"(kind {'|'.join(INFLIGHT_KINDS)}, state {'|'.join(INFLIGHT_STATES)}). "
+            "Add --allow-inflight only to leave work declared `abandoned` (#726)")
+    return {"items": [parse_inflight_item(r) for r in (raw or [])],
+            "attested_none": bool(getattr(args, "inflight_none", False)),
+            "override": bool(getattr(args, "allow_inflight", False))}
+
+
+def inflight_early_refusal(declaration, resume_prompt, *,
+                           session_id=None) -> "tuple[str, str] | None":
+    """Both #726 checks with NO side effect. Returns `(failed_step, reason)`, or None to proceed.
+
+    TYPED, not a bare string: the two checks have different remedies, and `perform_handoff`'s own
+    backstop already distinguishes them as `inflight` and `durable_path`. Returning only prose
+    made the campaign CLIs report `inflight` for a path refusal, so a machine caller had to parse
+    stderr to learn which one to fix.
+
+    The campaign CLIs call this BEFORE they claim a generation or record `mark_split_attempted`.
+    That ordering is load-bearing, not tidiness: `_cmd_handoff` marks `split_attempted` durably
+    before it calls `perform_handoff`, and a refusal after that mark would leave the campaign
+    with `split_attempted: true` and no terminal event — parked, not retryable. Refusing here
+    keeps the run re-runnable the moment the caller adds the flag.
+
+    `perform_handoff` keeps the same checks as a backstop, so a caller that skips this one is
+    still gated; this exists to gate it EARLIER, where nothing has been written yet.
+    """
+    ok, reason, record = inflight_decision(declaration)
+    if not ok:
+        return ("inflight", reason)
+    try:
+        text = (resume_prompt or "") + abandoned_work_block(record["declared"])
+        flagged = session_scoped_paths(text, session_id=session_id)
+    except Exception as exc:                      # pylint: disable=broad-except
+        return ("durable_path",
+                f"the session-scoped path scan raised {type(exc).__name__} — refusing rather "
+                "than handing the successor a reference nothing checked")
+    if flagged:
+        listed = "; ".join(f"{h['path']} — {h['reason']}" for h in flagged)
+        return ("durable_path",
+                f"the resume prompt points the successor at session-scoped path(s): {listed}. "
+                "Copy the artifact somewhere durable (in-repo) and reference that, or drop the "
+                "reference")
+    return None
+
+
+def _reject_inflight_text(field: str, value: str) -> None:
+    """Shared validation for the two caller-supplied strings in a declaration (#726).
+
+    Neither reaches a successor prompt — `abandoned_work_block` emits a count and allowlisted
+    kinds and nothing else — but both are refused here anyway. A malformed declaration is a
+    caller-contract violation, and catching it at the boundary is how the caller learns.
+
+    The bind directive is refused because a prompt that carries it makes the successor run the
+    switch skill twice (#694), and this text was, in an earlier design, headed for the prompt.
+    """
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+        raise LauncherError(
+            f"in-flight {field} {value!r} contains a control character — refused: a newline would "
+            "let a declaration break out of any block generated from it")
+    if _driver_lib().BIND_DIRECTIVE in value:
+        raise LauncherError(
+            f"in-flight {field} {value!r} contains {_driver_lib().BIND_DIRECTIVE!r} — refused")
+
+
+def validate_inflight_item(item) -> "str | None":
+    """Validate one item dict. Returns a refusal reason, or None when it is well-formed (#726).
+
+    Shared by `parse_inflight_item` (the CLI path) and `inflight_decision` (the library path),
+    because the library path was the hole: a direct `perform_handoff` caller passing item dicts
+    bypassed every check the CLI parser applies, and the unvalidated `ident`/`detail` were then
+    copied into the audit payload. A "closed contract" that only one of its two entrances enforces
+    is not closed.
+    """
+    if not isinstance(item, dict) or set(item) != _INFLIGHT_ITEM_KEYS:
+        return f"an in-flight item must carry exactly {sorted(_INFLIGHT_ITEM_KEYS)}"
+    if item["kind"] not in INFLIGHT_KINDS:
+        return f"in-flight kind {item['kind']!r} is not one of {'|'.join(INFLIGHT_KINDS)}"
+    if item["state"] not in INFLIGHT_STATES:
+        return f"in-flight state {item['state']!r} is not one of {'|'.join(INFLIGHT_STATES)}"
+    ident, detail = item["ident"], item["detail"]
+    if not isinstance(ident, str) or not _INFLIGHT_IDENT_RE.fullmatch(ident):
+        return f"in-flight ident {ident!r} is not a bare token"
+    if not isinstance(detail, str) or len(detail) > INFLIGHT_MAX_DETAIL:
+        return (f"in-flight detail must be a string of at most {INFLIGHT_MAX_DETAIL} characters")
+    for field, value in (("ident", ident), ("detail", detail)):
+        try:
+            _reject_inflight_text(field, value)
+        except LauncherError as exc:
+            return str(exc)
+    return None
+
+
+def parse_inflight_item(raw) -> dict:
+    """`"<kind>:<ident>:<state>:<detail>"` → a validated item dict (#726).
+
+    `maxsplit=3`, so a colon inside `detail` is text rather than a field break — a real detail
+    routinely quotes a command. `detail` is optional; everything else is required.
+    """
+    if not isinstance(raw, str):
+        raise LauncherError(f"--inflight takes a string, got {type(raw).__name__}")
+    parts = raw.split(":", 3)
+    if len(parts) < 3:
+        raise LauncherError(
+            f"--inflight {raw!r} is malformed — the shape is "
+            f"'<kind>:<ident>:<state>[:<detail>]', kind one of {'|'.join(INFLIGHT_KINDS)}, "
+            f"state one of {'|'.join(INFLIGHT_STATES)}")
+    kind, ident, state = parts[0], parts[1], parts[2]
+    detail = parts[3] if len(parts) == 4 else ""
+    item = {"kind": kind, "ident": ident, "state": state, "detail": detail}
+    problem = validate_inflight_item(item)
+    if problem is not None:
+        raise LauncherError(f"--inflight {raw!r}: {problem}")
+    return item
+
+
+def inflight_decision(declaration) -> tuple[bool, str, dict]:
+    """The in-flight gate's whole decision, PURE. Returns `(ok, reason, record)`.
+
+    THE HONEST BOUND, because the design overclaimed twice before the reviews caught it: this is
+    an ATTESTATION gate, not a detector. A hook cannot enumerate harness background tasks — probed
+    live 2026-08-06: `<scratch-root>/tasks/<id>.output` exists per task but carries only stdout,
+    with no status and no sibling file, mid-run and after completion alike. So a caller that
+    answers falsely passes. What is mechanical is that the question cannot be SKIPPED and that
+    every answer is reported.
+
+    The declaration is a CLOSED object selecting exactly one alternative — `attested_none` with an
+    empty `items`, or a non-empty `items`. A bare `[]` is neither, and is refused: if it were an
+    attestation, a future caller could satisfy the gate by passing an empty list, which is the
+    bypass this contract exists to prevent.
+
+    A `running` item is refused even WITH the override. To proceed the caller re-declares it
+    `abandoned`, which is a positive statement about that specific job rather than a blanket
+    "let me past". An override with nothing abandoned is refused for the same reason
+    `--goal-rewrite-approved` is refused alongside `--no-teardown`: it would mint a false audit
+    record of an approval that authorised nothing.
+    """
+    record = {"declared": [], "attested_none": False, "override": False, "blocking": []}
+    if not isinstance(declaration, dict):
+        return (False, "the in-flight declaration must be an object with keys "
+                       "items, attested_none, override", record)
+    if set(declaration) != _INFLIGHT_KEYS:
+        return (False, f"the in-flight declaration must carry exactly "
+                       f"{sorted(_INFLIGHT_KEYS)} — got {sorted(declaration)}", record)
+    items = declaration["items"]
+    attested_none = declaration["attested_none"]
+    override = declaration["override"]
+    if not isinstance(items, list) or not isinstance(attested_none, bool) \
+            or not isinstance(override, bool):
+        return (False, "the in-flight declaration is malformed — items must be a list and "
+                       "attested_none/override must be booleans", record)
+    if len(items) > INFLIGHT_MAX_ITEMS:
+        return (False, f"{len(items)} declared items is over the {INFLIGHT_MAX_ITEMS} cap", record)
+    for i, item in enumerate(items):
+        problem = validate_inflight_item(item)
+        if problem is not None:
+            return (False, f"in-flight item {i}: {problem}", record)
+
+    record["declared"] = list(items)
+    record["attested_none"] = attested_none
+    record["override"] = override
+
+    if attested_none and items:
+        return (False, "--inflight-none contradicts the declared items — attest to nothing "
+                       "running, or declare what is", record)
+    if not attested_none and not items:
+        return (False, "no in-flight declaration was made. Enumerate this session's background "
+                       "work — harness background bash tasks, dispatched review jobs, and any "
+                       "Monitor watches — then pass --inflight-none if there is none, or one "
+                       "--inflight '<kind>:<ident>:<state>:<detail>' per item", record)
+
+    running = [it for it in items if it["state"] == "running"]
+    abandoned = [it for it in items if it["state"] == "abandoned"]
+    record["blocking"] = list(running) + list(abandoned)
+    if running:
+        named = ", ".join(f"{it['kind']}:{it['ident']}" for it in running)
+        return (False, f"in-flight work is still running: {named}. Wait for it and re-run with "
+                       "those items declared `completed`, or re-declare each as `abandoned` and "
+                       "pass --allow-inflight. The override cannot pass a `running` item", record)
+    if abandoned and not override:
+        named = ", ".join(f"{it['kind']}:{it['ident']}" for it in abandoned)
+        return (False, f"work is declared abandoned but the handoff was not authorised to leave "
+                       f"it: {named}. Pass --allow-inflight to proceed; the successor is told not "
+                       "to wait for it", record)
+    if override and not abandoned:
+        return (False, "--allow-inflight was passed with nothing declared `abandoned` — an "
+                       "override of nothing would record an approval that authorised nothing",
+                record)
+    return (True, "in-flight declaration accepted", record)
+
+
+def abandoned_work_block(items) -> str:
+    """The successor's ABANDONED-WORK notice, or `""` when nothing was abandoned. PURE.
+
+    EVERY BYTE IS HOOK-AUTHORED. The only variables are a count and the allowlisted `kind`
+    values; neither `ident` nor `detail` appears. That is deliberate and it is the third revision
+    of this function's contract: `_INFLIGHT_IDENT_RE` happily admits
+    `ignore_previous_instructions`, so an identifier is semantic text reaching a model, and
+    fencing prose as data does not stop a model reading it as instruction. Exclusion does.
+    `driver_lib.with_boundary_clause` already states the same invariant for its own clause.
+
+    The wording never claims the work STOPPED, because declaring it abandoned cannot stop it.
+    """
+    gone = [it for it in items if it.get("state") == "abandoned"]
+    if not gone:
+        return ""
+    kinds = sorted({it["kind"] for it in gone})
+    noun = "item was" if len(gone) == 1 else "items were"
+    return (
+        "\n\n--- ABANDONED WORK (predecessor handoff) ---\n"
+        f"{len(gone)} background {noun} abandoned at this handoff (kinds: {', '.join(kinds)}). "
+        "They may still finish in the predecessor session, but their results will NOT reach you "
+        "and must not be waited for. Re-dispatch anything you need.\n"
+        "--- END ABANDONED WORK ---")
+
+
+def session_scoped_paths(text, *, session_id: str | None = None) -> list[dict]:
+    """Absolute paths in `text` that are scoped to a Claude session. PURE, no filesystem access.
+
+    Why such a path is a defect — and NOT for the reason #726's body gives. The issue says a
+    successor "could not have read the file even knowing the path". Probed 2026-08-06 and that is
+    false: `/tmp/claude-<uid>` is `drwx------` owned by the single host user, every session runs
+    as that user, and session directories five days old were still listable. The real reasons are
+    that it is untracked per-session temp state with no durability guarantee, that it is scoped to
+    a session the default handoff is about to RETIRE, and that the successor is never given the
+    predecessor's session id, so the path is usable only if pasted verbatim.
+
+    Two rules. (1) A component equal to the predecessor's session id, when it is known. (2) A path
+    under a `/tmp/claude-*` scratch root carrying a UUID-shaped component — session-scoped by
+    SHAPE, which is what covers the `--no-teardown` ad-hoc case that passes no session id at all.
+
+    A `file://` URL needs no decoder: it contains the plain path as a substring, and the leading
+    `//` collapses in normalization.
+    """
+    hits: list[dict] = []
+    seen: set[str] = set()
+    for match in _ABS_PATH_RE.finditer(text or ""):
+        raw = match.group(0).rstrip(_TRAILING_PUNCT)
+        if not raw:
+            continue
+        # Collapse the leading slash run BEFORE normalizing. `posixpath.normpath` deliberately
+        # PRESERVES exactly two leading slashes (the POSIX implementation-defined case), so
+        # `//tmp/claude-…/<uuid>/…` normalized to `//tmp/…`, whose first component is empty —
+        # and rule 2's `parts[1] == "tmp"` test then missed it entirely. Measured: the scan
+        # returned clean on that spelling while returning a hit on one and three slashes.
+        path = posixpath.normpath(re.sub(r"^/+", "/", raw))
+        if path in seen:
+            continue
+        parts = path.split("/")
+        reason = None
+        if session_id and session_id in parts:
+            reason = (f"the path is scoped to the predecessor's session {session_id} — a "
+                      "successor is issued a different id and the directory belongs to a session "
+                      "this handoff is retiring")
+        elif len(parts) > 3 and parts[1] == "tmp" and parts[2].startswith("claude-") \
+                and any(_UUID_RE.fullmatch(p) for p in parts[3:]):
+            reason = ("the path is inside a per-session Claude scratch root — untracked temp "
+                      "state with no durability guarantee, tied to the session being retired")
+        if reason:
+            seen.add(path)
+            hits.append({"path": path, "reason": reason})
+    return hits
+
+
 def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     goal_condition: str, resume_prompt: str, registry_path: str,
                     transcript_dir: str, launch_mode: str = "fresh",
@@ -1904,7 +2225,7 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                     predecessor_goal_condition: str | None = None,
                     strict_goal_binding: bool = False,
                     expected_predecessor_goal=_UNSET_GOAL_SNAPSHOT,
-                    campaign_context=None) -> dict:
+                    campaign_context=None, inflight=_UNSET_INFLIGHT) -> dict:
     """Execute the ordered handoff. Effects are injected so tests drive the whole sequence.
 
     THE ORDER, and why each position is load-bearing:
@@ -1998,6 +2319,18 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     expected_goal_snapshot = (None if expected_predecessor_goal is _UNSET_GOAL_SNAPSHOT
                               else expected_predecessor_goal)
 
+    # #726 — omission is a caller bug, in the same class as an empty `resume_prompt`, and it is
+    # refused here with the other caller-mismatch validations rather than skipped. An earlier
+    # revision let the sentinel skip the gate to avoid touching existing tests; that made
+    # "the gate protects perform_handoff" an overclaim, and the measured cost of doing it
+    # properly turned out to be one kwargs-helper edit per test module.
+    if inflight is _UNSET_INFLIGHT:
+        raise LauncherError(
+            "no in-flight declaration was passed to perform_handoff. Every handoff must state "
+            "what background work the predecessor still has — omission and 'nothing is running' "
+            "must not be the same argument (#726). Pass "
+            "{'items': [...], 'attested_none': bool, 'override': bool}")
+
     out: dict = {"ok": False, "steps": [], "results": {}, "truncated": False,
                  "failed_step": None, "new_pane": None, "session_id": None,
                  "cleanup": None, "teardown_skipped": None, "predecessor_guard": None,
@@ -2008,7 +2341,10 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                  # recover a code it already had would be exactly the kind of guess that finding
                  # forbids.
                  "failure_code": None,
-                 "failure_detail": None, "pane_capture": None}
+                 "failure_detail": None, "pane_capture": None,
+                 # #726 — the backward-looking record. Present on EVERY exit, including a later
+                 # delivery failure, so an override can never disappear behind an outcome.
+                 "inflight": None, "session_paths": None}
 
     ladder = _VERIFICATION_STEPS if steps is None else steps
     gate_steps = _predecessor_steps(ladder)
@@ -2110,6 +2446,59 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             out["reason"] = revalidation_reason
             out["failure_detail"] = revalidation_reason
             return out
+
+    # #726 — the two BACKWARD-looking preflights, the only ones in this function. Every other
+    # gate here asks whether the SUCCESSOR is ready; these ask whether the PREDECESSOR is
+    # finished, and whether what it is handing over is reachable.
+    #
+    # Position: after the queue rung (which is deliberately first, #840) and before the name
+    # preflight, because both are purely local — refusing here spends no `herdr` subprocess and
+    # creates nothing to clean up.
+    #
+    # Fail-mode is CLOSED, the OPPOSITE of the #731 preflight immediately below, and the
+    # difference is not an inconsistency. That one fails open because a second gate exists
+    # downstream: `agent start` still refuses a taken name. These two have no downstream gate —
+    # being the only backward-looking check in the system is the entire point of #726.
+    ok_inflight, inflight_reason, inflight_record = inflight_decision(inflight)
+    out["inflight"] = inflight_record
+    record("inflight_preflight", ["<declared in-flight inventory>"], note=inflight_reason)
+    if not ok_inflight:
+        out["failed_step"] = "inflight"
+        out["failure_detail"] = inflight_reason
+        return out
+
+    # The successor's notice is generated HERE rather than asked of the caller: checking that a
+    # caller named the abandoned work only proves some substring exists, while writing the block
+    # guarantees the successor is told. Appending is safe against every earlier validation — the
+    # marker check and the bind refusal ran on the original text, and `validate_inserted_prompt`
+    # refuses a prompt that STARTS with `/`, which an append cannot change.
+    resume_prompt = resume_prompt + abandoned_work_block(inflight_record["declared"])
+
+    # Scanned on the AUGMENTED prompt, so anything the generator added is scanned too.
+    try:
+        flagged = session_scoped_paths(resume_prompt, session_id=predecessor_session)
+    except Exception as exc:                      # pylint: disable=broad-except
+        # Refuse, do not proceed. An earlier revision failed open here and it contradicted this
+        # function's own doctrine: a data-loss boundary that cannot evaluate must not admit the
+        # thing it exists to refuse. Refusing strands nothing — no pane exists yet.
+        detail = (f"the session-scoped path scan raised {type(exc).__name__} — refusing rather "
+                  "than handing the successor a reference nothing checked")
+        record("durable_path_preflight", ["<resume prompt>"], note=detail)
+        out["failed_step"] = "durable_path"
+        out["failure_detail"] = detail
+        return out
+    out["session_paths"] = {"flagged": flagged}
+    if flagged:
+        listed = "; ".join(f"{h['path']} — {h['reason']}" for h in flagged)
+        detail = (f"the resume prompt points the successor at session-scoped path(s): {listed}. "
+                  "Copy the artifact somewhere durable (in-repo) and reference that, or drop the "
+                  "reference")
+        record("durable_path_preflight", ["<resume prompt>"], note=detail)
+        out["failed_step"] = "durable_path"
+        out["failure_detail"] = detail
+        return out
+    record("durable_path_preflight", ["<resume prompt>"],
+           note="no session-scoped paths in the resume prompt")
 
     # #731 — pre-split name preflight. A bound agent name makes `agent start` fail AFTER a
     # pane exists, and a same-name retry is structurally impossible (the name stays bound) —
@@ -4227,6 +4616,10 @@ def resume_prompt_for_state(state: dict, project: str | None = None, *,
 #: boundary. 9 is the compare-and-record refusal, which only `sweep record` can produce.
 SWEEP_REQUIRED_RC = 8
 SWEEP_HEAD_MOVED_RC = 9
+# #726 — the in-flight/session-path gate on the campaign paths. 6 (revalidation),
+# 8 and 9 (sweep) are taken; a distinct code lets a driver tell 'declare and retry'
+# apart from a bad argument (rc 2).
+INFLIGHT_REQUIRED_RC = 10
 
 
 def _sweep_gate(state, observed_head) -> "tuple[int, dict] | None":
@@ -4776,9 +5169,15 @@ def _classify_launch(out: dict, *, panes_before) -> tuple[str | None, bool]:
     if out.get("ok"):
         return ("successor_acked", False)
     failed = out.get("failed_step")
-    if failed == "pane_inventory_unavailable":
+    if failed in ("pane_inventory_unavailable", "inflight", "durable_path"):
         # herdr could not even be listed, so no split was attempted. Distinct from a refusal:
         # an OBSERVATION failure must never downgrade a healthy campaign (F4).
+        #
+        # #726's two preflights join it for a different reason with the same answer: both run
+        # BEFORE the split, on purely local data, so "nothing was created" is proven rather than
+        # inferred. Without this row an unrecognised `failed_step` falls through to
+        # `(None, False)` — no terminal event — and a campaign that had already recorded
+        # `mark_split_attempted` would park unreconciled.
         return ("no_split_attempted", False)
     if failed == "split":
         panes_after = _pane_inventory(_default_runner)
@@ -4987,6 +5386,19 @@ def _cmd_handoff(args) -> int:
         print(_sweep_refusal_text(payload["status"], args.driver_state), file=sys.stderr)
         return rc
 
+    # #726 — the backward-looking gate, HERE and not inside `perform_handoff`. Below this point
+    # the command claims a generation and records `mark_split_attempted`; a refusal after that
+    # mark leaves the campaign with `split_attempted: true` and no terminal event, which parks it
+    # rather than letting it retry. Refusing beside the rc-6 and rc-8 gates keeps it re-runnable.
+    declaration = inflight_from_args(args)
+    refusal = inflight_early_refusal(declaration, disposition.get("resume_prompt"))
+    if refusal is not None:
+        failed_step, reason = refusal
+        print(json.dumps({"outcome": "inflight_required", "failed_step": failed_step,
+                          "observed_head": observed_head}, indent=2))
+        print(f"refusing: {reason}", file=sys.stderr)
+        return INFLIGHT_REQUIRED_RC
+
     # Probes are DERIVED or asserted by the launcher about itself — never hardcoded True. A
     # launcher that does not pass --launcher-armed/--fresh-launch-supported is telling us it
     # cannot do those things; absence must not read as support (the same lesson as the 8a
@@ -5143,7 +5555,7 @@ def _cmd_handoff(args) -> int:
             kind="child_boundary", resolution_id=resolution_id),
         registry_path=args.registry, transcript_dir=args.transcript_dir,
         launch_mode=args.launch_mode, expected_project=getattr(args, "project", None),
-        teardown=not args.no_teardown)
+        teardown=not args.no_teardown, inflight=declaration)
 
     outcome, downgrade = _classify_launch(out, panes_before=panes_before)
 
@@ -5265,6 +5677,8 @@ def _cmd_ad_hoc_handoff(args) -> int:
     """
     resume_prompt = _read_text_arg(args.resume_prompt, args.resume_prompt_file, "resume prompt")
     condition = _read_text_arg(args.goal_condition, args.goal_condition_file, "goal condition")
+    # #726 — built here so a missing declaration is refused before any herdr probe runs.
+    declaration = inflight_from_args(args)
 
     # #758 Step-11 wave: --no-teardown skips the verbatim-carry validation entirely, so an
     # approval flag there could only ever mint a FALSE audit record ("override consumed"
@@ -5380,6 +5794,8 @@ def _cmd_ad_hoc_handoff(args) -> int:
         # the library defaulted ON while this CLI defaulted OFF, so the two surfaces disagreed
         # about one operation), which is why it is always passed here.
         teardown=teardown,
+        # #726 — refused above by `inflight_from_args` if the caller declared nothing at all.
+        inflight=declaration,
         # Only meaningful when tearing down, and it is what lets the goal be CLEARED and the clear
         # CONFIRMED before the pane is closed. `own` is this session's own id, already required
         # above for the ownership proof.
@@ -5531,6 +5947,10 @@ def _cmd_mid_child_handoff(args) -> int:
     # a `git fetch` — holding the campaign lock across a network call would block every concurrent
     # reader for its duration. The locked `_open` below stays authoritative; this only decides
     # whether to get that far.
+    # #726 — bound inside the `ready` branch below, because a not-ready disposition is a caller
+    # error that must keep its own exit code. Initialised here so the rare path where the UNLOCKED
+    # pre-read disagrees with the locked one cannot reach the launch with it unbound.
+    declaration = None
     pre_disposition = driver_lib.mid_child_handoff(
         _locked_state_read(args.driver_state), position=position, include_bind=False)
     if pre_disposition.get("outcome") == "ready":
@@ -5541,6 +5961,21 @@ def _cmd_mid_child_handoff(args) -> int:
                               "reason": revalidation_reason}, indent=2))
             print(f"refusing mid-child handoff: {revalidation_reason}", file=sys.stderr)
             return 6
+
+        # #726 — same position and same reason as `_cmd_handoff`'s: BEFORE `open_handoff` bumps
+        # the generation and writes `handoff_pending`, so a refusal burns no generation. Inside
+        # the `ready` branch on purpose, beside the queue check: a not-ready disposition is a
+        # CALLER error ("no active child", a position naming the wrong child) and must keep its
+        # own exit code rather than be masked by this gate — the same ordering rule the queue
+        # check above is documented against.
+        declaration = inflight_from_args(args)
+        refusal = inflight_early_refusal(declaration, pre_disposition.get("resume_prompt"),
+                                         session_id=predecessor_session)
+        if refusal is not None:
+            failed_step, reason = refusal
+            print(json.dumps({"ok": False, "failed_step": failed_step}, indent=2))
+            print(f"refusing mid-child handoff: {reason}", file=sys.stderr)
+            return INFLIGHT_REQUIRED_RC
 
     # The disposition is computed INSIDE the lock so the generation it bumps is derived from the
     # state actually being written, not from a copy read earlier.
@@ -5604,10 +6039,30 @@ def _cmd_mid_child_handoff(args) -> int:
     # is the only construct that actually makes the claim true.
     out = None
     try:
+        if declaration is None:
+            # The unlocked pre-read was not `ready` but the locked one is. Rare, and the gate must
+            # still run. INSIDE the try, deliberately: `open_handoff` has already bumped the
+            # generation by this point, and `inflight_from_args` RAISES on a missing declaration —
+            # raising outside the cancelling `finally` would strand that generation uncancelled,
+            # which is the exact failure the `finally` exists to prevent.
+            declaration = inflight_from_args(args)
+        # Deliberately the SECOND run of this check, and the authoritative one: the early call
+        # above scanned the UNLOCKED pre-read's prompt to avoid burning a generation, while this
+        # one scans the prompt the successor will actually receive. Pure and idempotent, so a
+        # declaration that passed once passes again; only a prompt that changed under the lock
+        # can differ, and that is exactly the case worth catching.
+        refusal = inflight_early_refusal(declaration, disposition["resume_prompt"],
+                                         session_id=predecessor_session)
+        if refusal is not None:
+            failed_step, reason = refusal
+            print(json.dumps({"ok": False, "failed_step": failed_step}, indent=2))
+            print(f"refusing mid-child handoff: {reason}", file=sys.stderr)
+            return INFLIGHT_REQUIRED_RC
         out = perform_handoff(
             anchor_pane=args.anchor_pane, cwd=args.cwd, project_root=args.project_root,
             name=args.name, goal_condition=condition,
             resume_prompt=disposition["resume_prompt"], registry_path=args.registry,
+            inflight=declaration,
             transcript_dir=args.transcript_dir, launch_mode=args.launch_mode,
             prompt_marker=driver_lib.mid_child_marker(position["issue"], generation),
             expected_project=args.project, expected_project_path=args.project_path,
@@ -5664,6 +6119,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_ho = sub.add_parser("handoff", help="run the wired herdr handoff for a campaign")
+    add_inflight_args(p_ho)
     p_ho.add_argument("--driver-state", required=True,
                       help="claude_docs/.driver-state/<campaign>.json")
     p_ho.add_argument("--anchor-pane", required=True, help="the PREDECESSOR's pane id")
@@ -5739,6 +6195,7 @@ def main(argv: list[str] | None = None) -> int:
     # new session") mean RETIRE THIS ONE, and the OFF default left a live pane re-prompting itself
     # from an armed goal. Retirement is gated on every verification passing and on the goal being
     # provably cleared, so the safe-by-construction path is also the expected one.
+    add_inflight_args(p_ah)
     p_ah.add_argument("--no-teardown", action="store_true", default=False,
                       help="keep the anchor pane alive after a successful handoff. Your /goal stays "
                            "ARMED and the output says so — use this only for an additive handoff "
@@ -5772,6 +6229,7 @@ def main(argv: list[str] | None = None) -> int:
     # handover and the retirement have different owners: only the successor may retire.
     p_mc = sub.add_parser("mid-child-handoff",
                           help="hand this mid-child session over to a fresh successor (#665)")
+    add_inflight_args(p_mc)
     p_mc.add_argument("--driver-state", required=True)
     p_mc.add_argument("--anchor-pane", required=True, help="THIS session's pane id")
     p_mc.add_argument("--name", required=True, help="herdr agent name for the successor")
@@ -5940,6 +6398,19 @@ def main(argv: list[str] | None = None) -> int:
 
     # #718 — the context meter's act tier calls this. PROSE only; a bare slash command is refused
     # because it is inert inside a /goal loop (see `validate_inserted_prompt`).
+    # #726 — the path check as a standalone verb, so a caller this repo cannot edit can run it.
+    # `clear-prep` lives at ~/.claude/skills/clear-prep, OUTSIDE this repository: giving it
+    # something to call is the most that can honestly be done for it from here, and it does not
+    # make it call it. The PR body says so rather than claiming clear-prep is covered.
+    p_chk = sub.add_parser("check-handoff-prompt",
+                           help="refuse a resume prompt that points a successor at a "
+                                "session-scoped path (#726)")
+    p_chk.add_argument("--prompt-file", required=True,
+                       help="the resume prompt, read verbatim from a file")
+    p_chk.add_argument("--session-id", default=None,
+                       help="the PREDECESSOR's session id, when known — adds the exact-component "
+                            "rule to the shape rule")
+
     p_ins = sub.add_parser("insert-prompt",
                            help="insert a PROSE prompt into a pane and submit it (#718)")
     p_ins.add_argument("--pane", required=True,
@@ -5997,6 +6468,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "goal-text":
             text, truncated = goal_text(args.condition)
             print(json.dumps({"text": text, "truncated": truncated}))
+            return 0
+        if args.cmd == "check-handoff-prompt":
+            with open(args.prompt_file, encoding="utf-8") as fh:
+                flagged = session_scoped_paths(fh.read(), session_id=args.session_id)
+            print(json.dumps({"flagged": flagged}, indent=2))
+            if flagged:
+                print("refusing: the prompt points a successor at session-scoped path(s). Copy "
+                      "each artifact somewhere durable (in-repo) and reference that, or drop the "
+                      "reference (#726)", file=sys.stderr)
+                return 3
             return 0
         if args.cmd == "insert-prompt":
             delivered, reason = insert_prompt(pane=args.pane, text=args.text)

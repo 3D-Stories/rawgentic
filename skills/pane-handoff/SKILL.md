@@ -71,6 +71,54 @@ marker; this gate is only for the unprompted path.
 - **Mid-campaign handoff inside an epic auto-run.** That is `mid-child-handoff`, which carries the
   driver-state generation and the successor-owned retirement; this command deliberately has neither.
 
+## Step 0: Say what of yours is still running (#726)
+
+**Do this BEFORE you assemble anything.** The command refuses without it, and the refusal names
+these three classes back to you:
+
+1. **Harness background bash tasks** you started — the ones whose completion notifications land in
+   this session.
+2. **Dispatched review jobs** — anything you launched through `hooks/review_runner.py` whose
+   `--out` file has not landed yet.
+3. **`Monitor` watches** you armed.
+
+Then pass exactly one of:
+
+- `--inflight-none` — an affirmative "nothing of mine is still running".
+- One `--inflight '<kind>:<ident>:<state>:<detail>'` per item, `kind` ∈
+  `bash|dispatch|watch|other`, `state` ∈ `running|completed|abandoned`.
+
+**A `running` item refuses the handoff, and `--allow-inflight` cannot pass it.** Two ways forward,
+and you choose deliberately:
+
+- **Wait.** Let the work finish — you get its completion notification — then re-run with that item
+  declared `completed`. Declaring it, rather than dropping it, is what keeps the wait in the
+  record. This is the manual half of the contract: nothing polls for you, because nothing on disk
+  can tell a running harness task from a finished one (measured — its `.output` file looks
+  identical either way).
+- **Abandon it.** Re-declare it `abandoned` and add `--allow-inflight`. The successor is then
+  told, in text the command writes itself, that some work was abandoned and must not be waited
+  for. Your `ident` and `detail` stay in the audit record and never reach the successor's prompt.
+
+**Why this exists:** on 2026-07-30 a handoff ran with a design re-gate still dispatched. Its 15 KB
+verdict — 8 findings, 3 of them High — landed two minutes later in a scratchpad directory scoped to
+the session being retired. The handoff reported every gate green.
+
+### One more thing the command checks by itself
+
+It scans your resume prompt for paths scoped to a session — anything under a
+`/tmp/claude-*` scratch root with a session UUID in it, or carrying your own session id. Those are
+per-session temp state: not in the repo, tied to a session that is ending, and addressed by an id
+the successor cannot derive. The handoff refuses and names each one. **There is no override** —
+copy the artifact somewhere durable in the repo and reference that instead, or drop the reference.
+`clear-prep` can run the same check on its own output:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/hooks/launcher_lib.py" check-handoff-prompt \
+  --prompt-file <prompt file> [--session-id "$CLAUDE_CODE_SESSION_ID"]
+```
+`0` clean · `3` offending paths named on stdout · `2` caller error.
+
 ## Step 1: Assemble the four inputs
 
 **The work prompt.** If the user already has a handoff/resume prompt file, use it. If not, that
@@ -160,8 +208,12 @@ python3 "${CLAUDE_PLUGIN_ROOT}/hooks/launcher_lib.py" ad-hoc-handoff \
   --transcript-dir <transcript dir> \
   --resume-prompt-file <prompt file> \
   --goal-condition-file <goal file> \
-  --prompt-marker '<the unique marker>'
+  --prompt-marker '<the unique marker>' \
+  --inflight-none
 ```
+
+Swap `--inflight-none` for one `--inflight '<kind>:<ident>:<state>:<detail>'` per item when
+something IS running, per Step 0, and add `--allow-inflight` only to leave `abandoned` work.
 
 ### Retiring your own pane is the DEFAULT
 
@@ -218,6 +270,8 @@ hosts our session). Report what it says, not what you hoped — and read
 
 | `failed_step` | What it means | What to do |
 |---|---|---|
+| `inflight` | you declared work still `running`, or declared `abandoned` work without `--allow-inflight`, or passed `--allow-inflight` with nothing abandoned. Refused BEFORE anything was created | `failure_detail` names each blocking item and the flag that clears it. Wait and re-declare it `completed`, or re-declare it `abandoned` with `--allow-inflight` |
+| `durable_path` | the resume prompt points the successor at a session-scoped path it should not be told to read. Refused BEFORE anything was created, and there is no override | copy the artifact somewhere durable in the repo and reference that, or drop the reference |
 | `split` / `spawned` | the successor never really came up | check `herdr pane list`; nothing was handed over |
 | `name_taken` | the requested `--name` is already bound to a pane (`failure_detail` names it) — refused BEFORE any split, so nothing was created | check `herdr agent list` and pick a fresh `--name`; a same-name retry cannot succeed while the name stays bound |
 | `agent_start` | herdr refused to start the agent for some other reason — `failure_detail` carries the error, `pane_capture` what the pane showed | read both before theorizing; the tentative pane was cleaned up |
