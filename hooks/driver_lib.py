@@ -3759,7 +3759,7 @@ def _supervision_override_errors(value) -> list[str]:
     return errors
 
 
-def _supervision_override_effective_restrictions(value, now: str) -> frozenset:
+def supervision_override_effective_restrictions(value, now: str) -> frozenset:
     """The restriction set `value` imposes at `now`, treating an expired override as `none`.
 
     `now` and `expires_at` are ISO-8601 UTC strings in the same fixed-width
@@ -3804,7 +3804,7 @@ def set_supervision_override(state: dict, new_value, *, now: str) -> dict | None
     if errors:
         raise DriverStateError(
             f"invalid supervision_override: {'; '.join(errors)}")
-    current_restrictions = _supervision_override_effective_restrictions(
+    current_restrictions = supervision_override_effective_restrictions(
         state.get("supervision_override"), now)
     new_restrictions = SUPERVISION_OVERRIDE_RESTRICTIONS.get(new_value.get("mode"), frozenset())
     if not (new_restrictions >= current_restrictions):

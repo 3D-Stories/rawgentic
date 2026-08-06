@@ -19,6 +19,8 @@ from collections import namedtuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+import driver_lib
+import review_runner
 import supervision_lib as sl
 
 #: A single, self-identifying ask (round 3 finding 9). The CALLER is responsible for
@@ -33,12 +35,16 @@ Route = namedtuple("Route", "action reason deadline")
 _ASK_DEADLINE_MINUTES = 20
 _TERMINAL_NON_ANSWER_DISPOSITIONS = frozenset({"ambiguous", "unreachable", "late"})
 
-#: The strictness poset (design §9): none < no_merge < no_merge_no_consult =
-#: attended_only; none < no_consult < no_merge_no_consult = attended_only.
-_NO_MERGE_MODES = frozenset({"no_merge", "no_merge_no_consult", "attended_only"})
-_NO_CONSULT_MODES = frozenset({"no_consult", "no_merge_no_consult", "attended_only"})
-_OVERRIDE_MODES = frozenset(
-    {"none", "no_merge", "no_consult", "no_merge_no_consult", "attended_only"})
+#: The strictness poset (design §9) lives in driver_lib (the field's sole writer's own
+#: module) — derived here rather than re-hardcoded, so a change to the poset cannot
+#: drift the two modules apart: none < no_merge < no_merge_no_consult = attended_only;
+#: none < no_consult < no_merge_no_consult = attended_only.
+_NO_MERGE_MODES = frozenset(
+    mode for mode, restrictions in driver_lib.SUPERVISION_OVERRIDE_RESTRICTIONS.items()
+    if "merge" in restrictions)
+_NO_CONSULT_MODES = frozenset(
+    mode for mode, restrictions in driver_lib.SUPERVISION_OVERRIDE_RESTRICTIONS.items()
+    if "consult" in restrictions)
 
 
 def _parse_ts(value):
@@ -101,7 +107,7 @@ def _effective_override_mode(override, *, now: datetime, current_revision: int) 
     if not isinstance(override, dict):
         return "none"
     mode = override.get("mode")
-    if mode not in _OVERRIDE_MODES:
+    if mode not in driver_lib.SUPERVISION_OVERRIDE_MODES:
         return "none"
     expires_at = _parse_ts(override.get("expires_at"))
     if expires_at is not None and now >= expires_at:
@@ -252,3 +258,52 @@ def authority_permits(action_kind: str, *, view: CampaignView) -> bool:
     if action_kind == "merge":
         return view.merge_permitted_by_grant and not view.merge_denied
     return False
+
+
+def consult_permitted(view: CampaignView, backend: str) -> "tuple[bool, str]":
+    """The ONLY new outward-egress gate in this issue (design §8). Fails closed on any
+    of three independent checks, in order — checked BEFORE `review_runner` is invoked
+    at all, so a refusal costs zero payload construction:
+
+    1. `view.granted` — consult must be granted for this campaign at all.
+    2. `backend` must be in `view.consult_providers` — the granted provider LIST, not
+       just a single requested name (closes the gap where the runner's own per-account
+       429 backend switch could silently reach an ungranted provider).
+    3. `review_runner.backend_available(backend)` — the SAME readiness check the
+       runner itself trusts, reused rather than a second, potentially-drifting one.
+    """
+    if not view.granted:
+        return False, "consult not granted"
+    if backend not in view.consult_providers:
+        return False, f"{backend!r} not in the granted provider list {view.consult_providers}"
+    if not review_runner.backend_available(backend):
+        return False, f"{backend} backend unavailable (readiness check failed)"
+    return True, ""
+
+
+def validate_supervision_override(value, *, current, now: datetime) -> "tuple[bool, str]":
+    """(ok, error) — structural + tighten check for a PROPOSED `supervision_override`
+    value. Deliberately kept in sync with `driver_lib.set_supervision_override`'s OWN
+    transition table (T2): both read the SAME `driver_lib.SUPERVISION_OVERRIDE_MODES`/
+    `SUPERVISION_OVERRIDE_RESTRICTIONS` data, so the poset itself cannot drift between
+    the two. This function differs from the setter only in HOW a problem is reported (a
+    tuple here, a raised `DriverStateError` there, since this is a pre-flight check, not
+    a write) and in taking `now` as this module's own `datetime`, not driver_lib's
+    ISO-string convention.
+    """
+    if not isinstance(value, dict):
+        return False, f"supervision_override must be a dict, got {value!r}"
+    mode = value.get("mode")
+    if mode not in driver_lib.SUPERVISION_OVERRIDE_MODES:
+        return False, (f"mode must be one of {sorted(driver_lib.SUPERVISION_OVERRIDE_MODES)}, "
+                       f"got {mode!r}")
+    now_str = now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    current_restrictions = driver_lib.supervision_override_effective_restrictions(
+        current, now_str)
+    new_restrictions = driver_lib.SUPERVISION_OVERRIDE_RESTRICTIONS.get(mode, frozenset())
+    if not (new_restrictions >= current_restrictions):
+        return False, (
+            f"supervision_override must only TIGHTEN: current restrictions "
+            f"{sorted(current_restrictions)} are not a subset of {mode!r}'s "
+            f"restrictions {sorted(new_restrictions)}")
+    return True, ""
