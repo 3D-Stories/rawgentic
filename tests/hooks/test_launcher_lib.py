@@ -776,6 +776,14 @@ class TestHandoffCLI:
                     "failed_step": None}
 
         monkeypatch.setattr(ll, "perform_handoff", fake)
+        # #927 PR 2: the boundary now PROBES before launching, and it needs both tiers — a
+        # capability AND a live anchor pane. Faked here for determinism: unfaked, this test
+        # depends on whether the machine running the suite happens to have herdr and a pane
+        # called `w1:p1`, and a pane-less CI box would take the (correct) inline branch and
+        # never reach `perform_handoff` at all. The subject of this test is argument
+        # threading, so the probe is a precondition, not the thing under test.
+        monkeypatch.setattr(ll, "transport_probe", lambda **kw: (True, True, "probe_ok"))
+        monkeypatch.setattr(ll, "_pane_inventory", lambda runner=None: {"w1:p1"})
         rc = ll.main(_handoff_argv(_state(tmp_path), tmp_path,
                                    **{"--launcher-armed": None,
                                       "--fresh-launch-supported": None}))
@@ -785,6 +793,9 @@ class TestHandoffCLI:
         assert "612" in seen["resume_prompt"], "the successor must be told which child is next"
         assert seen["launch_mode"] == "fresh"
         assert seen["transcript_dir"] == str(tmp_path)
+        # The boundary correlation clause rides the same prompt (section 4.5 / finding C6).
+        assert "resolution b:epic-667:4#1" in seen["resume_prompt"]
+        assert "task list back up" in seen["resume_prompt"]
 
 
 class TestOwnershipDiscipline:
@@ -2186,3 +2197,199 @@ class TestStep11ProbeFixes:
             runner=lambda argv, timeout=None: _ProbeProc(0, "x" * (ll.PROBE_MAX_BYTES + 1)))
         assert (cap, pane) == (False, False)
         assert reason == "probe_oversized"
+
+
+# --- #927 PR 2 — the boundary fence, WIRED ---------------------------------------------------
+#
+# PR 1 shipped this machinery with no caller (D233). These tests are the caller's contract.
+# Design authority: docs/planning/2026-08-05-927-epic-run-transport-rework.md sections 16.2-16.4.
+# They drive `main()` in-process so the real argparse runs, and fake only the two things that
+# would touch a live herdr: `transport_probe` and `perform_handoff`.
+
+
+class TestBoundaryFenceWiring:
+
+    @pytest.fixture(autouse=True)
+    def _no_live_issue_probe(self, monkeypatch):
+        monkeypatch.setenv(ll.ISSUE_PROBE_ENV, "0")
+
+    def _run(self, tmp_path, monkeypatch, *, state=None, probe=(True, True, "probe_ok"),
+             handoff=None, extra=None, panes_after=None, inventory=("w1:p1",)):
+        """Drive `handoff` in-process. Returns (rc, state_after, splits_seen).
+
+        `splits_seen` captures the driver-state AS IT WAS ON DISK when the launch was attempted,
+        which is how the "resolution lands before the split" ordering is asserted rather than
+        assumed. Only the two herdr-touching functions are faked.
+        """
+        state_path = state if state is not None else _state(tmp_path)
+        monkeypatch.setattr(ll, "transport_probe", lambda **kw: probe)
+        seq = [set(inventory), set(panes_after if panes_after is not None else inventory)]
+        monkeypatch.setattr(ll, "_pane_inventory",
+                            lambda runner=None: seq.pop(0) if seq else set(inventory))
+        calls = []
+
+        def _fake_perform(**kw):
+            calls.append(json.loads(state_path.read_text(encoding="utf-8")))
+            return handoff if handoff is not None else {
+                "ok": True, "results": {}, "failed_step": None, "new_pane": "w1:pNEW",
+                "session_id": "s1", "truncated": False, "cleanup": None, "failure_code": None}
+
+        monkeypatch.setattr(ll, "perform_handoff", _fake_perform)
+        argv = _handoff_argv(state_path, tmp_path, **{"--launcher-armed": None,
+                                                     "--fresh-launch-supported": None})
+        if extra:
+            argv += extra
+        rc = ll.main(argv)
+        after = json.loads(state_path.read_text(encoding="utf-8"))
+        return rc, after, calls
+
+    def test_a_refused_claim_stops_this_contender_with_rc_7_and_writes_nothing(
+            self, tmp_path, monkeypatch, capsys) -> None:
+        """Pass-1 Critical (F1): the first draft let a loser 'continue in place'. At a boundary
+        nothing is in flight, so continuing can only mean taking the next child -- beside the claim
+        holder's successor. That is the two-workers condition the fence exists to prevent."""
+        state_path = _state(tmp_path)
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        # somebody else holds a live claim on the generation this boundary will open
+        payload["handoff_claim"] = {"generation": 4, "claimant": "other-session",
+                                   "claimed_at": 9_999_999_999, "started": False}
+        state_path.write_text(json.dumps(payload), encoding="utf-8")
+        rc, after, calls = self._run(tmp_path, monkeypatch, state=state_path)
+        assert rc == 7, capsys.readouterr()
+        assert calls == [], "a losing contender must not launch anything"
+        assert after.get("handoff_claim", {}).get("claimant") == "other-session"
+        assert not dl_transitions(after), "no resolution may be recorded without the claim"
+
+    def test_a_child_in_flight_refuses_the_boundary_without_writing(
+            self, tmp_path, monkeypatch) -> None:
+        """`child_boundary_precondition`: something in_progress is the mid-child case, not this."""
+        state_path = _state(tmp_path, issues=[{"number": 611, "status": "in_progress"},
+                                              {"number": 612, "status": "queued"}])
+        rc, after, calls = self._run(tmp_path, monkeypatch, state=state_path)
+        assert rc == 3
+        assert calls == []
+        assert "handoff_claim" not in after
+
+    def test_the_resolution_lands_before_the_split_and_marks_it_attempted(
+            self, tmp_path, monkeypatch) -> None:
+        """Section 16.2 ordering, and the C1 Critical: `split_attempted` must be durable BEFORE the
+        split, or a crash in between is indistinguishable from 'never started'."""
+        rc, after, calls = self._run(tmp_path, monkeypatch)
+        assert rc == 0, after
+        assert len(calls) == 1, "the split ran exactly once"
+        seen = dl_transitions(calls[0])
+        assert seen, "the resolution must be on DISK when perform_handoff is called"
+        assert seen[0]["split_attempted"] is True
+        assert seen[0]["successor_pane"] is None
+        assert seen[0]["panes_before"] is not None
+
+    def test_a_successful_launch_records_the_pane_and_acks_then_releases_the_claim(
+            self, tmp_path, monkeypatch) -> None:
+        rc, after, _calls = self._run(tmp_path, monkeypatch)
+        assert rc == 0
+        events = dl_transitions(after)
+        assert events[0]["successor_pane"] == "w1:pNEW"
+        assert [e["outcome"] for e in dl_all_events(after) if e.get("outcome")] == ["successor_acked"]
+        assert after.get("handoff_claim") is None, "a definite terminal releases the claim (F1)"
+
+    def test_an_inline_effect_continues_inline_and_releases_its_claim(
+            self, tmp_path, monkeypatch) -> None:
+        rc, after, calls = self._run(tmp_path, monkeypatch, probe=(True, False, "pane_not_found"))
+        assert rc == 0
+        assert calls == [], "inline continuation launches nothing"
+        assert [e["outcome"] for e in dl_all_events(after) if e.get("outcome")] == ["inline_continued"]
+        assert after.get("handoff_claim") is None
+        assert dl_transitions(after)[0]["effective"] == "inline"
+
+    def test_a_measured_refusal_downgrades_the_preference_exactly_once(
+            self, tmp_path, monkeypatch) -> None:
+        """Section 16.4: only the ENUMERATED spiked code may downgrade (F5)."""
+        rc, after, _c = self._run(tmp_path, monkeypatch, handoff={
+            "ok": False, "results": {}, "failed_step": "split", "new_pane": None,
+            "session_id": None, "truncated": False, "cleanup": None,
+            "failure_code": "pane_not_found"}, panes_after=["w1:p1"])
+        assert rc == 4
+        assert [e["outcome"] for e in dl_all_events(after) if e.get("outcome")] == ["launch_failed"]
+        assert after["preferred_transport"] == "inline"
+        assert after["session_mode"] == "single-session", "the projection moves with it"
+
+    def test_an_unclassified_split_failure_does_NOT_downgrade(
+            self, tmp_path, monkeypatch) -> None:
+        """F5: an empty diff proves no pane survived, NOT that creation was refused."""
+        rc, after, _c = self._run(tmp_path, monkeypatch, handoff={
+            "ok": False, "results": {}, "failed_step": "split", "new_pane": None,
+            "session_id": None, "truncated": False, "cleanup": None,
+            "failure_code": "internal_error"}, panes_after=["w1:p1"])
+        assert rc == 4
+        assert [e["outcome"] for e in dl_all_events(after) if e.get("outcome")] == ["launch_failed"]
+        # The fixture campaign carries only the legacy `session_mode`, which `campaign_transport`
+        # migrates on READ without writing — so "untouched" means no downgrade was materialised.
+        assert after.get("preferred_transport") != "inline", "preference must not be downgraded"
+        assert after.get("session_mode") == "fresh-session", "nor its projection"
+        assert "transport_audit" not in after, "and no downgrade was audited"
+
+    def test_an_unparseable_split_response_leaves_NO_terminal_event(
+            self, tmp_path, monkeypatch) -> None:
+        """F5/C5: closing it would remove it from reconciliation's reach for good."""
+        rc, after, _c = self._run(tmp_path, monkeypatch, handoff={
+            "ok": False, "results": {}, "failed_step": "split_response_unparseable",
+            "new_pane": None, "session_id": None, "truncated": False, "cleanup": None})
+        assert rc == 4
+        assert [e for e in dl_all_events(after) if e.get("outcome")] == []
+        assert dl_unterminated(after), "it stays the crash signature reconciliation keys on"
+        assert after.get("handoff_claim") is not None, "an indeterminate launch KEEPS its lease"
+
+    def test_a_pane_appearing_after_a_failed_split_is_indeterminate(
+            self, tmp_path, monkeypatch) -> None:
+        rc, after, _c = self._run(tmp_path, monkeypatch, handoff={
+            "ok": False, "results": {}, "failed_step": "split", "new_pane": None,
+            "session_id": None, "truncated": False, "cleanup": None,
+            "failure_code": "pane_not_found"}, panes_after=["w1:p1", "w1:pGHOST"])
+        assert [e for e in dl_all_events(after) if e.get("outcome")] == []
+        assert after.get("preferred_transport") != "inline"
+        assert after.get("session_mode") == "fresh-session"
+
+    def test_an_unlistable_inventory_records_no_split_attempted(
+            self, tmp_path, monkeypatch) -> None:
+        rc, after, _c = self._run(tmp_path, monkeypatch, handoff={
+            "ok": False, "results": {}, "failed_step": "pane_inventory_unavailable",
+            "new_pane": None, "session_id": None, "truncated": False, "cleanup": None})
+        assert [e["outcome"] for e in dl_all_events(after)
+                if e.get("outcome")] == ["no_split_attempted"]
+        assert after.get("preferred_transport") != "inline", \
+            "an observation failure never downgrades"
+        assert after.get("session_mode") == "fresh-session"
+
+    def test_an_agent_that_never_started_records_start_failed_on_the_owned_pane(
+            self, tmp_path, monkeypatch) -> None:
+        rc, after, _c = self._run(tmp_path, monkeypatch, handoff={
+            "ok": False, "results": {}, "failed_step": "agent_start", "new_pane": "w1:pNEW",
+            "session_id": None, "truncated": False, "cleanup": None})
+        assert [e["outcome"] for e in dl_all_events(after) if e.get("outcome")] == ["start_failed"]
+        assert dl_transitions(after)[0]["successor_pane"] == "w1:pNEW"
+
+    def test_the_launcher_still_defers_to_the_recorded_answer(self, tmp_path, monkeypatch) -> None:
+        """AC 3 / #611 Step-11 pass-3 High 2. A campaign recorded as `inline` gets NO process
+        boundary at all -- the launcher reads the recorded answer and never forces one."""
+        state_path = _state(tmp_path)
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        payload.pop("session_mode", None)
+        payload["preferred_transport"] = "inline"
+        state_path.write_text(json.dumps(payload), encoding="utf-8")
+        rc, after, calls = self._run(tmp_path, monkeypatch, state=state_path)
+        assert rc == 3
+        assert calls == []
+        assert dl_all_events(after) == [], "no boundary, so no transition at all"
+
+
+def dl_all_events(state):
+    return [e for e in (state.get("transitions") or []) if isinstance(e, dict)]
+
+
+def dl_transitions(state):
+    return [e for e in dl_all_events(state) if "outcome" not in e]
+
+
+def dl_unterminated(state):
+    closed = {e.get("resolution_id") for e in dl_all_events(state) if e.get("outcome")}
+    return [e for e in dl_transitions(state) if e.get("resolution_id") not in closed]
