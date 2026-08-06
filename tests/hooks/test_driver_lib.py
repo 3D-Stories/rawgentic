@@ -1223,3 +1223,85 @@ class TestTransitionLog:
         self._resolved(st)
         ok, errors = dl.validate_driver_state(st)
         assert ok, list(errors)
+
+
+class TestChildBoundaryFence:
+    """#845, folded into #927: the child boundary gets the fence mid-child already has.
+
+    Deliberately NOT by adding a `kind` (D232). `_refuse_foreign_kind` documents that this entry
+    point handles only the boundary handoff "which carries no kind at all" and refuses ANY kind
+    with rc 3, and the record's three-key shape is pinned. The paths are already separate by the
+    absent-kind convention; what the boundary LACKS is the claim, so that is what is added.
+    """
+
+    def _st(self, **kw):
+        base = {"schema_version": 1, "campaign": "camp",
+                "issues": [{"number": 7, "status": "queued"},
+                           {"number": 8, "status": "queued"}]}
+        base.update(kw)
+        return base
+
+    def test_a_queued_next_child_with_none_in_flight_satisfies_the_precondition(self) -> None:
+        ok, reason = dl.child_boundary_precondition(self._st(), next_issue=7)
+        assert ok is True
+        assert reason == "ready"
+
+    def test_a_child_in_flight_is_the_MID_CHILD_case_not_this_one(self) -> None:
+        st = self._st(issues=[{"number": 7, "status": "in_progress"},
+                              {"number": 8, "status": "queued"}])
+        ok, reason = dl.child_boundary_precondition(st, next_issue=8)
+        assert ok is False
+        assert reason == "child_in_flight"
+
+    def test_a_next_child_that_is_not_queued_is_refused(self) -> None:
+        st = self._st(issues=[{"number": 7, "status": "merged"}])
+        ok, reason = dl.child_boundary_precondition(st, next_issue=7)
+        assert ok is False
+        assert reason == "next_child_not_queued"
+
+    def test_an_unknown_next_child_is_refused(self) -> None:
+        ok, reason = dl.child_boundary_precondition(self._st(), next_issue=999)
+        assert ok is False
+        assert reason == "next_child_not_queued"
+
+    def test_the_fence_refuses_a_second_caller_on_one_generation(self) -> None:
+        """The whole point: two boundary calls, one successor."""
+        st = self._st(generation=4,
+                      handoff_pending={"generation": 4, "next_issue": 7, "written_ts": 10})
+        first, claimed = dl.handoff_claim(st, 4, claimant="pane-a", now_ts=100)
+        assert first is True
+        # `handoff_claim` is PURE — the claim lives in the RETURNED state, not in `st`.
+        assert dl.handoff_claim_blocked_by_live_claim(
+            claimed, 4, now_ts=101, lease_s=1800) is True
+        second, _ = dl.handoff_claim(claimed, 4, claimant="pane-b", now_ts=101)
+        assert second is False, "a second claimant must not also launch a successor"
+
+    def test_an_expired_lease_becomes_reclaimable(self) -> None:
+        st = self._st(generation=4,
+                      handoff_pending={"generation": 4, "next_issue": 7, "written_ts": 10})
+        _ok, claimed = dl.handoff_claim(st, 4, claimant="pane-a", now_ts=100)
+        assert dl.handoff_claim_blocked_by_live_claim(
+            claimed, 4, now_ts=100 + 1801, lease_s=1800) is False
+
+    def test_opening_a_boundary_handoff_twice_reuses_the_generation(self) -> None:
+        """Idempotent open: a competing invocation gets the SAME generation, not a second one."""
+        st = self._st(generation=4)
+        disp = {"outcome": "ready", "generation": 5, "next_issue": 7}
+        once = dl.open_handoff(st, disp, now_ts=10)
+        twice = dl.open_handoff(once, disp, now_ts=11)
+        assert once["generation"] == twice["generation"] == 5
+        assert twice["handoff_pending"]["next_issue"] == 7
+
+    def test_the_boundary_record_still_carries_NO_kind(self) -> None:
+        """D232: the absent-kind convention is what keeps the two paths apart. Preserve it."""
+        st = self._st(generation=4)
+        new = dl.open_handoff(st, {"outcome": "ready", "generation": 5, "next_issue": 7},
+                              now_ts=10)
+        assert "kind" not in new["handoff_pending"], (
+            "an explicit kind would make _refuse_foreign_kind reject the boundary's own record")
+
+    def test_the_mid_child_precondition_is_untouched_by_this_helper(self) -> None:
+        """The boundary precondition must not become a way to bypass the mid-child one."""
+        st = self._st(issues=[{"number": 7, "status": "in_progress"}])
+        ok, _ = dl.child_boundary_precondition(st, next_issue=7)
+        assert ok is False

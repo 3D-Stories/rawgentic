@@ -1777,6 +1777,41 @@ def unterminated_resolutions(state) -> list:
             if "outcome" not in e and e.get("resolution_id") not in closed]
 
 
+def child_boundary_precondition(state, next_issue) -> tuple[bool, str]:
+    """May a CHILD-BOUNDARY handoff open right now? Returns ``(ok, reason)``. PURE.
+
+    #845, folded into #927. The boundary and the mid-child paths reuse the same generation /
+    claim / lease / ack machinery and differ ONLY here, in what must be true before a claim is
+    taken:
+
+    - mid-child requires exactly one child ``in_progress`` matching the position record;
+    - the boundary requires the opposite — the next child ``queued`` and NOTHING in flight.
+
+    Keeping the difference in a precondition, rather than in the fence, is what lets the fence be
+    reused verbatim and leaves the mid-child path genuinely untouched.
+
+    Note what is deliberately NOT here (D232): no ``kind`` discriminator. ``_refuse_foreign_kind``
+    documents that this entry point serves only the boundary handoff, "which carries no kind at
+    all", and refuses any kind — including an unrecognised one — with rc 3. Introducing one would
+    make the boundary reject its own record.
+    """
+    if not isinstance(state, dict):
+        return (False, "next_child_not_queued")
+    issues = state.get("issues")
+    issues = issues if isinstance(issues, list) else []
+    # A child in flight is the mid-child case, and it is checked FIRST: a run with something
+    # in_progress must never fall through to a boundary handoff just because the named next
+    # child happens to look queued.
+    if any(isinstance(i, dict) and i.get("status") == "in_progress" for i in issues):
+        return (False, "child_in_flight")
+    for issue in issues:
+        if isinstance(issue, dict) and issue.get("number") == next_issue:
+            if issue.get("status") == "queued":
+                return (True, "ready")
+            return (False, "next_child_not_queued")
+    return (False, "next_child_not_queued")
+
+
 def legacy_session_mode(transport: str) -> "str | None":
     """The write-only `session_mode` projection for a transport, or None if unknown. PURE.
 
