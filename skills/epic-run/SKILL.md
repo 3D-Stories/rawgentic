@@ -168,8 +168,9 @@ put a list up by hand).
   record exists for this head naming every remaining child with a reason. It does **not** verify
   that the judgment behind it was any good, and nothing here should be read as claiming
   otherwise. Two refusals with different remedies: `missing` is cleared by doing the sweep and
-  running `sweep record`; `unreadable` means the state file needs repair first (copy it aside,
-  delete the malformed `boundary_sweeps` key, check it parses, then record).
+  running `sweep record`; `unreadable` means the state file needs repair first — copy it aside,
+  RESET the field to `[]` (never DELETE the key: an absent key means the campaign predates
+  this contract and disarms the gate permanently), check it parses, then record.
   A campaign whose driver-state carries no `boundary_sweeps` key at all predates this contract
   and is NOT gated — it adopts by recording its first sweep. Field precedent: the by-hand D181
   sweeps in `claude_docs/session_notes/epic-906-autorun-log.md`.

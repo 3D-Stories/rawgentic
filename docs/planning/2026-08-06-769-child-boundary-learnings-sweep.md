@@ -97,9 +97,8 @@ same wave exists to close that hole). Claiming more than coverage here would rep
                                       //   or null when the head moved with no child completing
       "learnings": "…what child #927 taught, non-empty…",
       "assessments": [                // EVERY remaining eligible child, exactly once
-        {"issue": 769, "outcome": "commented",  "note": "…", "ref": "https://…",
-         "body_hash": "…"},           // the body actually assessed (see §4.6)
-        {"issue": 726, "outcome": "unaffected", "note": "…", "body_hash": "…"}
+        {"issue": 769, "outcome": "commented",  "note": "…", "ref": "https://…"},
+        {"issue": 726, "outcome": "unaffected", "note": "…"}
       ],
       "observed_at": 1754450000
     }
@@ -385,29 +384,29 @@ correction comment retires as unrecoverable (that log was trimmed 2026-08-02).
 
 ### 4.6 Known limitation shipped deliberately: a body edited after the sweep
 
-**Pass-3 adversarial High, `correctness` — CONFIRMED, and only PARTLY closed.** The gate keys on
-the head and the eligible issue-number set, but the things assessed are mutable GitHub issue
-bodies. Editing a remaining child's body without moving `origin/main` and without changing queue
-membership leaves the stored record satisfying the gate, so a stale assessment can authorize the
-next child even though the five-part procedure says each child's CURRENT body was read.
+**Pass-3 adversarial High, `correctness` — CONFIRMED, and NOT closed.** The gate keys on the head
+and the eligible issue-number set, but the things assessed are mutable GitHub issue bodies. Editing
+a remaining child's body without moving `origin/main` and without changing queue membership leaves
+the stored record satisfying the gate, so a stale assessment can authorize the next child even
+though the five-part procedure says each child's CURRENT body was read.
 
-**What ships:** every assessment records a `body_hash` of the body actually assessed, computed with
-the existing `normalize_issue_body` helper — the exact mechanism `build_revalidation_record`
-already uses (`driver_lib.py:913-914`). The evidence is captured where it is free, because the
-sweep has the bodies in hand at that moment.
+**What ships: nothing for this, deliberately.** The pass-3 draft added a `body_hash` per assessment
+as partial evidence. **The Step-11 review deleted it**, and was right to: nothing computed it, no
+CLI example supplied it, and the schema made it optional — so it would have been a field that is
+always absent, advertising evidence that never exists. An optional-and-never-populated field is
+worse than no field, because the design's own prose then over-claims.
 
-**What does NOT ship, and why:** `boundary_sweep_status` does NOT compare those hashes against live
-issue bodies. Doing so would require the gate to make GitHub reads, turning a pure, clock-free,
-I/O-free state function into a network-dependent one and breaking the module's enforced no-I/O
-promise (`tests/hooks/test_driver_state_write_back.py:295-301` greps for `subprocess` in
-`driver_lib`). That is a capability decision worth its own issue, not a side effect of this one.
+**What a real fix needs, and why it is not here:** `boundary_sweep_status` would have to compare a
+recorded hash against the LIVE issue body, which means GitHub reads inside a pure state function.
+`driver_lib` promises no I/O and that promise is test-enforced by a source grep for `subprocess`
+(`tests/hooks/test_driver_state_write_back.py:295-301`). That is a capability decision deserving
+its own issue, not a side effect of this one.
 
 **The hole is SHARED with the gate this one mirrors, not introduced by it** — verified rather than
 assumed: `build_revalidation_record` stores a `body_hash`, and `_receipt_covers_child`
 (`driver_lib.py:639`) compares only `to_sha == observed_head`, never the hash against a live body.
-So a post-revalidation body edit already evades the existing gate the same way. Recording the hash
-here is what makes a future comparison possible for both. Residual recorded as a run-record
-follow-up, not filed as an issue (D179).
+A post-revalidation body edit already evades the existing gate the same way. Residual recorded as a
+run-record follow-up, not filed as an issue (D179).
 
 ## 5. What this deliberately does NOT build
 
@@ -677,3 +676,35 @@ reading `observe_head`). Consistent with D238/D240, established earlier in this 
 **Gate outcome:** design ACCEPTED as amended, with one documented deferred limitation (§4.6). Three
 adversarial passes produced **1 Critical + 7 High + 8 Medium + 1 Low across 18 findings; 17 applied
 (one partly), 1 refuted.**
+
+## 13. Step-11 pre-PR review — dispositions
+
+One cross-model pass over the committed diff (`review_runner.py review-code --base origin/main`,
+reviewer `gpt-5.6-sol`, author `claude-opus-5`, `status: success`, `diagnostic: false`, `head_sha`
+verified equal to HEAD before any finding was consumed). **6 findings: 4 High, 2 Medium — all six
+CONFIRMED, two of them by running the code, and all six fixed.**
+
+| # | Sev | Finding | Fix |
+|---|---|---|---|
+| 1 | High `completeness` | The prose claimed campaign creation seeds `boundary_sweeps: []`, but the only seeding anywhere was **in a test helper** — so every NEW campaign would have inherited the migration exemption and the gate would never have fired for anyone | Seed it in the real creation seam, `transport resolve-creation`, with a test that drives the production path |
+| 2 | High `correctness` | `boundary_sweep_status`, documented as never raising, threw `TypeError` on an unhashable `issue` value — a corrupt file became a `next-child` OUTAGE instead of an rc-8 refusal. **Reproduced before fixing** | Total validation; every failure becomes `unreadable` |
+| 3 | High `security` | Key absence is the grandfathering marker, and **my own documented repair told operators to DELETE the key** — turning the repair into a permanent bypass of the gate | Repair now RESETS the field to `[]`; both the CLI refusal text and the two prose surfaces say so, with the reason attached |
+| 4 | High `security` | The reader checked head + issue-number set and nothing else, so a hand-written record with no `learnings`, no outcomes and no notes read as `swept`. **Reproduced: it returned `swept`** | `sweep_record_is_intact`, shared with the write path; one corrupt record makes the whole field `unreadable` |
+| 5 | Medium `correctness` | `observe_head` and the `--expected-head` comparison ran BEFORE the lock, so the head could move between the check and the append — the exact staleness compare-and-record promises to refuse | The authoritative comparison moved INSIDE `_locked_state_update`; a move there returns `None`, so nothing is written |
+| 6 | Medium `internal-consistency` | `body_hash` was optional in code and "always recorded" in the design; no caller computed it | The field is **removed** and §4.6 rewritten to say plainly that nothing ships for that limitation |
+
+**Note on findings 1, 3 and 6: all three are the same class of defect — prose that claimed more
+than the code delivered.** Seeding that existed only in a test, a repair procedure that disarmed
+the thing it repaired, and a field advertised as evidence that nothing populated. That is worth
+recording as the lesson of this review, because each individually reads as a small slip and
+together they are a pattern: the design was written before the code, and three claims were never
+re-checked against what actually shipped.
+
+**Ambiguity breaker: fired once (finding 1) and resolved from the code** — the question was whether
+a production creation path existed to seed; `transport resolve-creation` is it. Not escalated,
+consistent with D238/D240.
+
+**Loop-back budget after this round: `design` 2/2, `review` 1/1, global 3/3 — fully spent.** The
+Step-11 reopen token was minted before the review (which is what debited `review`), so this fix
+round is authorized; there is no budget for another. Any further finding must be dispositioned
+without a loop-back.

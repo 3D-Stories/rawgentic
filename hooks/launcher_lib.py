@@ -4254,9 +4254,11 @@ def _sweep_refusal_text(status: str, driver_state: str) -> str:
     if status == "unreadable":
         return ("refusing: the campaign's `boundary_sweeps` field is unreadable, so whether the "
                 "boundary was swept cannot be determined — and a fence must never read that as "
-                f"'it was done'. REPAIR the state file ({driver_state}): copy it aside, delete "
-                "the malformed `boundary_sweeps` key, check it parses, then record the sweep "
-                "again. Deleting the key is safe because its absence never reads as swept")
+                f"'it was done'. REPAIR the state file ({driver_state}): copy it aside, RESET the "
+                'malformed field to an empty list (`"boundary_sweeps": []`), check the file '
+                "parses, then record the sweep again. RESET it — do not DELETE the key: an "
+                "absent key means 'campaign predates this contract' and disarms the gate "
+                "permanently, so deleting it would turn a repair into a silent bypass")
     return ("refusing: the remaining queue has not been swept against this boundary's learnings "
             "(the owner's standing order — see docs/multi-issue-driver.md). Do the sweep, then "
             "record it:\n"
@@ -4302,7 +4304,11 @@ def _cmd_sweep(args) -> int:
         print(json.dumps({"status": status, "observed_head": observed_head}, indent=2))
         return 0 if status in ("not_due", "swept") else 3
 
-    # verb == "record"
+    # verb == "record". The expected-head comparison happens INSIDE the lock below, not here:
+    # comparing before acquiring it leaves a window in which the head moves and the record is
+    # appended anyway, which is precisely the staleness the compare-and-record rule promises to
+    # refuse (Step-11 finding). This early check is only a cheap reject of an obviously stale
+    # caller; the authoritative one is under the lock.
     if args.expected_head != observed_head:
         print(json.dumps({"outcome": "head_moved", "expected_head": args.expected_head,
                           "observed_head": observed_head}, indent=2))
@@ -4341,8 +4347,15 @@ def _cmd_sweep(args) -> int:
     outcome = {}
 
     def _record(state):
+        # RE-OBSERVE under the lock. This is the authoritative half of compare-and-record: the
+        # pre-lock check above can go stale between its comparison and this mutation, and
+        # appending then would stamp assessments with a head that had already moved.
+        locked_head = observe_head(project_root)
+        if locked_head != args.expected_head:
+            outcome["head_moved"] = locked_head
+            return None                      # None ⇒ _locked_state_update writes nothing
         new = driver_lib.record_boundary_sweep(
-            state, after_issue=after_issue, swept_at_head=observed_head,
+            state, after_issue=after_issue, swept_at_head=locked_head,
             learnings=args.learnings, assessments=assessments, now_ts=int(time.time()))
         outcome["result"] = "replayed" if new is None else "recorded"
         return new
@@ -4352,6 +4365,15 @@ def _cmd_sweep(args) -> int:
     except driver_lib.DriverStateError as exc:
         print(f"refusing: {exc}", file=sys.stderr)
         return 2
+    except LauncherError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 5
+    if "head_moved" in outcome:
+        print(json.dumps({"outcome": "head_moved", "expected_head": args.expected_head,
+                          "observed_head": outcome["head_moved"]}, indent=2))
+        print("refusing: origin/main moved while the record was being written, so nothing was "
+              "written. Re-run `sweep begin`, re-assess, and record again", file=sys.stderr)
+        return SWEEP_HEAD_MOVED_RC
     print(json.dumps({"result": outcome.get("result"), "head": observed_head,
                       "after_issue": after_issue}, indent=2))
     return 0
@@ -4622,6 +4644,13 @@ def _cmd_transport(args) -> int:
             projected = driver_lib.legacy_session_mode(transport)
             if projected is not None:
                 new["session_mode"] = projected
+            # #769 — SEED the sweep contract here, at the one production point where a campaign
+            # is created. `boundary_sweep_status` grandfathers a campaign with no
+            # `boundary_sweeps` key, so without this seeding every NEW campaign would inherit the
+            # migration exemption meant for campaigns already in flight, and the gate would never
+            # fire for anyone (Step-11 finding: the only seeding in the first draft was in a test
+            # helper). Empty list = "gated, nothing swept yet".
+            new.setdefault(driver_lib.BOUNDARY_SWEEPS_KEY, [])
             now = int(time.time())
             rid = driver_lib.append_resolution(
                 new, transition_id=f"c:{new.get('campaign', 'campaign')}:0",

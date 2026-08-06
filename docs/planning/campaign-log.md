@@ -18,7 +18,7 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 **Issue:** [#769](https://github.com/3D-Stories/rawgentic/issues/769) ·
 **Design:** `docs/planning/2026-08-06-769-child-boundary-learnings-sweep.md` ·
-**Base:** `224ddace` · **Suite:** 5636→5689
+**Base:** `224ddace` · **Suite:** 5636→5698
 
 **Problem.** Queue revalidation asks whether the remaining issue bodies still describe reality at
 this head. The owner's D181 standing order asks the wider question — re-assess every remaining

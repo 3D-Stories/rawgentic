@@ -201,7 +201,7 @@ procedure lives in `skills/epic-run/SKILL.md`; this is the durable contract.
 | `swept_at_head` | the 40-char `origin/main` sha the assessment was made against |
 | `after_issue` | the disposed child whose learnings drove it, **or `null`** when the head moved with no child completing |
 | `learnings` | what the boundary taught — required, non-empty |
-| `assessments[]` | one entry per remaining eligible child: `issue`, `outcome`, `note`, plus `ref` when the outcome is not `unaffected`, plus the assessed `body_hash` |
+| `assessments[]` | one entry per remaining eligible child: `issue`, `outcome`, `note`, plus `ref` when the outcome is not `unaffected` |
 
 Outcomes are `unaffected`, `commented` or `rescoped`. Coverage is **set EQUALITY** against the
 children whose status is not `merged`/`deferred`/`abandoned` — a missing child and a foreign one
@@ -215,13 +215,19 @@ boundary.
 
 **The gate.** `next-child` and `handoff` both refuse with **rc 8** when the boundary is unswept.
 `sweep record` clears a `missing`; an `unreadable` field needs the state repaired first — copy the
-file aside, delete the malformed `boundary_sweeps` key, confirm it parses, then record again
-(deleting is safe because an absent field never reads as swept).
+file aside, RESET the field to `[]`, confirm it parses, then record again. **Reset it; never
+delete the key.** An absent key is the migration marker below, so deleting it would turn a
+documented repair into a permanent bypass of the gate.
 
 **What this gate checks, and what it cannot.** Coverage and record integrity ONLY: that a record
 exists for this head naming every remaining child with a reason. Whether the judgment behind it
 was any good is not observable from state, and nothing here claims otherwise — the same honesty
 the revalidation receipt's `depth` field failed at.
+
+**Read-side integrity.** `boundary_sweep_status` re-validates EVERY record in full — head,
+provenance, learnings, and each assessment's outcome/note/ref — before it will answer `swept`.
+Checking only the issue-number set would let a hand-written record with no evidence in it open
+a gate whose whole promise is record integrity.
 
 **Migration.** A campaign whose state carries no `boundary_sweeps` key predates this contract and
 is **not** gated; gating it would refuse work over a boundary already past and no longer sweepable.

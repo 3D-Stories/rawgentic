@@ -768,7 +768,7 @@ For major changes, please open an issue first to discuss the approach.
   are grandfathered (D242) — gating them would refuse work over a boundary already past. Three
   adversarial design passes (1 Critical + 7 High + 8 Medium + 1 Low; 17 applied, 1 refuted from
   source) closed the gate budget-exhausted per #798. No workflow-spine change → no diagram REV.
-  Suite 5636→5689.
+  Suite 5636→5698.
 
 ### v3.133.0 (2026-08-06)
 - **The child boundary is now the DEFAULT, and the one-successor fence actually runs (#927, epic

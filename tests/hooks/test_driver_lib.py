@@ -2082,3 +2082,59 @@ def test_an_EMPTY_sweep_list_opts_the_campaign_IN():
 def test_an_opted_in_campaign_is_still_not_due_before_the_first_disposal():
     state = _sweep_campaign({769: "queued", 726: "in_progress"}, sweeps=[])
     assert dl.boundary_sweep_status(state, HEAD_A) == "not_due"
+
+
+# --- Step-11 review fixes ---------------------------------------------------
+def test_the_reader_does_not_RAISE_on_an_unhashable_issue_value():
+    """Step-11 High: `{"issue": []}` made a set comprehension raise TypeError out of a function
+    documented as never raising — a corrupt file became a next-child OUTAGE, not an rc-8 refusal."""
+    state = _sweep_campaign(sweeps=[{"swept_at_head": HEAD_A, "learnings": "x",
+                                     "assessments": [{"issue": []}]}])
+    assert dl.boundary_sweep_status(state, HEAD_A) == "unreadable"
+
+
+def test_a_record_with_matching_issue_numbers_but_no_evidence_is_NOT_swept():
+    """Step-11 High: the fence checked head + issue-number set and nothing else, so a
+    hand-written record with no learnings, no outcomes and no notes opened a gate whose whole
+    promise is record integrity."""
+    hollow = {"swept_at_head": HEAD_A, "assessments": [{"issue": 769}, {"issue": 726},
+                                                       {"issue": 586}]}
+    assert dl.boundary_sweep_status(_sweep_campaign(sweeps=[hollow]), HEAD_A) == "unreadable"
+
+
+def test_a_record_missing_a_required_ref_is_not_accepted_by_the_READER_either():
+    """Write-path and read-path must agree, or the gate trusts what the writer would refuse."""
+    bad = {"swept_at_head": HEAD_A, "after_issue": 927, "learnings": "x",
+           "assessments": [{"issue": 769, "outcome": "commented", "note": "n"},
+                           {"issue": 726, "outcome": "unaffected", "note": "n"},
+                           {"issue": 586, "outcome": "unaffected", "note": "n"}]}
+    assert dl.boundary_sweep_status(_sweep_campaign(sweeps=[bad]), HEAD_A) == "unreadable"
+
+
+def test_one_corrupt_record_makes_the_WHOLE_field_unreadable():
+    """Reading around corruption is a fence reporting 'done' it never verified."""
+    state = _sweep_campaign()
+    good = dl.record_boundary_sweep(
+        state, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+        assessments=[_assessment(769), _assessment(726), _assessment(586)], now_ts=1)
+    good[dl.BOUNDARY_SWEEPS_KEY] = good[dl.BOUNDARY_SWEEPS_KEY] + [{"swept_at_head": "junk"}]
+    assert dl.boundary_sweep_status(good, HEAD_A) == "unreadable"
+
+
+def test_sweep_record_is_intact_is_total_over_arbitrary_garbage():
+    for junk in (None, 7, "x", [], {}, {"swept_at_head": HEAD_A},
+                 {"swept_at_head": HEAD_A, "learnings": "x", "assessments": {}},
+                 {"swept_at_head": HEAD_A, "learnings": "x",
+                  "assessments": [{"issue": 1, "outcome": "nope", "note": "n"}]}):
+        assert dl.sweep_record_is_intact({}, junk) is False
+
+
+def test_body_hash_is_not_part_of_the_record():
+    """Step-11 Medium: the design claimed every assessment records one, nothing computed it, and
+    no example supplied it — an optional field that would always be absent."""
+    state = _sweep_campaign()
+    new = dl.record_boundary_sweep(
+        state, after_issue=927, swept_at_head=HEAD_A, learnings="x",
+        assessments=[dict(_assessment(769), body_hash="deadbeef"), _assessment(726),
+                     _assessment(586)], now_ts=1)
+    assert "body_hash" not in new[dl.BOUNDARY_SWEEPS_KEY][0]["assessments"][0]

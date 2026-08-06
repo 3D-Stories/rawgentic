@@ -329,10 +329,6 @@
                   "type": "string",
                   "maxLength": 200,
                   "description": "Required when the outcome is `commented` or `rescoped`, and grammar-checked as an https:// URL or a repository-relative docs/ or claude_docs/ path. A claim that a child CHANGED must point at the artifact; checking only length would let 'done' satisfy it."
-                },
-                "body_hash": {
-                  "type": "string",
-                  "description": "The normalized hash of the body actually assessed. RECORDED, not compared: boundary_sweep_status does not diff it against the live issue, because that would make a pure state function do network I/O. The same limitation exists in the revalidation receipt this mirrors."
                 }
               }
             }

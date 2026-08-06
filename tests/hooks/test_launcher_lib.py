@@ -2872,3 +2872,56 @@ class TestBoundarySweepCommands:
         assert ll.main(["sweep", "status", "--driver-state", str(state),
                         "--project-root", work]) == 0
         assert json.loads(capsys.readouterr().out)["status"] == "swept"
+
+
+class TestBoundarySweepReviewFixes:
+    """Step-11 findings on #769, each with the property it protects."""
+
+    @pytest.fixture(autouse=True)
+    def _no_live_issue_probe(self, monkeypatch):
+        monkeypatch.setenv(ll.ISSUE_PROBE_ENV, "0")
+
+    def test_campaign_creation_SEEDS_the_sweep_contract(self, tmp_path, monkeypatch):
+        """Without production seeding every NEW campaign inherits the migration exemption meant
+        for campaigns already in flight, and the gate never fires for anybody."""
+        work, _head = _local_repo_with_origin(tmp_path)
+        state = tmp_path / "fresh-campaign.json"
+        state.write_text(json.dumps({"campaign": "epic-new", "project": PROJECT,
+                                     "issues": [{"number": 1, "status": "queued"}]}),
+                         encoding="utf-8")
+        monkeypatch.setattr(ll, "resolve_creation_transport", lambda **k: ("inline", "probed"))
+        assert ll.main(["transport", "resolve-creation", "--driver-state", str(state),
+                        "--project-root", work]) == 0
+        after = json.loads(state.read_text(encoding="utf-8"))
+        assert after["boundary_sweeps"] == [], "a new campaign must be gated, not grandfathered"
+
+    def test_a_head_that_moves_before_the_LOCK_refuses_and_writes_nothing(self, tmp_path,
+                                                                         monkeypatch):
+        """Comparing before acquiring the lock leaves a window in which the head moves and the
+        record is appended anyway — the exact staleness compare-and-record promises to refuse."""
+        state = _state(tmp_path, boundary_sweeps=[])
+        work, head = _local_repo_with_origin(tmp_path)
+        calls = {"n": 0}
+        real = ll.observe_head
+
+        def _moving(root, **kw):
+            calls["n"] += 1
+            return real(root, **kw) if calls["n"] == 1 else "f" * 40
+
+        monkeypatch.setattr(ll, "observe_head", _moving)
+        rc = ll.main(["sweep", "record", "--driver-state", str(state), "--project-root", work,
+                      "--expected-head", head, "--after-issue", "611", "--learnings", "x",
+                      "--assess", json.dumps({"issue": 612, "outcome": "unaffected", "note": "n"})])
+        assert rc == 9
+        assert json.loads(state.read_text(encoding="utf-8"))["boundary_sweeps"] == []
+
+    def test_the_unreadable_refusal_says_RESET_and_never_says_delete(self, tmp_path, capsys):
+        """The first draft's repair text told operators to DELETE the key — which grandfathers the
+        campaign and disarms the gate permanently, turning the documented repair into a bypass."""
+        state = _state(tmp_path, boundary_sweeps="corrupt")
+        work, _head = _local_repo_with_origin(tmp_path)
+        assert ll.main(["next-child", "--driver-state", str(state), "--project-root", work]) == 8
+        err = capsys.readouterr().err.lower()
+        assert "reset" in err and '"boundary_sweeps": []' in err
+        assert "delete the malformed" not in err
+        assert "disarms the gate" in err, "the reason must travel with the instruction"

@@ -2293,10 +2293,11 @@ def _validate_sweep_assessments(state: dict, assessments) -> list[dict]:
             record["ref"] = ref
         elif ref is not None:
             record["ref"] = validate_operator_note(ref, what=f"the ref for #{number}")
-        body_hash = entry.get("body_hash")
-        if body_hash is not None:
-            record["body_hash"] = validate_operator_note(
-                body_hash, what=f"the body_hash for #{number}")
+        # NO `body_hash`. The design drafted one so a future check could detect an issue body
+        # edited after the sweep, but nothing computes it and no CLI example supplies it, so it
+        # would have been an optional field that is always absent — a claim of evidence with no
+        # evidence behind it (Step-11 finding). The limitation it was meant to address is
+        # documented instead, and the field is deferred with the check that would use it.
         seen.append(int(number))
         normalized.append(record)
     eligible = sweep_eligible_children(state)
@@ -2309,6 +2310,50 @@ def _validate_sweep_assessments(state: dict, assessments) -> list[dict]:
             f"a sweep must cover exactly the remaining eligible children {sorted(eligible)}; "
             f"missing {missing}, foreign {foreign}")
     return normalized
+
+
+def sweep_record_is_intact(state, record) -> bool:
+    """Is this a STRUCTURALLY complete sweep record? PURE, never raises.
+
+    Step-11 finding, and the gate was hollow without it: `boundary_sweep_status` used to check the
+    head, that `assessments` was a list, and the issue-number SET — nothing else.  So a
+    hand-written or half-corrupt record carrying only matching issue numbers, with no `learnings`,
+    no outcomes, no notes and no required refs, read as `swept` and opened a gate whose whole
+    promise is record integrity.  Coverage without integrity is not evidence.
+
+    The write path (`_validate_sweep_assessments`) and this read path must agree, so this applies
+    the same rules non-mutatingly.  It also makes the reader total: an unhashable `issue` value
+    used to raise `TypeError` out of a function documented as never raising, turning a corrupt
+    state file into a `next-child` outage instead of the rc-8 repair refusal.
+    """
+    if not isinstance(record, dict):
+        return False
+    try:
+        validate_validated_against(record.get("swept_at_head"))
+        after = record.get("after_issue")
+        if after is not None and not _is_int(after):
+            return False
+        validate_operator_note(record.get("learnings"), what="learnings")
+        assessments = record.get("assessments")
+        if not isinstance(assessments, list):
+            return False
+        seen = []
+        for entry in assessments:
+            if not isinstance(entry, dict) or not _is_int(entry.get("issue")):
+                return False
+            if entry.get("outcome") not in SWEEP_OUTCOMES:
+                return False
+            validate_operator_note(entry.get("note"), what="note")
+            if entry["outcome"] in _SWEEP_OUTCOMES_NEEDING_REF:
+                ref = entry.get("ref")
+                if not isinstance(ref, str) or not _SWEEP_REF_RE.match(ref):
+                    return False
+            seen.append(int(entry["issue"]))
+        return len(set(seen)) == len(seen)
+    except DriverStateError:
+        return False
+    except (TypeError, ValueError):
+        return False
 
 
 def _sweep_replay_payload(record: dict) -> tuple:
@@ -2404,13 +2449,11 @@ def boundary_sweep_status(state, observed_head) -> str:
     if not isinstance(raw, list) or any(not isinstance(r, dict) for r in raw):
         return "unreadable"
     records = boundary_sweeps(state)
-    for record in records:
-        if not isinstance(record.get("assessments"), list):
-            return "unreadable"
-        try:
-            validate_validated_against(record.get("swept_at_head"))
-        except DriverStateError:
-            return "unreadable"
+    # EVERY record must be structurally intact, not merely the one that happens to match this
+    # head: a corrupt neighbour means the field cannot be trusted, and a fence that reads around
+    # corruption is a fence that reports "done" it has not verified.
+    if any(not sweep_record_is_intact(state, r) for r in records):
+        return "unreadable"
     issues = state.get("issues") if isinstance(state.get("issues"), list) else []
     if not any(isinstance(i, dict) and i.get("status") in _DISPOSED_STATUSES for i in issues):
         return "not_due"
@@ -2418,7 +2461,7 @@ def boundary_sweep_status(state, observed_head) -> str:
     for record in records:
         if record.get("swept_at_head") != observed_head:
             continue
-        covered = {a.get("issue") for a in record["assessments"] if isinstance(a, dict)}
+        covered = {int(a["issue"]) for a in record["assessments"]}
         if covered == eligible:
             return "swept"
     return "missing"
