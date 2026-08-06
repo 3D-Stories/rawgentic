@@ -7,6 +7,7 @@ when nothing was written, which is precisely the false belief the state file exi
 prevent. So every refusal here is loud, and nothing is written on a refusal.
 """
 
+import ast
 import json
 import os
 import subprocess
@@ -104,12 +105,31 @@ def test_declare_cannot_set_attended(tmp_path):
     assert _read(tmp_path)["state"] == "away", "the absence must survive"
 
 
-def test_recovering_a_corrupt_file_jumps_the_revision_counter(tmp_path):
+def test_recovering_a_corrupt_file_never_re_issues_a_spent_revision(tmp_path):
     """Restarting the counter at 1 after a recovery would let a delayed event still
     carrying expected_revision=1 from the PREVIOUS lineage satisfy the fence and clear a
-    newer absence — the very hole the fence exists to close."""
+    newer absence — the very hole the fence exists to close.
+
+    Since #963 the MECHANISM depends on what is knowable. With a marker the lineage is
+    known, so the counter simply continues (no jump); the property below is unchanged
+    either way, and `test_recovering_a_corrupt_file_WITHOUT_a_marker_jumps_the_counter`
+    pins the legacy path where the number really is unknowable.
+    """
     _declare(tmp_path)                                   # revision 1
     Path(sl.supervision_path(str(tmp_path))).write_text("{corrupt")
+    rec = _declare(tmp_path, state="away")
+    assert rec["revision"] == 2                          # continued, never restarted
+    with pytest.raises(sa.RevisionMismatch):
+        sa.mark_attended(str(tmp_path), session_id="s", reason="stale",
+                         expected_revision=1, now=NOW)
+
+
+def test_recovering_a_corrupt_file_WITHOUT_a_marker_jumps_the_counter(tmp_path):
+    """The legacy path: no marker, so an unreadable record cannot state its own
+    revision and the counter must be advanced past any plausible prior value."""
+    _declare(tmp_path)                                   # revision 1
+    Path(sl.supervision_path(str(tmp_path))).write_text("{corrupt")
+    Path(sl.declared_marker_path(str(tmp_path))).unlink()
     rec = _declare(tmp_path, state="away")
     assert rec["revision"] > 1000, rec["revision"]
     with pytest.raises(sa.RevisionMismatch):
@@ -219,7 +239,8 @@ def test_no_stray_temp_files_are_left_behind(tmp_path):
     _declare(tmp_path)
     names = os.listdir(os.path.dirname(sl.supervision_path(str(tmp_path))))
     strays = [n for n in names
-              if n != ".supervision.json" and not n.endswith(".lock")]
+              if n not in (".supervision.json", ".supervision.declared.json")
+              and not n.endswith(".lock")]
     assert strays == [], f"stray temp file(s): {strays}"
 
 
@@ -677,3 +698,176 @@ def test_cli_missing_required_argument_is_a_usage_error(tmp_path):
     assert _cli("declare", "--workspace", str(tmp_path)).returncode == 2
 
 
+
+
+# ------------------------------- the durable declaration marker (#963 AC2, write side)
+#
+# `declare` and `mark_attended` maintain the marker `read_state` reconciles against.
+# Ordering is load-bearing: the marker is written FIRST in both, so every crash window
+# fails RESTRICTIVE. Revision formula (owner decision 2026-08-06): every write stamps
+# max(state revision, marker revision) + 1 into BOTH files, so no crash can reuse or
+# skip a number.
+
+
+def _marker(root):
+    return json.loads(Path(sl.declared_marker_path(str(root))).read_text())
+
+
+def test_declare_writes_a_live_marker_at_the_same_revision(tmp_path):
+    rec = _declare(tmp_path)
+    m = _marker(tmp_path)
+    assert m["declared"] is True
+    assert m["revision"] == rec["revision"]
+    assert m["state"] == "away"
+    assert m["schema_version"] == 1
+
+
+def test_mark_attended_clears_the_marker_at_the_same_revision(tmp_path):
+    _declare(tmp_path)
+    rec = sa.mark_attended(str(tmp_path), session_id="s", reason="back",
+                           expected_revision=1, now=NOW)
+    m = _marker(tmp_path)
+    assert m["declared"] is False
+    assert m["revision"] == rec["revision"] == 2
+    # The state file must still read valid — a cleared marker lets the record govern.
+    assert sl.read_state(str(tmp_path)).load_status == "valid"
+
+
+def test_every_write_stamps_the_same_revision_into_both_files(tmp_path):
+    for expected in (1, 2, 3):
+        if expected == 2:
+            sa.mark_attended(str(tmp_path), session_id="s", reason="back",
+                             expected_revision=1, now=NOW)
+        else:
+            _declare(tmp_path)
+        assert _read(tmp_path)["revision"] == expected
+        assert _marker(tmp_path)["revision"] == expected
+
+
+def test_recovery_after_deletion_continues_from_the_marker_revision(tmp_path):
+    """Owner decision 2026-08-06: the marker preserves the lineage, so a recovery
+    advances from it — it does NOT restart at 1 and does NOT need the corrupt-file
+    wall-clock jump (which exists only because an unreadable record cannot state its
+    own revision; a marker can)."""
+    _declare(tmp_path)
+    _declare(tmp_path)                       # revision 2 in both files
+    Path(sl.supervision_path(str(tmp_path))).unlink()
+    assert sl.read_state(str(tmp_path)).load_status == "invalid"   # denied meanwhile
+    rec = _declare(tmp_path)
+    assert rec["revision"] == 3
+    assert _marker(tmp_path)["revision"] == 3
+    assert sl.read_state(str(tmp_path)).load_status == "valid"
+
+
+def test_a_stale_fence_cannot_match_after_a_recovery(tmp_path):
+    """The property the wall-clock jump defended: an event from the previous lineage
+    must not satisfy the fence. The marker keeps the counter monotonic, so it cannot."""
+    _declare(tmp_path)
+    _declare(tmp_path)
+    Path(sl.supervision_path(str(tmp_path))).unlink()
+    _declare(tmp_path)                       # recovery -> revision 3
+    with pytest.raises(sa.RevisionMismatch):
+        sa.mark_attended(str(tmp_path), session_id="s", reason="stale reply",
+                         expected_revision=2, now=NOW)
+
+
+def test_a_crashed_declare_is_repaired_past_the_marker(tmp_path):
+    """Marker at N+1 with an attended record at N (declare crashed between the two
+    writes): the next write must advance past the MARKER, not past the record."""
+    sa.mark_attended.__doc__  # (no-op; keeps the intent adjacent to the arrange below)
+    _declare(tmp_path)
+    sa.mark_attended(str(tmp_path), session_id="s", reason="back",
+                     expected_revision=1, now=NOW)                  # both at 2
+    Path(sl.declared_marker_path(str(tmp_path))).write_text(json.dumps(
+        {"schema_version": 1, "declared": True, "revision": 3, "state": "away",
+         "ts": _iso(NOW)}))
+    assert sl.read_state(str(tmp_path)).load_status == "invalid"    # denied meanwhile
+    rec = _declare(tmp_path)
+    assert rec["revision"] == 4
+    assert _marker(tmp_path)["revision"] == 4
+
+
+def test_mark_attended_recovers_a_workspace_whose_state_file_vanished(tmp_path):
+    """The owner's way back when the state file is gone: /rawgentic:back must work."""
+    _declare(tmp_path)
+    Path(sl.supervision_path(str(tmp_path))).unlink()
+    rec = sa.mark_attended(str(tmp_path), session_id="s", reason="back",
+                           expected_revision=1, now=NOW)
+    assert rec["state"] == "attended"
+    assert rec["revision"] == 2
+    assert _marker(tmp_path)["declared"] is False
+    assert sl.read_state(str(tmp_path)).load_status == "valid"
+
+
+def test_every_revision_bump_keeps_the_two_files_in_lockstep(tmp_path):
+    """`mark_transport_verified` bumps the revision too, so it must stamp the marker.
+
+    A bump the marker never saw would leave a spent revision the marker has never seen,
+    and the next recovery — which trusts the marker's number — would re-issue it. The
+    structural guard is that `_persist_pair` is the only way to land a record.
+    """
+    src = Path(sa.__file__).read_text()
+    tree = ast.parse(src)
+    direct = [
+        node.lineno for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "_persist"
+        and not _inside_persist_pair(tree, node)
+    ]
+    assert direct == [], (
+        f"_persist called outside _persist_pair at line(s) {direct} — a revision bump "
+        "that skips the marker breaks the lockstep invariant (#963)")
+
+
+def _inside_persist_pair(tree, target):
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_persist_pair":
+            if any(inner is target for inner in ast.walk(node)):
+                return True
+    return False
+
+
+# ------------------------------------------------------- bootstrap-marker (migration)
+
+def test_bootstrap_marker_marks_a_live_legacy_declaration(tmp_path):
+    """A workspace that declared BEFORE #963 has a state file and no marker."""
+    _declare(tmp_path)
+    Path(sl.declared_marker_path(str(tmp_path))).unlink()
+    result = sa.bootstrap_marker(str(tmp_path))
+    assert result["written"] is True
+    m = _marker(tmp_path)
+    assert m["declared"] is True
+    assert m["revision"] == 1
+    assert m["state"] == "away"
+
+
+def test_bootstrap_marker_marks_a_legacy_attended_record_as_cleared(tmp_path):
+    _declare(tmp_path)
+    sa.mark_attended(str(tmp_path), session_id="s", reason="back",
+                     expected_revision=1, now=NOW)
+    Path(sl.declared_marker_path(str(tmp_path))).unlink()
+    result = sa.bootstrap_marker(str(tmp_path))
+    assert result["written"] is True
+    assert _marker(tmp_path)["declared"] is False
+
+
+def test_bootstrap_marker_is_a_no_op_on_a_never_declared_workspace(tmp_path):
+    result = sa.bootstrap_marker(str(tmp_path))
+    assert result["written"] is False
+    assert result["load_status"] == "absent"
+    assert not Path(sl.declared_marker_path(str(tmp_path))).exists()
+
+
+def test_bootstrap_marker_is_idempotent(tmp_path):
+    _declare(tmp_path)
+    first = _marker(tmp_path)
+    result = sa.bootstrap_marker(str(tmp_path))
+    assert result["written"] is False          # already consistent
+    assert _marker(tmp_path) == first
+
+
+def test_cli_bootstrap_marker_reports_and_exits_zero(tmp_path):
+    _declare(tmp_path)
+    Path(sl.declared_marker_path(str(tmp_path))).unlink()
+    r = _cli("bootstrap-marker", "--workspace", str(tmp_path))
+    assert r.returncode == 0
+    assert json.loads(r.stdout)["written"] is True
