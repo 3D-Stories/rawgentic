@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>Design: revalidate-children hardening (#944)</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-design{background:radial-gradient(1200px 600px at 50% -10%,rgba(124,156,255,.10),transparent 60%),var(--bg)}
+.tpl-design .wrap{max-width:1080px;padding:0 clamp(16px,4vw,32px) 64px}
+.tpl-design header{padding:clamp(24px,4vw,56px) 0 12px;border-bottom:none;margin-bottom:18px}
+.tpl-design h1{font-size:clamp(26px,3.4vw,40px)}
+.tpl-design h2{font-size:20.8px;margin:1.9em 0 .6em}
+
+/* #76 — the frame's companions only. Two rules, deliberately few.
+   An earlier draft of this PR also added a two-column `.dz-options` grid "so the wide measure
+   pays for itself". Both wrong: the grid was DEAD (the `.dz-options` rule further down sets
+   `display:block` at equal specificity and later source order), and it contradicted a decision
+   this file already records — cards stack FULL WIDTH because "a trade-off you have to READ is
+   not a 220px tile". The width pays for itself inside each card, where the for/against grid is
+   two columns and needs the room. Deleted rather than reconciled. */
+.tpl-design h1{line-height:1.2;max-width:22ch}
+.tpl-design header .eyebrow{font-size:11px;letter-spacing:.14em}
+.tpl-design .dz-lead{background:var(--surface);border:1px solid var(--line);
+border-left:4px solid var(--accent);border-radius:12px;padding:4px 20px 14px;margin:6px 0 26px}
+.tpl-design .dz-lead>p:first-child{font-size:17.5px;line-height:1.55;color:var(--ink);font-weight:550}
+/* Option cards. Stacked full-width, because a trade-off you have to READ is not a 220px tile;
+   the shared layer's flex row is overridden here at higher specificity. */
+.tpl-design .dz-options{margin:22px 0;display:block;counter-reset:dz-opt}
+.tpl-design .dz-options .blk-opt{counter-increment:dz-opt;display:grid;gap:10px 14px;
+grid-template-columns:1fr 1fr;grid-template-areas:"head head" "pro con";
+background:var(--surface);border:1px solid var(--line);border-radius:14px;
+padding:16px 18px;margin:0 0 16px;flex:none}
+.tpl-design .dz-options .blk-opt>.blk-title{grid-area:head;display:flex;gap:12px;
+align-items:baseline;font-size:19px;letter-spacing:-.01em;margin:0}
+.tpl-design .dz-options .blk-opt>.blk-title::before{content:counter(dz-opt,decimal-leading-zero);
+font:700 22px/1.1 ui-monospace,Menlo,Consolas,monospace;color:var(--accent);flex:none}
+.tpl-design .dz-options .blk-for{grid-area:pro;background:var(--req-c-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+.tpl-design .dz-options .blk-against{grid-area:con;background:var(--sev-high-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+/* #134 SETTLED THE FOLLOW-UP THIS COMMENT USED TO NAME. It said these labels were CSS-generated
+   content, so not dependable semantic markup, that the reference uses real DOM text
+   (`<h4>Pros</h4>`), and that making it semantic "means changing the renderer, which moves every
+   style's bytes and so cannot ride in a per-template PR". That is exactly what #134 did: `_options`
+   now emits a real `.blk-lbl` element, every rich style's bytes moved, and `plain` did not.
+   So this is no longer a `::before` at all — it RESTYLES the markup label the renderer emits.
+   Only the typography is set here; the colours come from the shared layer, which reaches this
+   template because the wrapper carries both `blk-options` and `dz-options`. `text-transform`
+   keeps the visible form FOR/AGAINST while the accessible name stays the emitted "For"/"Against".
+   The space the renderer emits after the label collapses harmlessly against a block. */
+.tpl-design .dz-options .blk-lbl{display:block;font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;text-transform:uppercase}
+/* Restated at (0,4,0): the card rule above is (0,3,0) and was silently beating the shared
+   `.blk-options .is-chosen` (0,2,0), so the chosen card lost its accent border. Measured. */
+.tpl-design .dz-options .blk-opt.is-chosen{border-color:var(--accent);border-width:2px}
+.tpl-design .dz-options .blk-opt.is-rejected{opacity:.72}
+.tpl-design .dz-options .is-chosen>.blk-title::after{content:"CHOSEN";font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent);
+border:1px solid var(--accent);border-radius:999px;padding:1px 8px;margin-left:auto;flex:none}
+@media(max-width:640px){.tpl-design .dz-options .blk-opt{grid-template-columns:1fr;
+grid-template-areas:"head" "pro" "con"}}
+/* A today/proposed pair is TWO ROOTS in one `nodes compare` block, so the
+   grid goes on the top-level list. Two separate fences cannot pair — each is
+   its own wrapper with a single child. */
+@media(min-width:720px){.tpl-design .dz-compare>ul{grid-template-columns:1fr 1fr}}
+.tpl-design .dz-compare{background:var(--code);border-radius:12px;padding:10px 14px}
+/* The verdict band — `.recommend` in the reference. A gradient wash rather than a flat fill, so
+   the decision reads as the page's conclusion and not as one more callout. */
+.tpl-design .dz-decision{margin:24px 0 8px}
+.tpl-design .dz-decision>.blk-callout{border:1px solid var(--accent);border-left-width:1px;
+border-radius:14px;padding:16px 18px;
+background:linear-gradient(180deg,var(--accent-soft),transparent)}
+.tpl-design .dz-decision>.blk-callout>.blk-title::before{content:"DECISION";display:block;
+font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent)}
+/* Trade-off table. Styled, deliberately NOT markered: a markdown table emits a bare <table> with
+   no hook, and `section_class` is not a table marker — using it would flip `design` into
+   sectioned rendering and demote its h2s. */
+.tpl-design table{border-collapse:collapse;width:100%;margin:14px 0}
+.tpl-design thead th{font:700 11px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);
+border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
+.tpl-design tbody td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.tpl-design tbody tr:nth-child(even){background:var(--code)}
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+
+:root{--accent:#f2a65e;}
+:root[data-theme=dark]{--accent:#f2a65e;}
+:root[data-theme=light]{--accent:#a26211;}
+@media print{:root,:root[data-theme=dark]{--accent:#a26211;}}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-06 06:29 MDT</div>
+<h1>Design: revalidate-children hardening (#944)</h1>
+
+</header>
+<main>
+<div class="dz-lead"><p><strong>Issue:</strong> #944 — claim-inventory coverage binding (AC1) + the obsolete-child owner gate (AC2-4). <strong>Design authority:</strong> <code>docs/planning/2026-08-05-871-m4-session-continuity-away-mode.md</code> §3.4, §5 point 10. <strong>Explicitly out of scope</strong> (owner declined 2026-08-05): merging the whole revalidation boundary into one script, and cheaper passes. This design ships exactly AC1-AC4, nothing broader.</p></div>
+<h2>1. AC1 — claim-inventory coverage binding</h2>
+<h3>1.1 What exists today (verified at <code>48002ffc</code>)</h3>
+<ul>
+<li><code>validate_claims(claims)</code> (<code>hooks/driver_lib.py:324</code>) checks claim SHAPE only: each claim has</li>
+</ul>
+<p>  the five required fields, <code>kind</code> ∈ <code>{citation, cause, ac}</code>, <code>verdict</code> ∈ <code>{holds, broken}</code>, and   no field is blank. It never checks that the claims RECORDED cover what the body ASSERTS.</p>
+<ul>
+<li><code>build_revalidation_record</code> (<code>:896</code>) is the sanctioned constructor — `skills/revalidate-children/</li>
+</ul>
+<p>  SKILL.md<code> already says &quot;build each record with the constructor, never by hand&quot; — and it is the   ONLY caller of </code>validate_revalidation_child<code>. <strong>Nothing in the test suite or the skill calls it   today</strong> (</code>grep -rl build_revalidation_record` finds it only in its own definition and the   skill&#x27;s prose), so extending its signature carries zero blast radius on existing tests.</p>
+<ul>
+<li>The skill&#x27;s own prose (<code>SKILL.md:145-153</code>, whitespace-normalized — the sentence wraps across a</li>
+</ul>
+<p>  newline) names the gap exactly: *&quot;a <code>deep</code> record carrying one <code>cause</code> claim is structurally   valid and makes the child selectable... depth is your obligation, and nothing downstream will   catch you skimping on it.&quot;*</p>
+<h3>1.2 Why the receipt itself cannot check this (corrected — see §1.5 for where it actually lives)</h3>
+<p>A <code>queue_revalidation.children[&lt;n&gt;]</code> record stores <code>body_hash</code> (a SHA-256 of the normalized body), never the body itself — <code>validate_revalidation_child</code> has no body to check coverage against, and neither does <code>rebuild_receipt</code> when it carries a prior record forward. <strong>Round 1 concluded from this that the constructor (<code>build_revalidation_record</code>) was therefore THE right enforcement point, since it is the one call site holding both the body and the claims. Round 2&#x27;s review proved that conclusion wrong</strong> (§1.5): the constructor is not on the production write path at all. What this section&#x27;s observation actually establishes is narrower and still true — the RECEIPT&#x27;s own validator (<code>validate_revalidation_child</code>) can never check coverage, because it never sees a body. Which caller CAN and must is answered in §1.5, not here.</p>
+<h3>1.3 The mechanical inventory</h3>
+<p>A new pure function, stdlib-only (matches the module&#x27;s own no-I/O contract):</p>
+<pre><code>def extract_claim_inventory(body: str, resolves) -&gt; dict:
+    &quot;&quot;&quot;{&quot;citation&quot;: [&lt;path&gt;, ...], &quot;cause&quot;: [&lt;item text&gt;, ...], &quot;ac&quot;: [&lt;item text&gt;, ...],
+    &quot;errors&quot;: [&lt;str&gt;, ...]}&quot;&quot;&quot;</code></pre>
+<ul>
+<li><strong><code>citation</code></strong> — **revised after Step-4 review (finding 4, High, confirmed live: <code>cited_paths</code></li>
+</ul>
+<p>  drops an unresolved candidate from its returned list entirely — reproduced against the real   function before accepting the finding).** <code>cited_paths(body, resolves)[0]</code> returns only the   RESOLVED subset, by design, for ITS purpose (deep/quick classification). But the skill&#x27;s own   claim schema explicitly anticipates an unresolved citation — <code>checked_against: &quot;&lt;no-file:   reasoning&gt;&quot;</code> is a documented, valid claim form for exactly that case — so dropping unresolved   candidates from the INVENTORY means the coverage check can never require the claim the schema   itself already has a slot for. <code>cited_paths</code> is refactored to delegate its candidate-building   loop to a new <code>_cited_candidates(body, resolves) -&gt; list[str]</code> (ALL path-shaped candidates,   resolved or not, same root-level-file filter); <code>cited_paths</code> becomes a two-line wrapper filtering   that list by <code>known</code> — byte-identical output, so its own existing tests are unaffected. The   inventory uses <code>_cited_candidates</code> directly: every cited path needs a claim, not only the ones   that still exist.</p>
+<ul>
+<li><strong><code>ac</code> and <code>cause</code> share ONE extractor, <code>_extract_section(lines, heading_re)</code></strong>, returning</li>
+</ul>
+<p>  <code>(items, unclassified)</code>. It finds the heading, then walks every line up to the next heading,   classifying each non-blank line as EITHER a new top-level list item (<code>^\s{0,3}(?:[-*]|\d+[.)])   \s+</code>), a continuation of the current item, OR — <strong>added after Step-4 review round 2 (finding 1,   High, confirmed by inspection: the round-1 fix only detected a WHOLLY empty extraction, so a   section mixing a real list with a stray unlisted paragraph silently dropped the paragraph)</strong> —   <strong>unclassified</strong>, collected into <code>unclassified</code> rather than silently discarded. When the section   has NO list at all, the WHOLE section&#x27;s non-blank text is one item (§1.3&#x27;s original fallback,   unchanged) and <code>unclassified</code> is empty (nothing was a candidate item to misclassify). <code>ac</code> also   keeps round 1&#x27;s fix: a bare &quot;acceptance criteria&quot; phrase found ANYWHERE in the body with zero   items extracted is itself one more <code>unclassified</code> signal.</p>
+<ul>
+<li><strong><code>extract_claim_inventory</code> fails closed on ANY <code>unclassified</code> content, for either kind</strong> —</li>
+</ul>
+<p>  returned in <code>errors</code>, naming the kind and the offending text. <code>validate_claim_coverage</code> refuses   construction outright when <code>errors</code> is non-empty (below), so a section this parser cannot fully   account for blocks the record rather than silently under-counting it.</p>
+<ul>
+<li>**<code>cause</code> — separately revised after Step-4 review round 1 (finding 1, Critical, confirmed:</li>
+</ul>
+<p>  presence-only checking cannot close the stated failure mode — the SAME single claim keeps   satisfying validation no matter how many distinct causes the body asserts; #944&#x27;s own body is   the counter-example, a NUMBERED LIST of two causes).** <code>cause</code> uses the SAME <code>_extract_section</code>   as <code>ac</code>, pointed at a &quot;Problem&quot;/&quot;Root cause&quot;/&quot;Cause&quot; heading: a list means itemized coverage   exactly like <code>ac</code>; free prose means one whole-section item — honest that unstructured narrative   cannot be split further than &quot;it exists&quot; without real NLP (declined for the reason the skill&#x27;s   own prose already declined it: this is not the &quot;much larger change... deliberately not   attempted&quot; the original gap named, it is the structurally-evident subset of it).</p>
+<h3>1.4 Coverage check and refusal</h3>
+<pre><code>def missing_claim_coverage(inventory: dict, claims: list, depth: str) -&gt; dict:
+    &quot;&quot;&quot;{&quot;citation&quot;: [&lt;uncovered path&gt;...], &quot;cause&quot;: [&lt;uncovered item&gt;...], &quot;ac&quot;: [&lt;uncovered item&gt;...]}&quot;&quot;&quot;
+
+def validate_claim_coverage(body: str, resolves, claims: list, depth: str) -&gt; None:
+    &quot;&quot;&quot;Raises DriverStateError naming every missing item when coverage fails, or when
+    `extract_claim_inventory` itself reported an extraction error (fail-closed, §1.3).&quot;&quot;&quot;</code></pre>
+<ul>
+<li><code>deep</code> requires all three kinds; <code>quick</code> requires <code>cause</code> + <code>ac</code> only — this is not a new rule,</li>
+</ul>
+<p>  it is the skill&#x27;s own existing depth semantics (<code>SKILL.md:139-143</code>: quick &quot;take[s] citation   claims as-is&quot;) made enforceable.</p>
+<ul>
+<li><strong>Maximum bipartite matching, ACROSS ALL THREE KINDS.</strong> Round 1 added one-to-one consumption</li>
+</ul>
+<p>  (finding 3, round 1) via a GREEDY first-match. <strong>Round 2 found the greedy version itself   incorrect (finding 2, High, confirmed by construction: a two-item, two-claim case exists where   processing order determines whether a complete matching is found)</strong> — greedy consumption can   report a real coverage gap that does not exist, simply because an earlier item happened to grab   a claim a later item also needed. Replaced with a standard augmenting-path maximum-matching   algorithm (stdlib-only, no dependency; the item/claim counts per issue body are small enough   that the naive O(V·E) algorithm is more than fast enough) over the bipartite graph of &quot;item can   match claim&quot; edges, computed PER KIND (citation, cause, ac matched independently — an <code>ac</code> claim   can never satisfy a <code>cause</code> item regardless of text). An item left unmatched after a genuine   MAXIMUM matching is missing coverage; this is now provably correct (a complete matching is   found whenever one exists), not merely &quot;whatever the processing order happened to find.&quot;</p>
+<ul>
+<li><strong>Citation match rule</strong>: a resolved path matches a claim whose <code>checked_against</code> starts with</li>
+</ul>
+<p>    <code>&quot;&lt;path&gt;@&quot;</code>; an UNRESOLVED path (present in the inventory per the finding-4/round-1 fix above)     matches a claim whose <code>quoted_from_body</code> contains the path text verbatim — <code>checked_against</code>     for an unresolved citation is the generic <code>&quot;&lt;no-file: reasoning&gt;&quot;</code> form (<code>SKILL.md:161</code>),     which names no path, so <code>quoted_from_body</code> (which should quote the citation from the body) is     the only field that CAN distinguish which unresolved path a given claim addresses.</p>
+<ul>
+<li>**AC / cause match rule — tightened after Step-4 review round 2 (finding 3, High, confirmed:</li>
+</ul>
+<p>    symmetric substring matching lets a short, generic claim fragment — &quot;the&quot;, &quot;error&quot; — satisfy     ANY item containing that fragment, one-to-one consumption notwithstanding, since enough weak     claims can still fill every slot).** Substring tolerance is REMOVED. A claim matches an item     when its <code>quoted_from_body</code>, whitespace-normalized and casefolded, EQUALS the item&#x27;s text under     the same normalization — enforcing the skill&#x27;s OWN existing word for this field, &quot;verbatim&quot;     (<code>SKILL.md:159</code>: <em>&quot;the claim, verbatim from the body&quot;</em>), rather than the looser     &quot;clipped-or-reworded-fragment&quot; tolerance the round-1 draft invented. This is not a new     requirement on the auditor — it is the field&#x27;s documented meaning, now actually checked.</p>
+<ul>
+<li>The refusal message names every missing item (&quot;acceptance-criteria item(s) have no matching &#x27;ac&#x27;</li>
+</ul>
+<p>  claim: …&quot;, &quot;citation claims missing for cited path(s): …&quot;, &quot;cause item(s) have no matching   &#x27;cause&#x27; claim: …&quot;) — AC1&#x27;s &quot;with the missing claims named.&quot; An <code>extract_claim_inventory</code>   extraction error (§1.3&#x27;s fail-closed case) is refused with its own message BEFORE coverage is   even computed — an ungradeable inventory has nothing to bind claims to.</p>
+<h3>1.5 Where coverage is actually enforced (rewritten after Step-4 review round 2, finding 5)</h3>
+<p><strong>Round 1&#x27;s placement was wrong, and the review proved it by reading further than I had.</strong> <code>build_revalidation_record</code> is not merely uncalled by any TEST (§1.1&#x27;s true observation) — it is uncalled by the PRODUCTION CLI PATH too. <code>_cmd_rebuild_receipt</code> (<code>hooks/launcher_lib.py:4873</code>, invoked as <code>launcher_lib.py rebuild-receipt --audited audited.json</code> — the skill&#x27;s own step 7, the ONLY way a real campaign&#x27;s receipt is ever written) reads <code>--audited</code> as <strong>raw JSON dicts</strong> and passes them straight to <code>driver_lib.rebuild_receipt</code>, which calls <code>validate_revalidation_child</code> for STRUCTURAL checks only. <strong>Confirmed by reading <code>_cmd_rebuild_receipt</code> end to end (<code>:4899-4953</code>): no call to <code>build_revalidation_record</code>, no call to <code>validate_claim_coverage</code>, anywhere in that function.</strong> An agent following the skill&#x27;s OWN documented step 7 never goes through the constructor at all in the real flow — only in a test that calls it directly. Shipping AC1 with the check ONLY in the constructor would enforce nothing in production, exactly as the review said.</p>
+<p><strong>The fix moves enforcement to <code>_cmd_rebuild_receipt</code> itself</strong>, the one place real records are actually written:</p>
+<ul>
+<li>A new required-when-<code>--audited</code>-is-non-empty argument, <code>--bodies &lt;file&gt;</code>: JSON</li>
+</ul>
+<p>  <code>{&quot;&lt;issue number str&gt;&quot;: &quot;&lt;raw issue body, verbatim&gt;&quot;}</code>. <strong>Revised after WF5&#x27;s plan review   (finding 3, High/security, confirmed by re-reading Task 6&#x27;s own schema against itself): the   original draft ALSO threaded a caller-supplied <code>resolves</code> list through <code>--bodies</code>, verified by   NOTHING — only <code>body</code> was hash-checked, so a fabricated or stale <code>resolves</code> (which paths &quot;exist&quot;)   could change citation-coverage matching with no integrity check catching it.</strong> <code>resolves</code> is   REMOVED from the file entirely. <code>_cmd_rebuild_receipt</code> already has git/subprocess access (it   already calls <code>observe_head</code>), so it DERIVES <code>resolves</code> itself: extract candidate citation paths   from <code>body</code> via <code>_cited_candidates</code> (no <code>resolves</code> needed for candidate extraction, only for   resolution), then probe each candidate with <code>git -C &lt;project_root&gt; cat-file -e   &lt;sha&gt;:&lt;path&gt;</code> against BOTH <code>record[&quot;from_sha&quot;]</code> and <code>record[&quot;to_sha&quot;]</code> (either counts as   resolved — the skill&#x27;s own documented meaning of <code>resolves</code>, &quot;paths that exist in EITHER   endpoint tree&quot;). No caller-supplied resolution data exists to fabricate, closing the gap   completely rather than adding a second thing to verify. <code>--audited</code> entries with no matching   <code>--bodies</code> entry refuse (rc 2, naming the missing issue) before anything is written.</p>
+<ul>
+<li>For each <code>(number, record)</code> pair, BEFORE calling <code>driver_lib.rebuild_receipt</code>:
+<ol>
+<li>verify `hashlib.sha256(driver_lib.normalize_issue_body(body)).hexdigest() ==</li>
+</ol></li>
+</ul>
+<p>     record[&quot;body_hash&quot;]` — an integrity check that was free once both values are in hand, closing      a body/hash swap that nothing previously checked;</p>
+<ol start="2">
+<li>derive <code>resolves</code> via the git probes above;</li>
+<li>call `driver_lib.validate_claim_coverage(body, resolves, record[&quot;claims&quot;],</li>
+</ol>
+<p>     record[&quot;depth&quot;])<code>, skipped when </code>record.get(&quot;pending_disposition&quot;)<code> is set (§1.4&#x27;s rule,      unchanged) — a coverage or integrity failure refuses the WHOLE command (rc 2, naming the      child and the missing items) before </code>rebuild_receipt` is ever called, so nothing partial is      written.</p>
+<ul>
+<li><code>build_revalidation_record</code> KEEPS its own <code>resolves</code> parameter and coverage call — not as &quot;the&quot;</li>
+</ul>
+<p>  enforcement point any more, but as a correct, unit-testable primitive for anything that DOES go   through it (a future programmatic caller, or a test exercising the coverage logic in isolation   without a live CLI round-trip). Demoting its role, not deleting the check, is the honest   correction: the logic was right, its placement was not the only place that needed it.</p>
+<ul>
+<li><code>skills/revalidate-children/SKILL.md</code> step 7 gains one line: build <code>bodies.json</code> alongside</li>
+</ul>
+<p>  <code>audited.json</code> and pass <code>--bodies bodies.json</code> to the <code>rebuild-receipt</code> command.</p>
+<h3>1.6 Skill and doc prose</h3>
+<p><code>skills/revalidate-children/SKILL.md:145-153</code> — the &quot;depth is your obligation&quot; paragraph — is rewritten to describe the mechanical check and the new <code>rebuild-receipt --bodies</code> requirement (§1.5), replacing &quot;a much larger change than this machinery carries, and deliberately not attempted here&quot; (now attempted, narrowly, by #944).</p>
+<h2>2. AC2-4 — the obsolete-child owner gate</h2>
+<h3>2.1 What already exists, half-built</h3>
+<ul>
+<li><code>validate_revalidation_child</code> already enforces <code>pending_disposition</code> and <code>outcome</code> as MUTUALLY</li>
+</ul>
+<p>  EXCLUSIVE (<code>:368-380</code>) — a pending-disposition record is never stamped with a real outcome.</p>
+<ul>
+<li><code>_DISPOSED_STATUSES = frozenset({&quot;deferred&quot;, &quot;abandoned&quot;, &quot;merged&quot;})</code> (<code>:295</code>) is <strong>already</strong></li>
+</ul>
+<p>  documented as &quot;statuses that SETTLE a pending owner decision&quot; — this vocabulary exists   specifically so <code>rebuild_receipt</code> can tell a settled disposition from a live one. <strong>The write-back   command AC3 asks for already exists</strong>: <code>record-child-outcome --issue N --status   deferred|abandoned|merged</code>, already lock-safe via <code>_locked_state_update</code>. #944 does not need a   new command — it needs to make selection actually REFUSE while the disposition is live, which   is the piece <code>docs/multi-issue-driver.md:342-346</code> explicitly predicts and defers: *&quot;When #848   lands, this bullet returns: only the owner clears it... because choosing between <code>deferred</code> and   <code>abandoned</code> is deliberately not a machine&#x27;s decision.&quot;*</p>
+<ul>
+<li><code>next_ready_issue</code> (<code>:1456</code>) — the selection function — has NO pending-disposition check at all</li>
+</ul>
+<p>  today; an obsolete-marked child is <code>queued</code> and selectable like any other.</p>
+<h3>2.2 The refusal, at the selection boundary</h3>
+<p>A new exception, mirroring <code>QueueRevalidationRequired</code>&#x27;s existing pattern exactly (a distinct type so the CLI can map it to its OWN return code):</p>
+<pre><code>class ObsoletePendingChild(DriverStateError):
+    def __init__(self, message, *, issue):
+        super().__init__(message)
+        self.issue = issue</code></pre>
+<p><strong>Revised after Step-4 review round 2 (finding 4, High, confirmed by re-reading the round-1 loop against its own behavior): raising at the FIRST ready-but-obsolete-pending candidate stops the ENTIRE scan, even when a completely unrelated, independent child later in the queue is ALSO ready and has nothing to do with the obsolete one.</strong> <code>has_pending_dependents</code> (below) answers &quot;does something depend on the obsolete child&quot;, but round 1&#x27;s loop never asked the more basic question first: &quot;is there other real work regardless.&quot; The corrected loop does not stop at the first obsolete-pending candidate — it remembers the FIRST one seen (for an actionable message) and CONTINUES scanning:</p>
+<pre><code>first_obsolete = None
+for issue in issues:
+    if effective[issue[&quot;number&quot;]] != &quot;queued&quot;:
+        continue
+    deps = _in_queue_deps(issue, numset)
+    if not all(effective[d] in satisfied for d in deps):
+        continue
+    pending = _child_pending_disposition(state, issue[&quot;number&quot;])
+    if pending is not None:
+        if first_obsolete is None:
+            first_obsolete = issue[&quot;number&quot;]
+        continue                      # do not stop the whole scan for one child
+    return issue[&quot;number&quot;]
+if first_obsolete is not None:
+    raise ObsoletePendingChild(..., issue=first_obsolete)
+return None</code></pre>
+<p><code>ObsoletePendingChild</code> now fires ONLY when the scan reaches the end with no genuinely selectable candidate — i.e. every remaining ready child is obsolete-pending, or nothing is ready at all. A <code>deferred</code>/<code>abandoned</code>/<code>merged</code> child never reaches the check either way — the loop&#x27;s existing <code>if effective[...] != &quot;queued&quot;: continue</code> already skips it, which is exactly what makes the existing write-back command (§2.5) sufficient to clear it on the NEXT selection call, with no new &quot;exclude&quot; mechanism needed.</p>
+<p><code>fresh_session_handoff</code> gains one more <code>except</code> arm alongside its existing <code>QueueRevalidationRequired</code> handling, returning a new explicit disposition (<code>{&quot;outcome&quot;: &quot;obsolete_pending&quot;, &quot;issue&quot;: N, &quot;has_pending_dependents&quot;: &lt;bool&gt;}</code>) rather than letting it collapse into <code>blocked</code> — the same &quot;never let a recoverable refusal read as generic&quot; principle §840 already established for <code>revalidation_required</code>.</p>
+<pre><code>def has_pending_dependents(state: dict, issue_number: int) -&gt; bool:
+    &quot;&quot;&quot;True when some NOT-YET-TERMINAL child depends on issue_number.&quot;&quot;&quot;</code></pre>
+<p>Pure, reuses the existing <code>_in_queue_deps</code>/<code>TERMINAL_STATUSES</code> machinery — this is the mechanical half of design §5 point 10 (&quot;a sleeping run defers an obsolete-marked child only when no remaining child depends on it&quot;).</p>
+<h3>2.3 Return-code composition (the freshest correction comment&#x27;s constraint)</h3>
+<p>As of <code>1cc353f4</code> the handout path already carries rc 6 (revalidation), 7 (claim-refused, handoff only), 8/9 (sweep), 10 (in-flight/session-path). <strong>The next free code is 11.</strong> Per the same comment&#x27;s ordering principle — <em>&quot;an owner-gated refusal is NOT self-clearing... putting the non-clearable gate first would mask a refusal the run could have cleared itself&quot;</em> — the CLI checks every SELF-clearing gate before surfacing the owner gate:</p>
+<pre><code>revalidation (6, unavoidably first — it runs before selection)
+  → sweep (8/9)
+  → in-flight (10, handoff only)
+  → obsolete-pending (11)
+  → ready (0)</code></pre>
+<p>Both <code>_cmd_next_child</code> and <code>_cmd_handoff</code> are restructured so the sweep gate (and, for <code>handoff</code>, the in-flight gate) run whenever the disposition outcome is <code>&quot;ready&quot;</code> <strong>or</strong> <code>&quot;obsolete_pending&quot;</code> — not only <code>&quot;ready&quot;</code> as today — so a caller who hasn&#x27;t yet declared in-flight work, or hasn&#x27;t swept the last boundary, sees THAT refusal first and clears it before ever learning about the obsolete child underneath it.</p>
+<h3>2.4 Supervision routing (AC2&#x27;s &quot;supervision-aware&quot;)</h3>
+<p><code>hooks/supervision_lib.py</code> (#943 Part A, already shipped) supplies exactly what this needs — <code>read_state</code> + <code>evaluate_workspace</code> → a <code>SupervisionView.state</code> ∈ <code>{attended, away, sleeping, attended-overdue}</code> — and its own docstring says the CAMPAIGN-scoped evaluator is #947&#x27;s, not required here: this gate only needs the WORKSPACE-global view, so <strong>#944 has no dependency on #947</strong>, even though #947 is queued after it.</p>
+<p><code>launcher_lib.py</code> gains a small workspace-root resolver (<code>_find_workspace_root</code>, the same walk-up idiom <code>context_meter.find_workspace</code> already uses — reimplemented locally rather than cross-imported, matching the existing precedent of two independent copies of this idiom) and a lazy <code>_supervision_lib()</code> import mirroring <code>_driver_lib()</code>. <strong>Round 2, finding 7 (Medium, ambiguous) asked what happens on a missing/malformed supervision state or a failed workspace resolution — resolved from the already-read code (<code>supervision_lib.py:156</code> &quot;NEVER raises&quot;; <code>evaluate_workspace</code>&#x27;s <code>load_status != &quot;valid&quot;</code> branch, <code>:250-261</code>, already returns a safe default <code>SupervisionView(state=&quot;attended&quot;, ...)</code>), not escalated.</strong> <code>_find_workspace_root</code> returning <code>None</code> (no workspace found) is handled the same way <code>read_state</code> already handles it — <code>read_state(None)</code> returns <code>Loaded({}, &quot;absent&quot;)</code>, which <code>evaluate_workspace</code> turns into the same safe <code>attended</code> default. <code>_supervision_view_for</code> cannot crash or degrade into a generic error; it degrades to the SAME conservative default the library already guarantees. This was a gap in the design doc&#x27;s PROSE, not in the underlying code — fixed here by stating it. The rc-11 refusal text then branches on <code>view.state</code>:</p>
+<p><strong>Scope correction after Step-4 review round 2 (finding 6, High — this PARTIALLY OVERTURNS D256&#x27;s round-1 resolution, and says so plainly rather than quietly).</strong> Round 1 (finding 5) asked &quot;who executes the sleeping/no-dependents defer-and-continue sequence&quot;, and D256 answered &quot;the same orchestrating session that already executes every other rc-N remedy in this file.&quot; Round 2 pushed back, correctly: the OTHER refusals (rc 6, 8, 10) name a SINGLE remedy command for a HUMAN or the NEXT skill invocation to run — they never claim the run then AUTOMATICALLY continues unattended. &quot;Defer, post the ERROR comment, run the write-back, retry selection, and continue&quot; is a claim of FOUR chained actions happening with no human and no cited orchestrator code tying them together — that is a materially stronger claim than the other refusal codes make, and D256 was wrong to treat it as the same shape. <strong>Corrected scope: #944 ships the MECHANICAL REFUSAL ONLY, in every supervision state, with no automatic continuation of any kind.</strong> rc 11 always refuses; only the printed text differs:</p>
+<ul>
+<li><strong><code>attended</code> / <code>away</code> / <code>attended-overdue</code></strong> → &quot;ask the owner&quot; — names the write-back command.</li>
+</ul>
+<p>  The CLI never calls <code>AskUserQuestion</code> itself (it has no such tool); it only names the   recommended action, exactly as <code>_sweep_refusal_text</code> never runs <code>gh</code> itself.</p>
+<ul>
+<li><strong><code>sleeping</code>, <code>has_pending_dependents == False</code></strong> → informational text naming the RECOMMENDED</li>
+</ul>
+<p>  action (post the ERROR-comment-protocol blocker, run the write-back, retry) — but #944 does   not execute any of it, and the design no longer claims it happens automatically. Building that   automation (WHO calls it, when, with what retry/verification) is explicitly deferred, most   naturally to #947 (which already owns &quot;blocker routing with route_for and the transport   capability gate&quot;) or a dedicated follow-up — not silently absorbed into #944&#x27;s scope.</p>
+<ul>
+<li><strong><code>sleeping</code>, <code>has_pending_dependents == True</code></strong> → informational text naming PARK as the</li>
+</ul>
+<p>  recommended action (nothing else can advance past this one; a human decision is needed). Same   scope limit: the CLI refuses and prints guidance, it does not write <code>campaign_wait</code> (still a   validator-only field, <code>_campaign_wait_errors</code>, <code>:3231</code>, no writer — #947&#x27;s territory) or take   any other action.</p>
+<p>The practical effect for THIS issue: rc 11 is always a plain refusal. The message differs by supervision state so that a FUTURE consumer (human or automation) has the right recommendation, but #944 itself performs no multi-step recovery, sleeping or otherwise. This is the honest scope the reviewer&#x27;s second pass forced — better caught now than shipped as an overclaim.</p>
+<h3>2.5 AC3 — recoverability</h3>
+<p>The remedy is <code>record-child-outcome --issue N --status deferred|abandoned|merged</code> — already lock-safe, already existing. Every rc-11 message names it verbatim (the #840 failure mode this AC guards against: a gate whose printed remedy cannot actually clear it). The regression test is mechanical: build a state with a pending-disposition <code>queued</code> child, confirm <code>next_ready_issue</code> raises, call <code>record_child_outcome(..., &quot;deferred&quot;)</code>, confirm the NEXT call selects past it cleanly.</p>
+<h3>2.6 Closing the preflight/commit race (adopted from peer consult, see §4)</h3>
+<p><code>_cmd_handoff</code> computes <code>disposition</code> (and therefore the obsolete-pending check) BEFORE taking the state lock, then commits under the lock via <code>_open_and_claim</code> → <code>child_boundary_precondition(s, next_issue)</code>, which re-checks <code>status == &quot;queued&quot;</code> but nothing about <code>pending_disposition</code>. A concurrent session can rebuild the receipt and mark <code>next_issue</code> pending-disposition (its <code>status</code> field is untouched by that — <code>pending_disposition</code> lives only in the receipt) in the window between the two. <code>child_boundary_precondition</code> gains one more check, under the SAME lock, right after its existing <code>status == &quot;queued&quot;</code> check: <code>_child_pending_disposition(state, next_issue) is not None</code> → <code>(False, &quot;next_child_pending_disposition&quot;)</code>. <code>_cmd_next_child</code> needs no equivalent — it never claims or mutates anything, so it carries no commit step for this race to hit.</p>
+<p><strong>Revised after Step-4 review (finding 6, Medium, confirmed: the original draft named the new precondition reason but never said what <code>_open_and_claim</code>/<code>_cmd_handoff</code> DO with it).</strong> Without an explicit mapping, <code>next_child_pending_disposition</code> would fall through to whatever generic failure <code>_open_and_claim</code>&#x27;s other precondition reasons already produce (<code>gate[&quot;verdict&quot;] = &quot;precondition&quot;</code> surfaces as a plain refusal today) — losing the rc-11 shape and the write-back remedy the moment it matters most (an ACTUAL race, not merely a preflight-time read). <code>_cmd_handoff</code> gains one more branch on <code>gate.get(&quot;reason&quot;)</code> immediately after <code>_open_and_claim</code> returns a precondition failure: when the reason is <code>&quot;next_child_pending_disposition&quot;</code>, emit the IDENTICAL <code>obsolete_pending</code> JSON payload and rc-11 refusal text §2.4 already defines for the preflight path (recomputing <code>has_pending_dependents</code> and the supervision view under the now-current state), rather than the generic precondition-failure branch. The regression test for §2.5&#x27;s race (Task 5, plan below) is extended to assert the FULL rc-11 payload, not just the bare precondition tuple.</p>
+<h3>2.7 Doc updates (drift-guard test already pins this section)</h3>
+<p><code>docs/multi-issue-driver.md:288-293</code> and <code>:342-346</code> currently state the gate was CUT and is &quot;being rebuilt in #848&quot; — <code>tests/hooks/test_multi_issue_driver.py::test_doc_documents_queue_ revalidation_840</code> pins <code>&quot;That clause was CUT (#848)&quot;</code> verbatim. This is the SAME pin-inversion pattern the #848-cut PR itself used (inverting an earlier &quot;the gate is LIVE&quot; pin) — the test is updated in the same commit to pin the RESTORED prose (crediting #944 as the #848 rebuild), never left pointing at prose that is now false.</p>
+<h2>3. Files touched</h2>
+<ul>
+<li><code>hooks/driver_lib.py</code> — <code>_cited_candidates</code> (extracted from <code>cited_paths</code>), `extract_claim_</li>
+</ul>
+<p>  inventory<code>, </code>_extract_list_section<code>, </code>_section_has_content<code>, </code>missing_claim_coverage<code>,   </code>validate_claim_coverage<code>, </code>ObsoletePendingChild<code>, </code>has_pending_dependents<code>,   </code>_child_pending_disposition<code>; </code>build_revalidation_record<code> gains </code>resolves<code>; </code>next_ready_issue<code>   gains the pending-disposition raise; </code>child_boundary_precondition` gains the locked recheck   (§2.6).</p>
+<ul>
+<li><code>hooks/launcher_lib.py</code> — <code>_find_workspace_root</code>, <code>_supervision_lib</code>, <code>_supervision_view_for</code>,</li>
+</ul>
+<p>  <code>_obsolete_pending_refusal_text</code>, <code>OBSOLETE_PENDING_RC = 11</code>; <code>_cmd_next_child</code>/<code>_cmd_handoff</code>   reordered per §2.3; <code>_cmd_handoff</code> gains the locked-recheck-failure branch (§2.6).</p>
+<ul>
+<li><code>skills/revalidate-children/SKILL.md</code> — §1.5.</li>
+<li><code>docs/multi-issue-driver.md</code> — §2.6.</li>
+<li><code>tests/hooks/test_driver_lib.py</code> or a new <code>tests/hooks/test_claim_inventory.py</code> — inventory</li>
+</ul>
+<p>  extraction, coverage matching, constructor refusal/acceptance, <code>pending_disposition</code> skip.</p>
+<ul>
+<li><code>tests/hooks/test_launcher_lib.py</code> — rc-11 composition ordering, all three supervision branches,</li>
+</ul>
+<p>  the write-back regression test.</p>
+<ul>
+<li><code>tests/hooks/test_multi_issue_driver.py</code> — updated doc pins (§2.6).</li>
+</ul>
+<h2>4. Peer consult (gpt-5.6-sol, backend gpt, 2026-08-06)</h2>
+<p>Independent proposal requested at design time (blind — drafted before reading it), for both AC1 and AC2. Disposition per finding, D179-honest:</p>
+<p><strong>Adopted:</strong></p>
+<ul>
+<li><strong>The preflight/locked-commit race (§2.6).</strong> The peer&#x27;s sharpest finding: a CLI-only owner check</li>
+</ul>
+<p>  is bypassable by an internal caller, so the marker must be enforced again at the locked handout   commit, not only at the earlier preflight read. My original draft had the gate only in   <code>next_ready_issue</code> (read at disposition time); this closes the TOCTOU window in   <code>child_boundary_precondition</code> under the same lock <code>_open_and_claim</code> already holds.</p>
+<ul>
+<li><strong><code>attended-overdue</code> behaves as <code>attended</code></strong>, and <strong><code>away</code> is NOT folded into <code>sleeping</code></strong> via</li>
+</ul>
+<p>  <code>nobody_to_ask</code> — the peer stated the reasoning more sharply than my own draft had (&quot;this   issue&#x27;s required policy distinguishes only <code>sleeping</code> for automatic deferral&quot;), confirming a   choice I&#x27;d made but not yet argued explicitly.</p>
+<p><strong>Declined, with reasons:</strong></p>
+<ul>
+<li><strong>A full claim-ID + digest-bound inventory</strong> (<code>{id, kind, locator, text_digest}</code> on every claim,</li>
+</ul>
+<p>  stored inventory versioned separately from the receipt). More correct against claim   re-ordering/rebinding than substring matching, but it changes the CLAIM schema itself   (<code>_CLAIM_REQUIRED</code>) — a bigger, rippling change than this &quot;note&quot;-priority issue&#x27;s own AC1 asks   for (&quot;with the missing claims named&quot;, not &quot;matched by stable ID&quot;), and the owner declined   &quot;merging the whole boundary into one script&quot; for this session. Flagged here as a real follow-up   if AC-item churn in practice turns out to make substring matching unreliable — not attempted now.</p>
+<ul>
+<li><strong>A discriminated result type replacing <code>next_ready_issue</code>&#x27;s <code>int | None</code></strong> (<code>Ready</code> /</li>
+</ul>
+<p>  <code>OwnerDispositionRequired</code> / <code>SafeSleepingDeferral</code> / <code>ParkedOnObsoleteDependency</code> /   <code>NoReadyChild</code>). Raising <code>ObsoletePendingChild</code> achieves the same branching at the call site with   a much smaller diff, and matches this module&#x27;s OWN existing precedent   (<code>QueueRevalidationRequired</code> is exception-based, not a return-type wrapper) — adopting the   peer&#x27;s shape here would be LESS consistent with the surrounding code, not more.</p>
+<ul>
+<li><strong>A durable outbox for the ERROR-comment before the state mutation is considered final.</strong> Real</li>
+</ul>
+<p>  concern, but the durable-run-record/transactional-outbox work is #888&#x27;s territory (already   shipped, persist-before-merge ordering) and #947&#x27;s (departure preflight, blocker routing) —   building a NEW outbox here for one gate would be exactly the over-reach the owner declined.</p>
+<ul>
+<li><strong>Transitive (not just direct) dependent checking.</strong> <code>has_pending_dependents</code> checks direct</li>
+</ul>
+<p>  <code>depends_on</code> edges only — but that already suffices for this yes/no question: if child B   directly depends on the obsolete child C, B alone is already blocked, which is sufficient reason   to park; there is no need to also enumerate C&#x27;s further downstream dependents to justify the   same park decision. This also matches <code>next_ready_issue</code>&#x27;s own existing dependency model, which   is direct-edge only throughout (satisfaction propagates by repeated re-selection, not an explicit   transitive closure).</p>
+<ul>
+<li><strong>A new <code>child disposition resolve --decision keep|rescope|close</code> command.</strong> Sidestepped</li>
+</ul>
+<p>  entirely: the write-back reuses the EXISTING, already-lock-safe <code>record-child-outcome --status   deferred|abandoned|merged</code> (§2.5) rather than inventing new decision vocabulary — which also   sidesteps the peer&#x27;s own flagged risk that &quot;rescope is underspecified and can alter dependency   identity.&quot;</p>
+<h2>5. Step-4 adversarial-on-design review, round 1 (gpt-5.6-sol, backend gpt, 2026-08-06)</h2>
+<p>Dispatched against the round-1 draft (the one §4 describes). 6 findings: 1 Critical, 4 High, 1 Medium. Loop-back: one <code>design</code>-source loop-back consumed (<code>design_loopback_count</code> 0→1, <code>global_loopback_total</code> 0→1, both within budget). Volume check did not trigger (1 Critical &lt; 5, 4 High &lt; 5 — the per-tier independent thresholds in <code>VOLUME_THRESHOLDS</code>). Disposition, all confirmed against real evidence before acting (never applied on the reviewer&#x27;s say-so alone):</p>
+<table>
+<thead><tr><th>#</th><th>Severity</th><th>Claim</th><th>Confirmed how</th><th>Disposition</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Critical</td><td>Presence-only <code>cause</code> check doesn&#x27;t close the stated failure mode for multiple distinct causes</td><td>Re-read §1.3 against AC1&#x27;s own stated goal; #944&#x27;s own body IS a counter-example (a numbered two-cause list)</td><td><strong>Fixed</strong> — §1.3 <code>cause</code> now itemizes via <code>_extract_list_section</code>, same as <code>ac</code></td></tr>
+<tr><td>2</td><td>High</td><td>No fail-closed behavior for an unrecognized AC heading/structure — silent vacuous pass</td><td>Re-read §1.3&#x27;s extraction logic; confirmed no fallback existed</td><td><strong>Fixed</strong> — §1.3 now detects the bare phrase &quot;acceptance criteria&quot; as a structural mismatch signal and refuses (fail-closed) rather than passing vacuously</td></tr>
+<tr><td>3</td><td>High</td><td>Independent substring matching lets one claim spuriously cover multiple inventory items</td><td>Re-read §1.4&#x27;s original matching rule; confirmed no one-to-one constraint existed</td><td><strong>Fixed</strong> — §1.4 now does greedy one-to-one bipartite matching across all three kinds</td></tr>
+<tr><td>4</td><td>High</td><td><code>cited_paths</code> silently drops unresolved candidates, so an unresolved citation never needs a claim</td><td><strong>Reproduced live</strong>: <code>cited_paths(body_with_missing_file, resolves)</code> returns only the resolved path, confirmed by execution</td><td><strong>Fixed</strong> — §1.3/§1.4: new <code>_cited_candidates</code> returns ALL candidates; unresolved paths matched via <code>quoted_from_body</code> (the schema&#x27;s own <code>&lt;no-file: reasoning&gt;</code> form names no path)</td></tr>
+<tr><td>5</td><td>High, ambiguous</td><td>No named executor for the sleeping-mode defer-and-continue action</td><td>Read WF2&#x27;s own <code>&lt;error-protocol&gt;</code> block and the existing rc-6/8/10 refusal-text pattern in <code>launcher_lib.py</code> — same shape, same non-answer, already accepted throughout this file</td><td><strong>Resolved from code, not escalated</strong> (D256) — reclassified spec-tightening; §2.4 prose tightened to name the existing executor explicitly</td></tr>
+<tr><td>6</td><td>Medium</td><td>The locked-recheck failure path isn&#x27;t mapped to the rc-11 payload</td><td>Re-read §2.6; confirmed no mapping was specified</td><td><strong>Fixed</strong> — §2.6 now specifies the exact branch in <code>_cmd_handoff</code></td></tr>
+</tbody>
+</table>
+<p>A fresh adversarial-on-design pass against this revised draft is the next action (Step 4, round 2) before Step 5 finalizes.</p>
+<h2>6. Step-4 adversarial-on-design review, round 2 (gpt-5.6-sol, backend gpt, 2026-08-06)</h2>
+<p>Dispatched against the round-1-revised draft. 6 High findings + 1 Medium (ambiguous) — the 6 High count MEETS <code>VOLUME_THRESHOLDS.High = 5</code>, triggering the volume loop-back. A second <code>design</code>-source loop-back was consumed (<code>design_loopback_count</code> 1→2, AT the per-source cap; <code>global_loopback_total</code> 1→2, still under the global cap of 3). Per the #798 carve-out (design source cap reached, global cap NOT reached), this gate CLOSES budget-exhausted after applying this round&#x27;s findings — it does not loop to a third design/review round. Finding 7&#x27;s ambiguity was resolved from code first, clearing the breaker to <code>clear</code> before the close.</p>
+<table>
+<thead><tr><th>#</th><th>Severity</th><th>Claim</th><th>Confirmed how</th><th>Disposition</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>High</td><td>Round-1&#x27;s fail-closed AC check only catches a WHOLLY empty extraction, not a section mixing a real list with unclassified content</td><td>Re-read §1.3&#x27;s round-1 fix against the finding&#x27;s own mixed-format example</td><td><strong>Fixed</strong> — §1.3 now flags ANY unclassified non-blank line in the section, not only a zero-item result</td></tr>
+<tr><td>2</td><td>High</td><td>Greedy one-to-one matching is order-dependent and can report a false gap when a complete matching exists</td><td>Confirmed by construction: reproduced the exact two-item/two-claim case in reasoning before accepting</td><td><strong>Fixed</strong> — §1.4 replaced with a standard maximum-bipartite-matching algorithm (augmenting paths), stdlib-only</td></tr>
+<tr><td>3</td><td>High</td><td>Symmetric substring matching lets a short/generic claim fragment satisfy any item containing it</td><td>Re-read §1.4&#x27;s original match rule; confirmed no minimum-specificity requirement existed</td><td><strong>Fixed</strong> — §1.4 AC/cause matching now requires EXACT normalized equality, enforcing the skill&#x27;s own documented &quot;verbatim&quot; meaning for <code>quoted_from_body</code> rather than a looser tolerance I had invented</td></tr>
+<tr><td>4</td><td>High</td><td><code>next_ready_issue</code> raising at the FIRST obsolete-pending candidate can park the whole run while an unrelated ready child exists later in queue order</td><td>Re-read the round-1 loop against its own single-track behavior; confirmed the gap</td><td><strong>Fixed</strong> — §2.2: the loop now continues scanning past an obsolete-pending candidate, raising only when NO other candidate is selectable</td></tr>
+<tr><td>5</td><td>High</td><td><code>build_revalidation_record</code> (the round-1 enforcement point) has no caller on the PRODUCTION path — <code>_cmd_rebuild_receipt</code> reads raw JSON directly</td><td><strong>Reproduced by reading <code>_cmd_rebuild_receipt</code> end to end</strong> (<code>hooks/launcher_lib.py:4899-4953</code>): confirmed no call to the constructor or the coverage check anywhere in that function</td><td><strong>Fixed</strong> — §1.5 (new): enforcement moves to <code>_cmd_rebuild_receipt</code> via a new <code>--bodies</code> argument, checked before <code>rebuild_receipt</code> is called; the constructor keeps its check as a demoted, still-correct primitive</td></tr>
+<tr><td>6</td><td>High</td><td>The sleeping-mode &quot;defer and continue&quot; claim has no named executor for its four chained actions — a materially stronger claim than the other refusal codes make</td><td>Re-read D256&#x27;s reasoning against the actual claim being defended; confirmed the analogy was imprecise</td><td><strong>Fixed, and D256 partially overturned (D257)</strong> — §2.4 now ships the mechanical refusal only, in every supervision state, with no claim of automatic continuation</td></tr>
+<tr><td>7</td><td>Medium, ambiguous</td><td>Undefined behavior on a missing/malformed supervision state or failed workspace resolution</td><td>Re-read <code>supervision_lib.py:156</code> (&quot;NEVER raises&quot;) and <code>:250-261</code> (safe-default branch), already read this session</td><td><strong>Resolved from code</strong> — the underlying library already guarantees a safe default; §2.4 now states this explicitly (a documentation gap, not a code gap)</td></tr>
+</tbody>
+</table>
+<p>Gate closed via <code>plan_lib.close_design_gate</code> immediately after this table — see the Step 16 run-record&#x27;s top-level <code>extra</code> for the <code>design_gate_close</code> entry this produces.</p>
+<h2>7. WF5 Step-6 plan review (gpt-5.6-sol, backend gpt, 2026-08-06)</h2>
+<p>Dispatched against the finalized implementation plan (<code>.rawgentic-impl-plan-944.md</code>). 3 High + 2 Medium (one ambiguous). None consumed a design loop-back — the source is exhausted (2/2) and D258 records the judgment: each fix is a refinement within the design&#x27;s already-reviewed architecture, not a change to it.</p>
+<table>
+<thead><tr><th>#</th><th>Severity</th><th>Claim</th><th>Confirmed how</th><th>Disposition</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>High</td><td>Section absence returns an empty inventory with no error, contradicting fail-closed</td><td>Re-read Task 2&#x27;s AND Task 3&#x27;s RED lines together — the finding evaluated Task 2 alone</td><td><strong>Refuted</strong> — Tasks 2 (genuine absence → no error, by design) and 3 (phrase-mentioned-but-unparseable → <code>errors</code>, fail-closed) already draw exactly this distinction; the plan is tightened to state the cross-task connection explicitly so it reads as one rule, not two isolated bullets</td></tr>
+<tr><td>2</td><td>High</td><td>No task creates <code>--bodies</code>, migrates callers, or proves a real campaign can produce it</td><td>The skill (an LLM agent following prose) has no code &quot;caller&quot; to migrate beyond its own SKILL.md; the underlying concern (an end-to-end, skill-shaped test) is fair</td><td><strong>Applied as a plan refinement</strong> — Task 6&#x27;s tests gain a skill-shaped fixture (built the way the skill&#x27;s own procedure would build it); Task 12&#x27;s skill prose gains a fully worked example, not just a description</td></tr>
+<tr><td>3</td><td>High, security</td><td><code>--bodies</code>&#x27;s <code>resolves</code> field is never integrity-checked; a fabricated list changes citation coverage with no hash mismatch to catch it</td><td>Re-read Task 6&#x27;s schema against its own stated integrity check — confirmed <code>resolves</code> was outside it entirely</td><td><strong>Fixed, §1.5 revised (D258)</strong> — <code>resolves</code> is REMOVED from <code>--bodies</code>; <code>_cmd_rebuild_receipt</code> derives it itself via git probes against both endpoint commits, closing the gap by eliminating the untrusted input rather than adding a second check</td></tr>
+<tr><td>4</td><td>Medium, ambiguous</td><td>&quot;Diffed against the baseline&quot; has no defined pass/fail rule</td><td>Answerable from WF2&#x27;s own already-read contract (<code>&lt;test-run-discipline&gt;</code>: the Step-9 gate&#x27;s regression rule)</td><td><strong>Resolved from the contract</strong> — Verification strategy now states the rule explicitly: zero new failures, zero newly-skipped tests, every difference enumerated and dispositioned</td></tr>
+<tr><td>5</td><td>Medium</td><td>No drift-guard test for the skill&#x27;s <code>--bodies</code> prose</td><td>Re-read Task 12; confirmed no such test was planned</td><td><strong>Applied</strong> — Task 12/14 gain a test asserting the skill documents the <code>--bodies</code> step and its schema</td></tr>
+</tbody>
+</table>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis: none — everything above is in-repo state (a driver-state JSON file, an existing workspace-scoped state file already read elsewhere in this repo) and stdlib. No new external service, API, or platform surface is introduced.</p>
+<h2>Security implications</h2>
+<p>None material. The gate only reads existing on-disk state (driver-state, supervision-state) that other parts of this codebase already read the same way; it adds no new write path beyond the already-existing, already-tested <code>record_child_outcome</code>.</p>
+
+</main>
+<footer>Last updated: 2026-08-06 06:29 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
