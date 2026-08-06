@@ -1660,6 +1660,29 @@ def transport_probe(*, pane_ref, runner=None):
         return (False, False, f"probe_error:{type(exc).__name__}")
 
 
+def resolve_creation_transport(*, runner=None) -> tuple[str, str]:
+    """The `preferred_transport` a NEW campaign should record. Returns ``(transport, reason)``.
+
+    #927 AC 1: the preference is DERIVED by probing, not asked at setup and not defaulted. This
+    deliberately consults TIER 1 ONLY — a campaign being created has no pane reference of its
+    own, and requiring one would fail closed on every new campaign while herdr was perfectly
+    healthy. That failure mode is why `transport_probe` reports the tiers separately.
+
+    Note what this does NOT do: it never *upgrades* anything. It is the creation seam only. An
+    existing campaign's recorded preference is changed exclusively by the sanctioned
+    `transport set` command.
+    """
+    import driver_lib  # pylint: disable=import-outside-toplevel  (module convention, :4072)
+
+    capability_ok, _pane_ok, reason = transport_probe(pane_ref=None, runner=runner)
+    if capability_ok:
+        # Tier 1 alone answers creation, so `no_pane_ref` is the expected reason here and is
+        # NOT a degradation — report the capability verdict instead of the tier-2 skip.
+        return (driver_lib.PANE_CHAIN_TRANSPORT,
+                "probe_ok" if reason == "no_pane_ref" else reason)
+    return (driver_lib.INLINE_TRANSPORT, reason)
+
+
 # #840 — the ONLY permitted source of `observed_head`.
 _OBSERVED_HEAD_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 

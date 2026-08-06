@@ -2017,3 +2017,52 @@ class TestTransportProbe:
         ll.transport_probe(pane_ref=None, runner=runner)
         assert seen and all(t == ll.PROBE_TIMEOUT_S for t in seen), (
             "every probe call carries the bounded timeout")
+
+
+class TestCreationTransport:
+    """#927 AC 1: a NEW campaign's preference is DERIVED by probing, never asked and never defaulted.
+
+    This is the acceptance criterion the design nearly shipped broken. With only `inline` as a
+    no-field default, a healthy new campaign would inherit `inline` and preserve exactly the
+    behaviour #927 exists to invert. Creation therefore probes TIER 1 ONLY -- it has no pane
+    reference, and requiring one would fail closed on every new campaign.
+    """
+
+    def test_a_healthy_herdr_creates_a_pane_chain_campaign(self) -> None:
+        transport, reason = ll.resolve_creation_transport(
+            runner=lambda argv, timeout=None: _ProbeProc(0, _probe_pane_list("w1:aaa")))
+        assert transport == "pane_chain"
+        assert reason == "probe_ok"
+
+    def test_an_unreachable_herdr_creates_an_inline_campaign(self) -> None:
+        transport, reason = ll.resolve_creation_transport(
+            runner=lambda argv, timeout=None: _ProbeProc(1, ""))
+        assert transport == "inline"
+        assert reason == "herdr_unreachable"
+
+    def test_creation_never_needs_a_pane_reference(self) -> None:
+        """The whole point of tier 1: `--current` is what fails in a pane-less session."""
+        calls = []
+
+        def runner(argv, timeout=None):
+            calls.append(argv)
+            return _ProbeProc(0, _probe_pane_list("w1:aaa"))
+
+        transport, _ = ll.resolve_creation_transport(runner=runner)
+        assert transport == "pane_chain"
+        assert all(a[:3] != ["herdr", "pane", "get"] for a in calls), (
+            "creation must not depend on a pane reference it may not have")
+
+    def test_a_missing_binary_creates_an_inline_campaign_rather_than_raising(self) -> None:
+        def runner(argv, timeout=None):
+            raise FileNotFoundError("herdr")
+
+        assert ll.resolve_creation_transport(runner=runner) == ("inline", "herdr_absent")
+
+    def test_the_result_is_always_a_known_transport(self) -> None:
+        import driver_lib as _dl
+        for runner in (lambda argv, timeout=None: _ProbeProc(0, _probe_pane_list("w1:a")),
+                       lambda argv, timeout=None: _ProbeProc(1, ""),
+                       lambda argv, timeout=None: _ProbeProc(0, "{not json")):
+            transport, _reason = ll.resolve_creation_transport(runner=runner)
+            assert transport in _dl.TRANSPORTS
