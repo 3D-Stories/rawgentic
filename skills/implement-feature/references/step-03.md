@@ -14,6 +14,7 @@ Exit 0 → enabled; non-zero → skip silently (default; no temp file, no subpro
      --workspace .rawgentic_workspace.json --project <name> --key peerConsult
    ```
    Exit 0 → stdout is the backend (`gpt`|`glm`|`both`; absent config → `gpt`). **Exit 2 → the config carries an invalid backend value: abort THIS consult sub-step loudly (log the stderr message; the sub-step is skipped, never defaulted to gpt)** — non-blocking for Step 3, which proceeds with your own design alone. Never default an empty stdout capture to gpt; branch on the exit code.
+1a. **Supervision gate, unattended only (#947 AC6).** If away/sleeping (`supervision_lib.py nobody-to-ask` exits 0), run `python3 hooks/supervision_route.py consult-check --workspace-root <ws root> --project-root . --campaign-id <id> --backend <backend>` first. Exit 1 → skip, report `reason`, proceed alone (non-blocking). Exit 0 → append its `allowed_backends` below. Attended skips this.
 1b. Write the issue body + the Step 2 codebase-analysis summary to a problem file UNDER the project root (e.g. `<root>/.rawgentic-peer-problem-<n>.md` — the runner's path containment rejects any `--artifact` or `--out` outside `project_root`, refusing before egress). Launch the consult through the runner as a BACKGROUND process (or a read-only dispatch subagent), one invocation per resolved backend — under `both`, TWO independent invocations with distinct `--out` paths (`--backend gpt` with `--reviewer gpt-5.6-sol`; `--backend glm` omitting `--reviewer`):
    ```bash
    python3 hooks/review_runner.py consult \

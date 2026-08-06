@@ -51,8 +51,9 @@ deliberate — see the expiry rule below.
   instantly-expired absence.
 - `revision` — monotonic. It is the optimistic-concurrency token (`--expected-revision`)
   and the absence-window identifier a later report can cite.
-- `governed_campaign_ids` — campaign names, charset-validated because #947 will join them
-  into paths. An empty list governs every campaign.
+- `governed_campaign_ids` — campaign names, charset-validated (the same
+  `validate_campaign_id` #947 Part B reuses for claims/preflight/driver-state paths).
+  An empty list governs every campaign.
 - `consult_grant` — permission for a cross-model consult to send repo text off this host.
   Default un-granted, so silence never authorizes egress.
 
@@ -112,12 +113,12 @@ Non-regular files are refused **before** opening, because `open()` on a FIFO wit
 blocks — and this read rides a hook that fires on every tool call, so one bad filesystem
 entry would hang the session rather than degrade it.
 
-**Known gap, deliberately left to #947:** if the state file is *deleted* between two hook
-invocations, the next read sees a genuine absence and installs are permitted again.
-Distinguishing "never declared" from "declared, then the record was removed" needs a durable
-marker outside the file being protected, which is a design change beyond this issue. The
-narrower races — a dangling symlink, and a delete between `stat` and `open` — ARE closed
-above.
+**Known gap, still open (#947 Part B did not address it):** if the state file is *deleted*
+between two hook invocations, the next read sees a genuine absence and installs are
+permitted again. Distinguishing "never declared" from "declared, then the record was
+removed" needs a durable marker outside the file being protected, which is a design change
+beyond either #943 or #947 — no issue currently owns it. The narrower races — a dangling
+symlink, and a delete between `stat` and `open` — ARE closed above.
 
 ## Two modules, and why they are separate
 
@@ -143,17 +144,39 @@ whose exit condition nobody can state is a stall wearing a pause's clothes.
 `plan_lib.build_goal_text`'s campaign variant references both states so a Stop-hook goal
 loop reads an honest pause instead of nagging one.
 
-## What is NOT here yet (#947)
+## What #947 (Part B) shipped
 
-Deliberately absent, and gated off rather than half-built:
+`hooks/supervision_route.py` — the campaign-scoped decision layer, gated behind a single
+`CampaignView`, itself only ever produced by `evaluate_campaign` (no combination of
+inputs can pair one campaign's view with a foreign campaign's grant, override, or
+workspace state):
 
-- texting the owner about a blocker and waiting a bounded time for a reply;
-- consulting cross-model to break a tie while unsupervised;
-- revision-bound action claims and `authority_permits`;
-- the departure preflight that sweeps live campaigns for blocking decisions;
-- any behavioural consumer of `campaign_wait` — writing it does not by itself halt a run.
+- `route_for` — the blocker-routing decision (owner-only exemption, sleeping decides
+  immediately, away gates on `transport_verified` and a typed `AskAttempt`);
+- `authority_permits` — bounded autonomous authority; `merge` is the only action_kind
+  absence can ever permit, and only under a grant an override hasn't denied;
+- `consult_permitted` — the outward-egress gate for a cross-model consult while
+  unsupervised, wired into this repo's three existing `review_runner.py consult` call
+  sites via `consult_check` (implement-feature Step 3, peer-consult/WF13);
+- `hooks/supervision_claims.py` — revision-bound action claims, execute-once via
+  reconcile-before-retry (no idempotency key exists for a GitHub merge);
+- `hooks/supervision_preflight.py` + `supervision_admin.declare(preflight_token=...)` —
+  the departure preflight, now wired into `/rawgentic:away` and `/rawgentic:sleeping`
+  before their existing `declare` call, and `/rawgentic:back` now cancels every pending
+  claim on return;
+- `supervision_admin.mark_transport_verified` — owner-attended, Hermes-cross-checked
+  transport verification, the trust signal `route_for` reads before it will ever wait
+  on an ask;
+- `driver_lib.set_supervision_override` — the ONE writer of the tighten-only
+  `supervision_override` field (a per-campaign restriction stacked on top of this
+  workspace-global state);
+- `tests/test_askuserquestion_registration.py` — a repo-wide guard that a new
+  `AskUserQuestion` site in `skills/**/*.md` names its own routing.
 
-Until #947 ships, a run that hits a blocker while the owner is away **parks for a human**
-rather than deciding. That is more conservative than the owner's verbal away protocol, on
-purpose: the protocol assumes the text actually arrives, and that has not been proven
-end-to-end on this host.
+Deliberately still NOT here, per the design's own scope boundary (§1a): wiring
+`authority_permits`/the claims lifecycle into the epic-run driver's OWN merge step
+(`hooks/launcher_lib.py`, WF2 Step 14) — that executable broker belongs to a future
+issue, so this shipped the gate, not a retrofit of every action call site in the repo.
+Until that broker exists, a run that hits a blocker still **parks for a human** on that
+one call site rather than deciding, even though the decision layer above can now answer
+the question correctly if asked.

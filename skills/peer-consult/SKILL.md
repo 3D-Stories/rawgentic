@@ -167,6 +167,7 @@ The egress warning text (and any detected secret categories).
    python3 hooks/task_class_lib.py read --project-root "<PROJECT_ROOT>"
    ```
    Take `task_class` from the JSON on stdout (rc 1 = unreadable/invalid snapshot: STOP and relay it — never re-resolve and never substitute a default). **When an issue is in scope you MUST pass BOTH `--task-class` and `--issue` below.** Passing `--issue` without `--task-class` is REFUSED (exit 2, `invalid_input`) by design: an issue-scoped consult that quietly fell back to the project default would show the peer a class the issue never set, with no failure and no diagnostic.
+1a. **Supervision gate, when unattended (#947 Part B AC6).** If this session is away/sleeping (`supervision_lib.py nobody-to-ask` exits 0), run `python3 hooks/supervision_route.py consult-check --workspace-root <workspace root> --project-root "<PROJECT_ROOT>" --campaign-id <campaign id> --backend <gpt|glm>` before dispatching. Exit 1 → STOP this consult, report the printed `reason` — never egress anyway. Exit 0 → append `--allowed-backends` from the printed `allowed_backends` to the dispatch below. An attended session skips this check entirely.
 2. Run the consult through the runner (fail-closed; the codex binary is PATH-stubbed in tests):
    ```bash
    python3 hooks/review_runner.py consult \

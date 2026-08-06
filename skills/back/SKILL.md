@@ -36,8 +36,21 @@ came back. An explicit return is.
    something. Re-read step 2 and decide again with the newer state; do NOT retry with a
    forced value, because that is exactly the clobber the fence exists to stop.
 
-4. **Report** that the guards are lifted, and note that the consult-egress grant was
-   cleared with them — a grant given for an absence must not outlive it.
+3a. **Cancel pending action claims (#947 Part B §6).** Right after `mark-attended`
+   succeeds, cancel every claim still `pending` — an unsupervised session may have
+   minted one for an action it never got to execute:
+   ```bash
+   python3 -c "import sys; sys.path.insert(0,'hooks'); from supervision_claims import cancel_claims; import json; print(json.dumps(cancel_claims(project_root='<project root>')))"
+   ```
+   No `campaign_id` given sweeps every campaign under the project root — the owner is
+   back, so nothing needs a claim-authorized decision anymore. This only ever touches
+   `pending` claims; one already `executing` is left alone (its executor already
+   observed authorization under the lock and is mid-side-effect — cancelling it now
+   would race the actual outward action, not prevent it).
+
+4. **Report** that the guards are lifted, note that the consult-egress grant was
+   cleared with them (a grant given for an absence must not outlive it), and name any
+   claims cancelled in step 3a.
 
 ## Lead with what happened while they were gone
 

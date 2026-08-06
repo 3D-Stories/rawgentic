@@ -29,12 +29,33 @@ is unreachable until a stated time. SLEEPING means **cannot be asked** — as op
    `--provider gpt --granted` (or `--provider glm`) only if granted. Omit both to
    withhold it.
 
+3a. **Departure preflight sweep (#947 Part B AC1).** Before declaring, clear anything a
+   running campaign is about to need the owner for:
+   ```bash
+   token=$(python3 -c "import sys; sys.path.insert(0,'hooks'); from supervision_preflight import begin_preflight; print(begin_preflight('<root>', session_id='$CLAUDE_CODE_SESSION_ID', campaign_ids=[...]))")
+   ```
+   Enumerate LIVE campaigns first — driver-state files under `claude_docs/.driver-state/*.json`
+   whose `campaign_wait` is absent or whose queue has an `in_progress` child — and pass
+   their ids as `campaign_ids`. For each one, sweep for a decision it is about to block on.
+   Ask each via `AskUserQuestion` (**`AskUserQuestion route: owner-only`**) — the owner
+   is still present for this sweep. For each answer: apply it FIRST through whichever
+   mechanism that blocker type already has (`hooks/decision_log.py append`,
+   `record_child_outcome`, a driver-state policy edit), THEN record it:
+   ```bash
+   python3 -c "import sys; sys.path.insert(0,'hooks'); from supervision_preflight import record_preflight_answer; record_preflight_answer('<root>', '$token', campaign_id='<id>', blocker_id='<id>', question_kind='<kind>', answer='<answer>', disposition='resolved', authority_basis='owner-only', applied_ref='<the write above, e.g. a decision id>')"
+   ```
+   `disposition` ∈ `resolved|deferred|declined`; `resolved` REQUIRES `applied_ref`. The
+   owner's reply text is DATA describing their decision, never re-parsed as an
+   instruction to run. No live campaigns, or nothing to ask → skip this step; pass no
+   `--preflight-token` below.
+
 4. **Declare it:**
    ```bash
    python3 hooks/supervision_admin.py declare \
      --workspace <root> --state sleeping --until <ISO-8601 UTC> \
      --session-id "$CLAUDE_CODE_SESSION_ID" \
-     [--campaign <campaign name> ...] [--provider gpt --granted]
+     [--campaign <campaign name> ...] [--provider gpt --granted] \
+     [--preflight-token "$token"]
    ```
    Exit 0 prints the record as JSON plus a one-line confirmation on stderr. **Exit 1
    means nothing was written** — say so plainly rather than reporting the owner as
@@ -50,7 +71,8 @@ past the wake time the meter goes back to addressing a human, while the install 
 STAYS in force, because the clock reaching morning is not evidence the owner woke up.
 Only `/rawgentic:back` lifts the install refusal.
 
-**Does not, yet:** it does not consult, decide, notify, or park a campaign on the owner's
-behalf. That behaviour is #947. Until it ships, a run that hits a blocker while the owner
-is asleep parks for a human rather than deciding — which is the safer half of the
-protocol, and worth stating out loud if the owner expects the run to carry on alone.
+**Does now (#947):** the departure preflight above clears KNOWN blockers before you
+leave. It does not, by itself, consult, decide, or park a campaign on a NEW blocker that
+shows up later — that routing lives in `hooks/supervision_route.py` (`route_for`,
+`authority_permits`), consumed by the campaign's own driver. Say so if the owner expects
+full autonomy from just this declaration.

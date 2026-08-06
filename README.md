@@ -749,6 +749,37 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.137.0 (2026-08-06)
+- **Supervision behaviour Part B: preflight, routing, claims, authority (#947, epic
+  #871).** New `hooks/supervision_route.py` (`CampaignView`/`evaluate_campaign` — the
+  ONE authority-evaluating function, single-constructor AST-guarded — `route_for`,
+  `authority_permits`, `consult_permitted`), `hooks/supervision_claims.py`
+  (revision-bound action claims, execute-once via reconcile-before-retry), and
+  `hooks/supervision_preflight.py` (departure-preflight staging). `declare()` gains an
+  additive `preflight_token` fold-in and `mark_transport_verified` (Hermes-cross-checked
+  evidence); `driver_lib.set_supervision_override` is the tighten-only field's sole
+  writer; `review_runner.py` gains `--allowed-backends`. Wired into `skills/away`,
+  `skills/sleeping` (preflight sweep), `skills/back` (cancels pending claims), and this
+  repo's three real `consult` call sites. A Step-6 cross-model plan review (not just the
+  three-round design gate) caught a real gap the design gate couldn't see — the design's
+  own §1a already committed to wiring `consult_permitted` into that ONE call site, but no
+  task did — and two genuine design-level flaws with the design loop-back budget already
+  exhausted: tightened `transport_verified` to require an exact session match; accepted
+  the 500-token replay-cap edge case as documented risk. Step 11's full-diff review (5
+  more confirmed findings, fixed: claim identity drops `blocker_id`; `claim_action`'s
+  lock order now matches `begin_execution`; a corrupt supervision file denies every
+  claim mint instead of reading as revision 0; the preflight staging file is sealed
+  before its answers fold into a declaration; `--hermes-state-dir` defaults to
+  `hermes_bridge`'s own canonical resolution) also surfaced 3 findings deferred with
+  documented reasoning (one root cause: no durable, deletion-resistant marker
+  distinguishes "never declared" from "declared, then the state file vanished" —
+  closing it means hardening the already-merged #943 Part A, real design work the
+  exhausted budget can't authorize now) and 1 refuted (an internal dataclass forgery
+  concern, already defended by the module's own AST test). Full reasoning:
+  `claude_docs/.wf2-state/947/dispositions.jsonl`. New
+  `tests/test_askuserquestion_registration.py` guard (AC8). No workflow-spine change
+  → no diagram REV. Suite 5896→6087.
+
 ### v3.136.0 (2026-08-06)
 - **Claim-inventory coverage and the obsolete-child owner gate (#944, epic #871).**
   `rebuild-receipt --bodies` now refuses, before writing anything, when a revalidation record's

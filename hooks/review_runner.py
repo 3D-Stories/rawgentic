@@ -460,6 +460,13 @@ def _glm_available() -> bool:
     return ok
 
 
+def backend_available(name: str) -> bool:
+    """Public readiness check (#947 Part B §8) — `consult_permitted` reuses this SAME
+    check the runner itself trusts, rather than a second, potentially-drifting
+    implementation."""
+    return _gpt_available() if name == "gpt" else _glm_available()
+
+
 def _write_result(result: dict, resolved_out) -> bool:
     """Write the result receipt to a pre-resolved path. False on write failure."""
     if not resolved_out:
@@ -477,12 +484,19 @@ def run_review(*, verb: str, artifact=None, artifact_type: str = "generic",
                base=None, brief=None, author_model=None, reviewer=None,
                backend: str = "gpt", reopen_token=None, project_root: str = ".",
                out_path=None, max_bytes=None, timeout=None,
-               task_class=None, issue=None,
+               task_class=None, issue=None, allowed_backends=None,
                glm_fn=None, glm_available=None, runner=subprocess.run) -> dict:
     """The runner core. Returns the result dict (also written to out_path).
 
     Injectable for tests: `runner` (codex subprocess), `glm_fn` (GLM transport),
     `glm_available` (backend-switch availability probe).
+
+    `allowed_backends` (#947 Part B §8, additive, default `None` = unchanged): a
+    `frozenset` restricting which backend a mid-flight 429 switch (`_switchable`) may
+    land on. Every EXISTING caller (WF2 Steps 4/8a/11, WF5, WF13) never passes this, so
+    `None` preserves today's unrestricted switch behavior byte-for-byte. This is what
+    makes supervision's `consult_permitted` gate (§8) real: a caller that was only
+    granted `gpt` cannot have the runner silently fail over to an ungranted `glm`.
     """
     t0 = time.monotonic()
     max_bytes = arl.MAX_BYTES if max_bytes is None else max_bytes
@@ -789,6 +803,8 @@ def run_review(*, verb: str, artifact=None, artifact_type: str = "generic",
 
     def _switchable():
         other = "glm" if cur_backend == "gpt" else "gpt"
+        if allowed_backends is not None and other not in allowed_backends:
+            return None, None, f"backend switch to {other} not in the allowed set"
         if other == "glm":
             avail = glm_available if glm_available is not None else _glm_available()
         else:
@@ -941,6 +957,9 @@ def main(argv=None) -> int:
         p.add_argument("--reviewer", default=None,
                        help="pinned reviewer model (explicit -m; never inherited)")
         p.add_argument("--backend", choices=list(BACKENDS), default="gpt")
+        p.add_argument("--allowed-backends", default=None,
+                       help="CSV of backends a mid-flight 429 switch may land on "
+                            "(#947 Part B §8); omit for the unrestricted default")
         if with_token:
             p.add_argument("--reopen-token", default=None,
                            help="token from `plan_lib review-reopen`; absent -> "
@@ -978,6 +997,10 @@ def main(argv=None) -> int:
     _common(p_con, author_required=False, with_token=False)
 
     args = parser.parse_args(argv)
+    allowed_backends = None
+    if args.allowed_backends is not None:
+        allowed_backends = frozenset(
+            b.strip() for b in args.allowed_backends.split(",") if b.strip())
     result = run_review(
         verb=args.verb,
         artifact=getattr(args, "artifact", None),
@@ -994,6 +1017,7 @@ def main(argv=None) -> int:
         timeout=args.timeout,
         task_class=args.task_class,
         issue=args.issue,
+        allowed_backends=allowed_backends,
     )
     return _exit_code(result)
 
