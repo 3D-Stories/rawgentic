@@ -1090,3 +1090,136 @@ class TestTransportProjection:
 
     def test_an_unknown_transport_has_no_projection(self) -> None:
         assert dl.legacy_session_mode("teleport") is None
+
+
+class TestTransitionLog:
+    """#927: the effect of a transition is TWO immutable events, never one mutable field.
+
+    A single record carrying `outcome` would have to be written before the action that
+    determines the outcome -- so it would be invented early or mutated later, and an
+    append-only record you mutate is neither. Splitting them keeps both immutable and makes
+    "a resolution with no terminal event" the crash signature recovery keys on.
+    """
+
+    def _resolved(self, st, **kw):
+        kw.setdefault("transition_id", "b:camp:3")
+        kw.setdefault("generation", 3)
+        kw.setdefault("trigger", "child_boundary")
+        kw.setdefault("kind", "child_boundary")
+        kw.setdefault("preferred", "pane_chain")
+        kw.setdefault("effective", "pane_chain")
+        kw.setdefault("probe_reason", "probe_ok")
+        kw.setdefault("probe_ms", 12)
+        kw.setdefault("pane_ref", "w1:aaa")
+        kw.setdefault("panes_before", ["w1:aaa"])
+        kw.setdefault("now_ts", 1000)
+        return dl.append_resolution(st, **kw)
+
+    def test_a_resolution_lands_before_any_action(self) -> None:
+        st = {}
+        rid = self._resolved(st)
+        rec = dl.transition_events(st)[0]
+        assert rec["resolution_id"] == rid
+        assert rec["successor_pane"] is None, "nothing has been launched yet"
+        assert rec["split_attempted"] is False
+
+    def test_the_resolution_id_correlates_the_two_events(self) -> None:
+        st = {}
+        rid = self._resolved(st)
+        dl.append_terminal_outcome(st, resolution_id=rid, outcome="successor_acked", now_ts=1001)
+        terminals = [e for e in dl.transition_events(st) if e.get("outcome")]
+        assert len(terminals) == 1
+        assert terminals[0]["resolution_id"] == rid
+
+    def test_the_attempt_is_part_of_the_resolution_id(self) -> None:
+        """A reclaim is a second ATTEMPT at the same transition and must not collide."""
+        st = {}
+        first = self._resolved(st, attempt=1)
+        second = self._resolved(st, attempt=2)
+        assert first != second
+        assert first.startswith("b:camp:3#")
+        assert second.startswith("b:camp:3#")
+
+    def test_a_resolution_with_no_terminal_event_is_the_crash_signature(self) -> None:
+        st = {}
+        rid = self._resolved(st)
+        assert dl.unterminated_resolutions(st) == [rid]
+        dl.append_terminal_outcome(st, resolution_id=rid, outcome="inline_continued", now_ts=2)
+        assert dl.unterminated_resolutions(st) == []
+
+    def test_the_terminal_vocabulary_is_closed(self) -> None:
+        assert dl.TERMINAL_OUTCOMES == frozenset({
+            "successor_acked", "inline_continued", "launch_failed", "start_failed",
+            "reconciled_no_action", "created", "parked_unreconcilable"})
+
+    def test_launch_indeterminate_is_NOT_a_terminal_outcome(self) -> None:
+        """It was, in an earlier draft, while other sections required the same transition to
+        stay reclaimable -- so an implementation treating terminals as closed would strand it
+        forever. An indeterminate launch is the ABSENCE of a terminal event."""
+        assert "launch_indeterminate" not in dl.TERMINAL_OUTCOMES
+        st = {}
+        rid = self._resolved(st)
+        with pytest.raises(dl.DriverStateError):
+            dl.append_terminal_outcome(st, resolution_id=rid,
+                                       outcome="launch_indeterminate", now_ts=2)
+
+    def test_an_unknown_outcome_is_refused(self) -> None:
+        st = {}
+        rid = self._resolved(st)
+        with pytest.raises(dl.DriverStateError):
+            dl.append_terminal_outcome(st, resolution_id=rid, outcome="vibes", now_ts=2)
+
+    def test_a_terminal_event_for_an_unknown_resolution_is_refused(self) -> None:
+        with pytest.raises(dl.DriverStateError):
+            dl.append_terminal_outcome({}, resolution_id="b:camp:9#1",
+                                       outcome="created", now_ts=2)
+
+    def test_the_successor_pane_amendment_is_the_only_permitted_in_place_write(self) -> None:
+        st = {}
+        rid = self._resolved(st)
+        dl.mark_split_attempted(st, resolution_id=rid)
+        assert dl.resolution(st, rid)["split_attempted"] is True
+        dl.record_successor_pane(st, resolution_id=rid, pane="w1:bbb")
+        assert dl.resolution(st, rid)["successor_pane"] == "w1:bbb"
+
+    def test_split_attempted_lands_BEFORE_the_pane_id(self) -> None:
+        """The ordering that makes `null` unambiguous.
+
+        split_attempted False + successor_pane None means the split was never called, which is
+        the only state that authorises a relaunch. If the marker landed after the split, a crash
+        in between would look identical to "never started" and could launch a second successor
+        beside a live one -- the Critical this ordering exists to remove.
+        """
+        st = {}
+        rid = self._resolved(st)
+        rec = dl.resolution(st, rid)
+        assert (rec["split_attempted"], rec["successor_pane"]) == (False, None)
+        dl.mark_split_attempted(st, resolution_id=rid)
+        rec = dl.resolution(st, rid)
+        assert (rec["split_attempted"], rec["successor_pane"]) == (True, None), (
+            "the indeterminate window is representable")
+
+    def test_panes_before_is_carried_so_a_diff_is_possible_later(self) -> None:
+        st = {}
+        rid = self._resolved(st, panes_before=["w1:aaa", "w1:bbb"])
+        assert sorted(dl.resolution(st, rid)["panes_before"]) == ["w1:aaa", "w1:bbb"]
+
+    def test_events_are_appended_never_rewritten(self) -> None:
+        st = {}
+        first = self._resolved(st)
+        dl.append_terminal_outcome(st, resolution_id=first,
+                                   outcome="parked_unreconcilable", now_ts=2)
+        before = len(dl.transition_events(st))
+        second = self._resolved(st, attempt=2)
+        dl.append_terminal_outcome(st, resolution_id=second,
+                                   outcome="successor_acked", now_ts=3)
+        events = dl.transition_events(st)
+        assert len(events) == before + 2
+        assert any(e.get("outcome") == "parked_unreconcilable" for e in events), (
+            "the parked event survives a later attempt")
+
+    def test_a_validated_state_tolerates_the_transition_log(self) -> None:
+        st = {"schema_version": 1, "campaign": "camp", "issues": []}
+        self._resolved(st)
+        ok, errors = dl.validate_driver_state(st)
+        assert ok, list(errors)

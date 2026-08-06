@@ -1659,6 +1659,124 @@ def campaign_transport(state) -> tuple[str, str]:
     return (INLINE_TRANSPORT, "legacy_default")
 
 
+#: Where the two-event log lives on driver-state. Additive; `additionalProperties: true`
+#: already permits it, and `validate_driver_state` has no unknown-key branch.
+TRANSITIONS_KEY = "transitions"
+
+#: The CLOSED set of terminal outcomes. `launch_indeterminate` is deliberately ABSENT: an
+#: earlier draft made it terminal while other paths still required the same transition to be
+#: reclaimable, so an implementation treating terminals as closed would strand it forever. An
+#: indeterminate launch is the ABSENCE of a terminal event — the crash signature, not an event.
+TERMINAL_OUTCOMES = frozenset({
+    "successor_acked",        # a successor is running and acknowledged
+    "inline_continued",       # resolved inline; the predecessor carries on
+    "launch_failed",          # provably nothing started; retryable
+    "start_failed",           # a pane exists but no agent runs in it
+    "reconciled_no_action",   # reclaim proved there was nothing to do
+    "created",                # campaign creation recorded a preference
+    "parked_unreconcilable",  # a human must look; never auto-reclaimed
+})
+
+
+def transition_events(state) -> list:
+    """Every transition event, oldest first. PURE, and never raises on a malformed state."""
+    if not isinstance(state, dict):
+        return []
+    events = state.get(TRANSITIONS_KEY)
+    return list(events) if isinstance(events, list) else []
+
+
+def append_resolution(state: dict, *, transition_id: str, generation, trigger: str, kind: str,
+                      preferred: str, effective: str, probe_reason: str, probe_ms,
+                      pane_ref, panes_before, now_ts: int, attempt: int = 1,
+                      advisory_emitted: "bool | None" = None) -> str:
+    """Append the RESOLUTION event and return its ``resolution_id``.
+
+    This lands BEFORE any action. `successor_pane` is null and `split_attempted` is False at
+    this point, and that pair is what later makes recovery unambiguous: a crash here means
+    nothing was ever launched.
+    """
+    resolution_id = f"{transition_id}#{attempt}"
+    state.setdefault(TRANSITIONS_KEY, []).append({
+        "resolution_id": resolution_id,
+        "transition_id": transition_id,
+        "generation": generation,
+        "trigger": trigger,
+        "kind": kind,
+        "preferred_snapshot": preferred,
+        "effective": effective,
+        "probe_reason": probe_reason,
+        "probe_ms": probe_ms,
+        "pane_ref": pane_ref,
+        "panes_before": list(panes_before) if panes_before is not None else None,
+        "split_attempted": False,
+        "successor_pane": None,
+        "advisory_emitted": advisory_emitted,
+        "observed_at": now_ts,
+    })
+    return resolution_id
+
+
+def resolution(state, resolution_id: str) -> "dict | None":
+    """The resolution event with this id, or None. PURE."""
+    for event in transition_events(state):
+        if event.get("resolution_id") == resolution_id and "outcome" not in event:
+            return event
+    return None
+
+
+def _require_resolution(state, resolution_id: str) -> dict:
+    found = resolution(state, resolution_id)
+    if found is None:
+        raise DriverStateError(f"no resolution {resolution_id!r} to amend")
+    return found
+
+
+def mark_split_attempted(state: dict, *, resolution_id: str) -> None:
+    """Record that a split is ABOUT to be called — before calling it.
+
+    The ordering is the whole safety property. With the marker landing first,
+    ``split_attempted=False`` proves nothing was created, and only that state authorises a
+    relaunch. If it landed after the split, a crash in between would be indistinguishable from
+    "never started" and could launch a second successor beside a live one.
+    """
+    _require_resolution(state, resolution_id)["split_attempted"] = True
+
+
+def record_successor_pane(state: dict, *, resolution_id: str, pane: str) -> None:
+    """Amend the resolution with the ownership-verified new pane id.
+
+    The one permitted in-place write, confined to a field that is null until the split returns.
+    """
+    _require_resolution(state, resolution_id)["successor_pane"] = pane
+
+
+def append_terminal_outcome(state: dict, *, resolution_id: str, outcome: str,
+                            now_ts: int) -> None:
+    """Close a resolution with an immutable terminal event."""
+    if outcome not in TERMINAL_OUTCOMES:
+        raise DriverStateError(
+            f"unknown terminal outcome {outcome!r}; expected one of "
+            f"{sorted(TERMINAL_OUTCOMES)}")
+    found = resolution(state, resolution_id)
+    if found is None:
+        raise DriverStateError(f"no resolution {resolution_id!r} to close")
+    state.setdefault(TRANSITIONS_KEY, []).append({
+        "resolution_id": resolution_id,
+        "transition_id": found.get("transition_id"),
+        "claim_attempt": found.get("resolution_id", "").rsplit("#", 1)[-1],
+        "outcome": outcome,
+        "observed_at": now_ts,
+    })
+
+
+def unterminated_resolutions(state) -> list:
+    """Resolution ids with no terminal event — the crash signature. PURE."""
+    closed = {e.get("resolution_id") for e in transition_events(state) if e.get("outcome")}
+    return [e["resolution_id"] for e in transition_events(state)
+            if "outcome" not in e and e.get("resolution_id") not in closed]
+
+
 def legacy_session_mode(transport: str) -> "str | None":
     """The write-only `session_mode` projection for a transport, or None if unknown. PURE.
 
