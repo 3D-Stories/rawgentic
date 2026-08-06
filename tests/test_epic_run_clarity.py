@@ -135,3 +135,53 @@ def test_epic_run_points_decisions_at_the_durable_store():
     assert "claude_docs/decisions/<project>.jsonl" in text
     assert "--overturnable" in text
     assert "Do NOT hand-append" in text
+
+
+class TestBoundaryLearningsSweep:
+    """#769 — the owner's D181 standing order, named in the skill that executes it.
+
+    Before this, a grep of the skill and `docs/multi-issue-driver.md` for
+    reassess / learnings sweep / boundary sweep returned ZERO: the sweep was done by hand at
+    every boundary and named nowhere, so a fresh-session successor could not tell whether it
+    had happened.
+    """
+
+    def _step4(self) -> str:
+        return _section(_text(), "## Step 4:", "## Step 5:")
+
+    def test_the_boundary_section_names_the_learnings_sweep(self):
+        assert "learnings sweep" in self._step4().lower()
+
+    def test_the_canonical_sentence_covers_every_condition_the_GATE_enforces(self):
+        """A sentence narrower than the code sends an operator into an unexplained rc 8.
+
+        The Step-4 design review caught exactly that: the draft said "after every merged child"
+        while the gate also fires for deferred/abandoned children and for a head move with no
+        completion.
+        """
+        s = self._step4()
+        assert "After every merged, deferred, or abandoned child" in s
+        assert "without a completion" in s
+        assert "before selecting or handing off the next child" in s
+
+    def test_the_five_part_procedure_is_spelled_out(self):
+        s = self._step4()
+        for part in ("list", "sweep", "comment", "decision entry", "only then"):
+            assert part in s.lower(), part
+
+    def test_the_skill_states_what_the_validator_does_NOT_check(self):
+        """Over-claiming is how `depth` became "an instruction to the auditor, not a property
+        the validator checks" (#944). This one says so up front."""
+        s = self._step4().lower()
+        assert "coverage" in s
+        assert "not" in s and "judgment" in s
+
+    def test_the_field_precedent_is_the_D181_sweeps_not_the_retired_D6_pointer(self):
+        s = self._step4()
+        assert "D181" in s
+        assert "epic-756-autorun-log" not in s, \
+            "that log was trimmed 2026-08-02 and carries no D6; the issue's own correction " \
+            "comment retires the citation"
+
+    def test_the_skill_names_the_command_that_clears_the_gate(self):
+        assert "sweep record" in self._step4()

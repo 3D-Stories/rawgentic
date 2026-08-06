@@ -133,6 +133,46 @@ put a list up by hand).
   auto-closed, `git fetch origin`, branch the next child from the new main. Use the
   `merge-watch` skill's lane doctrine for CI triage (hard vs advisory lanes; OAuth
   false-red signature).
+- **The learnings sweep — the owner's standing order, and a GATE since #769.**
+  **After every merged, deferred, or abandoned child — and whenever `origin/main` moves
+  between children without a completion — sweep every remaining eligible child against the
+  learnings for that boundary before selecting or handing off the next child.** Revalidation
+  asks only whether the remaining bodies still describe reality at this head; this asks the
+  wider question the owner actually gave (D181, epic #906, verbatim: *"in between each issue,
+  make sure you revalidate future issues in the epic based on learnings"*). A completed child
+  routinely invalidates a sibling's premise in a way no line-anchor check can see. The five
+  parts, in order:
+  1. **List** the completed child's findings, recorded decisions and filed issues.
+  2. **Sweep** every remaining child's CURRENT body against them.
+  3. **Comment or rescope** any child whose scope, approach or dependencies changed.
+  4. **Log a decision entry** for anything you changed or deliberately did not.
+  5. **Only then** start the next child.
+
+  Record it, or the next `next-child`/`handoff` refuses with **rc 8**:
+  ```bash
+  HEAD=$(python3 hooks/launcher_lib.py sweep begin --project-root . \
+         | python3 -c 'import json,sys; print(json.load(sys.stdin)["head"])')
+  python3 hooks/launcher_lib.py sweep record --driver-state <f> --expected-head "$HEAD" \
+    --after-issue <the child that just finished> --learnings '<what it taught>' \
+    --assess '{"issue":<n>,"outcome":"unaffected","note":"<why it is unaffected>"}' \
+    --project-root .
+  ```
+  One `--assess` per remaining eligible child, and coverage is checked as set EQUALITY — a
+  missing child and a foreign one are equally refused. Outcomes are `unaffected`, `commented`
+  or `rescoped`; the last two need a `ref` pointing at the artifact. **OMIT `--after-issue`
+  when the head moved with no child completing** (an unplanned blocker fix between children);
+  the literal text `null` is rejected so a typo cannot pass for that case. `--expected-head` is
+  re-compared under the state lock, so assessments made against a head that has since moved are
+  refused rather than stamped as current.
+  **What the gate checks, and what it cannot:** coverage and record integrity ONLY — that a
+  record exists for this head naming every remaining child with a reason. It does **not** verify
+  that the judgment behind it was any good, and nothing here should be read as claiming
+  otherwise. Two refusals with different remedies: `missing` is cleared by doing the sweep and
+  running `sweep record`; `unreadable` means the state file needs repair first (copy it aside,
+  delete the malformed `boundary_sweeps` key, check it parses, then record).
+  A campaign whose driver-state carries no `boundary_sweeps` key at all predates this contract
+  and is NOT gated — it adopts by recording its first sweep. Field precedent: the by-hand D181
+  sweeps in `claude_docs/session_notes/epic-906-autorun-log.md`.
 - **The child boundary is the DEFAULT (#927 — it fires unless the campaign records
   `preferred_transport: "inline"`).** After a child reaches ANY terminal outcome — `merged` OR a blocker's `deferred`/`abandoned` — the
   session ENDS rather than looping in-process (a blocked child's context must not bleed into

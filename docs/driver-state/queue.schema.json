@@ -266,6 +266,83 @@
         }
       }
     },
+    "boundary_sweeps": {
+      "description": "#769. Append-only record of the child-boundary LEARNINGS sweep -- the owner's D181 standing order mechanized. Revalidation asks whether the remaining issue bodies still describe reality at this head; the sweep asks the wider question of whether they still make sense given what the completed child LEARNED. That judgment is not observable from state, so the validator checks COVERAGE and record integrity ONLY, never the quality of the reasoning. Replay identity is (swept_at_head, after_issue), not the head alone: a deferred or abandoned child moves no commit, so two genuine boundaries can share one head. A differing record at one identity is refused at the writer, so state stays single-valued and there is no durable conflict state to repair.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "swept_at_head",
+          "after_issue",
+          "learnings",
+          "assessments"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "swept_at_head": {
+            "type": "string",
+            "description": "The 40-char origin/<default> sha the sweep was performed against, re-compared under the state lock before the write so an assessment cannot be stamped with a head that moved under it."
+          },
+          "after_issue": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The disposed child whose learnings drove this sweep, or null when origin/main moved with no child completing (an unplanned blocker fix between children). Validated as a disposed child of this queue; never absent."
+          },
+          "learnings": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "What the boundary taught. Required and non-empty: a record of what was swept but not what it was swept AGAINST is far less use to a successor."
+          },
+          "assessments": {
+            "type": "array",
+            "description": "Exactly one entry per remaining eligible child (status not merged/deferred/abandoned) -- set EQUALITY, so both a missing child and a foreign one are refused.",
+            "items": {
+              "type": "object",
+              "required": [
+                "issue",
+                "outcome",
+                "note"
+              ],
+              "additionalProperties": true,
+              "properties": {
+                "issue": {
+                  "type": "integer"
+                },
+                "outcome": {
+                  "enum": [
+                    "unaffected",
+                    "commented",
+                    "rescoped"
+                  ],
+                  "description": "A closed vocabulary. `blocked` was in the design draft and was deleted: nothing consumed it, so a child recorded as needing a decision would still have been handed out. Blocking belongs to pending_disposition and the #944 owner gate."
+                },
+                "note": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "Required even for `unaffected`. The negative result is the common case and must be cheap but not free -- 'does not touch the transport probe' is a complete, truthful note."
+                },
+                "ref": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "description": "Required when the outcome is `commented` or `rescoped`, and grammar-checked as an https:// URL or a repository-relative docs/ or claude_docs/ path. A claim that a child CHANGED must point at the artifact; checking only length would let 'done' satisfy it."
+                },
+                "body_hash": {
+                  "type": "string",
+                  "description": "The normalized hash of the body actually assessed. RECORDED, not compared: boundary_sweep_status does not diff it against the live issue, because that would make a pure state function do network I/O. The same limitation exists in the revalidation receipt this mirrors."
+                }
+              }
+            }
+          },
+          "observed_at": {
+            "type": "integer"
+          }
+        }
+      }
+    },
     "transitions": {
       "description": "#927. Append-only two-event log. A `resolution` lands BEFORE any action; a `terminal_outcome` closes it afterwards, correlated by `resolution_id`. A resolution with no terminal event is the crash signature reconciliation keys on -- so events are appended, never rewritten.",
       "type": "array",

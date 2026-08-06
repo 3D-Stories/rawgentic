@@ -14,6 +14,59 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #871 M4 — #769: the learnings sweep stops being a habit · v3.134.0
+
+**Issue:** [#769](https://github.com/3D-Stories/rawgentic/issues/769) ·
+**Design:** `docs/planning/2026-08-06-769-child-boundary-learnings-sweep.md` ·
+**Base:** `224ddace` · **Suite:** 5636→5689
+
+**Problem.** Queue revalidation asks whether the remaining issue bodies still describe reality at
+this head. The owner's D181 standing order asks the wider question — re-assess every remaining
+child against what the completed child *learned*. That sweep was being done, and done well, by
+hand at every boundary. It was named in neither `skills/epic-run/SKILL.md` nor
+`docs/multi-issue-driver.md` (grep for reassess / learnings sweep / boundary sweep at `224ddace`:
+**zero**), and nothing recorded that it happened — so a fresh-session successor either redid it
+worse, without the predecessor's context, or dropped it silently.
+
+**What shipped.** An append-only `boundary_sweeps` field, four pure functions in `driver_lib`,
+three `launcher_lib sweep` subcommands, a schema declaration with no `schema_version` bump, and a
+shared **rc 8** refusal wired into both `next-child` and `handoff` from one helper.
+
+**The decision that shaped it: gate, or record?**
+
+| | |
+|---|---|
+| Drafted | a record plus a visible advisory, no hard gate |
+| Shipped | a coverage-validated record AND a fail-closed gate |
+| Why it flipped | the independent peer proposal argued the gate; my "a second gate doubles the wedge surface" objection does not survive, because a `missing` sweep is self-clearable by doing the ordered work. The failure asymmetry decides it: a gate firing wrongly costs one command, an ignored advisory costs the standing order silently |
+
+**What the gate honestly checks:** coverage and record integrity only — that a record exists for
+this head naming every remaining child with a reason. Not the quality of the judgment, and the
+prose says so, because this repo already has one audit stamp whose own docstring admits `depth` is
+"an instruction to the auditor, not a property the validator checks".
+
+**Three things the design review changed, each confirmed before it was applied:**
+
+| Finding | Change |
+|---|---|
+| A head alone is not a boundary identity | A deferred child moves no commit, so a second deferral at one head was a real boundary the gate called already-swept while refusing to record it. Replay identity became `(head, after_issue)`, and the gate now compares coverage against the CURRENT eligible set — no new counter |
+| `conflict` was unreachable AND unrepairable | A refused write leaves no evidence, so the status could never fire. Deleted rather than made reachable |
+| The published command sequence was broken | `HEAD=$(sweep begin)` assigns JSON, not a sha, so every documented record would have been refused. Fixed, and the three-command sequence is now under test |
+
+**Refuted with evidence:** the claim that `observe_head` never refreshes the tracking ref.
+`launcher_lib.py:1786-1792` builds an explicit refspec, fetches before the rev-parse, and fails
+closed on a non-zero fetch.
+
+**Known limitation, deliberate.** Issue bodies are mutable, and the gate does not detect a body
+edited after the sweep. Each assessment records the `body_hash` it assessed, but comparing it
+against a live body would make a pure state function do network I/O. Verified the same hole exists
+in the revalidation receipt this mirrors (`_receipt_covers_child` compares only `to_sha`), so it is
+shared and pre-existing, not introduced here.
+
+**Migration (D242).** Campaigns predating the contract are grandfathered: gating them would refuse
+work over a boundary already past and no longer sweepable — including the paused #906 campaign.
+Creation seeds `[]`, so every new campaign is gated.
+
 ## Epic #871 M4 — #943 Part A: supervision is declared, not guessed · v3.131.0
 
 **Issue:** [#943](https://github.com/3D-Stories/rawgentic/issues/943) — Part A only; Part B is
