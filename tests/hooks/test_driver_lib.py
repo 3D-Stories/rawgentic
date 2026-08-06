@@ -2203,6 +2203,20 @@ class TestExtractSection:
         assert items == ["Only thing."]
         assert unclassified == []
 
+    def test_trailing_content_after_the_last_item_is_not_unclassified(self):
+        """Real-body regression: #944's own '## Problem' section has a citation line AFTER its
+        two-item cause list, before the next heading. Flagging that would be a false positive
+        on the exact fixture this feature exists to handle — only content BETWEEN markers is
+        genuinely suspicious."""
+        text = ("## Problem\n\n"
+                "1. First cause.\n"
+                "2. Second cause.\n\n"
+                "Design: see the linked doc for details.\n\n"
+                "## Acceptance criteria\n")
+        items, unclassified = dl._extract_section(self._lines(text), dl._CAUSE_HEADING_RE)
+        assert items == ["First cause.", "Second cause."]
+        assert unclassified == []
+
     def test_944s_own_problem_section_is_a_two_item_numbered_list(self):
         """The exact real-world case that drove the round-1 Critical finding: #944's own body
         itemizes two distinct causes under '## Problem'."""
@@ -2218,3 +2232,63 @@ class TestExtractSection:
         assert "Coverage gap" in items[0]
         assert "obsolete-child marker gates nothing" in items[1]
         assert unclassified == []
+
+
+# --------------------------------------------------------------------------- #
+# extract_claim_inventory (#944 — claim-inventory coverage binding, AC1)
+# --------------------------------------------------------------------------- #
+class TestExtractClaimInventory:
+    def test_944s_own_body_end_to_end(self):
+        """The primary fixture: #944's own real body — a 2-item numbered Problem list, a
+        4-item Acceptance criteria list, and a design-doc citation."""
+        body = (
+            "## Problem\n\n"
+            "Two documented holes, both stated in `skills/revalidate-children/SKILL.md`:\n\n"
+            "1. **Coverage gap.** The receipt attests that a look happened.\n"
+            "2. **The obsolete-child marker gates nothing.** It is informational only.\n\n"
+            "Design: `docs/planning/2026-08-05-871-m4-session-continuity-away-mode.md` §3.4.\n\n"
+            "## Acceptance criteria\n\n"
+            "1. Claim-inventory coverage binding.\n"
+            "2. Obsolete-child owner gate.\n"
+            "3. The gate is recoverable.\n"
+            "4. Tests cover the above.\n")
+        resolves = {"docs/planning/2026-08-05-871-m4-session-continuity-away-mode.md"}
+        inv = dl.extract_claim_inventory(body, resolves)
+        # Both citations appear — the SKILL.md path is a genuine, UNRESOLVED candidate here
+        # (not in `resolves`), exactly the case #944 needs the inventory to see (finding 4).
+        assert inv["citation"] == [
+            "skills/revalidate-children/SKILL.md",
+            "docs/planning/2026-08-05-871-m4-session-continuity-away-mode.md"]
+        assert len(inv["cause"]) == 2
+        assert len(inv["ac"]) == 4
+        assert inv["errors"] == []
+
+    def test_ac_mentioned_but_unparseable_is_an_extraction_error(self):
+        """Round-1 fix (finding 2): the bare phrase present with zero structured items
+        extracted must fail closed, not silently pass with an empty ac inventory."""
+        body = "## What must be true\n\nSee the acceptance criteria discussed on the call.\n"
+        inv = dl.extract_claim_inventory(body, resolves=set())
+        assert inv["ac"] == []
+        assert any("acceptance criteria" in e.lower() for e in inv["errors"])
+
+    def test_ac_genuinely_absent_is_not_an_error(self):
+        body = "## Problem\n\nA bug fix with no acceptance-criteria-shaped body at all.\n"
+        inv = dl.extract_claim_inventory(body, resolves=set())
+        assert inv["ac"] == []
+        assert inv["errors"] == []
+
+    def test_a_stray_unlisted_ac_line_is_an_extraction_error(self):
+        body = ("## Acceptance criteria\n\n1. First.\n\n"
+                "An extra requirement with no list marker.\n\n2. Second.\n")
+        inv = dl.extract_claim_inventory(body, resolves=set())
+        assert inv["ac"] == ["First.", "Second."]
+        assert inv["errors"]
+
+    def test_unresolved_citation_is_present_not_dropped(self):
+        body = "See hooks/nonexistent_file.py for the cause."
+        inv = dl.extract_claim_inventory(body, resolves=set())
+        assert inv["citation"] == ["hooks/nonexistent_file.py"]
+
+    def test_no_headings_at_all_is_a_fully_empty_inventory(self):
+        inv = dl.extract_claim_inventory("Just a short bug report with no structure.", set())
+        assert inv == {"citation": [], "cause": [], "ac": [], "errors": []}

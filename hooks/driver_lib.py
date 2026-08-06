@@ -303,13 +303,25 @@ def _extract_section(lines: list, heading_re) -> tuple:
             break
         section_lines.append(line)
 
+    # The LAST marker's position decides what counts as "unclassified" versus an ordinary
+    # closing note (#944 real-body regression: #944's own "## Problem" section has a trailing
+    # citation line AFTER its two-item cause list, before "## Acceptance criteria" — flagging
+    # that as unclassified was a false positive on the exact fixture this feature exists to
+    # handle). Stray content BETWEEN two markers is genuinely suspicious (why would an ordinary
+    # closing note sit in the MIDDLE of a list?); stray content after the LAST marker is not.
+    last_marker_index = None
+    for index, line in enumerate(section_lines):
+        if _TOP_LEVEL_LIST_ITEM_RE.match(line):
+            last_marker_index = index
+
     items: list = []
     pre_marker: list = []       # non-blank content before the first marker (or, if no marker
-    post_marker: list = []      # ever appears, ALL of it) — the fallback source, never "stray"
+                                 # ever appears, ALL of it) — the fallback source, never flagged
+    unclassified: list = []
     current: "list | None" = None
     item_open = False
     saw_marker = False
-    for line in section_lines:
+    for index, line in enumerate(section_lines):
         stripped = line.strip()
         marker = _TOP_LEVEL_LIST_ITEM_RE.match(line)
         if marker:
@@ -325,14 +337,64 @@ def _extract_section(lines: list, heading_re) -> tuple:
         if item_open and current is not None:
             current.append(stripped)
             continue
-        (post_marker if saw_marker else pre_marker).append(stripped)
+        if not saw_marker:
+            pre_marker.append(stripped)
+        elif last_marker_index is not None and index < last_marker_index:
+            unclassified.append(stripped)
+        # else: trailing content after the LAST marker — an ordinary closing note, not flagged.
     if current is not None:
         items.append(_normalize_section_item(current))
 
     if not saw_marker:
         whole = _normalize_section_item(pre_marker)
         return ([whole] if whole else [], [])
-    return items, post_marker
+    return items, unclassified
+
+
+_AC_BARE_PHRASE_RE = re.compile(r"acceptance criteria", re.IGNORECASE)
+
+
+def extract_claim_inventory(body: str, resolves) -> dict:
+    """Mechanical inventory of what a revalidation audit should check, extracted from the RAW
+    issue body — never from a receipt (#944, AC1). Returns
+    ``{"citation": [<path>...], "cause": [<item text>...], "ac": [<item text>...],
+    "errors": [<str>...]}``. Pure; no I/O (`resolves` is injected, same contract as
+    `cited_paths`).
+
+    `errors` is fail-closed extraction signals — a non-empty list means the inventory could not
+    be fully trusted, and `validate_claim_coverage` refuses construction on it before computing
+    coverage at all. Two kinds land here: `ac` mentioned by bare phrase with zero structured
+    items extracted (round-1 review finding 2), and either kind carrying `unclassified` content
+    (round-2 review finding 1) — a list that also has content the parser could not attribute to
+    any item. `cause` deliberately does NOT get the bare-phrase check `ac` gets: "acceptance
+    criteria" said in passing is rare, but "cause"/"problem" as ordinary English words are not,
+    so the same heuristic there would manufacture false positives on prose that never intended a
+    formal cause section.
+    """
+    lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n") \
+        if isinstance(body, str) else []
+    errors: list = []
+
+    citation = _cited_candidates(body, resolves)
+
+    ac_items, ac_unclassified = _extract_section(lines, _AC_HEADING_RE)
+    if not ac_items and not ac_unclassified and isinstance(body, str) \
+            and _AC_BARE_PHRASE_RE.search(body):
+        errors.append(
+            "the body mentions 'acceptance criteria' but no recognized heading and list "
+            "matched it — the section exists but this parser could not read it")
+    if ac_unclassified:
+        errors.append(
+            "the 'Acceptance criteria' section has content this parser could not attribute to "
+            f"any list item: {'; '.join(ac_unclassified)}")
+
+    cause_items, cause_unclassified = _extract_section(lines, _CAUSE_HEADING_RE)
+    if cause_unclassified:
+        errors.append(
+            "the 'Problem'/'Root cause' section has content this parser could not attribute to "
+            f"any list item: {'; '.join(cause_unclassified)}")
+
+    return {"citation": citation, "cause": cause_items, "ac": ac_items, "errors": errors}
 
 
 class DriverStateError(ValueError):
