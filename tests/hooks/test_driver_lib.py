@@ -1004,3 +1004,89 @@ class TestCliRefusalStub:
         assert proc.returncode == 0
         assert proc.stdout == ""
         assert proc.stderr == ""
+
+
+# ------------------------------------------------ #927 transport model + migration
+
+class TestCampaignTransport:
+    """#927: `session_mode` becomes a PREFERENCE, and the legacy field migrates on READ.
+
+    The migration is the highest-risk piece of this issue: a wrong mapping silently changes the
+    boundary behaviour of every campaign already on disk, and nothing would fail loudly.
+    """
+
+    def test_a_recorded_preference_wins(self) -> None:
+        st = {"preferred_transport": "pane_chain"}
+        assert dl.campaign_transport(st) == ("pane_chain", "recorded")
+
+    def test_legacy_fresh_session_migrates_to_pane_chain(self) -> None:
+        assert dl.campaign_transport({"session_mode": "fresh-session"}) == (
+            "pane_chain", "migrated")
+
+    def test_legacy_single_session_migrates_to_inline(self) -> None:
+        assert dl.campaign_transport({"session_mode": "single-session"}) == (
+            "inline", "migrated")
+
+    def test_neither_field_is_the_legacy_default_only(self) -> None:
+        """`inline` here is for a PRE-EXISTING campaign carrying neither field.
+
+        It must never be how a NEW campaign is defaulted — that is the creation contract, and
+        conflating the two is the AC-1 regression this issue exists to prevent.
+        """
+        assert dl.campaign_transport({}) == ("inline", "legacy_default")
+
+    def test_the_canonical_field_wins_over_a_disagreeing_legacy_field(self) -> None:
+        st = {"preferred_transport": "inline", "session_mode": "fresh-session"}
+        assert dl.campaign_transport(st) == ("inline", "recorded")
+
+    def test_an_unrecognised_legacy_value_is_never_guessed(self) -> None:
+        transport, provenance = dl.campaign_transport({"session_mode": "sideways"})
+        assert transport == "inline"
+        assert provenance == "unrecognized"
+
+    def test_an_unrecognised_CANONICAL_value_is_also_refused(self) -> None:
+        transport, provenance = dl.campaign_transport({"preferred_transport": "teleport"})
+        assert transport == "inline"
+        assert provenance == "unrecognized"
+
+    def test_a_non_dict_state_does_not_raise(self) -> None:
+        assert dl.campaign_transport(None) == ("inline", "legacy_default")
+
+    def test_the_transport_vocabulary_is_closed(self) -> None:
+        assert dl.TRANSPORTS == frozenset({"pane_chain", "inline"})
+        assert dl.PANE_CHAIN_TRANSPORT == "pane_chain"
+        assert dl.INLINE_TRANSPORT == "inline"
+
+    def test_the_legacy_mapping_is_exhaustive_over_the_old_vocabulary(self) -> None:
+        """Both legacy values must map, or a campaign silently lands on the default."""
+        for legacy in ("fresh-session", "single-session"):
+            transport, provenance = dl.campaign_transport({"session_mode": legacy})
+            assert provenance == "migrated", f"{legacy} did not migrate"
+            assert transport in dl.TRANSPORTS
+
+    def test_resolution_is_PURE_and_never_writes(self) -> None:
+        """Migration materialises on the next locked write, never on a read path."""
+        st = {"session_mode": "fresh-session"}
+        before = json.dumps(st, sort_keys=True)
+        dl.campaign_transport(st)
+        assert json.dumps(st, sort_keys=True) == before
+
+
+class TestTransportProjection:
+    """The write-only compatibility projection that keeps a rolled-back build correct."""
+
+    def test_pane_chain_projects_to_the_legacy_fresh_session(self) -> None:
+        assert dl.legacy_session_mode("pane_chain") == "fresh-session"
+
+    def test_inline_projects_to_the_legacy_single_session(self) -> None:
+        assert dl.legacy_session_mode("inline") == "single-session"
+
+    def test_the_projection_round_trips_through_the_resolver(self) -> None:
+        """The two directions must agree, or a rollback executes the wrong transport."""
+        for transport in sorted(dl.TRANSPORTS):
+            projected = dl.legacy_session_mode(transport)
+            back, provenance = dl.campaign_transport({"session_mode": projected})
+            assert (back, provenance) == (transport, "migrated")
+
+    def test_an_unknown_transport_has_no_projection(self) -> None:
+        assert dl.legacy_session_mode("teleport") is None

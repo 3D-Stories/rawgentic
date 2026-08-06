@@ -1602,6 +1602,73 @@ FRESH_SESSION_MODE = "fresh-session"
 LAUNCHABLE_MODES = frozenset({"herdr", "pane_less"})
 
 
+# --------------------------------------------------------------------------- #
+# #927: transport replaces `session_mode`
+# --------------------------------------------------------------------------- #
+#: A campaign records a PREFERENCE (durable) and resolves an EFFECT per transition. The old
+#: `session_mode` conflated the two into one permanent hand-authored answer, so a campaign
+#: could not express "I want a pane chain, but herdr is missing right now".
+PANE_CHAIN_TRANSPORT = "pane_chain"
+INLINE_TRANSPORT = "inline"
+TRANSPORTS = frozenset({PANE_CHAIN_TRANSPORT, INLINE_TRANSPORT})
+
+#: The one-way legacy mapping. Kept as a module constant rather than inlined twice so the
+#: resolver and the compatibility projection cannot drift apart — a drift here would let a
+#: rolled-back build execute the OPPOSITE transport, silently.
+_LEGACY_TO_TRANSPORT = {
+    FRESH_SESSION_MODE: PANE_CHAIN_TRANSPORT,   # "fresh-session"
+    "single-session": INLINE_TRANSPORT,
+}
+_TRANSPORT_TO_LEGACY = {v: k for k, v in _LEGACY_TO_TRANSPORT.items()}
+
+
+def campaign_transport(state) -> tuple[str, str]:
+    """The campaign's PREFERRED transport and where that answer came from. PURE.
+
+    Returns ``(transport, provenance)`` with provenance in
+    ``recorded | migrated | unrecognized | legacy_default``.
+
+    Migration happens on READ and writes nothing — materialising it is the next locked write's
+    job, so no read path mutates state. The canonical field always wins over a disagreeing
+    legacy one, because the legacy field is a write-only projection (see `legacy_session_mode`)
+    and a hand edit of it must never override the real answer.
+
+    ``legacy_default`` marks the ONE case that is genuinely defaulted: a pre-existing campaign
+    carrying neither field. A NEW campaign never reaches it — creation probes and records a
+    preference explicitly. Conflating those two is exactly the regression that would leave a
+    healthy new campaign on ``inline`` and preserve the default #927 exists to invert.
+    """
+    if not isinstance(state, dict):
+        return (INLINE_TRANSPORT, "legacy_default")
+
+    recorded = state.get("preferred_transport")
+    if recorded is not None:
+        if recorded in TRANSPORTS:
+            return (recorded, "recorded")
+        return (INLINE_TRANSPORT, "unrecognized")
+
+    legacy = state.get("session_mode")
+    if legacy is not None:
+        migrated = _LEGACY_TO_TRANSPORT.get(legacy)
+        if migrated is not None:
+            return (migrated, "migrated")
+        # Never guess. An unrecognised value degrades visibly rather than being mapped by
+        # resemblance — but it does NOT hard-fail, because that would strand a live campaign.
+        return (INLINE_TRANSPORT, "unrecognized")
+
+    return (INLINE_TRANSPORT, "legacy_default")
+
+
+def legacy_session_mode(transport: str) -> "str | None":
+    """The write-only `session_mode` projection for a transport, or None if unknown. PURE.
+
+    This exists ONLY so a build rolled back to a pre-#927 version keeps behaving correctly: it
+    reads `session_mode` and knows nothing of `preferred_transport`. It is an OUTPUT, never a
+    source — new code reads the canonical field. Removed in a later cleanup issue.
+    """
+    return _TRANSPORT_TO_LEGACY.get(transport)
+
+
 BIND_DIRECTIVE = "/rawgentic:switch"
 
 # A bind directive WITH a project argument. The argument is the whole point: Step-4 review finding,
