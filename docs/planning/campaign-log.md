@@ -14,6 +14,57 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #871 M4 — #586 Part 1: a measured clock instead of a pinned session ID · v3.135.1
+
+**The gap.** The durable overnight resume launcher (`overnight-resume.sh` template, per-run copies
+like `epic204-resume.sh`) relaunched via `claude --resume "$SESSION_ID"` with the ID **pinned at arm
+time**. A `/clear` mints a new session ID, so `--resume <old-id>` errors, and the fresh-`-p` fallback
+was fragile enough to intermittently miss overnight (owner report, 2026-07-22).
+
+**What shipped, and what deliberately did not.** Part 1 (this PR, `Part of #586`) ships only the
+testable core: `hooks/reset_resume_lib.py` extracts and validates
+`rate_limits.five_hour.resets_at` from a statusline-shaped payload, asserts freshness on the
+OBSERVATION timestamp advancing (never on `resets_at` itself changing — see below), computes the
+one-shot resume epoch (`resets_at + 60s`), and runs a conservative session-lineage identity check
+before any `--continue`. The scheduler wiring, the `overnight-resume.sh` rewrite, and the
+watchdog-to-reconciler demotion are workspace-root changes outside any git repo (`.git` there is a
+stub with no HEAD/objects/refs — confirmed, not assumed) and ship in a follow-up PR (D250).
+
+**The live spike that AC 1 called for, and what it actually produced.** Instrumenting the live
+global bridge script (`~/.claude/rawgentic-statusline.sh`) to observe its real stdin payload was
+denied by the auto-mode permission classifier on every attempt. A nested `claude --debug hooks -p`
+one-shot DID confirm, first-hand, that headless print-mode never invokes the statusLine command at
+all across a full session lifecycle — empirically backing, rather than merely assuming, the design
+doc's own claim that the bridge write must happen during a live interactive session. The harder
+fact — whether THIS host's interactive payload carries the field — stays unconfirmed and is why
+`extract_resets_at` returns a clean `{"ok": false, ...}` rather than trusting the value blind;
+Part 2 is where this gets a live caller for the first time. Recorded as D249.
+
+**The freshness design decision.** This same wave's log recorded a measured defect: `herdr`'s
+scraped statusline `tokens` field returned byte-identical output and an unchanged revision counter
+across three probes spread over many minutes — the capture had frozen, not the value. `resets_at`
+legitimately stays constant for up to five hours, so freshness here is asserted on the OBSERVATION
+timestamp advancing between reads, never on `resets_at` changing — checking the latter would
+false-positive on every healthy read.
+
+**Decisions (this slot).**
+- **D249** — the classifier-blocked live spike is shipped as a runtime self-check
+  (`extract_resets_at`'s `ok: false` path) rather than a manual pre-verification gate.
+- **D250** — splits #586 into two PRs (the #927 D233 precedent): this PR ships the pure library;
+  Part 2 (fresh WF2 run) wires it into the actual scheduler and the workspace-root templates.
+
+**Reviews.** One Step-11 cross-model pass (`gpt-5.6-sol`, diagnostic): 2 High + 3 Medium, all
+applied — the freshness check gained a live-clock recency bound (an advancing-but-ancient pair was
+wrongly "fresh"), the lineage check's docstring now states plainly that it is a point-in-time
+snapshot and Part 2 must resume via `--resume <verified-tail>` immediately rather than a
+separately-resolved `--continue`, and three malformed-input paths that raised now return clean
+failures.
+
+**Status.** Suite 5762→5804 (+42), exit 0. No workflow-spine change → no diagram REV. PR, CI and
+merge SHA filled by the next slot's pass, per the established convention here.
+
+---
+
 ## Epic #871 M4 — #726: a handoff finally looks backward · v3.135.0
 
 **The gap.** Every gate in `perform_handoff` — split, agent start, project bind, prompt landed,
