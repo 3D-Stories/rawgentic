@@ -2484,3 +2484,60 @@ clean.
 
 **Status.** PR + CI + merge SHA filled by the next slot's pass (established
 convention). Telemetry for this slot is embedded below.
+
+---
+
+## #927 — the epic-run child boundary becomes the default, with a fence (epic #871, M4 wave)
+
+**Shipped.** v3.132.0 (part 1, `19925711`) + **v3.133.0 (part 2)**. Part 1 was honestly scoped as
+machinery with no caller (D233, after the pre-PR review caught a changelog entry claiming a working
+fence while `_cmd_handoff` was unchanged). Part 2 is the wiring, and it carries `Closes #927`.
+
+**What part 1 actually left behind, measured at `19925711` rather than assumed.** Twelve functions
+appeared ONLY in `hooks/driver_lib.py` where they were defined; `resolve_creation_transport` had no
+caller; there was no `transport` CLI verb of any kind; and `skills/epic-run/SKILL.md` contained the
+string `transport` zero times. So **AC 1, AC 2 and AC 4 had no live path** — not merely an unwired
+fence. That measurement is why part 2 absorbed four items the handoff into this pane had not listed
+(D237): the creation seam, `transport set`, `transport unpark`, and the `creation_refused` downgrade.
+
+**The design.** `docs/planning/2026-08-05-927-epic-run-transport-rework.md`. Sections 1–14 are the
+settled three-pass design; §15 is its pass-3 findings table, which was cited from SEVEN places and
+had never been written (its headings stopped at §14 — every one of those references was dangling);
+§16–§17 are part 2's implementation design and platform declaration; §18–§20 are part 2's own
+review passes.
+
+**The ordering IS the safety property.** Claim before probe; resolution (with the pre-split pane
+inventory) before any launch; `split_attempted` before the split; then terminal outcome, downgrade
+and claim release in ONE locked mutation. `split_attempted: false` therefore PROVES nothing was
+created, and a `null` successor under `true` is resolved by an inventory diff rather than trusted.
+
+**Decisions (this slot).**
+- **D235** — part 1's spent loop-back counters rotated aside so part 2 ran on a fresh budget; the
+  counters file is keyed by ISSUE, not by run.
+- **D236** — declined an ELIGIBLE small-standard lane and ran the full spine, because what this
+  wires is the fence whose failure mode is two successors on one generation.
+- **D237** — kept as ONE PR rather than splitting code from prose: shipping another caller-less
+  command is exactly the defect D233 recorded against part 1.
+- **D238 / D239** — the ambiguity circuit breaker fired on three findings across two design passes.
+  Every one was resolved from the SHIPPED CODE rather than escalated to an away owner: two were
+  confirmed real defects, and one was REFUTED with file:line evidence (`_terminal_for` already
+  returns the latest terminal event, so the reviewer's repeated-unpark scenario cannot occur).
+
+**Reviews.** Two cross-model design passes (`gpt-5.6-sol`, both `diagnostic: false`, freshness
+verified): **1 Critical + 11 High + 4 Medium**, 15 applied, 1 refuted. The Critical was mine — a
+claim-refused contender was told to "continue in place", which at a boundary means starting the
+next child beside the holder's successor. The gate then CLOSED budget-exhausted at the `design`
+cap per #798. Step 4's inline self-review added 2 input-validation findings on the new CLI trust
+boundary, both applied.
+
+**Measured, not reasoned.** The negative `pane split` probe part 1 owed (§11) was run live with the
+exact shipped argv: rc 1, empty stdout, `{"error":{"code":"pane_not_found"}}` on stderr, pane
+inventory unchanged — nothing created. That measurement NARROWED the design: the transport downgrade
+now triggers on an enumerated spiked code rather than on an inferred failure shape.
+
+**Also owed and recorded.** Close-or-fold dispositions on #846 (open, scope narrowed — the boundary
+path now records completion, mid-child still does not), #849 (open, unchanged), #850 (open, scope
+widened — three new CLI verbs the jam matrix will not cover) and #851 (open, unchanged).
+
+**Status.** Suite 5584→5628 (+44), exit 0. No workflow-spine change → no diagram REV. PR, CI and
+merge SHA filled by the next slot's pass, per the established convention here.

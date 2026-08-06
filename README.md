@@ -749,6 +749,28 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.133.0 (2026-08-06)
+- **The child boundary is now the DEFAULT, and the one-successor fence actually runs (#927, epic
+  #871).** Part 2, and it is the part that makes the feature real: part 1 shipped machinery with no
+  caller, so at `19925711` twelve of its functions appeared only in the module that defined them,
+  there was no `transport` command of any kind, and `skills/epic-run/SKILL.md` contained the word
+  `transport` zero times — AC 1, AC 2 and AC 4 had no live path at all. `_cmd_handoff` now opens the
+  generation and CLAIMS before it probes, records a resolution with the pre-split pane inventory
+  before any launch, marks `split_attempted` before the split, and closes with the terminal
+  outcome, any transport downgrade and the claim release in one locked mutation; a second
+  invocation for one boundary loses the claim and exits **rc 7** doing no campaign work, which
+  closes **#845** inside this issue. Three new verbs — `transport resolve-creation` (the probed
+  default, AC 1), `transport set` (AC 2, guard evaluated inside the write lock) and
+  `transport unpark` (so clearing a park is a command rather than hand-editing driver-state) —
+  plus advisories on both surfaces (AC 4), on **stderr** because both commands publish JSON that
+  skills parse. `--herdr-available` is deleted: a caller-asserted capability is the stale answer
+  this issue exists to remove. Two cross-model design passes drew 1 Critical + 11 High + 4 Medium
+  (15 applied, 1 refuted with file:line evidence, dispositions in the design doc's §18/§19), the
+  §11 negative `pane split` probe part 1 owed was RUN LIVE, and the four dispositions this issue
+  owed are recorded on #846/#849/#850/#851. Adds 44 tests in
+  `tests/hooks/test_launcher_lib.py` and `tests/hooks/test_driver_lib.py`. No workflow-spine change
+  → no diagram REV. Suite 5584→5628.
+
 ### v3.132.0 (2026-08-05)
 - **The transport model and the one-successor fence, built and tested but NOT YET WIRED (#927
   part 1, epic #871).** Read that scope line literally: this ships `hooks/` machinery with 96
