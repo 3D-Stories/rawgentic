@@ -17,6 +17,7 @@ the provenance clause passes, so only the head comparison can refuse it.
 
 Pure functions imported directly per `docs/testing.md:5-8`.
 """
+import hashlib
 import json
 import os
 import subprocess
@@ -34,7 +35,18 @@ import launcher_lib as ll  # noqa: E402
 HEAD = "fb9293c630a6e7477a638a07853dfb0846cc9cf5"
 OLD = "3d4e1607d2ccb7178956f9afa05ab0dbb0cbe25d"
 SENTINEL = "abcdef0123456789abcdef0123456789abcdef01"
-BODY_HASH = "9" * 64
+# #944: BODY_HASH must correspond to a REAL body a --bodies file can supply, since a CLI-level
+# rebuild-receipt call now enforces claim-inventory coverage. TRIVIAL_BODY has no headings at
+# all, so its inventory is empty and coverage is trivially satisfied regardless of `claims` —
+# every pre-existing test in this file that never cared about AC1 keeps working unchanged.
+TRIVIAL_BODY = "A bug fix with no structured sections at all.\n"
+BODY_HASH = hashlib.sha256(dl.normalize_issue_body(TRIVIAL_BODY).encode("utf-8")).hexdigest()
+
+
+def _bodies_file(tmp_path, mapping):
+    path = tmp_path / "bodies.json"
+    path.write_text(json.dumps(mapping), encoding="utf-8")
+    return path
 
 
 def _claim(verdict="holds"):
@@ -1747,18 +1759,25 @@ class TestRound8RebuildReceiptIsTheArmingProcedure:
         assert rebuilt["issues"][0]["validated_against"] == HEAD
         assert dl.next_ready_issue(rebuilt, observed_head=HEAD) == 1
 
-    def test_a_pending_child_IS_stamped_while_the_owner_gate_is_out(self):
-        """**Inverted with the owner gate (#848).** The "an obsolete child stays unstamped" rule
-        existed only to keep it un-selectable; with nothing gating on the marker the rule stopped
-        protecting anything and started jamming the queue instead — the child was never stamped,
-        so the per-child provenance clause refused for ever and re-running the skill changed
-        nothing. Found by the jam sweep after the cut. #848 restores both together."""
+    def test_a_pending_child_IS_stamped_but_next_ready_issue_now_refuses_it(self):
+        """**Re-inverted for #944 (the #848 rebuild).** The "an obsolete child stays unstamped"
+        rule existed only to keep it un-selectable; with nothing gating on the marker the rule
+        stopped protecting anything and started jamming the queue instead — the child was never
+        stamped, so the per-child provenance clause refused for ever and re-running the skill
+        changed nothing. Found by the jam sweep after the cut.
+
+        `rebuild_receipt` itself is UNCHANGED by #944 — it still stamps a pending-disposition
+        child (this class's whole point). What changed is `next_ready_issue`, which now refuses
+        it at SELECTION time regardless of the stamp — the stamp keeps the receipt's own linkage
+        invariant intact; the NEW gate lives one layer up."""
         state = _state(_iss(1))
         rebuilt = dl.rebuild_receipt(
             state, HEAD, {1: _receipt_child(pending="issue_obsolete")})
         assert rebuilt["issues"][0]["validated_against"] == HEAD
         assert dl.validate_queue_revalidation(rebuilt) is True
-        assert dl.next_ready_issue(rebuilt, observed_head=HEAD) == 1
+        with pytest.raises(dl.ObsoletePendingChild) as exc:
+            dl.next_ready_issue(rebuilt, observed_head=HEAD)
+        assert exc.value.issue == 1
 
     def test_it_never_mutates_the_state_it_was_given(self):
         state = _state(_iss(1, validated_against=OLD), reval=_reval(OLD, {}))
@@ -1966,8 +1985,10 @@ class TestRound11TheRebuildCLIRefusesCollidingKeys:
         """The negative twin — refusing collisions must not refuse the ordinary call."""
         work, head, path, audited_path = self._campaign(
             tmp_path, lambda h: {"1": self._record_at(h)})
+        bodies_path = _bodies_file(tmp_path, {"1": TRIVIAL_BODY})
         rc = ll.main(["rebuild-receipt", "--driver-state", str(path),
-                      "--project-root", str(work), "--audited", str(audited_path)])
+                      "--project-root", str(work), "--audited", str(audited_path),
+                      "--bodies", str(bodies_path)])
         assert rc == 0, rc
         persisted = json.loads(path.read_text(encoding="utf-8"))
         assert persisted["queue_revalidation"]["validated_head"] == head
@@ -2108,8 +2129,10 @@ class TestRound12LiteralDuplicateJsonKeys:
         path = _write_state(tmp_path, _state(_iss(1)))
         audited = tmp_path / "audited.json"
         audited.write_text(json.dumps({"1": _receipt_child(to_sha=head)}), encoding="utf-8")
+        bodies_path = _bodies_file(tmp_path, {"1": TRIVIAL_BODY})
         rc = ll.main(["rebuild-receipt", "--driver-state", str(path),
-                      "--project-root", str(work), "--audited", str(audited)])
+                      "--project-root", str(work), "--audited", str(audited),
+                      "--bodies", str(bodies_path)])
         assert rc == 0, rc
 
 
@@ -2233,3 +2256,177 @@ class TestRound13TheStrictDecoderCoversEveryDriverStatePath:
             capture_output=True, text=True, check=False)
         assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
         assert "Traceback" not in proc.stderr, proc.stderr
+
+
+# --------------------------------------------------------------------------- #
+# #944 — the REAL enforcement point: rebuild-receipt --bodies
+# --------------------------------------------------------------------------- #
+class TestRebuildReceiptBodiesEnforcement:
+    """Step-4 review round 2, finding 5: `build_revalidation_record` has no caller on the
+    production write path — `_cmd_rebuild_receipt` reads `--audited` as raw JSON and never
+    touches the constructor. This is the FIX: coverage is enforced HERE, the one place a real
+    campaign's receipt is actually written, via a new `--bodies` argument.
+    """
+
+    def _record_for(self, body, to_sha, claims, depth="deep", extraction="paths"):
+        body_hash = __import__("hashlib").sha256(
+            dl.normalize_issue_body(body).encode("utf-8")).hexdigest()
+        return {"body_hash": body_hash, "from_sha": OLD, "to_sha": to_sha,
+               "extraction": extraction, "depth": depth, "outcome": "still_valid",
+               "claims": claims, "validated_at": 1_754_000_000}
+
+    def _campaign(self, tmp_path, record_for_head):
+        work, head = _repo_with_origin(tmp_path)
+        path = _write_state(tmp_path, _state(_iss(1)))
+        audited_path = tmp_path / "audited.json"
+        audited_path.write_text(json.dumps({"1": record_for_head(head)}), encoding="utf-8")
+        return work, head, path, audited_path
+
+    def _bodies_path(self, tmp_path, mapping):
+        bodies_path = tmp_path / "bodies.json"
+        bodies_path.write_text(json.dumps(mapping), encoding="utf-8")
+        return bodies_path
+
+    def test_full_coverage_with_bodies_succeeds(self, tmp_path):
+        body = "## Acceptance criteria\n\n1. The one AC.\n"
+        claim = {"kind": "ac", "quoted_from_body": "The one AC.",
+                 "checked_against": "<no-file: n/a>", "evidence": "x", "verdict": "holds"}
+        work, head, path, audited_path = self._campaign(
+            tmp_path, lambda h: self._record_for(body, h, [claim]))
+        bodies_path = self._bodies_path(tmp_path, {"1": body})
+        rc = ll.main(["rebuild-receipt", "--driver-state", str(path),
+                      "--project-root", str(work), "--audited", str(audited_path),
+                      "--bodies", str(bodies_path)])
+        assert rc == 0, rc
+
+    def test_under_coverage_refuses_before_any_write(self, tmp_path):
+        body = "## Acceptance criteria\n\n1. The one AC.\n"
+        # validate_claims itself refuses an empty claims list before coverage is even reached —
+        # use one claim of the WRONG kind so coverage genuinely fails, not the structural check.
+        wrong_kind_claim = {"kind": "cause", "quoted_from_body": "irrelevant",
+                            "checked_against": "<no-file: n/a>", "evidence": "x",
+                            "verdict": "holds"}
+        work, head, path, audited_path = self._campaign(
+            tmp_path, lambda h: self._record_for(body, h, [wrong_kind_claim]))
+        bodies_path = self._bodies_path(tmp_path, {"1": body})
+        before = path.read_text(encoding="utf-8")
+        rc = ll.main(["rebuild-receipt", "--driver-state", str(path),
+                      "--project-root", str(work), "--audited", str(audited_path),
+                      "--bodies", str(bodies_path)])
+        assert rc == 2, rc
+        assert path.read_text(encoding="utf-8") == before, "nothing must be written on refusal"
+
+    def test_a_body_hash_mismatch_refuses(self, tmp_path):
+        real_body = "## Acceptance criteria\n\n1. The real AC.\n"
+        claim = {"kind": "ac", "quoted_from_body": "The real AC.",
+                 "checked_against": "<no-file: n/a>", "evidence": "x", "verdict": "holds"}
+        work, head, path, audited_path = self._campaign(
+            tmp_path, lambda h: self._record_for(real_body, h, [claim]))
+        # --bodies supplies a DIFFERENT body than the one the record's body_hash attests.
+        bodies_path = self._bodies_path(tmp_path, {"1": "## Acceptance criteria\n\n1. Swapped.\n"})
+        rc = ll.main(["rebuild-receipt", "--driver-state", str(path),
+                      "--project-root", str(work), "--audited", str(audited_path),
+                      "--bodies", str(bodies_path)])
+        assert rc == 2, rc
+
+    def test_an_audited_entry_with_no_matching_bodies_entry_refuses(self, tmp_path):
+        body = "## Acceptance criteria\n\n1. The one AC.\n"
+        claim = {"kind": "ac", "quoted_from_body": "The one AC.",
+                 "checked_against": "<no-file: n/a>", "evidence": "x", "verdict": "holds"}
+        work, head, path, audited_path = self._campaign(
+            tmp_path, lambda h: self._record_for(body, h, [claim]))
+        bodies_path = self._bodies_path(tmp_path, {})   # missing issue 1 entirely
+        rc = ll.main(["rebuild-receipt", "--driver-state", str(path),
+                      "--project-root", str(work), "--audited", str(audited_path),
+                      "--bodies", str(bodies_path)])
+        assert rc == 2, rc
+
+    def test_pending_disposition_needs_no_bodies_entry_at_all(self, tmp_path):
+        """A pending-disposition record is never stamped/selectable (AC2); it does not need
+        full inventory coverage, so it needs no --bodies entry either."""
+        rec = _receipt_child(pending="issue_obsolete", verdict="broken")
+        work, head, path, audited_path = self._campaign(tmp_path, lambda h: dict(rec, to_sha=h))
+        rc = ll.main(["rebuild-receipt", "--driver-state", str(path),
+                      "--project-root", str(work), "--audited", str(audited_path)])
+        assert rc == 0, rc
+
+    def test_a_real_resolved_citation_derived_via_git_is_covered(self, tmp_path):
+        """The finding-3 security fix: resolves is DERIVED by the CLI via real git probes, not
+        trusted from caller input. A citation to a file that genuinely exists in the repo must
+        be recognized as resolved without any caller-supplied resolution data at all."""
+        work, head = _repo_with_origin(tmp_path)
+        _git(work, "log", "--oneline")  # sanity: repo has at least one commit
+        body = "See f.txt for the cause.\n\n## Acceptance criteria\n\n1. The AC.\n"
+        claims = [
+            {"kind": "citation", "quoted_from_body": "f.txt", "checked_against": f"f.txt@{head}",
+             "evidence": "x", "verdict": "holds"},
+            {"kind": "ac", "quoted_from_body": "The AC.", "checked_against": "<no-file: n/a>",
+             "evidence": "x", "verdict": "holds"},
+        ]
+        record = self._record_for(body, head, claims, depth="deep")
+        record["from_sha"] = head
+        path = _write_state(tmp_path, _state(_iss(1)))
+        audited_path = tmp_path / "audited.json"
+        audited_path.write_text(json.dumps({"1": record}), encoding="utf-8")
+        bodies_path = self._bodies_path(tmp_path, {"1": body})
+        rc = ll.main(["rebuild-receipt", "--driver-state", str(path),
+                      "--project-root", str(work), "--audited", str(audited_path),
+                      "--bodies", str(bodies_path)])
+        assert rc == 0, rc
+
+    def test_a_fabricated_resolves_cannot_be_supplied_at_all(self, tmp_path):
+        """The finding-3 fix, from the other direction: --bodies carries no `resolves` field —
+        there is nothing for a caller to fabricate."""
+        bodies_path = self._bodies_path(tmp_path, {"1": "body text"})
+        raw = json.loads(bodies_path.read_text(encoding="utf-8"))
+        assert raw == {"1": "body text"}, "the --bodies schema must carry ONLY the body string"
+
+    def test_an_unresolvable_endpoint_commit_refuses_rather_than_reading_as_unresolved(
+            self, tmp_path):
+        """Step-8a review finding 7: `_probe_path_exists` treats EVERY nonzero `git cat-file`
+        result as "path absent" — including a bad commit, a repo error, or a permission failure.
+        Because an unresolved single-component path is then excluded from `_cited_candidates`,
+        an operational probe failure could silently narrow the required inventory instead of
+        refusing. A record naming an endpoint commit that does not exist in this repo at all
+        must refuse, not quietly report every citation against it as unresolved."""
+        body = "See f.txt for the cause.\n\n## Acceptance criteria\n\n1. The AC.\n"
+        claims = [
+            {"kind": "citation", "quoted_from_body": "f.txt", "checked_against": "f.txt@ghost",
+             "evidence": "x", "verdict": "holds"},
+            {"kind": "ac", "quoted_from_body": "The AC.", "checked_against": "<no-file: n/a>",
+             "evidence": "x", "verdict": "holds"},
+        ]
+        work, head, path, audited_path = self._campaign(
+            tmp_path, lambda h: self._record_for(body, h, claims))
+        # Corrupt from_sha to a well-formed-but-nonexistent commit AFTER building the record —
+        # body_hash still matches (computed from `body`, not from_sha), so this isolates the
+        # probe-failure path from the hash-mismatch path Finding 6 already covers.
+        audited = json.loads(audited_path.read_text(encoding="utf-8"))
+        audited["1"]["from_sha"] = "f" * 40
+        audited_path.write_text(json.dumps(audited), encoding="utf-8")
+        bodies_path = self._bodies_path(tmp_path, {"1": body})
+        before = path.read_text(encoding="utf-8")
+        rc = ll.main(["rebuild-receipt", "--driver-state", str(path),
+                      "--project-root", str(work), "--audited", str(audited_path),
+                      "--bodies", str(bodies_path)])
+        assert rc == 2, rc
+        assert path.read_text(encoding="utf-8") == before, "nothing must be written on refusal"
+
+    def test_a_path_probe_operational_failure_refuses_rather_than_reading_as_unresolved(
+            self, tmp_path):
+        """Step-11 review: the Finding-7 fix validates only the ENDPOINT COMMITS upfront — a
+        SUBSEQUENT path-level probe failure (a transient repo error, not a bad commit) still
+        fell through to "path absent" once the commit itself was confirmed valid. `git cat-file
+        -e <sha>:<path>` cannot distinguish a genuine miss from an operational failure at the
+        path level; `_derive_resolves` must raise rather than silently narrow the inventory."""
+        work, head = _repo_with_origin(tmp_path)
+        real_runner = ll._default_runner
+
+        def _flaky_runner(argv):
+            if "ls-tree" in argv:
+                return subprocess.CompletedProcess(argv, 2, stdout="", stderr="simulated error")
+            return real_runner(argv)
+
+        with pytest.raises(dl.DriverStateError):
+            ll._derive_resolves(dl, "See f.txt for the cause.", head, head, str(work),
+                                runner=_flaky_runner)

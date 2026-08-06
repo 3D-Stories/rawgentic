@@ -182,6 +182,81 @@ class TestExtractionEdgeCases:
         assert extraction == "ambiguous"
 
 
+class TestCitedCandidatesCharacterization:
+    """#944: `cited_paths` is refactored to delegate to `_cited_candidates`, which returns
+    ALL path-shaped candidates (resolved or not) rather than only the resolved subset. This
+    class characterizes `cited_paths`'s output as UNCHANGED by that refactor (run against the
+    pre-refactor behavior first, then re-run unchanged after — the same fixture proves both
+    ways), and separately proves `_cited_candidates` exposes what `cited_paths` was hiding."""
+
+    def test_cited_paths_output_is_unchanged_by_the_refactor(self):
+        """Step-8a review finding 8: the original version compared `cited_paths(body, resolves)`
+        against ITSELF, which passes for every deterministic output regardless of what it
+        actually is — it protected nothing. Each expected value below was confirmed by running
+        the real function before pinning it (never hand-derived)."""
+        # A table spanning all-resolved, all-unresolved, mixed, none, and the single-component
+        # root-level-file case — the exact dimensions `cited_paths`'s own docstring distinguishes.
+        cases = [
+            ("hooks/a.py and hooks/b.py", {"hooks/a.py", "hooks/b.py"},
+             (["hooks/a.py", "hooks/b.py"], "paths")),
+            ("hooks/ghost.py and lib/gone.py", set(), ([], "ambiguous")),
+            ("hooks/real.py and hooks/ghost.py", {"hooks/real.py"},
+             (["hooks/real.py"], "ambiguous")),
+            ("purely prose, no citations at all.", set(), ([], "none")),
+            ("README.md changed", {"README.md"}, (["README.md"], "paths")),
+            ("bare_word_not_a_real_file.py mentioned in prose", set(), ([], "none")),
+        ]
+        for body, resolves, expected in cases:
+            assert dl.cited_paths(body, resolves) == expected, body
+
+    def test_unresolved_multi_component_candidate_is_dropped_by_cited_paths(self):
+        """The behavior #944 needed to see named explicitly: a citation to a path that does
+        not exist is INVISIBLE to `cited_paths`'s returned list — confirmed live before relying
+        on it (design doc §1.3, finding 4)."""
+        paths, extraction = dl.cited_paths(
+            "See hooks/nonexistent_file.py for the cause, and hooks/driver_lib.py for the fix.",
+            resolves={"hooks/driver_lib.py"})
+        assert paths == ["hooks/driver_lib.py"]
+        assert extraction == "ambiguous"
+        assert "hooks/nonexistent_file.py" not in paths
+
+    def test_cited_candidates_includes_the_unresolved_multi_component_path(self):
+        candidates = dl._cited_candidates(
+            "See hooks/nonexistent_file.py for the cause, and hooks/driver_lib.py for the fix.",
+            resolves={"hooks/driver_lib.py"})
+        assert set(candidates) == {"hooks/nonexistent_file.py", "hooks/driver_lib.py"}
+
+    def test_cited_candidates_still_applies_the_single_component_resolution_filter(self):
+        """A bare word matching the filename grammar is a candidate ONLY when it resolves —
+        unchanged from `cited_paths`'s own existing rule (prose naming a module is not a path
+        claim; only a resolving root-level file is)."""
+        candidates = dl._cited_candidates("see config.py mentioned in passing", resolves=set())
+        assert candidates == []
+        candidates = dl._cited_candidates("see README.md", resolves={"README.md"})
+        assert candidates == ["README.md"]
+
+    def test_cited_candidates_on_an_empty_body_is_empty(self):
+        assert dl._cited_candidates("", resolves={"hooks/a.py"}) == []
+        assert dl._cited_candidates(None, resolves={"hooks/a.py"}) == []
+
+    def test_all_path_candidates_includes_single_component_tokens_unconditionally(self):
+        """#944: `_cmd_rebuild_receipt` needs the RAW candidate list — including single-
+        component tokens — to know what to probe via git BEFORE it can compute `resolves` at
+        all. `_cited_candidates` cannot supply this itself, because its own single-component
+        filter needs `resolves` already known (chicken-and-egg)."""
+        candidates = dl._all_path_candidates("see config.py and hooks/a.py mentioned")
+        assert set(candidates) == {"config.py", "hooks/a.py"}
+
+    def test_cited_candidates_is_a_filter_over_all_path_candidates(self):
+        body = "see config.py and hooks/a.py and hooks/ghost.py"
+        raw = dl._all_path_candidates(body)
+        assert set(raw) == {"config.py", "hooks/a.py", "hooks/ghost.py"}
+        filtered = dl._cited_candidates(body, resolves={"hooks/a.py"})
+        # config.py dropped (single-component, does not resolve); hooks/ghost.py kept
+        # (multi-component, kept regardless of resolution).
+        assert set(filtered) == {"hooks/a.py", "hooks/ghost.py"}
+
+
 class TestAdversarialInput:
     """Issue bodies are untrusted text (criterion 8 — ReDoS). The patterns must be bounded."""
 

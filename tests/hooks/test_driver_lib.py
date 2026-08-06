@@ -294,6 +294,146 @@ def test_next_ready_issue_non_int_depends_on_entry_raises_driver_state_error():
 
 
 # --------------------------------------------------------------------------- #
+# The obsolete-child owner gate (#944, AC2) — next_ready_issue's pending-disposition raise
+# --------------------------------------------------------------------------- #
+_OBSOLETE_HEAD = "a" * 40
+
+
+def _valid_receipt_record(pending=None, head=_OBSOLETE_HEAD):
+    """A fully valid queue_revalidation.children[<n>] record, built via the real constructor —
+    `next_ready_issue`'s receipt-freshness gate (`_refuse_unrevalidated_queue`) runs the FULL
+    `validate_queue_revalidation` check whenever ANY receipt is present, so a hand-rolled partial
+    record fails structural validation before this new logic is ever reached."""
+    kind, verdict = ("cause", "broken") if pending else ("ac", "holds")
+    claim = {"kind": kind, "quoted_from_body": "irrelevant", "verdict": verdict,
+             "checked_against": "<no-file: gone>", "evidence": "x"}
+    kwargs = dict(body="a trivial body with no headings at all", from_sha=head, to_sha=head,
+                 extraction="none", depth="deep", claims=[claim], validated_at=1, resolves=set())
+    if pending:
+        kwargs["pending_disposition"] = pending
+    return driver_lib.build_revalidation_record(**kwargs)
+
+
+def _revalidated_state(specs, head=_OBSOLETE_HEAD):
+    """`specs`: [(number, status, pending_or_None), ...]. Every `queued` issue is stamped
+    `validated_against=head` and given a matching receipt record (the linkage
+    `_validate_queue_revalidation` requires); non-queued issues get neither, since the
+    per-child provenance clause only applies to ELIGIBLE (queued) children."""
+    issues = []
+    children = {}
+    for number, status, pending in specs:
+        entry = {"number": number, "status": status}
+        if status == "queued":
+            entry["validated_against"] = head
+            children[str(number)] = _valid_receipt_record(pending, head)
+        issues.append(entry)
+    state = {"schema_version": 2, "campaign": "c", "issues": issues,
+             "queue_revalidation": {"version": 1, "extractor_version": 1,
+                                    "validated_head": head, "children": children}}
+    return state, head
+
+
+class TestObsoletePendingChild:
+    def test_a_lone_obsolete_pending_candidate_raises(self):
+        state, head = _revalidated_state([(1, "queued", "issue_obsolete")])
+        with pytest.raises(driver_lib.ObsoletePendingChild) as exc:
+            driver_lib.next_ready_issue(state, observed_head=head)
+        assert exc.value.issue == 1
+
+    def test_an_unrelated_later_ready_candidate_is_selected_instead(self):
+        """The round-2 review's finding 4, and the reason this whole task exists: raising on
+        the FIRST obsolete-pending candidate stopped the entire scan, even when a completely
+        unrelated, independent, ready candidate exists later in queue order."""
+        state, head = _revalidated_state(
+            [(1, "queued", "issue_obsolete"), (2, "queued", None)])
+        assert driver_lib.next_ready_issue(state, observed_head=head) == 2
+
+    def test_raises_only_when_nothing_else_is_selectable(self):
+        state, head = _revalidated_state([(1, "queued", "issue_obsolete"), (2, "merged", None)])
+        with pytest.raises(driver_lib.ObsoletePendingChild) as exc:
+            driver_lib.next_ready_issue(state, observed_head=head)
+        assert exc.value.issue == 1
+
+    def test_a_deferred_child_never_raises_at_all(self):
+        """The moment an owner (or a future automation) calls record-child-outcome, the child
+        is no longer `queued` — next_ready_issue's existing status filter already skips it, with
+        no new 'exclude' mechanism needed."""
+        state, head = _revalidated_state(
+            [(1, "deferred", "issue_obsolete"), (2, "queued", None)])
+        assert driver_lib.next_ready_issue(state, observed_head=head) == 2
+
+    def test_a_merged_child_never_raises_either(self):
+        state, head = _revalidated_state([(1, "merged", "issue_obsolete")])
+        assert driver_lib.next_ready_issue(state, observed_head=head) is None
+
+    def test_dependency_satisfaction_still_gates_before_the_pending_check(self):
+        """An obsolete-pending child whose OWN deps are unsatisfied is simply not ready yet —
+        the pending-disposition raise only fires for a candidate that would otherwise BE
+        selected."""
+        state, head = _revalidated_state([(2, "queued", "issue_obsolete")])
+        # #1 is pr_open (not eligible, so it needs no stamp/receipt entry of its own) and #2
+        # depends on it — #2's dep is unsatisfied, so #2 is not ready regardless of the pending
+        # marker.
+        state["issues"].insert(0, _issue(1, status="pr_open"))
+        state["issues"][1]["depends_on"] = [1]
+        assert driver_lib.next_ready_issue(state, observed_head=head) is None
+
+    def test_first_obsolete_issue_is_the_one_named_when_several_exist(self):
+        state, head = _revalidated_state(
+            [(1, "queued", "issue_obsolete"), (2, "queued", "issue_obsolete")])
+        with pytest.raises(driver_lib.ObsoletePendingChild) as exc:
+            driver_lib.next_ready_issue(state, observed_head=head)
+        assert exc.value.issue == 1
+
+
+class TestHasPendingDependents:
+    def test_true_when_a_remaining_child_directly_depends_on_it(self):
+        state = {"issues": [_issue(1, status="queued"), _issue(2, [1], status="queued")]}
+        assert driver_lib.has_pending_dependents(state, 1) is True
+
+    def test_false_when_nothing_depends_on_it(self):
+        state = {"issues": [_issue(1, status="queued"), _issue(2, status="queued")]}
+        assert driver_lib.has_pending_dependents(state, 1) is False
+
+    def test_a_merged_dependent_does_not_count(self):
+        """A TERMINAL child will never run again — its historical dependency on the obsolete
+        issue is not something that still needs unblocking."""
+        state = {"issues": [_issue(1, status="queued"), _issue(2, [1], status="merged")]}
+        assert driver_lib.has_pending_dependents(state, 1) is False
+
+    def test_an_abandoned_dependent_does_not_count_either(self):
+        state = {"issues": [_issue(1, status="queued"), _issue(2, [1], status="abandoned")]}
+        assert driver_lib.has_pending_dependents(state, 1) is False
+
+    def test_a_deferred_dependent_still_counts(self):
+        """Deferred is NOT terminal — a parked child can legitimately be re-queued later, and
+        would then need issue 1 resolved."""
+        state = {"issues": [_issue(1, status="queued"), _issue(2, [1], status="deferred")]}
+        assert driver_lib.has_pending_dependents(state, 1) is True
+
+
+class TestFreshSessionHandoffObsoletePending:
+    def test_returns_the_obsolete_pending_outcome_not_blocked(self):
+        """Round-1's own principle, re-applied: a recoverable refusal must never collapse into
+        the generic 'blocked' outcome — the same reason revalidation_required exists."""
+        state, head = _revalidated_state([(1, "queued", "issue_obsolete")])
+        disposition = driver_lib.fresh_session_handoff(
+            state, mode=driver_lib.FRESH_SESSION_MODE, observed_head=head)
+        assert disposition["outcome"] == "obsolete_pending"
+        assert disposition["issue"] == 1
+        assert disposition["has_pending_dependents"] is False
+
+    def test_has_pending_dependents_is_true_when_something_depends_on_it(self):
+        state, head = _revalidated_state(
+            [(1, "queued", "issue_obsolete"), (2, "queued", None)])
+        state["issues"][1]["depends_on"] = [1]
+        disposition = driver_lib.fresh_session_handoff(
+            state, mode=driver_lib.FRESH_SESSION_MODE, observed_head=head)
+        assert disposition["outcome"] == "obsolete_pending"
+        assert disposition["has_pending_dependents"] is True
+
+
+# --------------------------------------------------------------------------- #
 # validate_driver_state (v1/v2 readability)
 # --------------------------------------------------------------------------- #
 def test_validate_driver_state_valid_v2():
@@ -1793,6 +1933,25 @@ def test_a_malformed_consumed_marker_fails_CLOSED():
         assert ok is False, bad
 
 
+def test_child_boundary_precondition_refuses_a_pending_disposition_queued_child():
+    """#944 Task 8: closes the preflight/locked-commit race. A `revalidate-children` write-back
+    can land `pending_disposition` on the receipt record WITHOUT touching `status` — the child
+    is still `queued` by the time `_open_and_claim` takes its lock, so `status == "queued"`
+    alone is not enough; the precondition must also recheck the receipt under the same lock."""
+    state = _campaign_with_boundary(next_issue=10)
+    state["queue_revalidation"] = {"children": {"10": {"pending_disposition": "issue_obsolete"}}}
+    ok, why = dl.child_boundary_precondition(state, 10)
+    assert ok is False
+    assert why == "next_child_pending_disposition"
+
+
+def test_child_boundary_precondition_still_ready_with_no_pending_disposition():
+    """Sibling of the refusal above: an unrelated or absent `queue_revalidation` block must not
+    false-positive the new check."""
+    state = _campaign_with_boundary(next_issue=10)
+    assert dl.child_boundary_precondition(state, 10) == (True, "ready")
+
+
 def test_validate_claimant_id_rejects_prompt_shaped_and_oversized_values():
     """Step-11 F6: the claimant is read from the environment, stored durably, and interpolated
     into the successor's generated prompt."""
@@ -2138,3 +2297,340 @@ def test_body_hash_is_not_part_of_the_record():
         assessments=[dict(_assessment(769), body_hash="deadbeef"), _assessment(726),
                      _assessment(586)], now_ts=1)
     assert "body_hash" not in new[dl.BOUNDARY_SWEEPS_KEY][0]["assessments"][0]
+
+
+# --------------------------------------------------------------------------- #
+# _extract_section (#944 — claim-inventory coverage binding, AC1)
+# --------------------------------------------------------------------------- #
+class TestExtractSection:
+    """`_extract_section(lines, heading_re)` -> (items, unclassified). Shared by the `ac` and
+    `cause` claim-inventory extraction (design doc §1.3): a heading match, top-level list items
+    collected with their wrapped continuations, and — fail-closed — any non-blank content the
+    parser could not attribute to a real item, kept SEPARATE from the deliberate free-prose
+    fallback (a section with no list at all is not an error; a section that mixes a real list
+    with something the parser cannot classify is)."""
+
+    def _lines(self, text):
+        return text.split("\n")
+
+    def test_clean_numbered_list(self):
+        text = "## Acceptance criteria\n\n1. First thing.\n2. Second thing.\n\n## Next section\n"
+        items, unclassified = dl._extract_section(self._lines(text), dl._AC_HEADING_RE)
+        assert items == ["First thing.", "Second thing."]
+        assert unclassified == []
+
+    def test_wrapped_continuation_lines_join_the_item(self):
+        text = ("## Acceptance criteria\n\n"
+                "1. First thing that wraps\n"
+                "   onto a second physical line.\n"
+                "2. Second thing.\n")
+        items, unclassified = dl._extract_section(self._lines(text), dl._AC_HEADING_RE)
+        assert items == ["First thing that wraps onto a second physical line.", "Second thing."]
+        assert unclassified == []
+
+    def test_heading_with_no_list_falls_back_to_one_whole_section_item(self):
+        text = "## Root cause\n\nThe cause is a race between two writers.\n\n## Next\n"
+        items, unclassified = dl._extract_section(self._lines(text), dl._CAUSE_HEADING_RE)
+        assert items == ["The cause is a race between two writers."]
+        assert unclassified == []
+
+    def test_list_plus_a_stray_unlisted_paragraph_is_unclassified(self):
+        """The round-2 review's finding 1: a section mixing a real list with unattributed
+        prose must fail closed, not silently drop the stray paragraph."""
+        text = ("## Acceptance criteria\n\n"
+                "1. First thing.\n\n"
+                "Some extra unlisted requirement floats here.\n\n"
+                "2. Second thing.\n")
+        items, unclassified = dl._extract_section(self._lines(text), dl._AC_HEADING_RE)
+        assert items == ["First thing.", "Second thing."]
+        assert unclassified == ["Some extra unlisted requirement floats here."]
+
+    def test_no_heading_at_all_is_empty_with_no_error(self):
+        text = "Just some prose with no relevant heading at all.\n"
+        items, unclassified = dl._extract_section(self._lines(text), dl._AC_HEADING_RE)
+        assert items == []
+        assert unclassified == []
+
+    def test_bulleted_list_with_dash_and_star(self):
+        text = "## Problem\n\n- First cause.\n* Second cause.\n"
+        items, unclassified = dl._extract_section(self._lines(text), dl._CAUSE_HEADING_RE)
+        assert items == ["First cause.", "Second cause."]
+
+    def test_a_markdown_checkbox_prefix_is_stripped_from_the_item_text(self):
+        """Step-8a review finding 3: `_TOP_LEVEL_LIST_ITEM_RE` captures everything after the
+        marker, so `- [ ] X` extracted as `[ ] X` — which then fails EXACT-match claim coverage
+        against a claim quoting only `X`. This is the skill's OWN fully-worked example
+        (`skills/revalidate-children/SKILL.md`), so the documented step was not executable."""
+        text = "## Acceptance criteria\n\n- [ ] X is checked before Y runs.\n"
+        items, unclassified = dl._extract_section(self._lines(text), dl._AC_HEADING_RE)
+        assert items == ["X is checked before Y runs."]
+
+    def test_checked_and_uppercase_checkbox_variants_are_also_stripped(self):
+        text = "## Acceptance criteria\n\n- [x] Done thing.\n- [X] Also done.\n"
+        items, unclassified = dl._extract_section(self._lines(text), dl._AC_HEADING_RE)
+        assert items == ["Done thing.", "Also done."]
+
+    def test_stops_at_the_next_heading_of_any_level(self):
+        text = "## Acceptance criteria\n\n1. Only thing.\n\n### Unrelated subsection\n\nOther stuff.\n"
+        items, unclassified = dl._extract_section(self._lines(text), dl._AC_HEADING_RE)
+        assert items == ["Only thing."]
+        assert unclassified == []
+
+    def test_trailing_content_after_the_last_item_is_not_unclassified(self):
+        """Real-body regression: #944's own '## Problem' section has a citation line AFTER its
+        two-item cause list, before the next heading. Flagging that would be a false positive
+        on the exact fixture this feature exists to handle — only content BETWEEN markers is
+        genuinely suspicious."""
+        text = ("## Problem\n\n"
+                "1. First cause.\n"
+                "2. Second cause.\n\n"
+                "Design: see the linked doc for details.\n\n"
+                "## Acceptance criteria\n")
+        items, unclassified = dl._extract_section(self._lines(text), dl._CAUSE_HEADING_RE)
+        assert items == ["First cause.", "Second cause."]
+        assert unclassified == []
+
+    def test_944s_own_problem_section_is_a_two_item_numbered_list(self):
+        """The exact real-world case that drove the round-1 Critical finding: #944's own body
+        itemizes two distinct causes under '## Problem'."""
+        text = (
+            "## Problem\n\n"
+            "Two documented holes in the queue-revalidation machinery, both stated in\n"
+            "`skills/revalidate-children/SKILL.md` rather than fixed:\n\n"
+            "1. **Coverage gap.** The receipt attests that a look happened.\n"
+            "2. **The obsolete-child marker gates nothing.** It is informational only.\n\n"
+            "## Acceptance criteria\n")
+        items, unclassified = dl._extract_section(self._lines(text), dl._CAUSE_HEADING_RE)
+        assert len(items) == 2
+        assert "Coverage gap" in items[0]
+        assert "obsolete-child marker gates nothing" in items[1]
+        assert unclassified == []
+
+    def test_a_second_matching_heading_is_aggregated_not_ignored(self):
+        """Step-8a review finding 1: `_CAUSE_HEADING_RE` treats 'Problem', 'Root cause' and
+        'Cause' as synonyms, but a body can legitimately carry BOTH a '## Problem' section and a
+        separate later '## Root cause' section. The original version stopped at the FIRST
+        matching heading, so the second section's claims silently never entered the inventory —
+        a claim set could omit them entirely and still pass coverage."""
+        text = ("## Problem\n\n1. First cause.\n\n"
+                "## Root cause\n\n2. Second cause.\n\n"
+                "## Acceptance criteria\n")
+        items, unclassified = dl._extract_section(self._lines(text), dl._CAUSE_HEADING_RE)
+        assert items == ["First cause.", "Second cause."]
+        assert unclassified == []
+
+    def test_unclassified_content_in_a_later_matching_section_is_not_lost_either(self):
+        state = ("## Problem\n\n1. First.\n\nStray unlisted content.\n\n2. Second.\n\n"
+                 "## Root cause\n\n1. Third.\n\nMore stray content.\n\n2. Fourth.\n")
+        items, unclassified = dl._extract_section(self._lines(state), dl._CAUSE_HEADING_RE)
+        assert items == ["First.", "Second.", "Third.", "Fourth."]
+        assert unclassified == ["Stray unlisted content.", "More stray content."]
+
+
+# --------------------------------------------------------------------------- #
+# extract_claim_inventory (#944 — claim-inventory coverage binding, AC1)
+# --------------------------------------------------------------------------- #
+class TestExtractClaimInventory:
+    def test_944s_own_body_end_to_end(self):
+        """The primary fixture: #944's own real body — a 2-item numbered Problem list, a
+        4-item Acceptance criteria list, and a design-doc citation."""
+        body = (
+            "## Problem\n\n"
+            "Two documented holes, both stated in `skills/revalidate-children/SKILL.md`:\n\n"
+            "1. **Coverage gap.** The receipt attests that a look happened.\n"
+            "2. **The obsolete-child marker gates nothing.** It is informational only.\n\n"
+            "Design: `docs/planning/2026-08-05-871-m4-session-continuity-away-mode.md` §3.4.\n\n"
+            "## Acceptance criteria\n\n"
+            "1. Claim-inventory coverage binding.\n"
+            "2. Obsolete-child owner gate.\n"
+            "3. The gate is recoverable.\n"
+            "4. Tests cover the above.\n")
+        resolves = {"docs/planning/2026-08-05-871-m4-session-continuity-away-mode.md"}
+        inv = dl.extract_claim_inventory(body, resolves)
+        # Both citations appear — the SKILL.md path is a genuine, UNRESOLVED candidate here
+        # (not in `resolves`), exactly the case #944 needs the inventory to see (finding 4).
+        assert inv["citation"] == [
+            "skills/revalidate-children/SKILL.md",
+            "docs/planning/2026-08-05-871-m4-session-continuity-away-mode.md"]
+        assert len(inv["cause"]) == 2
+        assert len(inv["ac"]) == 4
+        assert inv["errors"] == []
+
+    def test_ac_mentioned_but_unparseable_is_an_extraction_error(self):
+        """Round-1 fix (finding 2): the bare phrase present with zero structured items
+        extracted must fail closed, not silently pass with an empty ac inventory."""
+        body = "## What must be true\n\nSee the acceptance criteria discussed on the call.\n"
+        inv = dl.extract_claim_inventory(body, resolves=set())
+        assert inv["ac"] == []
+        assert any("acceptance criteria" in e.lower() for e in inv["errors"])
+
+    def test_ac_genuinely_absent_is_not_an_error(self):
+        body = "## Problem\n\nA bug fix with no acceptance-criteria-shaped body at all.\n"
+        inv = dl.extract_claim_inventory(body, resolves=set())
+        assert inv["ac"] == []
+        assert inv["errors"] == []
+
+    def test_a_stray_unlisted_ac_line_is_an_extraction_error(self):
+        body = ("## Acceptance criteria\n\n1. First.\n\n"
+                "An extra requirement with no list marker.\n\n2. Second.\n")
+        inv = dl.extract_claim_inventory(body, resolves=set())
+        assert inv["ac"] == ["First.", "Second."]
+        assert inv["errors"]
+
+    def test_unresolved_citation_is_present_not_dropped(self):
+        body = "See hooks/nonexistent_file.py for the cause."
+        inv = dl.extract_claim_inventory(body, resolves=set())
+        assert inv["citation"] == ["hooks/nonexistent_file.py"]
+
+    def test_no_headings_at_all_is_a_fully_empty_inventory(self):
+        inv = dl.extract_claim_inventory("Just a short bug report with no structure.", set())
+        assert inv == {"citation": [], "cause": [], "ac": [], "errors": []}
+
+
+# --------------------------------------------------------------------------- #
+# missing_claim_coverage / claim_coverage_ok (#944 — AC1, maximum bipartite matching)
+# --------------------------------------------------------------------------- #
+class TestMissingClaimCoverage:
+    def _claim(self, kind, quoted, checked="<no-file: reasoning>", verdict="holds"):
+        return {"kind": kind, "quoted_from_body": quoted, "checked_against": checked,
+                "evidence": "x", "verdict": verdict}
+
+    def test_deep_requires_all_three_kinds(self):
+        inventory = {"citation": ["hooks/a.py"], "cause": ["The cause."], "ac": ["The AC."]}
+        missing = dl.missing_claim_coverage(inventory, [], "deep")
+        assert missing == {"citation": ["hooks/a.py"], "cause": ["The cause."], "ac": ["The AC."]}
+
+    def test_quick_does_not_require_citation(self):
+        inventory = {"citation": ["hooks/a.py"], "cause": ["The cause."], "ac": ["The AC."]}
+        missing = dl.missing_claim_coverage(inventory, [], "quick")
+        assert missing == {"citation": [], "cause": ["The cause."], "ac": ["The AC."]}
+
+    def test_full_coverage_reports_nothing_missing(self):
+        inventory = {"citation": ["hooks/a.py"], "cause": ["The cause."], "ac": ["The AC."]}
+        claims = [
+            self._claim("citation", "hooks/a.py mentioned", checked="hooks/a.py@" + "0" * 40),
+            self._claim("cause", "The cause."),
+            self._claim("ac", "The AC."),
+        ]
+        missing = dl.missing_claim_coverage(inventory, claims, "deep")
+        assert dl.claim_coverage_ok(missing)
+
+    def test_exact_match_required_for_ac_and_cause_not_substring(self):
+        """Round-2 review finding 3: a short generic claim fragment must NOT cover an item it
+        is merely a substring of — the field is documented 'verbatim', not 'clipped'."""
+        inventory = {"citation": [], "cause": [], "ac": ["The system must validate all input."]}
+        claims = [self._claim("ac", "the")]
+        missing = dl.missing_claim_coverage(inventory, claims, "deep")
+        assert missing["ac"] == ["The system must validate all input."]
+
+    def test_exact_match_tolerates_only_whitespace_and_case_normalization(self):
+        inventory = {"citation": [], "cause": [], "ac": ["The AC.  "]}
+        claims = [self._claim("ac", "  the ac.")]
+        missing = dl.missing_claim_coverage(inventory, claims, "deep")
+        assert missing["ac"] == []
+
+    def test_maximum_matching_finds_an_assignment_greedy_would_miss(self):
+        """Round-2 review finding 2: a GREEDY first-match can report a false coverage gap when
+        a complete matching exists. Citation matching (substring/containment) is where this
+        naturally arises: one claim mentions BOTH paths, another mentions only one — processing
+        the multi-match item first and greedily taking the shared claim starves the other item,
+        even though a valid assignment (swap) covers both."""
+        inventory = {"citation": ["hooks/a.py", "hooks/b.py"], "cause": [], "ac": []}
+        claims = [
+            self._claim("citation", "See hooks/a.py and hooks/b.py, both gone."),
+            self._claim("citation", "hooks/a.py was removed."),
+        ]
+        missing = dl.missing_claim_coverage(inventory, claims, "deep")
+        assert missing["citation"] == [], (
+            "a complete matching exists (item hooks/a.py -> claim 1, item hooks/b.py -> "
+            "claim 0) but a greedy first-match would report hooks/b.py as missing")
+
+    def test_citation_coverage_via_checked_against_prefix_for_resolved_path(self):
+        inventory = {"citation": ["hooks/a.py"], "cause": [], "ac": []}
+        claims = [self._claim("citation", "irrelevant text", checked="hooks/a.py@" + "1" * 40)]
+        missing = dl.missing_claim_coverage(inventory, claims, "deep")
+        assert missing["citation"] == []
+
+    def test_citation_coverage_via_quoted_from_body_for_unresolved_path(self):
+        inventory = {"citation": ["hooks/ghost.py"], "cause": [], "ac": []}
+        claims = [self._claim("citation", "hooks/ghost.py no longer exists")]
+        missing = dl.missing_claim_coverage(inventory, claims, "deep")
+        assert missing["citation"] == []
+
+    def test_a_claim_of_the_wrong_kind_never_covers_an_item(self):
+        inventory = {"citation": [], "cause": [], "ac": ["The AC."]}
+        claims = [self._claim("cause", "The AC.")]
+        missing = dl.missing_claim_coverage(inventory, claims, "deep")
+        assert missing["ac"] == ["The AC."]
+
+    def test_one_to_one_a_single_claim_cannot_cover_two_items(self):
+        inventory = {"citation": [], "cause": [], "ac": ["Same text.", "Same text."]}
+        claims = [self._claim("ac", "Same text.")]
+        missing = dl.missing_claim_coverage(inventory, claims, "deep")
+        assert len(missing["ac"]) == 1
+
+    def test_unknown_depth_raises(self):
+        with pytest.raises(dl.DriverStateError):
+            dl.missing_claim_coverage({"citation": [], "cause": [], "ac": []}, [], "bogus")
+
+
+# --------------------------------------------------------------------------- #
+# validate_claim_coverage / build_revalidation_record (#944 — AC1, demoted primitive)
+# --------------------------------------------------------------------------- #
+class TestValidateClaimCoverage:
+    def _claim(self, kind, quoted, checked="<no-file: reasoning>"):
+        return {"kind": kind, "quoted_from_body": quoted, "checked_against": checked,
+                "evidence": "x", "verdict": "holds"}
+
+    def test_full_coverage_passes(self):
+        body = "## Acceptance criteria\n\n1. The AC.\n"
+        dl.validate_claim_coverage(body, set(), [self._claim("ac", "The AC.")], "deep")
+
+    def test_under_coverage_raises_naming_the_missing_item(self):
+        body = "## Acceptance criteria\n\n1. The AC.\n"
+        with pytest.raises(dl.DriverStateError, match="The AC"):
+            dl.validate_claim_coverage(body, set(), [], "deep")
+
+    def test_an_extraction_error_refuses_before_coverage_is_even_computed(self):
+        body = "## What must be true\n\nSee the acceptance criteria discussed on the call.\n"
+        with pytest.raises(dl.DriverStateError, match="acceptance criteria"):
+            dl.validate_claim_coverage(body, set(), [], "deep")
+
+
+class TestBuildRevalidationRecordCoverage:
+    def _claim(self, kind, quoted, checked="<no-file: reasoning>"):
+        return {"kind": kind, "quoted_from_body": quoted, "checked_against": checked,
+                "evidence": "x", "verdict": "holds"}
+
+    def test_omitting_resolves_raises_loudly(self):
+        with pytest.raises(TypeError):
+            dl.build_revalidation_record(   # pylint: disable=missing-kwoa
+                body="## Acceptance criteria\n\n1. The AC.\n",
+                from_sha="a" * 40, to_sha="b" * 40, extraction="none", depth="deep",
+                claims=[self._claim("ac", "The AC.")], validated_at=1)
+
+    def test_under_coverage_refuses_construction(self):
+        with pytest.raises(dl.DriverStateError):
+            dl.build_revalidation_record(
+                body="## Acceptance criteria\n\n1. The AC.\n",
+                from_sha="a" * 40, to_sha="b" * 40, extraction="none", depth="deep",
+                claims=[], validated_at=1, resolves=set())
+
+    def test_full_coverage_succeeds(self):
+        record = dl.build_revalidation_record(
+            body="## Acceptance criteria\n\n1. The AC.\n",
+            from_sha="a" * 40, to_sha="b" * 40, extraction="none", depth="deep",
+            claims=[self._claim("ac", "The AC.")], validated_at=1, resolves=set())
+        assert record["outcome"] == "still_valid"
+
+    def test_pending_disposition_skips_coverage_entirely(self):
+        """A pending-disposition record is not a stamped, selectable outcome (AC2) — full
+        inventory coverage does not gate it; it already requires >=1 broken claim under the
+        existing coherence rule."""
+        record = dl.build_revalidation_record(
+            body="## Acceptance criteria\n\n1. Something entirely uncovered.\n",
+            from_sha="a" * 40, to_sha="b" * 40, extraction="none", depth="deep",
+            claims=[self._claim("cause", "unrelated", checked="<no-file: gone>")],
+            validated_at=1, resolves=set(), outcome=None,
+            pending_disposition="issue_obsolete")
+        assert record["pending_disposition"] == "issue_obsolete"

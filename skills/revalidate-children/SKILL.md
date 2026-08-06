@@ -25,17 +25,23 @@ issue. A successor then implements from a body that is quietly wrong.
 `driver_lib.next_ready_issue` therefore refuses to hand out the next child unless:
 
 - the campaign receipt's `validated_head` equals a **freshly observed** `origin/main`, AND
-- every eligible child carries `validated_against == that head`.
+- every eligible child carries `validated_against == that head`, AND
+- the child it would otherwise select carries no live `pending_disposition` — restored by #944
+  (the #848 rebuild; the gate was cut from #840 after breaking in four consecutive review rounds,
+  owner decision 2026-08-02).
 
-There is no third clause today. **A `pending_disposition` gates NOTHING — the owner gate was cut
-from #840 and is being rebuilt in #848** (owner decision 2026-08-02, after it broke in four
-consecutive review rounds). You still RECORD the marker when an audit concludes a child is
-obsolete: it is the evidence an owner acts on, and #848 is what will make it refuse. Until then,
-say plainly in your report that an obsolete child is NOT yet blocked from satisfying a
-dependent's dependency.
+**A `pending_disposition` now genuinely gates.** `next-child`/`handoff` refuse it with rc 11,
+naming the write-back remedy (`record-child-outcome --status deferred|abandoned|merged`) — an
+owner-gated refusal: never self-clearing, never automatically continued, in every supervision
+state (design doc `2026-08-06-944-revalidate-hardening-design.md` §2.4). The scan does not stop
+at the first marked child either — it skips past a lone obsolete-pending candidate to any OTHER
+genuinely ready child, and raises only when nothing else is selectable.
 
-**This skill clears both clauses above.** Every refusal it can meet is cleared by re-running it
-and rebuilding the receipt.
+**This skill clears the first two provenance clauses** (stale `validated_head`, an unstamped
+eligible child) by re-running it and rebuilding the receipt. **It records and carries forward the
+third clause, but only an owner running `record-child-outcome` can clear a live
+`pending_disposition`** — re-running this skill rediscovers the same marker for ever (Step-8a
+review finding 9).
 
 It is also the producer for the `queue_revalidated` rung on the
 pane-handoff ladder — `teardown_allowed` refuses to retire a predecessor until the receipt is current.
@@ -143,14 +149,23 @@ through a file the child never cites — #835 is the standing proof: its body wa
   least likely to invalidate, never the class #835 failed on.
 
 **What the receipt actually proves — read this before trusting a `deep` stamp** (Step-11 round 3,
-finding 4). `deep` is an INSTRUCTION to you, not a mechanically verified property of the receipt.
-`validate_claims` refuses an empty claims list and validates the shape of every claim it is given,
-but it does **not** check completeness or kind coverage: a `deep` record carrying one `cause` claim
-is structurally valid and makes the child selectable. So the receipt attests *that a look happened
-and left evidence*, never *that every claim in the body was examined*. Closing that gap needs a
-mechanical inventory of the issue body bound claim-by-claim to the receipt — a much larger change
-than this machinery carries, and deliberately not attempted here. **The consequence for you: depth
-is your obligation, and nothing downstream will catch you skimping on it.**
+finding 4; the coverage half mechanically closed by #944). `deep` is an INSTRUCTION to you, not a
+self-verifying property of the receipt: `validate_claims` refuses an empty claims list and
+validates the shape of every claim it is given, but on its own it cannot tell whether you checked
+the RIGHT claims — a `deep` record carrying one `cause` claim used to be structurally valid even
+when the body raised four.
+
+**#944 closed that half of the gap.** `rebuild-receipt --bodies` (step 7) now runs a mechanical
+inventory of the issue body — every numbered Problem/Cause item, every AC bullet, every cited
+path — and REFUSES, before writing anything, when your `claims` do not cover every item the body
+raises (exact-match on cause/AC text, citation-based on cited paths; `driver_lib.
+extract_claim_inventory` / `missing_claim_coverage`). A `deep` record that skips an AC bullet or a
+cause clause is no longer structurally valid — it is refused by name, not silently accepted.
+
+**What it still cannot check: that the evidence you quoted is genuine**, or that the file you
+cited is the right one. Coverage proves you looked at everything the body raises; it does not
+prove you looked correctly. That half remains your obligation, and nothing downstream catches you
+skimping on it.
 
 **5. Record each claim as evidence.** Per claim:
 
@@ -171,15 +186,18 @@ is not evidence.
 |---|---|
 | `holds` | `still_valid` |
 | any `broken`, and the issue is still worth doing | `body_corrected` — **post a correction COMMENT** and record its URL |
-| any `broken`, and the issue no longer makes sense | set `pending_disposition: "issue_obsolete"` and report it to the owner — it does NOT block anything yet (#848) |
+| any `broken`, and the issue no longer makes sense | set `pending_disposition: "issue_obsolete"` and report it to the owner — this NOW blocks the child from being selected, rc 11, until an owner clears it (#944) |
 
 **Corrections are comments. Never edit an issue body.** The body stays as filed; the comment is the
 authority. State that in the comment.
 
 **`issue_obsolete` is not an outcome.** Closing a child is an owner decision, so record the
-marker and REPORT it — never choose for them. Until #848 lands the marker is INFORMATIONAL: it
-gates nothing, and the child is stamped and selectable like any other. Say that plainly in your
-report, or an owner reads "obsolete" and assumes the queue is holding when it is not.
+marker and REPORT it — never choose for them. **The marker now gates selection (#944):** the
+child is still stamped (its evidence carries forward into the receipt), but `next_ready_issue`
+refuses to hand it out while `pending_disposition` is set, and prints the write-back remedy
+rather than acting on it itself. Say plainly in your report which children are held this way, so
+an owner reads "obsolete" and knows exactly what is stuck behind it, not merely that a marker
+exists.
 
 **7. Write the receipt with the `rebuild-receipt` command.** Do NOT assemble it by hand and do
 NOT call `driver_lib.rebuild_receipt` yourself — it is PURE, so calling it changes no file, and
@@ -190,13 +208,45 @@ that, writes atomically, then re-reads from disk and validates what actually lan
 
 ```bash
 python3 hooks/launcher_lib.py rebuild-receipt \
-  --driver-state <state.json> --project-root . --audited audited.json
+  --driver-state <state.json> --project-root . \
+  --audited audited.json --bodies bodies.json
 ```
 
 `audited.json` holds `{"<issue number>": <record>}` for the children you actually looked at —
 omit the flag entirely when nothing needed auditing, which is legitimate and still arms the
 campaign. Exit 0 prints the validated head; **6** means the rebuild was refused (the message
 names the remedy); **5** means the head could not be observed.
+
+**`--bodies` is required whenever any `--audited` entry is NOT `pending_disposition`** (#944,
+AC1) — the command refuses, BEFORE writing anything, when a covered entry's claims do not cover
+its body's mechanical inventory. Worked example, auditing #612 as `still_valid` with one `ac`
+claim:
+
+`bodies.json` holds one entry per issue number, each value the raw body text exactly as
+`gh issue view` returns it:
+
+```json
+{"612": "## Problem\n\n1. The gate never checks X.\n\n## Acceptance Criteria\n\n- [ ] X is checked before Y runs.\n"}
+```
+
+`audited.json` — built with `driver_lib.build_revalidation_record` (never by hand — see below):
+
+```json
+{"612": {"body_hash": "<sha256 of normalize_issue_body(body)>", "from_sha": "<prior sha>",
+         "to_sha": "<observed head>", "extraction": "paths", "depth": "quick",
+         "outcome": "still_valid", "validated_at": 1754000000,
+         "claims": [{"kind": "ac", "quoted_from_body": "X is checked before Y runs.",
+                     "checked_against": "hooks/driver_lib.py@<observed head>",
+                     "evidence": "read at that sha; the check now runs", "verdict": "holds"}]}}
+```
+
+**`--bodies` carries ONLY the raw body text — no `resolves` field, nothing for a caller to
+fabricate.** The command derives `resolves` itself from real `git cat-file -e` probes against
+both the record's `from_sha` and `to_sha`, so citation coverage is checked against what the repo
+actually contains, never against a value you supplied. Omit an entry only for an audited child
+whose record IS `pending_disposition` — coverage is skipped for those by design (an obsolete
+child is awaiting a decision, not a stamped outcome, so full inventory coverage does not gate
+it).
 
 Build each record with the constructor, never by hand — the validator requires eight fields and
 a `body_hash` over a specific normalization, which is why hand-built records failed:
@@ -220,10 +270,11 @@ makes the gate recoverable:
 - a stamp whose evidence was dropped, or that names no usable commit, is **cleared** — the stamp
   is the claim and the record is the evidence, so the claim must never outlive it;
 - a `pending_disposition` is carried forward as EVIDENCE of what the audit found, and the child
-  is still STAMPED. It withheld the stamp while the owner gate existed, because a stamped child is
-  selectable; with nothing gating on the marker that rule stopped protecting anything and started
-  jamming the queue instead — the child was never stamped, so the provenance clause refused for
-  ever. #848 restores both together;
+  is STAMPED regardless — stamping and gating are deliberately separate concerns. Withholding the
+  stamp (the pre-#840 behavior) left the provenance clause permanently unsatisfiable for that
+  child, jamming the queue with no write-back able to clear it. **#944 (the #848 rebuild) is what
+  restores the missing half at the right layer**: the child stays stamped, but selection now
+  refuses it directly (rc 11) until the owner runs the write-back;
 - an EMPTY `audited` still advances `validated_head`. That is correct, not a shortcut: a campaign
   whose children are all merged or in flight has nothing to audit, and the head clause refuses it
   regardless — so if this could not arm it, the gate would be shut for good on the mid-child

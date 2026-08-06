@@ -14,6 +14,101 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #871 M4 — #944: claim-inventory coverage + the obsolete-child owner gate · v3.136.0
+
+**Two documented holes, closed.** The receipt used to attest only *that a look happened and left
+evidence*, never *that every claim in the body was examined* — a `deep` record carrying one
+`cause` claim was structurally valid and made the child selectable regardless of what the body
+actually raised. And `pending_disposition: "issue_obsolete"` gated nothing at all: the owner gate
+had been cut from #840 after four consecutive review rounds broke it, and #848 (its planned
+rebuild) was closed without a replacement in the D176 fold.
+
+**AC1 — claim-inventory coverage, enforced at the REAL write path.** A mechanical inventory
+(`extract_claim_inventory`) pulls citation/cause/ac claims out of the issue body; coverage is
+checked via proper maximum bipartite matching (`_max_bipartite_match`, an augmenting-path
+algorithm — a round-2 design review finding was that a GREEDY first-match reports false gaps when
+a complete matching exists), with EXACT normalized-text equality for cause/ac (a round-2 finding:
+substring matching let a short generic claim fragment spuriously cover any item containing it).
+The enforcement point is `rebuild-receipt --bodies`, not the record constructor — a round-2 design
+review finding was that the constructor has ZERO production callers, so a coverage check living
+only there would never run on a real campaign. `--bodies` carries ONLY the raw body text; the CLI
+derives `resolves` itself via real `git cat-file -e` probes against both the record's endpoints,
+so nothing a caller supplies can fabricate citation coverage (a round-2 security finding on the
+first draft's trust boundary).
+
+**AC2-4 — the obsolete-child owner gate, restored.** `next_ready_issue` now refuses a child
+carrying a live `pending_disposition` (`ObsoletePendingChild`, rc 11 on both `next-child` and
+`handoff`), naming the `record-child-outcome --status deferred|abandoned|merged` write-back
+remedy. The scan does not stop at the first marked child — it remembers the first one seen and
+keeps scanning, raising only when every remaining ready child is pending-disposition or nothing is
+ready at all (a round-2 finding: the original version raised at the FIRST such candidate, parking
+the whole run even when unrelated ready work existed). Ordered behind the self-clearing gates
+(sweep, in-flight) so a caller who hasn't cleared those sees them first. Closes a genuine
+preflight/locked-commit race: a `revalidate-children` write-back can land `pending_disposition`
+without touching `status`, so `child_boundary_precondition` now rechecks the receipt under the
+SAME lock `_open_and_claim` already holds, and `_cmd_handoff` maps that race to the identical rc-11
+payload the preflight path emits.
+
+**Scope correction, stated plainly (D256 partially overturned by D257, Step-4 review round 2
+finding 6).** The issue's own AC2 text asked for "sleeping → defer the child … and continue ONLY
+if no remaining child depends on it." Round 1 accepted that as one remedy command, the same shape
+every other refusal code names. Round 2 correctly pushed back: the OTHER refusal codes name a
+single command for a human (or the next skill invocation) to run — they never claim the run then
+continues unattended. "Defer, post the blocker, run the write-back, retry, continue" is FOUR
+chained actions with no human and no orchestrator code tying them together, a materially stronger
+claim. **#944 ships the mechanical rc-11 refusal only, in every supervision state, with no
+automatic continuation of any kind** — attended/away/attended-overdue print an ask-the-owner
+message, sleeping prints a recommendation (defer, or park if a dependent exists) that is never
+executed automatically. Building the actual automation is explicitly deferred, most naturally to
+#947 (blocker routing) or a dedicated follow-up.
+
+**Reviews.** Two Step-4 design-review rounds (`gpt-5.6-sol`): round 1 found 1 Critical + 4 High
+(all fixed); round 2 found 4 High + 1 Medium — the greedy-matching bug, the unreachable
+constructor, substring matching, the scope-of-scan bug, and the scope-correction above — all
+fixed, gate closed budget-exhausted (design 2/2) per the #798 carve-out. Step-6 plan review: 3
+High + 2 Medium (1 refuted — Tasks 2+3 already drew the distinction the finding demanded in
+isolation), 2 applied as plan/skill refinements, 1 fixed as a security tightening (removing the
+caller-suppliable `resolves` field from `--bodies` entirely).
+
+**Step 8a found four more real bugs in code that looked correct on first pass — the same pattern
+every earlier round hit.** `_extract_section` only ever inventoried the FIRST heading matching a
+synonym-group pattern (a body with both "## Problem" and a separate "## Root cause" silently lost
+the second section's claims); the section extractor captured a Markdown checkbox prefix as part
+of the item text, so the skill's own fully-worked example (`- [ ] X`) was not actually executable
+under exact-match coverage; the rc-11 remedy text printed one line with UNQUOTED `|` characters (a
+shell pipeline, not a copyable command) and omitted `--driver-state`; and `_probe_path_exists`
+treated an unresolvable commit the same as a resolvable one that merely lacks the path, silently
+narrowing the required citation inventory around an operational failure. All four fixed, plus a
+vacuous self-comparing test and a stale "clears both clauses" sentence. **Three findings deferred
+with recorded rationale** (D260-D262) rather than patched under time pressure — each conflicts
+with an existing, deliberate test convention or needs its own design-level decision: a
+substantiveness policy for vacuous coverage on unstructured bodies, a closing-note syntax choice
+for trailing-content classification, and a live `gh issue view` fetch to close a body-authenticity
+gap where a caller-supplied hash is checked only against a caller-supplied body.
+
+**Step 11 (pre-PR review, tokenless — review-source loop-back budget exhausted, global 3/3)
+independently re-confirmed all three Step 8a deferrals still open, and found 2 MORE real bugs, both
+fixed** (`900bf4ad`): the sleeping+has_pending_dependents rc-11 branch printed no remedy command at
+all, contradicting the change's own claim that rc 11 names it in every supervision state; and
+`_probe_path_exists` validated only the endpoint commit, not each subsequent path-level probe, so
+an operational failure there still read as "path absent" — rewritten to a genuine tri-state via
+`git ls-tree`. Deferred-resolution exit gate (`plan_lib.assert_no_unresolved_high_deferrals`):
+PASS. Step 11.5 security scan: 0 findings, gate not blocked.
+
+**Decisions (this slot).** D255 (declined the small-standard lane — this hardens a shared
+selection mechanism every future epic run depends on), D256/D257 (the scope-correction above),
+D258 (a Step-6 finding fixed as a plan refinement rather than reopening the closed design gate,
+loop-back budget already exhausted), D259 (this handoff used ad-hoc pane-handoff rather than
+mid-child-handoff, a mid-#944 boundary), D260-D262 (the three Step 8a deferrals above).
+
+**Status.** Suite 5804→5896 (+92), exit 0 (re-verified unpiped before merge). No workflow-spine
+change → no diagram REV. `Closes #944`.
+
+Design: `docs/planning/2026-08-06-944-revalidate-hardening-design.md` ·
+live: https://rawgentic-design-944.vercel.app/
+
+---
+
 ## Epic #871 M4 — #586 Part 2: the scheduler, wired outside the repo · v3.135.2
 
 **The gap, closed.** Part 1 (v3.135.1) shipped the measurement/validation/lineage-check

@@ -79,10 +79,12 @@ import json
 import os
 import posixpath
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 
 # Pane ids are OPAQUE stable handles upstream, so this validates the security-relevant
 # properties rather than pretending to know the grammar: non-empty, not option-shaped, no
@@ -4562,6 +4564,44 @@ def _driver_lib():
     return driver_lib
 
 
+def _supervision_lib():
+    """Lazy, same direction as `_plan_lib`/`_driver_lib`, so `launcher_lib` stays importable
+    alone (#944 Task 9)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import supervision_lib  # pylint: disable=import-outside-toplevel
+    return supervision_lib
+
+
+def _find_workspace_root(start_dir: "str | None" = None) -> "str | None":
+    """Walk up from `start_dir` (default cwd) for `.rawgentic_workspace.json`.
+
+    Same walk-up idiom as `context_meter.find_workspace`, duplicated rather than imported —
+    `launcher_lib` stays importable without a `context_meter` dependency (#944 Task 9)."""
+    try:
+        current = os.path.realpath(start_dir or os.getcwd())
+    except OSError:
+        return None
+    while True:
+        if os.path.isfile(os.path.join(current, ".rawgentic_workspace.json")):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+
+
+def _supervision_view_for(start_dir: "str | None" = None):
+    """The effective supervision view for `start_dir` (default cwd). Never raises: no
+    workspace found resolves to `read_state`'s own "absent" root case, and a present-but-
+    unreadable state file resolves to its "invalid" case — `evaluate_workspace` maps BOTH
+    to `state="attended"`, so this wrapper inherits that safe default rather than
+    re-deriving it (#943 Part A's own never-raises, fail-open-for-availability contract,
+    `hooks/supervision_lib.py` module docstring; #944 Task 9)."""
+    sup = _supervision_lib()
+    root = _find_workspace_root(start_dir)
+    return sup.evaluate_workspace(sup.read_state(root), now=datetime.now(timezone.utc))
+
+
 def resume_prompt_for_state(state: dict, project: str | None = None, *,
                             repo_root: str | None = None) -> dict:
     """The canonical resume decision for the next ready child, as a RESULT OBJECT.
@@ -4620,6 +4660,72 @@ SWEEP_HEAD_MOVED_RC = 9
 # 8 and 9 (sweep) are taken; a distinct code lets a driver tell 'declare and retry'
 # apart from a bad argument (rc 2).
 INFLIGHT_REQUIRED_RC = 10
+# #944 AC2-4 — the obsolete-child owner gate. NOT self-clearing (a human, or the write-back
+# command a human runs, must act), so it is checked LAST among the boundary gates: revalidation
+# (6) -> sweep (8/9) -> in-flight (10, handoff only) -> obsolete-pending (11) -> ready (0). A
+# self-clearing gate ahead of this one would otherwise be masked by a refusal the run could have
+# cleared itself (design doc §2.3).
+OBSOLETE_PENDING_RC = 11
+
+
+def _obsolete_pending_remedy_commands(issue: int, driver_state: str, project_root: str) -> str:
+    """The three copy-pasteable `record-child-outcome` commands (one per status), newline-joined.
+
+    Step-8a review finding 5: the original text named ONE line with `--status
+    deferred|abandoned|merged` — an ordinary shell interprets the unquoted `|` characters as a
+    pipeline, so nothing about it was actually copy-pasteable — and omitted `--driver-state`
+    entirely, so even a hand-corrected command could update a different or default campaign
+    rather than the one that produced this refusal. Every path is shell-quoted."""
+    return "\n".join(
+        "  python3 hooks/launcher_lib.py record-child-outcome --issue "
+        f"{issue} --status {status} --driver-state {shlex.quote(driver_state)} "
+        f"--project-root {shlex.quote(project_root)}"
+        for status in ("deferred", "abandoned", "merged"))
+
+
+def _obsolete_pending_refusal_text(issue: int, has_pending_dependents: bool, view, *,
+                                   driver_state: str, project_root: str) -> str:
+    """rc-11's operator text (design §2.4). ALWAYS a plain refusal: #944 ships the MECHANICAL
+    refusal only, in every supervision state, with no automatic continuation of any kind (Step-4
+    review round 2 finding 6, High — partially overturns D256's round-1 resolution, which had
+    wrongly treated 'defer, post the blocker, run the write-back, retry' as one remedy command
+    the way the other refusal codes name one). The remedy named is identical in every branch;
+    only which action is RECOMMENDED, and to whom, changes by supervision state."""
+    remedies = _obsolete_pending_remedy_commands(issue, driver_state, project_root)
+    if view.state != "sleeping":
+        # attended / away / attended-overdue: a human (or the next skill invocation) is the
+        # right audience — name the remedy, do not decide for them.
+        return (f"refusing: child #{issue} is pending an owner disposition (marked obsolete by "
+                f"revalidate-children) — this is an owner-gated refusal, not self-clearing. Ask "
+                f"the owner which status applies, then run ONE of:\n{remedies}")
+    if has_pending_dependents:
+        # Step 11 review: this branch printed rc 11 with no remedy at all, contradicting the
+        # claim that rc 11 names the write-back remedy in EVERY supervision state — parking is
+        # not permanent, and the human who eventually resolves #{issue} still runs one of these.
+        return (f"refusing: child #{issue} is pending an owner disposition, and another queued "
+                f"child depends on it — nothing past it can advance either. Recommended, NOT "
+                f"executed automatically: PARK this run until a human resolves #{issue}; a "
+                f"sleeping run must not choose between deferred/abandoned/merged on its own. "
+                f"Owner resolution still requires ONE of:\n{remedies}")
+    return (f"refusing: child #{issue} is pending an owner disposition (marked obsolete by "
+            f"revalidate-children). Recommended, NOT executed automatically: post the "
+            f"ERROR-comment-protocol blocker on #{issue}, then run ONE of:\n{remedies}\n"
+            f"then retry selection. This run performs none of that itself.")
+
+
+def _print_obsolete_pending_refusal(issue: int, has_pending_dependents: bool, *,
+                                    observed_head: "str | None", driver_state: str,
+                                    project_root: str) -> None:
+    """The rc-11 payload+text pair, shared by every site that can discover this same refusal:
+    `next-child`'s preflight, `handoff`'s preflight, and `handoff`'s locked recheck (#944 Task 8's
+    race). One place so the three cannot drift on shape (design §2.3/§2.4/§2.6)."""
+    view = _supervision_view_for(project_root)
+    print(json.dumps({"outcome": "obsolete_pending", "issue": issue,
+                      "has_pending_dependents": has_pending_dependents,
+                      "observed_head": observed_head}, indent=2))
+    print(_obsolete_pending_refusal_text(issue, has_pending_dependents, view,
+                                         driver_state=driver_state, project_root=project_root),
+          file=sys.stderr)
 
 
 def _sweep_gate(state, observed_head) -> "tuple[int, dict] | None":
@@ -4840,7 +4946,10 @@ def _cmd_next_child(args) -> int:
               "driver-state file. This is a config error, NOT 'nothing ready' (#840)",
               file=sys.stderr)
         return 2
-    if outcome != "ready":
+    # #944 design §2.3: `obsolete_pending` runs through the SAME self-clearing gates below as
+    # `ready` — a caller who has not yet swept the last boundary sees THAT refusal first and
+    # clears it before ever learning about the obsolete child underneath it.
+    if outcome not in ("ready", "obsolete_pending"):
         print(json.dumps({"outcome": outcome, "observed_head": observed_head}, indent=2))
         return 3
     # #769 — the boundary-sweep gate, AFTER the not-ready check so a finished campaign is never
@@ -4851,6 +4960,12 @@ def _cmd_next_child(args) -> int:
         print(json.dumps(payload, indent=2))
         print(_sweep_refusal_text(payload["status"], args.driver_state), file=sys.stderr)
         return rc
+    if outcome == "obsolete_pending":
+        _print_obsolete_pending_refusal(
+            disposition["issue"], disposition["has_pending_dependents"],
+            observed_head=observed_head, driver_state=args.driver_state,
+            project_root=getattr(args, "project_root", None) or ".")
+        return OBSOLETE_PENDING_RC
     # #927 AC 4, the in-session half. A `ready` here under an `inline` campaign means the run is
     # about to take the next child IN THIS SESSION — a choice the campaign recorded, not a
     # degradation. `boundary_advisory_line` cannot speak for it (preferred and effective agree),
@@ -4868,6 +4983,113 @@ def _cmd_next_child(args) -> int:
     print(json.dumps({"outcome": "ready", "next_issue": disposition["next_issue"],
                       "observed_head": observed_head}, indent=2))
     return 0
+
+
+def _probe_path_exists(path: str, sha: str, project_root: str,
+                       *, runner=_default_runner) -> "bool | None":
+    """True when `path` exists at `sha`; False when confirmed absent; **None when the probe
+    itself is indeterminate** (Step-11 review: the Finding-7 fix validated only the endpoint
+    COMMIT upfront — a valid commit does not guarantee every SUBSEQUENT path-level probe
+    succeeds too; a transient repo error at this layer must not read as "path absent" either).
+
+    Uses `git ls-tree`, not `cat-file -e`, because `ls-tree` gives a genuine tri-state: rc 0
+    with EMPTY output is a confirmed absence (the pathspec matched nothing, which is not an
+    error to `ls-tree`); any NONZERO rc is a real operational failure, never "absent"."""
+    result = runner(["git", "-C", project_root, "ls-tree", "-r", "--name-only", sha, "--", path])
+    if getattr(result, "returncode", 1) != 0:
+        return None
+    return bool((getattr(result, "stdout", "") or "").strip())
+
+
+def _commit_exists(sha: str, project_root: str, *, runner=_default_runner) -> bool:
+    """True when `sha` resolves to a real commit object in the repo at `project_root`."""
+    result = runner(["git", "-C", project_root, "cat-file", "-e", f"{sha}^{{commit}}"])
+    return getattr(result, "returncode", 1) == 0
+
+
+def _derive_resolves(driver, body: str, from_sha: str, to_sha: str, project_root: str,
+                     *, runner=_default_runner) -> set:
+    """The set of `body`'s cited paths that exist in EITHER endpoint tree — DERIVED via real
+    git probes, never trusted from caller input (#944, Step-4 review round 2, finding 3: a
+    caller-supplied `resolves` was verified by nothing, so a fabricated list could change
+    citation-coverage matching with no integrity check catching it). Matches the skill's own
+    documented meaning of `resolves` — "paths that exist in EITHER endpoint tree".
+
+    Both endpoint commits are validated FIRST, whenever there is at least one path candidate to
+    resolve, and raise `driver.DriverStateError` if either does not resolve (Step-8a review
+    finding 7): `_probe_path_exists` cannot distinguish "this path is absent at a real commit"
+    from "this commit does not exist at all", and treating the latter as the former would
+    silently narrow the required inventory around an operational failure instead of refusing.
+    Skipped when there is nothing to resolve — many pre-#944 fixtures carry a placeholder
+    `from_sha`/`to_sha` that was never a real commit, and a body with no citations at all has no
+    dependency on either endpoint actually existing.
+    """
+    candidates = driver._all_path_candidates(body)  # pylint: disable=protected-access
+    if not candidates:
+        return set()
+    for label, sha in (("from_sha", from_sha), ("to_sha", to_sha)):
+        if not _commit_exists(sha, project_root, runner=runner):
+            raise driver.DriverStateError(
+                f"{label} {sha!r} does not resolve to a commit in this repo — cannot derive "
+                "resolves against an endpoint that does not exist")
+    resolved = set()
+    for path in candidates:
+        at_from = _probe_path_exists(path, from_sha, project_root, runner=runner)
+        at_to = _probe_path_exists(path, to_sha, project_root, runner=runner)
+        if at_from is None or at_to is None:
+            # An indeterminate probe is not "absent" (Step-11 review): silently treating it as
+            # unresolved would let an operational failure narrow the required inventory instead
+            # of refusing the whole rebuild.
+            raise driver.DriverStateError(
+                f"cannot determine whether {path!r} exists at from_sha/to_sha — the path probe "
+                "itself failed, which is not the same as the path being absent")
+        if at_from or at_to:
+            resolved.add(path)
+    return resolved
+
+
+def _refuse_uncovered_audited(driver, audited: dict, bodies_path, project_root: str) -> "str | None":
+    """(#944, AC1) The real enforcement gate for `rebuild-receipt`. Returns a refusal message,
+    or None when every non-pending audited record's claims cover its body's mechanical
+    inventory. Checked BEFORE `_locked_state_update` runs, so a refusal here writes nothing.
+    """
+    pending_free = {number: record for number, record in audited.items()
+                    if isinstance(record, dict) and record.get("pending_disposition") is None}
+    if not pending_free:
+        return None
+    if not bodies_path:
+        return (f"--bodies is required: {sorted(pending_free)} need claim-inventory coverage "
+                "checked against their real body, and none was supplied")
+    try:
+        with open(bodies_path, encoding="utf-8") as fh:
+            raw_bodies = _load_state_strict(fh, source=bodies_path)
+    except (OSError, ValueError) as exc:
+        return f"cannot read {bodies_path}: {exc}"
+    if not isinstance(raw_bodies, dict):
+        return f"{bodies_path} must be a JSON object of {{issue number: body}}"
+    for number, record in sorted(pending_free.items()):
+        key = str(number)
+        if key not in raw_bodies:
+            return f"--bodies has no entry for #{number}, which --audited names and requires"
+        body = raw_bodies[key]
+        if not isinstance(body, str):
+            return f"--bodies[{key!r}] must be a string body, got {type(body).__name__}"
+        body_hash = hashlib.sha256(driver.normalize_issue_body(body).encode("utf-8")).hexdigest()
+        if body_hash != record.get("body_hash"):
+            return (f"the body supplied for #{number} hashes to {body_hash}, but the audited "
+                    f"record's body_hash is {record.get('body_hash')!r} — this is not the body "
+                    "that record was built from")
+        try:
+            resolves = _derive_resolves(driver, body, record.get("from_sha", ""),
+                                        record.get("to_sha", ""), project_root)
+        except driver.DriverStateError as exc:
+            return f"#{number}: {exc}"
+        try:
+            driver.validate_claim_coverage(body, resolves, record.get("claims") or [],
+                                           record.get("depth", "deep"))
+        except driver.DriverStateError as exc:
+            return f"#{number}: {exc}"
+    return None
 
 
 def _cmd_rebuild_receipt(args) -> int:
@@ -4930,6 +5152,17 @@ def _cmd_rebuild_receipt(args) -> int:
                       "records cannot both be the evidence for one child", file=sys.stderr)
                 return 2
             audited[number] = value
+
+    # #944, AC1 — the REAL enforcement point for claim-inventory coverage. `build_revalidation_
+    # record` (driver_lib.py) has no caller on this path at all: every real campaign's receipt
+    # is written by an agent supplying `--audited` JSON directly, which `driver.rebuild_receipt`
+    # only validates STRUCTURALLY. Coverage is checked HERE, before anything is written, so an
+    # under-covered or hash-mismatched record refuses the WHOLE command rather than landing.
+    refusal = _refuse_uncovered_audited(driver, audited, args.bodies,
+                                        getattr(args, "project_root", None) or ".")
+    if refusal is not None:
+        print(f"refusing: {refusal}", file=sys.stderr)
+        return 2
 
     def _mutate(state):
         return driver.rebuild_receipt(state, head, audited)
@@ -5373,7 +5606,11 @@ def _cmd_handoff(args) -> int:
                           "worklist": disposition.get("worklist", []),
                           "reason": disposition.get("reason")}, indent=2))
         return 6
-    if disposition.get("outcome") != "ready":
+    # #944 design §2.3: `obsolete_pending` runs through the SAME self-clearing gates below as
+    # `ready` (sweep, then in-flight) — a caller who hasn't yet swept the last boundary or
+    # declared in-flight work sees THAT refusal first and clears it before ever learning about
+    # the obsolete child underneath it.
+    if disposition.get("outcome") not in ("ready", "obsolete_pending"):
         print(f"no handoff: campaign disposition is {disposition.get('outcome')!r} "
               f"(session_mode {mode!r})")
         return 3
@@ -5398,6 +5635,13 @@ def _cmd_handoff(args) -> int:
                           "observed_head": observed_head}, indent=2))
         print(f"refusing: {reason}", file=sys.stderr)
         return INFLIGHT_REQUIRED_RC
+
+    if disposition.get("outcome") == "obsolete_pending":
+        _print_obsolete_pending_refusal(
+            disposition["issue"], disposition["has_pending_dependents"],
+            observed_head=observed_head, driver_state=args.driver_state,
+            project_root=getattr(args, "project_root", None) or ".")
+        return OBSOLETE_PENDING_RC
 
     # Probes are DERIVED or asserted by the launcher about itself — never hardcoded True. A
     # launcher that does not pass --launcher-armed/--fresh-launch-supported is telling us it
@@ -5445,6 +5689,11 @@ def _cmd_handoff(args) -> int:
         if not ok:
             gate["verdict"] = "precondition"
             gate["reason"] = why
+            if why == "next_child_pending_disposition":
+                # #944 Task 10 (design §2.6): the SAME rc-11 payload the preflight path emits,
+                # recomputed against the LOCKED state `s` — this is the actual race window Task
+                # 8 closed, not merely a stale unlocked read.
+                gate["has_pending_dependents"] = driver_lib.has_pending_dependents(s, next_issue)
             return None                     # no write at all
         opened = driver_lib.open_handoff(s, disposition, now_ts=int(time.time()))
         claimed, after = driver_lib.handoff_claim(
@@ -5460,6 +5709,16 @@ def _cmd_handoff(args) -> int:
 
     _locked_state_update(args.driver_state, _open_and_claim)
     if gate.get("verdict") == "precondition":
+        if gate.get("reason") == "next_child_pending_disposition":
+            # #944 Task 10 (design §2.6): the IDENTICAL rc-11 payload/text the preflight path
+            # emits, not the generic precondition-failure branch below — this is an ACTUAL race
+            # caught under the lock, and losing the rc-11 shape here would lose the write-back
+            # remedy at the moment it matters most.
+            _print_obsolete_pending_refusal(
+                next_issue, gate.get("has_pending_dependents", False),
+                observed_head=observed_head, driver_state=args.driver_state,
+                project_root=getattr(args, "project_root", None) or ".")
+            return OBSOLETE_PENDING_RC
         print(f"no handoff: {gate['reason']} — the child-boundary precondition needs the next "
               f"child queued and nothing in flight (a child in flight is the `mid-child-handoff` "
               f"case, not this one)")
@@ -6354,6 +6613,10 @@ def main(argv: list[str] | None = None) -> int:
     p_rr.add_argument("--audited",
                       help="JSON file holding {issue number: record} for the children audited "
                            "this pass; omit when nothing needed auditing")
+    p_rr.add_argument("--bodies",
+                      help="JSON file holding {issue number: raw issue body} for every "
+                           "--audited entry that is not pending_disposition — required to "
+                           "enforce claim-inventory coverage (#944, AC1)")
 
     p_rco = sub.add_parser("record-child-outcome",
                            help="write a child's terminal status back to its campaign queue")

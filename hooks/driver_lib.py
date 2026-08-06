@@ -187,6 +187,52 @@ def _candidate_path(token: str):
     return token
 
 
+def _all_path_candidates(body: str) -> list[str]:
+    """Every path-SHAPED token in `body`, before the single-component resolution filter
+    `_cited_candidates` applies — no `resolves` needed at all (#944).
+
+    A production caller that does not yet HAVE a `resolves` set (`_cmd_rebuild_receipt`, which
+    must derive one via git probes) needs this raw list to know what to probe in the first
+    place — `_cited_candidates` itself cannot supply it, because its own single-component rule
+    needs `resolves` already known: a chicken-and-egg `_cited_candidates(body, resolves)` cannot
+    resolve on its own behalf.
+    """
+    if not isinstance(body, str) or not body:
+        return []
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for token in _TOKEN_SPLIT_RE.split(body):
+        path = _candidate_path(token)
+        if path is None or path in seen:
+            continue
+        seen.add(path)
+        candidates.append(path)
+    return candidates
+
+
+def _cited_candidates(body: str, resolves) -> list[str]:
+    """Every path-shaped candidate token in `body`, resolved or not (#944).
+
+    Extracted from `cited_paths` (Step-4 review round 1, finding 4): `cited_paths` itself only
+    ever returns the RESOLVED subset, for its own purpose (deep/quick classification). But the
+    revalidation claim schema documents an UNRESOLVED citation as a valid claim form
+    (`checked_against: "<no-file: reasoning>"`) — the claim-inventory coverage check (#944) needs
+    to know about a cited path that no longer exists, not only the ones that still do, so it has
+    something to require a claim for. `resolves` is still needed here: a bare single-component
+    token counts as a candidate only when it resolves (the existing root-level-file rule below),
+    since an unresolved one is usually prose naming a module, not a path claim.
+    """
+    known = set(resolves or ())
+    # A SINGLE-component token (`supervisor.py`) counts only when it really is a
+    # root-level file. Supporting root-level citations at all was a review finding —
+    # `README.md` was previously invisible — but measurement against five real issue
+    # bodies then showed the naive version turning every bare filename mentioned in
+    # prose into an UNRESOLVED citation, which dragged four of five fixtures to
+    # `ambiguous`. Prose naming a module is not a path claim; a resolving root-level
+    # file is. Multi-component tokens keep failing loudly when they do not resolve.
+    return [path for path in _all_path_candidates(body) if "/" in path or path in known]
+
+
 def cited_paths(body: str, resolves) -> tuple[list[str], str]:
     """Repository paths an issue body CITES, plus how confident that reading is.
 
@@ -206,33 +252,187 @@ def cited_paths(body: str, resolves) -> tuple[list[str], str]:
     ``resolves`` is the set of paths known to exist in one of the two endpoint trees. It is
     INJECTED rather than probed here because this module is pure — no I/O, no subprocess —
     a promise enforced by a source grep in `tests/hooks/test_driver_state_write_back.py`.
+
+    Thin filter over `_cited_candidates` (#944) — this function's own returned `paths` is
+    unchanged by that split; only the RESOLVED subset ever left this function.
     """
-    if not isinstance(body, str) or not body:
-        return ([], "none")
-    known = set(resolves or ())
-    candidates: list[str] = []
-    seen: set[str] = set()
-    for token in _TOKEN_SPLIT_RE.split(body):
-        path = _candidate_path(token)
-        if path is None or path in seen:
-            continue
-        # A SINGLE-component token (`supervisor.py`) counts only when it really is a
-        # root-level file. Supporting root-level citations at all was a review finding —
-        # `README.md` was previously invisible — but measurement against five real issue
-        # bodies then showed the naive version turning every bare filename mentioned in
-        # prose into an UNRESOLVED citation, which dragged four of five fixtures to
-        # `ambiguous`. Prose naming a module is not a path claim; a resolving root-level
-        # file is. Multi-component tokens keep failing loudly when they do not resolve.
-        if "/" not in path and path not in known:
-            continue
-        seen.add(path)
-        candidates.append(path)
+    candidates = _cited_candidates(body, resolves)
     if not candidates:
         return ([], "none")
+    known = set(resolves or ())
     resolved = [c for c in candidates if c in known]
     if len(resolved) != len(candidates):
         return (resolved, "ambiguous")
     return (resolved, "paths")
+
+
+# --------------------------------------------------------------------------- #
+# #944 — claim-inventory coverage binding, AC1
+# --------------------------------------------------------------------------- #
+_AC_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*acceptance criteria\b", re.IGNORECASE)
+_CAUSE_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*(?:problem|root cause|cause)\b", re.IGNORECASE)
+_ANY_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
+_TOP_LEVEL_LIST_ITEM_RE = re.compile(r"^\s{0,3}(?:[-*]|\d+[.)])\s+(\S.*)$")
+_TASK_MARKER_RE = re.compile(r"^\[[ xX]\]\s+")
+
+
+def _normalize_section_item(fragments: list) -> str:
+    """Join a list item's marker text and its continuation lines into one normalized string,
+    stripping a leading Markdown task-checkbox (`[ ]`, `[x]`, `[X]`) from the first fragment.
+
+    `_TOP_LEVEL_LIST_ITEM_RE` does not distinguish a checkbox item from an ordinary one, so the
+    raw capture for `- [ ] X` is `[ ] X` — which then fails EXACT-match claim coverage against a
+    claim quoting only `X` (Step-8a review finding 3; the skill's own fully-worked example uses
+    a checkbox, so the documented step was not executable as written)."""
+    parts = [s.strip() for s in fragments]
+    if parts:
+        parts[0] = _TASK_MARKER_RE.sub("", parts[0], count=1)
+    return " ".join(f for f in parts if f)
+
+
+def _extract_one_section(section_lines: list) -> tuple:
+    """(items, unclassified) for ONE already-sliced section's lines. Factored out of
+    `_extract_section` so multiple headings matching the same `heading_re` can each be
+    processed independently and combined (Step-8a review finding 1).
+
+    A top-level list item's WRAPPED continuation lines (no blank line before them) join its
+    text. Once a blank line closes an item, any FURTHER non-blank content before the next
+    marker is `unclassified` — but ONLY once at least one marker has been seen: lead-in prose
+    BEFORE the first list item (e.g. "Two documented holes, both stated in X:") is an ordinary
+    introduction, not something the parser failed to account for.
+
+    A section with NO list at all (`saw_marker` never true) degrades to ONE whole-section item
+    from its non-blank text — a deliberate, honest fallback (§1.3), never an error: unstructured
+    narrative cannot be split further than "it exists" without real NLP. `unclassified` is
+    reserved for a section that DOES have a list but also has content the parser could not
+    attribute to any item — the fail-closed case (#944, Step-4 review round 2, finding 1).
+    """
+    # The LAST marker's position decides what counts as "unclassified" versus an ordinary
+    # closing note (#944 real-body regression: #944's own "## Problem" section has a trailing
+    # citation line AFTER its two-item cause list, before "## Acceptance criteria" — flagging
+    # that as unclassified was a false positive on the exact fixture this feature exists to
+    # handle). Stray content BETWEEN two markers is genuinely suspicious (why would an ordinary
+    # closing note sit in the MIDDLE of a list?); stray content after the LAST marker is not.
+    last_marker_index = None
+    for index, line in enumerate(section_lines):
+        if _TOP_LEVEL_LIST_ITEM_RE.match(line):
+            last_marker_index = index
+
+    items: list = []
+    pre_marker: list = []       # non-blank content before the first marker (or, if no marker
+                                 # ever appears, ALL of it) — the fallback source, never flagged
+    unclassified: list = []
+    current: "list | None" = None
+    item_open = False
+    saw_marker = False
+    for index, line in enumerate(section_lines):
+        stripped = line.strip()
+        marker = _TOP_LEVEL_LIST_ITEM_RE.match(line)
+        if marker:
+            saw_marker = True
+            if current is not None:
+                items.append(_normalize_section_item(current))
+            current = [marker.group(1)]
+            item_open = True
+            continue
+        if not stripped:
+            item_open = False
+            continue
+        if item_open and current is not None:
+            current.append(stripped)
+            continue
+        if not saw_marker:
+            pre_marker.append(stripped)
+        elif last_marker_index is not None and index < last_marker_index:
+            unclassified.append(stripped)
+        # else: trailing content after the LAST marker — an ordinary closing note, not flagged.
+    if current is not None:
+        items.append(_normalize_section_item(current))
+
+    if not saw_marker:
+        whole = _normalize_section_item(pre_marker)
+        return ([whole] if whole else [], [])
+    return items, unclassified
+
+
+def _extract_section(lines: list, heading_re) -> tuple:
+    """(items, unclassified), aggregated over EVERY section whose heading matches `heading_re`.
+
+    Shared by the `ac` and `cause` claim-inventory extraction (design doc §1.3). `heading_re`
+    (`_CAUSE_HEADING_RE` in particular) treats several heading spellings as SYNONYMS for one
+    concept — "Problem", "Root cause" and "Cause" — but a body can legitimately carry more than
+    one of them as SEPARATE headings. The original version stopped at the FIRST match, so a
+    later matching section's items never entered the inventory at all — a claim set could omit
+    that section's claims entirely and still pass coverage (Step-8a review finding 1). Each
+    matching heading's own span is extracted independently by `_extract_one_section` and the
+    results are combined in document order.
+
+    No matching heading anywhere returns `([], [])` — nothing to require, not an error either;
+    the caller (`extract_claim_inventory`) is responsible for the SEPARATE "the concept is
+    mentioned by bare phrase but no recognized heading matched" fail-closed signal.
+    """
+    starts = [index + 1 for index, line in enumerate(lines) if heading_re.match(line)]
+    if not starts:
+        return [], []
+
+    all_items: list = []
+    all_unclassified: list = []
+    for start in starts:
+        section_lines = []
+        for line in lines[start:]:
+            if _ANY_HEADING_RE.match(line):
+                break
+            section_lines.append(line)
+        items, unclassified = _extract_one_section(section_lines)
+        all_items.extend(items)
+        all_unclassified.extend(unclassified)
+    return all_items, all_unclassified
+
+
+_AC_BARE_PHRASE_RE = re.compile(r"acceptance criteria", re.IGNORECASE)
+
+
+def extract_claim_inventory(body: str, resolves) -> dict:
+    """Mechanical inventory of what a revalidation audit should check, extracted from the RAW
+    issue body — never from a receipt (#944, AC1). Returns
+    ``{"citation": [<path>...], "cause": [<item text>...], "ac": [<item text>...],
+    "errors": [<str>...]}``. Pure; no I/O (`resolves` is injected, same contract as
+    `cited_paths`).
+
+    `errors` is fail-closed extraction signals — a non-empty list means the inventory could not
+    be fully trusted, and `validate_claim_coverage` refuses construction on it before computing
+    coverage at all. Two kinds land here: `ac` mentioned by bare phrase with zero structured
+    items extracted (round-1 review finding 2), and either kind carrying `unclassified` content
+    (round-2 review finding 1) — a list that also has content the parser could not attribute to
+    any item. `cause` deliberately does NOT get the bare-phrase check `ac` gets: "acceptance
+    criteria" said in passing is rare, but "cause"/"problem" as ordinary English words are not,
+    so the same heuristic there would manufacture false positives on prose that never intended a
+    formal cause section.
+    """
+    lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n") \
+        if isinstance(body, str) else []
+    errors: list = []
+
+    citation = _cited_candidates(body, resolves)
+
+    ac_items, ac_unclassified = _extract_section(lines, _AC_HEADING_RE)
+    if not ac_items and not ac_unclassified and isinstance(body, str) \
+            and _AC_BARE_PHRASE_RE.search(body):
+        errors.append(
+            "the body mentions 'acceptance criteria' but no recognized heading and list "
+            "matched it — the section exists but this parser could not read it")
+    if ac_unclassified:
+        errors.append(
+            "the 'Acceptance criteria' section has content this parser could not attribute to "
+            f"any list item: {'; '.join(ac_unclassified)}")
+
+    cause_items, cause_unclassified = _extract_section(lines, _CAUSE_HEADING_RE)
+    if cause_unclassified:
+        errors.append(
+            "the 'Problem'/'Root cause' section has content this parser could not attribute to "
+            f"any list item: {'; '.join(cause_unclassified)}")
+
+    return {"citation": citation, "cause": cause_items, "ac": ac_items, "errors": errors}
 
 
 class DriverStateError(ValueError):
@@ -349,6 +549,134 @@ def validate_claims(claims) -> int:
                     f"claims[{index}].{field} must be a non-empty string — a blank field is an "
                     "assertion that something was checked, with nothing to show for it")
     return len(claims)
+
+
+# --------------------------------------------------------------------------- #
+# #944 — claim-inventory coverage matching (AC1)
+# --------------------------------------------------------------------------- #
+_DEPTH_REQUIRED_CLAIM_KINDS = {"deep": ("citation", "cause", "ac"), "quick": ("cause", "ac")}
+
+
+def _max_bipartite_match(n_left: int, adjacency: dict) -> dict:
+    """Standard augmenting-path maximum matching. `adjacency[i]` is the set of right-node
+    indices left-node `i` may match. Returns `{left_index: right_index}` for matched pairs
+    (an unmatched left node is simply absent). O(V·E) — the per-issue item/claim counts this
+    runs over are small, so the naive algorithm is more than fast enough.
+
+    Round-2 review, finding 2: a GREEDY first-match can report a false coverage gap when a
+    complete matching exists, because an earlier item can consume a claim a later item also
+    needed. This finds a matching of MAXIMUM size, so a reported gap is real, not an artifact
+    of processing order.
+    """
+    match_right: dict = {}
+
+    def try_assign(u, visited):
+        for v in adjacency.get(u, ()):
+            if v in visited:
+                continue
+            visited.add(v)
+            if v not in match_right or try_assign(match_right[v], visited):
+                match_right[v] = u
+                return True
+        return False
+
+    for u in range(n_left):
+        try_assign(u, set())
+    return {u: v for v, u in match_right.items()}
+
+
+def _normalize_claim_text(value) -> str:
+    return " ".join(str(value).split()).casefold()
+
+
+def _claim_matches_citation(claim: dict, path: str) -> bool:
+    checked = claim.get("checked_against", "")
+    if isinstance(checked, str) and checked.startswith(f"{path}@"):
+        return True
+    quoted = claim.get("quoted_from_body", "")
+    return isinstance(quoted, str) and path in quoted
+
+
+def _claim_matches_text_item(claim: dict, item: str) -> bool:
+    """Round-2 review, finding 3: EXACT normalized equality, never substring containment — the
+    field is documented 'verbatim' (`SKILL.md:159`), and a substring rule let a short generic
+    claim fragment ("the", "error") spuriously cover any item containing it."""
+    quoted = claim.get("quoted_from_body", "")
+    return isinstance(quoted, str) and _normalize_claim_text(quoted) == _normalize_claim_text(item)
+
+
+def _missing_for_kind(items: list, claims: list, kind: str, match_fn) -> list:
+    """One-to-one coverage for a single claim kind, via maximum bipartite matching."""
+    if not items:
+        return []
+    kind_claims = [c for c in claims if isinstance(c, dict) and c.get("kind") == kind]
+    adjacency = {i: {j for j, claim in enumerate(kind_claims) if match_fn(claim, item)}
+                for i, item in enumerate(items)}
+    matched = _max_bipartite_match(len(items), adjacency)
+    return [item for i, item in enumerate(items) if i not in matched]
+
+
+def missing_claim_coverage(inventory: dict, claims: list, depth: str) -> dict:
+    """Which inventory items (per kind) have no matching claim, at `depth`. `deep` requires all
+    three kinds covered; `quick` requires `cause` + `ac` only — the skill's own existing depth
+    semantics (`SKILL.md:139-143`), made mechanically enforceable (#944, AC1).
+    """
+    if depth not in _DEPTH_REQUIRED_CLAIM_KINDS:
+        raise DriverStateError(
+            f"depth must be one of {sorted(_DEPTH_REQUIRED_CLAIM_KINDS)}, got {depth!r}")
+    claims = claims if isinstance(claims, list) else []
+    required = _DEPTH_REQUIRED_CLAIM_KINDS[depth]
+    missing = {"citation": [], "cause": [], "ac": []}
+    if "citation" in required:
+        missing["citation"] = _missing_for_kind(
+            inventory.get("citation") or [], claims, "citation", _claim_matches_citation)
+    if "cause" in required:
+        missing["cause"] = _missing_for_kind(
+            inventory.get("cause") or [], claims, "cause", _claim_matches_text_item)
+    if "ac" in required:
+        missing["ac"] = _missing_for_kind(
+            inventory.get("ac") or [], claims, "ac", _claim_matches_text_item)
+    return missing
+
+
+def claim_coverage_ok(missing: dict) -> bool:
+    return not missing["citation"] and not missing["cause"] and not missing["ac"]
+
+
+def validate_claim_coverage(body: str, resolves, claims: list, depth: str) -> None:
+    """Raise `DriverStateError` naming every missing item when `claims` does not cover the
+    mechanical inventory extracted from `body` at `depth` (#944, AC1) — or when the inventory
+    itself carries an extraction error (fail-closed, before coverage is even computed: an
+    ungradeable inventory has nothing to bind claims to).
+
+    NOTE (Step-4 review round 2, finding 5): this is a correct but DEMOTED primitive — the real
+    production enforcement point is `hooks/launcher_lib.py _cmd_rebuild_receipt`'s `--bodies`
+    handling, which every real campaign's write path actually goes through. This function
+    remains useful for anything that DOES construct a record via `build_revalidation_record`
+    (a future programmatic caller, or a test exercising coverage in isolation).
+    """
+    inventory = extract_claim_inventory(body, resolves)
+    if inventory["errors"]:
+        raise DriverStateError(
+            "claims cannot be validated for coverage — the mechanical inventory extraction "
+            "itself failed: " + "; ".join(inventory["errors"]))
+    missing = missing_claim_coverage(inventory, claims, depth)
+    if claim_coverage_ok(missing):
+        return
+    parts = []
+    if missing["citation"]:
+        parts.append(
+            f"citation claims missing for cited path(s): {', '.join(missing['citation'])}")
+    if missing["cause"]:
+        parts.append("cause item(s) have no matching 'cause' claim: "
+                     + "; ".join(repr(item) for item in missing["cause"]))
+    if missing["ac"]:
+        parts.append("acceptance-criteria item(s) have no matching 'ac' claim: "
+                     + "; ".join(repr(item) for item in missing["ac"]))
+    raise DriverStateError(
+        f"claims do not cover the mechanical inventory extracted from the issue body at depth "
+        f"{depth!r} — " + "; ".join(parts) + ". Add the missing claims (kind, quoted_from_body, "
+        "checked_against, evidence, verdict) and rebuild the record")
 
 
 def validate_revalidation_child(record) -> bool:
@@ -894,7 +1222,7 @@ def normalize_issue_body(body: str) -> str:
 
 
 def build_revalidation_record(*, body: str, from_sha: str, to_sha: str, extraction: str,
-                              depth: str, claims: list, validated_at: int,
+                              depth: str, claims: list, validated_at: int, resolves,
                               outcome: str | None = "still_valid",
                               pending_disposition: str | None = None,
                               correction_comment: str | None = None) -> dict:
@@ -909,6 +1237,13 @@ def build_revalidation_record(*, body: str, from_sha: str, to_sha: str, extracti
 
     `validated_at` is INJECTED: this module does no I/O and takes no clock, which is also what
     keeps its tests deterministic.
+
+    `resolves` is REQUIRED (#944, AC1) — no default, so an omitted value is a loud `TypeError`
+    at the one call site that matters, never a silent "nothing to check coverage against".
+    Claim-inventory coverage is validated against `body`/`resolves` right after the existing
+    structural check, SKIPPED when `pending_disposition` is set — a pending-disposition record
+    is deliberately not a stamped, selectable outcome (AC2), so full inventory coverage does not
+    gate it.
     """
     record = {"body_hash": hashlib.sha256(
                   normalize_issue_body(body).encode("utf-8")).hexdigest(),
@@ -922,6 +1257,8 @@ def build_revalidation_record(*, body: str, from_sha: str, to_sha: str, extracti
     if correction_comment is not None:
         record["correction_comment"] = correction_comment
     validate_revalidation_child(record)
+    if pending_disposition is None:
+        validate_claim_coverage(body, resolves, claims, depth)
     return record
 
 
@@ -1319,6 +1656,35 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
     reval = state.get("queue_revalidation")
     validated_head = None
     children: dict = {}
+    # #944: computed BEFORE any structural validation, via the same TOLERANT read
+    # `_child_pending_disposition` already uses — so a pending marker stays visible even when
+    # the receipt around it is otherwise broken, and ANY refusal this function raises (not only
+    # the reasons-based one below) can disclose it. Revalidation never clears an owner decision,
+    # so a state needing BOTH remedies must say so on its FIRST refusal — the same "one step at
+    # a time is the same as a remedy that does nothing" lesson round 8 already learned for the
+    # head+stamp pair.
+    pending_eligible = sorted(
+        i["number"] for i in state.get("issues", [])
+        if effective.get(i["number"]) == "queued"
+        and _child_pending_disposition(state, i["number"]) is not None)
+
+    def _disclose_owner_remedy(exc: DriverStateError) -> DriverStateError:
+        if not pending_eligible:
+            return exc
+        names = ", ".join(f"#{n}" for n in pending_eligible)
+        plural = "ies" if len(pending_eligible) == 1 else "y"
+        message = (str(exc).rstrip(".") + f". {names} also carr{plural} a pending_disposition "
+                  "that revalidation will NOT clear — an owner write-back "
+                  "(`record-child-outcome --status deferred|abandoned|merged`) is still needed "
+                  "after revalidating")
+        enriched = type(exc)(message)
+        for attr in ("observed_head", "validated_head", "outstanding"):
+            if hasattr(exc, attr):
+                setattr(enriched, attr, getattr(exc, attr))
+        enriched.remedy = "both" if getattr(exc, "remedy", None) == "revalidate" \
+            else getattr(exc, "remedy", None)
+        return enriched
+
     if reval is not None:
         # Validated BEFORE any eligibility shortcut (Step-11 review finding 3, reproduced): the
         # old code returned early when nothing was eligible, so a receipt of
@@ -1328,7 +1694,10 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
         #
         # This also checks the LINKAGE to the per-child stamps, so a fabricated stamp with no
         # evidence behind it fails here rather than passing the gate.
-        validate_queue_revalidation(state)
+        try:
+            validate_queue_revalidation(state)
+        except DriverStateError as exc:
+            raise _disclose_owner_remedy(exc) from exc
         validated_head = reval.get("validated_head")
         children = reval.get("children") or {}
     eligible = [i for i in state.get("issues", []) if effective[i["number"]] == "queued"]
@@ -1409,9 +1778,15 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
         # fixes. Executing the printed remedy left the gate still refusing, and only then asked
         # for revalidation: a two-step remedy delivered one step at a time, which is the same
         # defect as a remedy that does nothing, spread over two attempts.
-        # Only ONE remedy exists while the owner gate is out (#848): revalidation. The two-part
-        # and owner-only branches went with it — a suffix naming a remedy no clause can produce is
-        # exactly the prose-contradicting-code defect this PR kept shipping.
+        # **The owner remedy is back (#944, the #848 rebuild) — restored HERE too, as a
+        # DISCLOSURE, not an enforcement.** `next_ready_issue`'s own loop is still the only place
+        # that gates on `pending_disposition` (this function's job stays head-freshness and
+        # per-child stamps). But `revalidate-children` carries a pending marker FORWARD
+        # unchanged (it cannot clear an owner decision), so a state needing BOTH remedies must
+        # say so in its FIRST refusal — the exact "remedy delivered one step at a time" defect
+        # round 8 already fixed for the head+stamp pair, now recurring for stamp+owner. Reuses
+        # the `pending_eligible` computed at function entry (not recomputed) so this clause and
+        # the early structural-validation clause above can never disagree about it.
         suffix = ". Run the revalidate-children skill, post any corrections, then retry."
         error = QueueRevalidationRequired(
             "refusing to hand out the next child: the remaining queue has not been revalidated "
@@ -1425,9 +1800,11 @@ def _refuse_unrevalidated_queue(state: dict, observed_head: str, effective: dict
         # STRUCTURAL, not something a reader has to infer from the prose (round-9 High 3 and
         # Medium 1). Consumers — including the jam sweep — dispatch on this rather than pattern
         # matching the message, so corruption-controlled text cannot forge or suppress a remedy,
-        # and a refusal can be checked for having DISCLOSED every action it will take.
+        # and a refusal can be checked for having DISCLOSED every action it will take. "both" is
+        # NOT a third remedy value the DISPATCHER must special-case beyond "this needs more than
+        # revalidation" — `test_revalidation_jam_matrix.py` already reserved it for exactly this.
         error.remedy = "revalidate"
-        raise error
+        raise _disclose_owner_remedy(error)
 
 
 def campaign_deps_satisfied_by(state: dict) -> str:
@@ -1503,13 +1880,86 @@ def next_ready_issue(state: dict, deps_satisfied_by: str = "merged",
             "observed head (launcher_lib.observe_head). Selecting without one would skip the "
             "freshness gate entirely — pass observed_head, or explicitly None only for a campaign "
             "that predates #840 and has no receipt")
+    # #944, AC2: an obsolete-pending candidate does not stop the WHOLE scan — it is remembered
+    # (for an actionable message) and skipped, so a completely unrelated, independent, ready
+    # child later in queue order is still selected normally. `ObsoletePendingChild` is raised
+    # only once the scan reaches the end with no genuinely selectable candidate at all (Step-4
+    # review round 2, finding 4: the original version raised at the FIRST such candidate, which
+    # could park the whole run while unrelated ready work existed).
+    first_obsolete = None
     for issue in issues:
         if effective[issue["number"]] != "queued":
             continue
         deps = _in_queue_deps(issue, numset)
-        if all(effective[d] in satisfied for d in deps):
-            return issue["number"]
+        if not all(effective[d] in satisfied for d in deps):
+            continue
+        pending = _child_pending_disposition(state, issue["number"])
+        if pending is not None:
+            if first_obsolete is None:
+                first_obsolete = issue["number"]
+            continue
+        return issue["number"]
+    if first_obsolete is not None:
+        error = ObsoletePendingChild(
+            f"child #{first_obsolete} carries a pending_disposition and cannot be handed out "
+            "until an owner write-back clears it — run `launcher_lib.py record-child-outcome "
+            f"--issue {first_obsolete} --status deferred|abandoned|merged`",
+            issue=first_obsolete)
+        # STRUCTURAL, matching `QueueRevalidationRequired.remedy` (#840 round-9 High 3's own
+        # rule): a caller dispatches on this attribute, never on the message text. "owner" is
+        # the vocabulary `test_revalidation_jam_matrix.py`'s `drive_to_open` already reserved
+        # for this exact remedy, unreachable until now.
+        error.remedy = "owner"
+        raise error
     return None
+
+
+class ObsoletePendingChild(DriverStateError):
+    """Raised by `next_ready_issue` when EVERY remaining ready candidate carries a
+    `pending_disposition` (#944, the #848 rebuild) — the owner-gate refusal, distinct from
+    `QueueRevalidationRequired` so a caller can map it to its OWN return code (rc 11 in
+    `launcher_lib.py`, not rc 6).
+    """
+
+    def __init__(self, message, *, issue):
+        super().__init__(message)
+        self.issue = issue
+
+
+def _child_pending_disposition(state: dict, issue_number: int) -> "str | None":
+    """The receipt's `pending_disposition` for one child, or None. Never raises — by the time
+    selection runs the state is already schema-valid, so a malformed shape here means nothing
+    to gate on, not a crash mid-selection."""
+    reval = state.get("queue_revalidation")
+    if not isinstance(reval, dict):
+        return None
+    children = reval.get("children")
+    if not isinstance(children, dict):
+        return None
+    record = children.get(str(issue_number))
+    if not isinstance(record, dict):
+        return None
+    pending = record.get("pending_disposition")
+    return pending if isinstance(pending, str) else None
+
+
+def has_pending_dependents(state: dict, issue_number: int) -> bool:
+    """True when some NOT-YET-TERMINAL child in the queue depends on `issue_number` (#944).
+
+    Feeds the obsolete-child owner gate's supervision routing (design doc §2.4): a sleeping run
+    may recommend deferring an obsolete-marked child only when nothing left in the queue needs
+    it — otherwise deferring it would strand a dependent with no way to advance.
+    """
+    issues = state.get("issues", [])
+    numset = {i["number"] for i in issues if isinstance(i, dict) and _is_int(i.get("number"))}
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        if issue.get("status") in TERMINAL_STATUSES:
+            continue
+        if issue_number in _in_queue_deps(issue, numset):
+            return True
+    return False
 
 
 # #695 — statuses a child can never move AWAY from once recorded.
@@ -2186,6 +2636,13 @@ def child_boundary_precondition(state, next_issue) -> tuple[bool, str]:
     for issue in issues:
         if isinstance(issue, dict) and issue.get("number") == next_issue:
             if issue.get("status") == "queued":
+                # #944 Task 8: closes the preflight/locked-commit race. A `revalidate-children`
+                # write-back can land `pending_disposition` on the receipt record WITHOUT
+                # touching `status` — the child is still `queued` here. This recheck runs
+                # under the SAME lock `_open_and_claim` already holds, so it catches the write
+                # even when it landed after an earlier, unlocked disposition read.
+                if _child_pending_disposition(state, next_issue) is not None:
+                    return (False, "next_child_pending_disposition")
                 return (True, "ready")
             return (False, "next_child_not_queued")
     return (False, "next_child_not_queued")
@@ -2764,6 +3221,11 @@ def fresh_session_handoff(state: dict, *, mode: str, project=None,
         nxt = next_ready_issue(state, campaign_deps_satisfied_by(state),
                                issue_state_probe=issue_state_probe,
                                observed_head=observed_head)
+    except ObsoletePendingChild as exc:
+        # #944, AC2: a recoverable, owner-gated refusal — never let it collapse into `blocked`,
+        # the same "never generic" principle #840 established for `revalidation_required`.
+        return {"outcome": "obsolete_pending", "issue": exc.issue,
+                "has_pending_dependents": has_pending_dependents(state, exc.issue)}
     except DriverStateError as exc:
         # Same widening as the pre-gate above (round-10 Medium 1): a recoverable receipt error
         # reaching selection must become the disposition, not a traceback.

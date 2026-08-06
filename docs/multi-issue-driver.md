@@ -85,10 +85,11 @@ For each issue the campaign advances to:
    `QueueRevalidationRequired` instead of selecting. `next-child` is the caller that observes the
    head first and then selects. rc 0 → build that child; rc 3 → the campaign is done or every
    remaining issue is parked/blocked; rc 6 → stale provenance, cleared by
-   `/rawgentic:revalidate-children` (the refusal names the remedy; while #848 is open that is the
-   only reason this rc carries);
-   rc 5 → stop, the head could not be observed; rc 2 → read stdout before deciding (see the
-   table).
+   `/rawgentic:revalidate-children` (the refusal names the remedy — this is the ONLY reason rc 6
+   carries); rc 11 → a live `pending_disposition` on the child that would otherwise be selected,
+   cleared only by an owner running `record-child-outcome` (#944, restoring what #840 cut — see
+   *Selection in the IN-SESSION loop*, below); rc 5 → stop, the head could not be observed; rc 2 →
+   read stdout before deciding (see the table).
 2. **Run WF2 fresh** — invoke `/rawgentic:implement-feature <number>` as a brand
    new run. It goes through all 16 steps and **terminates at Step 16** exactly as
    it does standalone. The driver observes the *outcome*; it never reaches inside
@@ -287,10 +288,14 @@ remaining child valid having checked nothing, and the gate would report a fully 
 
 **`issue_obsolete` is not an `outcome`.** An obsolete child carries
 `pending_disposition: "issue_obsolete"` until an owner moves it to `deferred` or `abandoned`.
-**That marker currently gates NOTHING** — the owner gate was cut from #840 and is being rebuilt in
-#848, so it is recorded as evidence for an owner and nothing refuses on it. The child is stamped
-like any other; withholding the stamp only mattered while a stamped child could be selected past
-the gate, and with the gate out it jammed the queue instead.
+**That marker now genuinely gates (#944, restoring what #840 cut).** `next_ready_issue` refuses to
+hand out a child carrying a live `pending_disposition` — `next-child`/`handoff` surface this as rc
+11, naming the write-back remedy. The scan does not stop at the first marked child: it remembers
+the first one it sees and keeps looking, raising only when every remaining ready child is
+pending-disposition or nothing is ready at all — so one obsolete-marked child never blocks
+unrelated, independent work elsewhere in the queue. The child stays STAMPED regardless (its
+evidence carries forward into the receipt) — stamping and gating are separate concerns, and
+withholding the stamp is what jammed the queue while the gate was cut.
 
 **Corrections are COMMENTS, never body edits.** A child's body is its author's statement of the
 problem; the run annotates it, it does not rewrite it underneath them.
@@ -300,9 +305,11 @@ problem; the run annotates it, it does not rewrite it underneath them.
 Three layers, in increasing order of authority.
 
 **1. Selection.** `next_ready_issue(state, ..., observed_head=<sha>)` raises
-`QueueRevalidationRequired` when the receipt's `validated_head` differs from the observed head, when
-any eligible child's `validated_against` differs from it. (A third clause on
-`pending_disposition` was cut — see #848.) It **raises** rather than returning `None`, because
+`QueueRevalidationRequired` when the receipt's `validated_head` differs from the observed head, or
+when any eligible child's `validated_against` differs from it. (A separate, distinct exception,
+`ObsoletePendingChild` — described above — covers the `pending_disposition` case; it is its own
+type rather than a third clause here, so the CLI can map it to its own return code, rc 11.)
+It **raises** rather than returning `None`, because
 `None` already means
 "nothing ready" and is reported as *the epic finished* — announcing completion over a stale queue is
 strictly worse than refusing. `fresh_session_handoff` surfaces it as an explicit
@@ -337,13 +344,12 @@ document getting wrong, having previously said "`/rawgentic:revalidate-children`
 else":
 
 - **Stale provenance** (the receipt attests an older head, or an eligible child is unstamped) →
-  `/rawgentic:revalidate-children`, and nothing else. Re-running it is the whole remedy, and while
-  #848 is open it is the ONLY reason this gate refuses.
-- **A pending disposition** used to be a second, owner-only reason. That clause was CUT (#848) —
-  a marker now gates nothing and this gate never refuses because of one. When #848 lands, this
-  bullet returns: only the owner clears it, and re-running the revalidation skill rediscovers the
-  same marker for ever, because choosing between `deferred` and `abandoned` is deliberately not a
-  machine's decision.
+  `/rawgentic:revalidate-children`, and nothing else. Re-running it is the whole remedy.
+- **A pending disposition is a second, owner-only reason (#944, restoring what #840 cut).** Only
+  the owner clears it — `record-child-outcome --issue N --status deferred|abandoned|merged`,
+  named verbatim in the rc-11 refusal text. Re-running `/rawgentic:revalidate-children` does NOT
+  clear this one: it rediscovers the same marker for ever, because choosing between `deferred` and
+  `abandoned` is deliberately not a machine's decision.
 
 Neither bullet covers a CALLER or ENVIRONMENT failure — an absent `campaign_context`, an unreadable
 state file, an unobservable head. Those are refusals of the rung's producer rather than of the
@@ -363,6 +369,7 @@ pure function cannot fetch. `next-child` is the caller that observes. Exit codes
 | 3 | nothing ready (`complete` / `blocked`) |
 | 5 | the head could not be observed — fail-closed |
 | 6 | the queue needs revalidation; the worklist is on stdout |
+| 11 | the child that would otherwise be selected carries a live `pending_disposition` — an owner-gated refusal, not self-clearing (#944, restoring what #840 cut) |
 
 **rc 2 covers three situations and the number alone cannot separate them** (round-3 finding 6):
 unreadable or invalid state JSON, any `DriverStateError`, and — the one that is not a failure —

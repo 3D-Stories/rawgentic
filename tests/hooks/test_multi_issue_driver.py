@@ -162,11 +162,15 @@ def test_doc_documents_queue_revalidation_840():
     # `record-child-outcome --status deferred|abandoned` clears it. A drift guard that pins a
     # false sentence actively defends the error, which is worse than having no guard.
     assert "**What clears it depends on WHY it refused**" in text
-    # INVERTED with the owner-gate cut (#848). The doc used to pin an owner-only remedy for a
-    # `pending_disposition`; that clause is gone, so the doc must now say so rather than
-    # keep prescribing a remedy for a refusal the gate can no longer make.
-    assert "That clause was CUT (#848)" in text, "the driver doc must record the cut"
-    assert "record-child-outcome" in text, "the command is still named for when #848 lands"
+    # INVERTED AGAIN with the owner gate's restoration (#944, the #848 rebuild). The doc used to
+    # pin "That clause was CUT (#848)" — #944 restores the clause, so the doc must now say so
+    # rather than keep claiming a pending_disposition gates nothing.
+    assert "A pending disposition is a second, owner-only reason (#944, restoring what #840 cut)" \
+        in text, "the driver doc must record the #944 restoration, not the #840 cut"
+    assert "record-child-outcome --issue N --status deferred|abandoned|merged" in text, \
+        "the write-back remedy is named verbatim"
+    assert "That clause was CUT (#848)" not in text, \
+        "the doc must not keep claiming the gate is cut once #944 restores it"
     assert "and nothing else" in text, "the stale-provenance half is still absolute"
     # The review round INVERTED this pin. It previously required the doc to state the
     # per-campaign activation limit; the Step-11 review called that limit opt-in theatre and the
