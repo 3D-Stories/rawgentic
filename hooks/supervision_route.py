@@ -171,6 +171,15 @@ def evaluate_campaign(*, workspace_root: str, campaign_id: str, project_root: st
     campaign_governed = not governed_ids or campaign_id in governed_ids
 
     state, corrupt = _read_driver_state(project_root, campaign_id)
+    # #963 measured a proposed hardening here and REFUTED it: treating "governed campaign
+    # with no driver-state file" as removed-and-therefore-denying breaks the legitimate
+    # ordering where the owner declares away naming a campaign that has not STARTED yet
+    # (its state file is written when the run begins) — it would deny consult for exactly
+    # the campaign the declaration meant to authorize. Missing and never-created are
+    # indistinguishable without a durable campaign registry, which is why #947 Step 11
+    # finding 7 named one. Merge is already safe (no policy = no grant); the consult
+    # residual stays deferred WITH that registry, not closed by a guess.
+    # `TestGovernedCampaignMissingDriverState` pins the ordering this must keep allowing.
     policy = state.get("policy") or {}
     merge_permitted_by_grant = (not corrupt) and \
         policy.get("merge_policy") == "auto-merge-scoped-to-run"
