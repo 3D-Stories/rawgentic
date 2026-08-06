@@ -39,6 +39,18 @@ Ask ONE question with the options:
 
 Never assume auto-merge from a past run — the grant does not carry over.
 
+**Record an auto-merge answer into the campaign's driver state, or the grant does not
+exist to the code that enforces it (#963).** `supervision_route.evaluate_campaign` reads
+`policy.merge_policy` and grants a merge during an absence ONLY on the exact string
+`auto-merge-scoped-to-run`; anything else — `pr-only`, an unknown value, or the key
+absent — is no grant. Nothing used to WRITE that key, so the gate read a field no prose
+produced. When the answer is auto-merge, the driver-state file carries:
+```json
+"policy": {"merge_policy": "auto-merge-scoped-to-run"}
+```
+On PR-only, record `"merge_policy": "pr-only"` — an explicit decline reads better in the
+telemetry than an absent key that could equally mean "nobody asked".
+
 Alongside the merge-policy question, recommend arming the durable resume launcher (the
 `long-run-resume` skill's system-crontab pattern) at RUN START — even attended runs hit
 the same stall class (owner-away review verdicts, unattended quota pauses; measured
@@ -129,8 +141,17 @@ put a list up by hand).
   AND the epic box is ticked, and leave a blocked child visible with a note
   (mirroring the ERROR-comment-and-continue protocol). An owner-added
   mid-run child gets a task inserted at its queue position.
-- Between children (auto-merge mode): merge, verify the merge SHA on main and the issue
-  auto-closed, `git fetch origin`, branch the next child from the new main. Use the
+- Between children (auto-merge mode): merge THROUGH THE BROKER — never a raw
+  `gh pr merge` (#963), since a campaign merge is exactly what the supervision authority
+  gate exists to decide:
+  ```bash
+  python3 hooks/launcher_lib.py broker-merge --pr <pr> --issue <child> \
+    --campaign <campaign-id> --project-root .
+  ```
+  rc `0` merged (`merge_sha` in its JSON line is probe-confirmed) · `12` refused, nothing
+  merged — fix the named cause and re-run, never route around it · `13` parked — inspect
+  the PR, then re-run to reconcile. Then verify the merge SHA on main and the issue
+  auto-closed, `git fetch origin`, and branch the next child from the new main. Use the
   `merge-watch` skill's lane doctrine for CI triage (hard vs advisory lanes; OAuth
   false-red signature).
 - **The learnings sweep — the owner's standing order, and a GATE since #769.**
