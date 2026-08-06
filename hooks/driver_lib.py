@@ -1697,6 +1697,14 @@ def append_resolution(state: dict, *, transition_id: str, generation, trigger: s
     nothing was ever launched.
     """
     resolution_id = f"{transition_id}#{attempt}"
+    # A duplicate id would make `resolution()` and `append_terminal_outcome` target the FIRST
+    # record, so one terminal event would make every duplicate look closed and hide an
+    # unreconciled launch (Step-11 finding 5). Reusing an attempt number is a caller bug.
+    if any(e.get("resolution_id") == resolution_id and "outcome" not in e
+           for e in transition_events(state)):
+        raise DriverStateError(
+            f"resolution {resolution_id!r} already exists — reusing an attempt number would "
+            "hide an unreconciled launch behind the first record's terminal event")
     state.setdefault(TRANSITIONS_KEY, []).append({
         "resolution_id": resolution_id,
         "transition_id": transition_id,
@@ -1785,10 +1793,15 @@ def transport_set_blocked(state, *, now_ts: int, lease_s: int = 1800) -> tuple[b
     boundary is mid-launch — changing the recorded answer under it would let the launch and the
     record disagree about what was chosen.
     """
+    # Fail CLOSED (Step-11 finding 9). This is a guard: without a readable `issues` list there
+    # is no evidence that nothing is in flight, and reporting `ready` on no evidence would let
+    # the preference change during an active child or a launch.
     if not isinstance(state, dict):
-        return (False, "ready")
+        return (True, "state_unreadable")
     issues = state.get("issues")
-    for issue in issues if isinstance(issues, list) else []:
+    if not isinstance(issues, list):
+        return (True, "issues_unreadable")
+    for issue in issues:
         if isinstance(issue, dict) and issue.get("status") == "in_progress":
             return (True, "child_in_flight")
     generation = state.get("generation")
@@ -1799,10 +1812,18 @@ def transport_set_blocked(state, *, now_ts: int, lease_s: int = 1800) -> tuple[b
 
 
 def _terminal_for(state, resolution_id: str) -> "dict | None":
+    """The LATEST terminal event for a resolution, or None. PURE.
+
+    Latest, not first (Step-11 finding 7): the log is append-ordered, so returning the first
+    match would keep reporting `parked_unreconcilable` after an unpark had already resolved it,
+    and `unpark_blocked` would go on permitting repeated, conflicting adopt/discard decisions
+    for the same resolution.
+    """
+    latest = None
     for event in transition_events(state):
         if event.get("resolution_id") == resolution_id and event.get("outcome"):
-            return event
-    return None
+            latest = event
+    return latest
 
 
 def unpark_blocked(state, *, resolution_id: str) -> tuple[bool, str]:
@@ -1892,19 +1913,27 @@ def reconcile_boundary(record, *, fresh_panes, panes_with_agents,
     # because each of them depends on the inventory being trustworthy.
     if fresh_panes is None:
         return ("park", "inventory_unreadable")
-    agents = panes_with_agents if panes_with_agents is not None else set()
 
     successor = record.get("successor_pane")
     if successor is not None:
         if successor not in fresh_panes:
             return ("relaunch_permitted", "successor_gone")
-        if successor not in agents:
+        # UNKNOWN agent state is not "no agent" (Step-11 finding 4). Coercing an unreadable
+        # agent inventory to an empty set would classify a possibly-live successor as
+        # `start_failed` and authorise retiring it.
+        if panes_with_agents is None:
+            return ("park", "agent_state_unknown")
+        if successor not in panes_with_agents:
             # A pane is not a running agent. Acking an empty pane as a live successor would
             # stall the campaign forever with nothing to notice it.
             return ("start_failed", "pane_without_agent")
         return ("adopt_successor", "successor_alive")
 
-    if not record.get("split_attempted"):
+    # ONLY an explicit False proves the split was never called (Step-11 finding 3). A missing,
+    # null or malformed marker means a corrupt or partially-written resolution, and absence of
+    # evidence is not evidence of absence — fall through to the inventory diff instead of
+    # authorising a relaunch on a record we cannot read.
+    if record.get("split_attempted") is False:
         return ("relaunch_permitted", "never_started")
 
     # Indeterminate: prove by diff or park. Never by the null.

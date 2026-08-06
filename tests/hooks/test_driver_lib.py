@@ -1520,3 +1520,72 @@ class TestBoundaryAdvisory:
         seen.add("b:camp:3#1")
         assert dl.advisory_due("b:camp:3#1", seen) is False
         assert dl.advisory_due("r:camp:3:2#1", seen) is True
+
+
+class TestStep11Fixes:
+    """Regressions for the ten findings the pre-PR cross-model review raised. Each names its own."""
+
+    def _rec(self, **kw):
+        base = {"resolution_id": "b:camp:3#1", "panes_before": ["w1:anchor"],
+                "split_attempted": False, "successor_pane": None}
+        base.update(kw)
+        return base
+
+    def test_f3_a_MISSING_split_marker_does_not_authorise_a_relaunch(self) -> None:
+        """Only an explicit False proves the split was never called.
+
+        A corrupt or partially-written resolution has no marker; absence of evidence is not
+        evidence of absence, and relaunching on it could put a second successor beside a live one.
+        """
+        rec = self._rec()
+        del rec["split_attempted"]
+        verdict, _ = dl.reconcile_boundary(
+            rec, fresh_panes={"w1:anchor", "w1:mystery"},
+            panes_with_agents=set(), anchor_pane="w1:anchor")
+        assert verdict != "relaunch_permitted"
+
+    def test_f3_a_malformed_split_marker_is_not_a_false(self) -> None:
+        verdict, _ = dl.reconcile_boundary(
+            self._rec(split_attempted="no"), fresh_panes={"w1:anchor", "w1:mystery"},
+            panes_with_agents=set(), anchor_pane="w1:anchor")
+        assert verdict != "relaunch_permitted"
+
+    def test_f4_unknown_agent_state_parks_rather_than_declaring_start_failed(self) -> None:
+        """An unreadable agent inventory must not be coerced to "no agent"."""
+        verdict, reason = dl.reconcile_boundary(
+            self._rec(split_attempted=True, successor_pane="w1:new"),
+            fresh_panes={"w1:anchor", "w1:new"}, panes_with_agents=None,
+            anchor_pane="w1:anchor")
+        assert verdict == "park"
+        assert reason == "agent_state_unknown"
+
+    def test_f5_a_duplicate_resolution_id_is_refused(self) -> None:
+        st = {}
+        kw = dict(transition_id="b:camp:3", generation=3, trigger="child_boundary",
+                  kind="child_boundary", preferred="pane_chain", effective="pane_chain",
+                  probe_reason="probe_ok", probe_ms=1, pane_ref=None, panes_before=[],
+                  now_ts=1)
+        dl.append_resolution(st, attempt=1, **kw)
+        with pytest.raises(dl.DriverStateError):
+            dl.append_resolution(st, attempt=1, **kw)
+
+    def test_f7_unparking_twice_is_refused(self) -> None:
+        """`_terminal_for` must report the LATEST outcome, not the original park."""
+        st = {}
+        rid = dl.append_resolution(
+            st, transition_id="b:camp:3", generation=3, trigger="child_boundary",
+            kind="child_boundary", preferred="pane_chain", effective="pane_chain",
+            probe_reason="probe_ok", probe_ms=1, pane_ref=None, panes_before=[], now_ts=1)
+        dl.append_terminal_outcome(st, resolution_id=rid,
+                                   outcome="parked_unreconcilable", now_ts=2)
+        assert dl.unpark_blocked(st, resolution_id=rid) == (False, "ready")
+        dl.append_unpark(st, resolution_id=rid, outcome="reconciled_no_action",
+                         operator="owner", reason="debris", now_ts=3)
+        blocked, reason = dl.unpark_blocked(st, resolution_id=rid)
+        assert blocked is True
+        assert reason == "not_parked", "a resolved park must not accept a second decision"
+
+    def test_f9_the_transport_guard_fails_CLOSED_without_readable_state(self) -> None:
+        assert dl.transport_set_blocked(None, now_ts=1)[0] is True
+        assert dl.transport_set_blocked({}, now_ts=1)[0] is True
+        assert dl.transport_set_blocked({"issues": "not a list"}, now_ts=1)[0] is True

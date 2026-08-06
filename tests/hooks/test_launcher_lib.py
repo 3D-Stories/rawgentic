@@ -2145,3 +2145,44 @@ class TestLegacyProjectionChokepoint:
             f"expected exactly one _atomic_write call site, found {len(call_sites)}: "
             f"{call_sites}. A new driver-state writer must route through "
             f"_locked_state_update or the #927 legacy projection stops holding.")
+
+
+class TestStep11ProbeFixes:
+    """Regressions for the pre-PR review findings touching the probe and the projection."""
+
+    def test_f10_an_rc2_usage_error_is_not_reported_as_a_missing_pane(self) -> None:
+        """rc 2 is OUR bug; rc 1 is herdr saying the pane is gone. Collapsing them hides one."""
+        def runner(argv, timeout=None):
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return _ProbeProc(0, _probe_pane_list("w1:aaa"))
+            return _ProbeProc(2, "")
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:aaa", runner=runner)
+        assert (cap, pane) == (True, False)
+        assert reason == "probe_usage_error"
+
+    def test_f6_an_unknown_transport_REMOVES_a_stale_projection(self, tmp_path) -> None:
+        """The opposite-transport rollback regression the projection exists to prevent."""
+        p = tmp_path / "camp.json"
+        p.write_text(json.dumps({"schema_version": 1, "campaign": "c", "issues": [],
+                                 "preferred_transport": "teleport",
+                                 "session_mode": "fresh-session"}))
+        ll._locked_state_update(str(p), lambda st: st)
+        assert "session_mode" not in json.loads(p.read_text()), (
+            "a stale projection would run pane-chain after a rollback while this build runs inline")
+
+    def test_f8_the_default_probe_runner_bounds_its_streams(self) -> None:
+        """The real bound is in the runner, not a post-hoc len() on a buffered string."""
+        proc = ll._bounded_probe_runner(
+            [sys.executable, "-c",
+             "import sys; sys.stdout.write('x' * (200 * 1024))"],
+            timeout=15)
+        assert len(proc.stdout) <= ll.PROBE_MAX_BYTES + 1, (
+            "the runner must stop reading at the cap rather than buffering everything")
+
+    def test_f8_an_oversized_stream_still_degrades_the_probe(self) -> None:
+        cap, pane, reason = ll.transport_probe(
+            pane_ref=None,
+            runner=lambda argv, timeout=None: _ProbeProc(0, "x" * (ll.PROBE_MAX_BYTES + 1)))
+        assert (cap, pane) == (False, False)
+        assert reason == "probe_oversized"

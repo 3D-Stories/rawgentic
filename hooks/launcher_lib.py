@@ -1575,6 +1575,50 @@ PROBE_MAX_BYTES = 64 * 1024
 PROBE_TIMEOUT_S = 5
 
 
+class _BoundedProc:
+    """What `_bounded_probe_runner` hands back — the shape `_read` expects."""
+
+    __slots__ = ("returncode", "stdout", "stderr")
+
+    def __init__(self, returncode, stdout, stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _bounded_probe_runner(argv, timeout=PROBE_TIMEOUT_S):
+    """Run a probe command, reading AT MOST `PROBE_MAX_BYTES` from each stream.
+
+    `subprocess.run(capture_output=True)` buffers the whole of stdout before returning, so a
+    size check afterwards prevents nothing — a chatty or hostile daemon can exhaust memory
+    before the check ever executes (Step-11 finding 8). This stops reading at the cap, kills the
+    child, and reaps it.
+
+    Returns one byte OVER the cap when exceeded, so the caller's backstop check still trips.
+    """
+    # stderr is DEVNULL rather than a second PIPE, and that is load-bearing: two SEQUENTIAL
+    # bounded reads on two pipes DEADLOCK. The child blocks writing whichever stream we are not
+    # reading yet, so it never exits and our read never returns. Measured — the first version of
+    # this function hung its own test. The probe never reads stderr, and an unread pipe is also
+    # an unbounded buffer, so not creating it fixes both problems at once.
+    with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                          text=True, shell=False) as proc:
+        try:
+            # `read(n)` stops at n; the child is then KILLED rather than drained, so an
+            # unbounded producer cannot keep us reading.
+            out = proc.stdout.read(PROBE_MAX_BYTES + 1) if proc.stdout else ""
+            if len(out) > PROBE_MAX_BYTES:
+                proc.kill()
+                proc.wait(timeout=timeout)
+                return _BoundedProc(0, out)
+            proc.wait(timeout=timeout)
+            return _BoundedProc(proc.returncode, out)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise
+
+
 def transport_probe(*, pane_ref, runner=None):
     """Is a pane-chain transport available RIGHT NOW? Returns ``(capability_ok, pane_ok, reason)``.
 
@@ -1594,25 +1638,28 @@ def transport_probe(*, pane_ref, runner=None):
     round trip is the proof. Fail-open in every direction: this can degrade a boundary to
     ``inline``, never raise into it.
     """
-    runner = runner or _default_runner
+    runner = runner or _bounded_probe_runner
 
     def _read(argv):
-        """(parsed doc, error token). Never raises."""
+        """(parsed doc, error token, returncode). Never raises."""
         proc = runner(argv, timeout=PROBE_TIMEOUT_S)
-        if getattr(proc, "returncode", 1) != 0:
-            return None, "rc"
+        rc = getattr(proc, "returncode", 1)
         out = getattr(proc, "stdout", "") or ""
-        # Refuse on SIZE before parsing. A post-hoc length check on an already-buffered string
-        # prevents nothing; callers pass a runner that caps the stream (review finding A8).
+        # The size check is a BACKSTOP. The real bound is in `_bounded_probe_runner`, which
+        # stops reading and reaps the child at the cap — a post-hoc `len()` on an
+        # already-buffered string prevents nothing (Step-11 finding 8). It is still checked here
+        # because the runner is injectable and a caller may supply an unbounded one.
         if len(out) > PROBE_MAX_BYTES:
-            return None, "oversized"
+            return None, "oversized", rc
+        if rc != 0:
+            return None, "rc", rc
         try:
-            return json.loads(out), None
+            return json.loads(out), None, rc
         except (ValueError, TypeError):
-            return None, "unparseable"
+            return None, "unparseable", rc
 
     try:
-        doc, err = _read(["herdr", "pane", "list"])
+        doc, err, _rc = _read(["herdr", "pane", "list"])
         if err == "oversized":
             return (False, False, "probe_oversized")
         if err == "unparseable":
@@ -1632,12 +1679,17 @@ def transport_probe(*, pane_ref, runner=None):
             # A hostile or mistyped $HERDR_PANE_ID never reaches a subprocess.
             return (True, False, "invalid_pane_ref")
 
-        doc2, err2 = _read(["herdr", "pane", "get", pane_ref])
+        doc2, err2, rc2 = _read(["herdr", "pane", "get", pane_ref])
         if err2 == "oversized":
             return (True, False, "probe_oversized")
         if err2 == "unparseable":
             return (True, False, "probe_unparseable")
         if doc2 is None:
+            # rc 2 is OUR bug (a malformed invocation), rc 1 is herdr saying the pane is gone.
+            # Collapsing them would present an implementation error as an absent pane and lose
+            # the loud signal the design promised (Step-11 finding 10).
+            if rc2 == 2:
+                return (True, False, "probe_usage_error")
             return (True, False, "pane_not_found")
         node2 = doc2.get("result", doc2) if isinstance(doc2, dict) else None
         pane = node2.get("pane") if isinstance(node2, dict) else None
@@ -1672,7 +1724,8 @@ def resolve_creation_transport(*, runner=None) -> tuple[str, str]:
     existing campaign's recorded preference is changed exclusively by the sanctioned
     `transport set` command.
     """
-    import driver_lib  # pylint: disable=import-outside-toplevel  (module convention, :4072)
+    # Lazy import, matching this module's existing convention (see :4072).
+    import driver_lib  # pylint: disable=import-outside-toplevel
 
     capability_ok, _pane_ok, reason = transport_probe(pane_ref=None, runner=runner)
     if capability_ok:
@@ -3048,11 +3101,19 @@ def _project_legacy_session_mode(state) -> None:
     transport = state.get("preferred_transport")
     if transport is None:
         return
-    import driver_lib  # pylint: disable=import-outside-toplevel  (module convention)
+    # Lazy import, matching this module's existing convention (see :4072).
+    import driver_lib  # pylint: disable=import-outside-toplevel
 
     legacy = driver_lib.legacy_session_mode(transport)
     if legacy is not None:
         state["session_mode"] = legacy
+    else:
+        # An UNRECOGNISED canonical value must not leave a stale projection standing
+        # (Step-11 finding 6). `preferred_transport="teleport"` with a leftover
+        # `session_mode="fresh-session"` runs inline on this build and pane-chain after a
+        # rollback — the exact opposite-transport regression the projection exists to prevent.
+        # No projection is better than a false one.
+        state.pop("session_mode", None)
 
 
 def _locked_state_update(path: str, mutate):
