@@ -2760,6 +2760,14 @@ class TestSetSupervisionOverride:
         with pytest.raises(dl.DriverStateError):
             dl.set_supervision_override(state, {"mode": "bogus"}, now="2026-08-06T01:00:00Z")
 
+    def test_none_new_value_refuses_cleanly_rather_than_crashing(self):
+        """`_supervision_override_errors(None)` is `[]` (None is a valid STORED value —
+        no override), but passing None to the SETTER must not fall through to a bare
+        `.get('mode')` AttributeError. Found by this task's own self-review."""
+        state = _base_campaign_state()
+        with pytest.raises(dl.DriverStateError):
+            dl.set_supervision_override(state, None, now="2026-08-06T01:00:00Z")
+
     def test_every_other_top_level_field_survives_untouched(self):
         state = _base_campaign_state()
         state["campaign_wait"] = {"status": "waiting_for_owner", "reason": "x",

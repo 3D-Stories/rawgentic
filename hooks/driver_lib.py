@@ -3792,6 +3792,14 @@ def set_supervision_override(state: dict, new_value, *, now: str) -> dict | None
     `no_merge` and `no_consult` are incomparable: neither tightens the other, so a
     direct transition between them refuses.
     """
+    if not isinstance(new_value, dict):
+        # `_supervision_override_errors(None)` is `[]` — None is a VALID stored value
+        # (no override at all), but is not a valid THING TO SET: this setter exists to
+        # establish a restrictive value, and "tighten to nothing" isn't an operation —
+        # relaxation happens only via expiry or an explicit `{"mode": "none", ...}`.
+        raise DriverStateError(
+            f"new_value must be a dict, got {new_value!r} — pass "
+            "{'mode': 'none', ...} to explicitly clear, never None")
     errors = _supervision_override_errors(new_value)
     if errors:
         raise DriverStateError(
