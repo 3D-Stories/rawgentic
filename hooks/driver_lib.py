@@ -1777,6 +1777,90 @@ def unterminated_resolutions(state) -> list:
             if "outcome" not in e and e.get("resolution_id") not in closed]
 
 
+def transport_set_blocked(state, *, now_ts: int, lease_s: int = 1800) -> tuple[bool, str]:
+    """May the sanctioned `transport set` command change the preference now? ``(blocked, reason)``.
+
+    #927 AC 2. Two refusals, and the second is the one that is easy to forget: a child in flight
+    is the `mid-child-handoff` case rather than this one, AND a live handoff claim means a
+    boundary is mid-launch — changing the recorded answer under it would let the launch and the
+    record disagree about what was chosen.
+    """
+    if not isinstance(state, dict):
+        return (False, "ready")
+    issues = state.get("issues")
+    for issue in issues if isinstance(issues, list) else []:
+        if isinstance(issue, dict) and issue.get("status") == "in_progress":
+            return (True, "child_in_flight")
+    generation = state.get("generation")
+    if generation is not None and handoff_claim_is_live(
+            state, now_ts=now_ts, lease_s=lease_s):
+        return (True, "handoff_claim_active")
+    return (False, "ready")
+
+
+def _terminal_for(state, resolution_id: str) -> "dict | None":
+    for event in transition_events(state):
+        if event.get("resolution_id") == resolution_id and event.get("outcome"):
+            return event
+    return None
+
+
+def unpark_blocked(state, *, resolution_id: str) -> tuple[bool, str]:
+    """May `transport unpark` clear this resolution? ``(blocked, reason)``. PURE.
+
+    Only a `parked_unreconcilable` resolution may be unparked. Without this the design's
+    "only an operator clears it" would mean hand-editing driver-state, which everything else
+    here forbids.
+    """
+    terminal = _terminal_for(state, resolution_id)
+    if terminal is None:
+        return (True, "unknown_resolution")
+    if terminal.get("outcome") != "parked_unreconcilable":
+        return (True, "not_parked")
+    return (False, "ready")
+
+
+def append_unpark(state: dict, *, resolution_id: str, outcome: str, operator: str,
+                  reason: str, now_ts: int) -> None:
+    """Record an operator's unpark decision as a NEW event.
+
+    Appends rather than rewriting: the `parked_unreconcilable` event stays as the audit record
+    of what the run could not decide for itself.
+    """
+    if outcome not in TERMINAL_OUTCOMES:
+        raise DriverStateError(
+            f"unknown unpark outcome {outcome!r}; expected one of {sorted(TERMINAL_OUTCOMES)}")
+    state.setdefault(TRANSITIONS_KEY, []).append({
+        "resolution_id": resolution_id,
+        "outcome": outcome,
+        "operator": operator,
+        "reason": reason,
+        "observed_at": now_ts,
+    })
+
+
+def boundary_advisory_line(*, preferred: str, effective: str, reason: str) -> "str | None":
+    """The one-line operator advisory for a degraded boundary, or None. PURE.
+
+    #927 AC 4: an operator must SEE the choice being made rather than infer it from silence.
+    Carries only a fixed reason token — never probe stdout, which would let odd daemon output
+    (terminal escapes included) reach an operator's console.
+    """
+    if effective == preferred:
+        return None
+    return (f"### epic-run: transport={effective} preferred={preferred} "
+            f"reason={reason} — re-probing next transition")
+
+
+def advisory_due(transition_id: str, already_emitted) -> bool:
+    """Has this transition already advised? PURE.
+
+    Keyed on ``transition_id``, NOT ``generation``: `creation` and `boundary_resume` do not bump
+    a generation, so a generation key would make them collide and silently suppress one.
+    """
+    return transition_id not in (already_emitted or set())
+
+
 #: What a reclaimer may do with an unterminated boundary resolution.
 RECONCILE_VERDICTS = frozenset({
     "relaunch_permitted",   # PROVEN nothing survives

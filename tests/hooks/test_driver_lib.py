@@ -1405,3 +1405,118 @@ class TestBoundaryReconciliation:
     def test_every_verdict_is_from_the_closed_set(self) -> None:
         assert dl.RECONCILE_VERDICTS == frozenset(
             {"relaunch_permitted", "adopt_successor", "start_failed", "park"})
+
+
+class TestTransportSetGuard:
+    """#927 AC 2: an in-flight campaign's preference can be changed by a sanctioned command."""
+
+    def test_a_quiet_campaign_permits_the_change(self) -> None:
+        st = {"issues": [{"number": 7, "status": "queued"}]}
+        assert dl.transport_set_blocked(st, now_ts=100) == (False, "ready")
+
+    def test_a_child_in_flight_refuses(self) -> None:
+        """A mode flip while a child runs is the mid-child-handoff case, not this one."""
+        st = {"issues": [{"number": 7, "status": "in_progress"}]}
+        blocked, reason = dl.transport_set_blocked(st, now_ts=100)
+        assert blocked is True
+        assert reason == "child_in_flight"
+
+    def test_a_LIVE_CLAIM_also_refuses(self) -> None:
+        """Not just a child -- a boundary mid-launch must not have the answer changed under it."""
+        st = {"issues": [], "generation": 4,
+              "handoff_pending": {"generation": 4, "next_issue": 7, "written_ts": 1},
+              "handoff_claim": {"generation": 4, "claimant": "pane-a",
+                                "claimed_at": 100, "started": False}}
+        blocked, reason = dl.transport_set_blocked(st, now_ts=101)
+        assert blocked is True
+        assert reason == "handoff_claim_active"
+
+    def test_an_EXPIRED_claim_no_longer_refuses(self) -> None:
+        st = {"issues": [], "generation": 4,
+              "handoff_pending": {"generation": 4, "next_issue": 7, "written_ts": 1},
+              "handoff_claim": {"generation": 4, "claimant": "pane-a",
+                                "claimed_at": 100, "started": False}}
+        assert dl.transport_set_blocked(st, now_ts=100 + 1801)[0] is False
+
+
+class TestUnparkGuard:
+    """#927: unparking is a command, not hand-editing driver-state."""
+
+    def _parked(self):
+        st = {}
+        rid = dl.append_resolution(
+            st, transition_id="b:camp:3", generation=3, trigger="child_boundary",
+            kind="child_boundary", preferred="pane_chain", effective="pane_chain",
+            probe_reason="probe_ok", probe_ms=5, pane_ref="w1:a",
+            panes_before=["w1:a"], now_ts=1)
+        dl.append_terminal_outcome(st, resolution_id=rid,
+                                   outcome="parked_unreconcilable", now_ts=2)
+        return st, rid
+
+    def test_a_parked_resolution_may_be_unparked(self) -> None:
+        st, rid = self._parked()
+        assert dl.unpark_blocked(st, resolution_id=rid) == (False, "ready")
+
+    def test_a_resolution_that_is_not_parked_is_refused(self) -> None:
+        st = {}
+        rid = dl.append_resolution(
+            st, transition_id="b:camp:3", generation=3, trigger="child_boundary",
+            kind="child_boundary", preferred="inline", effective="inline",
+            probe_reason="probe_ok", probe_ms=5, pane_ref=None,
+            panes_before=[], now_ts=1)
+        dl.append_terminal_outcome(st, resolution_id=rid,
+                                   outcome="inline_continued", now_ts=2)
+        blocked, reason = dl.unpark_blocked(st, resolution_id=rid)
+        assert blocked is True
+        assert reason == "not_parked"
+
+    def test_an_unknown_resolution_is_refused(self) -> None:
+        assert dl.unpark_blocked({}, resolution_id="nope#1")[0] is True
+
+    def test_unparking_APPENDS_and_never_rewrites_the_parked_event(self) -> None:
+        st, rid = self._parked()
+        before = len(dl.transition_events(st))
+        dl.append_unpark(st, resolution_id=rid, outcome="reconciled_no_action",
+                         operator="owner", reason="pane was debris", now_ts=9)
+        events = dl.transition_events(st)
+        assert len(events) == before + 1
+        assert any(e.get("outcome") == "parked_unreconcilable" for e in events), (
+            "the parked event must survive as the audit record")
+        assert events[-1]["outcome"] == "reconciled_no_action"
+        assert events[-1]["operator"] == "owner"
+
+    def test_unparking_refuses_an_outcome_outside_the_closed_set(self) -> None:
+        st, rid = self._parked()
+        with pytest.raises(dl.DriverStateError):
+            dl.append_unpark(st, resolution_id=rid, outcome="vibes",
+                             operator="owner", reason="x", now_ts=9)
+
+
+class TestBoundaryAdvisory:
+    """#927 AC 4: an inline boundary is VISIBLE, and says so exactly once."""
+
+    def test_the_line_names_the_preference_and_the_reason(self) -> None:
+        line = dl.boundary_advisory_line(preferred="pane_chain", effective="inline",
+                                         reason="herdr_unreachable")
+        assert "inline" in line
+        assert "pane_chain" in line
+        assert "herdr_unreachable" in line
+
+    def test_a_pane_chain_boundary_has_nothing_to_advise(self) -> None:
+        assert dl.boundary_advisory_line(preferred="pane_chain", effective="pane_chain",
+                                         reason="probe_ok") is None
+
+    def test_the_advisory_never_echoes_probe_output(self) -> None:
+        """Only a fixed reason token. Raw daemon output must never reach a terminal."""
+        line = dl.boundary_advisory_line(
+            preferred="pane_chain", effective="inline",
+            reason="probe_unparseable") or ""
+        assert "\x1b" not in line and "\n" not in line.strip()
+
+    def test_it_fires_once_per_transition_not_once_per_generation(self) -> None:
+        """`creation` and `boundary_resume` do not bump a generation and would share a key."""
+        seen = set()
+        assert dl.advisory_due("b:camp:3#1", seen) is True
+        seen.add("b:camp:3#1")
+        assert dl.advisory_due("b:camp:3#1", seen) is False
+        assert dl.advisory_due("r:camp:3:2#1", seen) is True
