@@ -1566,6 +1566,176 @@ def herdr_available(which=shutil.which) -> bool:
     return which("herdr") is not None
 
 
+#: #927 — bounded reads and a bounded wall clock for the transport probe. The timeout exists
+#: for a HUNG daemon, not for latency: the round trip is a local socket. 5 s rather than the
+#: peer consult's proposed 2 s because a false negative costs one visible, self-healing
+#: `inline` transition, and this host routinely runs several agent panes plus a test suite at
+#: once — systematic spurious degradation is the failure #927 exists to end.
+PROBE_MAX_BYTES = 64 * 1024
+PROBE_TIMEOUT_S = 5
+
+
+class _BoundedProc:
+    """What `_bounded_probe_runner` hands back — the shape `_read` expects."""
+
+    __slots__ = ("returncode", "stdout", "stderr")
+
+    def __init__(self, returncode, stdout, stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _bounded_probe_runner(argv, timeout=PROBE_TIMEOUT_S):
+    """Run a probe command, reading AT MOST `PROBE_MAX_BYTES` from each stream.
+
+    `subprocess.run(capture_output=True)` buffers the whole of stdout before returning, so a
+    size check afterwards prevents nothing — a chatty or hostile daemon can exhaust memory
+    before the check ever executes (Step-11 finding 8). This stops reading at the cap, kills the
+    child, and reaps it.
+
+    Returns one byte OVER the cap when exceeded, so the caller's backstop check still trips.
+    """
+    # stderr is DEVNULL rather than a second PIPE, and that is load-bearing: two SEQUENTIAL
+    # bounded reads on two pipes DEADLOCK. The child blocks writing whichever stream we are not
+    # reading yet, so it never exits and our read never returns. Measured — the first version of
+    # this function hung its own test. The probe never reads stderr, and an unread pipe is also
+    # an unbounded buffer, so not creating it fixes both problems at once.
+    with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                          text=True, shell=False) as proc:
+        try:
+            # `read(n)` stops at n; the child is then KILLED rather than drained, so an
+            # unbounded producer cannot keep us reading.
+            out = proc.stdout.read(PROBE_MAX_BYTES + 1) if proc.stdout else ""
+            if len(out) > PROBE_MAX_BYTES:
+                proc.kill()
+                proc.wait(timeout=timeout)
+                return _BoundedProc(0, out)
+            proc.wait(timeout=timeout)
+            return _BoundedProc(proc.returncode, out)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise
+
+
+def transport_probe(*, pane_ref, runner=None):
+    """Is a pane-chain transport available RIGHT NOW? Returns ``(capability_ok, pane_ok, reason)``.
+
+    Two tiers, reported SEPARATELY and never collapsed into one verdict (#927). Campaign
+    creation legitimately has no pane reference, and it must still be able to record
+    ``pane_chain`` from ``capability_ok`` alone. A single collapsed verdict would report
+    ``inline`` there and silently preserve the very default this issue exists to invert — the
+    design's own AC-1 regression, caught in review before it shipped.
+
+    Tier 1 (capability) reuses the ``herdr pane list`` shape that `_pane_inventory` already
+    hardens; it needs no pane reference, which is the point — `--current` is exactly what fails
+    in a pane-less session (see this module's header). Tier 2 (liveness) asks about ONE pane and
+    requires the answer to be about that pane: an rc 0 response describing a different pane is
+    not evidence about this one.
+
+    ``HERDR_ENV`` / ``HERDR_PANE_ID`` are a HINT that supplies a candidate id, never proof — the
+    round trip is the proof. Fail-open in every direction: this can degrade a boundary to
+    ``inline``, never raise into it.
+    """
+    runner = runner or _bounded_probe_runner
+
+    def _read(argv):
+        """(parsed doc, error token, returncode). Never raises."""
+        proc = runner(argv, timeout=PROBE_TIMEOUT_S)
+        rc = getattr(proc, "returncode", 1)
+        out = getattr(proc, "stdout", "") or ""
+        # The size check is a BACKSTOP. The real bound is in `_bounded_probe_runner`, which
+        # stops reading and reaps the child at the cap — a post-hoc `len()` on an
+        # already-buffered string prevents nothing (Step-11 finding 8). It is still checked here
+        # because the runner is injectable and a caller may supply an unbounded one.
+        if len(out) > PROBE_MAX_BYTES:
+            return None, "oversized", rc
+        if rc != 0:
+            return None, "rc", rc
+        try:
+            return json.loads(out), None, rc
+        except (ValueError, TypeError):
+            return None, "unparseable", rc
+
+    try:
+        doc, err, _rc = _read(["herdr", "pane", "list"])
+        if err == "oversized":
+            return (False, False, "probe_oversized")
+        if err == "unparseable":
+            return (False, False, "probe_unparseable")
+        if doc is None:
+            return (False, False, "herdr_unreachable")
+        node = doc.get("result", doc) if isinstance(doc, dict) else None
+        if not isinstance(node, dict) or not isinstance(node.get("panes"), list):
+            return (False, False, "probe_unparseable")
+
+        # Capability is proven from here on; only tier 2 can still fail.
+        if not pane_ref:
+            return (True, False, "no_pane_ref")
+        try:
+            validate_pane_id(pane_ref)
+        except LauncherError:
+            # A hostile or mistyped $HERDR_PANE_ID never reaches a subprocess.
+            return (True, False, "invalid_pane_ref")
+
+        doc2, err2, rc2 = _read(["herdr", "pane", "get", pane_ref])
+        if err2 == "oversized":
+            return (True, False, "probe_oversized")
+        if err2 == "unparseable":
+            return (True, False, "probe_unparseable")
+        if doc2 is None:
+            # rc 2 is OUR bug (a malformed invocation), rc 1 is herdr saying the pane is gone.
+            # Collapsing them would present an implementation error as an absent pane and lose
+            # the loud signal the design promised (Step-11 finding 10).
+            if rc2 == 2:
+                return (True, False, "probe_usage_error")
+            return (True, False, "pane_not_found")
+        node2 = doc2.get("result", doc2) if isinstance(doc2, dict) else None
+        pane = node2.get("pane") if isinstance(node2, dict) else None
+        if not isinstance(pane, dict):
+            return (True, False, "probe_unparseable")
+        if pane.get("pane_id") != pane_ref:
+            return (True, False, "probe_identity_mismatch")
+        # The workspace is the pane id's prefix — asserted live against herdr 0.8.0 rather than
+        # assumed (`w1:pKS` -> `w1`).
+        if pane.get("workspace_id") != pane_ref.split(":")[0]:
+            return (True, False, "probe_identity_mismatch")
+        return (True, True, "probe_ok")
+    except FileNotFoundError:
+        return (False, False, "herdr_absent")
+    except subprocess.TimeoutExpired:
+        return (False, False, "probe_timeout")
+    except Exception as exc:  # pylint: disable=broad-except
+        # Fail-open is the whole contract: an unpredicted error degrades the transport, it does
+        # not take the boundary down with it.
+        return (False, False, f"probe_error:{type(exc).__name__}")
+
+
+def resolve_creation_transport(*, runner=None) -> tuple[str, str]:
+    """The `preferred_transport` a NEW campaign should record. Returns ``(transport, reason)``.
+
+    #927 AC 1: the preference is DERIVED by probing, not asked at setup and not defaulted. This
+    deliberately consults TIER 1 ONLY — a campaign being created has no pane reference of its
+    own, and requiring one would fail closed on every new campaign while herdr was perfectly
+    healthy. That failure mode is why `transport_probe` reports the tiers separately.
+
+    Note what this does NOT do: it never *upgrades* anything. It is the creation seam only. An
+    existing campaign's recorded preference is changed exclusively by the sanctioned
+    `transport set` command.
+    """
+    # Lazy import, matching this module's existing convention (see :4072).
+    import driver_lib  # pylint: disable=import-outside-toplevel
+
+    capability_ok, _pane_ok, reason = transport_probe(pane_ref=None, runner=runner)
+    if capability_ok:
+        # Tier 1 alone answers creation, so `no_pane_ref` is the expected reason here and is
+        # NOT a degradation — report the capability verdict instead of the tier-2 skip.
+        return (driver_lib.PANE_CHAIN_TRANSPORT,
+                "probe_ok" if reason == "no_pane_ref" else reason)
+    return (driver_lib.INLINE_TRANSPORT, reason)
+
+
 # #840 — the ONLY permitted source of `observed_head`.
 _OBSERVED_HEAD_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 
@@ -2911,6 +3081,41 @@ def _locked_state_read(path: str) -> dict:
             return _load_state_strict(fh)
 
 
+def _project_legacy_session_mode(state) -> None:
+    """Keep the write-only `session_mode` projection true, in place (#927).
+
+    Called from `_locked_state_update` — the module's ONLY driver-state writer — so the
+    invariant holds by construction rather than by every future mutation path remembering it.
+    Review finding A6: stated as a convention, the first path that forgets leaves `session_mode`
+    stale and a rolled-back build then executes the OPPOSITE transport, silently.
+
+    Two deliberate non-actions:
+
+    - No canonical field ⇒ the legacy field is left ALONE. A pre-#927 campaign must not have a
+      projection invented for it; `campaign_transport` migrates it on read instead.
+    - An unrecognised canonical value ⇒ no projection is written. Guessing a legacy value from
+      an unknown transport is how a rollback would silently pick the wrong one.
+    """
+    if not isinstance(state, dict):
+        return
+    transport = state.get("preferred_transport")
+    if transport is None:
+        return
+    # Lazy import, matching this module's existing convention (see :4072).
+    import driver_lib  # pylint: disable=import-outside-toplevel
+
+    legacy = driver_lib.legacy_session_mode(transport)
+    if legacy is not None:
+        state["session_mode"] = legacy
+    else:
+        # An UNRECOGNISED canonical value must not leave a stale projection standing
+        # (Step-11 finding 6). `preferred_transport="teleport"` with a leftover
+        # `session_mode="fresh-session"` runs inline on this build and pane-chain after a
+        # rollback — the exact opposite-transport regression the projection exists to prevent.
+        # No projection is better than a false one.
+        state.pop("session_mode", None)
+
+
 def _locked_state_update(path: str, mutate):
     """The ONE locked read -> validate -> atomic-replace cycle for driver state (#665).
 
@@ -2931,6 +3136,7 @@ def _locked_state_update(path: str, mutate):
         new = mutate(state)
         if new is None:
             return None
+        _project_legacy_session_mode(new)
         _atomic_write(path, json.dumps(new, indent=2) + "\n")
         return new
 

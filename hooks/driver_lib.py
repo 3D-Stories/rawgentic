@@ -1602,6 +1602,395 @@ FRESH_SESSION_MODE = "fresh-session"
 LAUNCHABLE_MODES = frozenset({"herdr", "pane_less"})
 
 
+# --------------------------------------------------------------------------- #
+# #927: transport replaces `session_mode`
+# --------------------------------------------------------------------------- #
+#: A campaign records a PREFERENCE (durable) and resolves an EFFECT per transition. The old
+#: `session_mode` conflated the two into one permanent hand-authored answer, so a campaign
+#: could not express "I want a pane chain, but herdr is missing right now".
+PANE_CHAIN_TRANSPORT = "pane_chain"
+INLINE_TRANSPORT = "inline"
+TRANSPORTS = frozenset({PANE_CHAIN_TRANSPORT, INLINE_TRANSPORT})
+
+#: The one-way legacy mapping. Kept as a module constant rather than inlined twice so the
+#: resolver and the compatibility projection cannot drift apart — a drift here would let a
+#: rolled-back build execute the OPPOSITE transport, silently.
+_LEGACY_TO_TRANSPORT = {
+    FRESH_SESSION_MODE: PANE_CHAIN_TRANSPORT,   # "fresh-session"
+    "single-session": INLINE_TRANSPORT,
+}
+_TRANSPORT_TO_LEGACY = {v: k for k, v in _LEGACY_TO_TRANSPORT.items()}
+
+
+def campaign_transport(state) -> tuple[str, str]:
+    """The campaign's PREFERRED transport and where that answer came from. PURE.
+
+    Returns ``(transport, provenance)`` with provenance in
+    ``recorded | migrated | unrecognized | legacy_default``.
+
+    Migration happens on READ and writes nothing — materialising it is the next locked write's
+    job, so no read path mutates state. The canonical field always wins over a disagreeing
+    legacy one, because the legacy field is a write-only projection (see `legacy_session_mode`)
+    and a hand edit of it must never override the real answer.
+
+    ``legacy_default`` marks the ONE case that is genuinely defaulted: a pre-existing campaign
+    carrying neither field. A NEW campaign never reaches it — creation probes and records a
+    preference explicitly. Conflating those two is exactly the regression that would leave a
+    healthy new campaign on ``inline`` and preserve the default #927 exists to invert.
+    """
+    if not isinstance(state, dict):
+        return (INLINE_TRANSPORT, "legacy_default")
+
+    recorded = state.get("preferred_transport")
+    if recorded is not None:
+        if recorded in TRANSPORTS:
+            return (recorded, "recorded")
+        return (INLINE_TRANSPORT, "unrecognized")
+
+    legacy = state.get("session_mode")
+    if legacy is not None:
+        migrated = _LEGACY_TO_TRANSPORT.get(legacy)
+        if migrated is not None:
+            return (migrated, "migrated")
+        # Never guess. An unrecognised value degrades visibly rather than being mapped by
+        # resemblance — but it does NOT hard-fail, because that would strand a live campaign.
+        return (INLINE_TRANSPORT, "unrecognized")
+
+    return (INLINE_TRANSPORT, "legacy_default")
+
+
+#: Where the two-event log lives on driver-state. Additive; `additionalProperties: true`
+#: already permits it, and `validate_driver_state` has no unknown-key branch.
+TRANSITIONS_KEY = "transitions"
+
+#: The CLOSED set of terminal outcomes. `launch_indeterminate` is deliberately ABSENT: an
+#: earlier draft made it terminal while other paths still required the same transition to be
+#: reclaimable, so an implementation treating terminals as closed would strand it forever. An
+#: indeterminate launch is the ABSENCE of a terminal event — the crash signature, not an event.
+TERMINAL_OUTCOMES = frozenset({
+    "successor_acked",        # a successor is running and acknowledged
+    "inline_continued",       # resolved inline; the predecessor carries on
+    "launch_failed",          # provably nothing started; retryable
+    "start_failed",           # a pane exists but no agent runs in it
+    "reconciled_no_action",   # reclaim proved there was nothing to do
+    "created",                # campaign creation recorded a preference
+    "parked_unreconcilable",  # a human must look; never auto-reclaimed
+})
+
+
+def transition_events(state) -> list:
+    """Every transition event, oldest first. PURE, and never raises on a malformed state."""
+    if not isinstance(state, dict):
+        return []
+    events = state.get(TRANSITIONS_KEY)
+    return list(events) if isinstance(events, list) else []
+
+
+def append_resolution(state: dict, *, transition_id: str, generation, trigger: str, kind: str,
+                      preferred: str, effective: str, probe_reason: str, probe_ms,
+                      pane_ref, panes_before, now_ts: int, attempt: int = 1,
+                      advisory_emitted: "bool | None" = None) -> str:
+    """Append the RESOLUTION event and return its ``resolution_id``.
+
+    This lands BEFORE any action. `successor_pane` is null and `split_attempted` is False at
+    this point, and that pair is what later makes recovery unambiguous: a crash here means
+    nothing was ever launched.
+    """
+    resolution_id = f"{transition_id}#{attempt}"
+    # A duplicate id would make `resolution()` and `append_terminal_outcome` target the FIRST
+    # record, so one terminal event would make every duplicate look closed and hide an
+    # unreconciled launch (Step-11 finding 5). Reusing an attempt number is a caller bug.
+    if any(e.get("resolution_id") == resolution_id and "outcome" not in e
+           for e in transition_events(state)):
+        raise DriverStateError(
+            f"resolution {resolution_id!r} already exists — reusing an attempt number would "
+            "hide an unreconciled launch behind the first record's terminal event")
+    state.setdefault(TRANSITIONS_KEY, []).append({
+        "resolution_id": resolution_id,
+        "transition_id": transition_id,
+        "generation": generation,
+        "trigger": trigger,
+        "kind": kind,
+        "preferred_snapshot": preferred,
+        "effective": effective,
+        "probe_reason": probe_reason,
+        "probe_ms": probe_ms,
+        "pane_ref": pane_ref,
+        "panes_before": list(panes_before) if panes_before is not None else None,
+        "split_attempted": False,
+        "successor_pane": None,
+        "advisory_emitted": advisory_emitted,
+        "observed_at": now_ts,
+    })
+    return resolution_id
+
+
+def resolution(state, resolution_id: str) -> "dict | None":
+    """The resolution event with this id, or None. PURE."""
+    for event in transition_events(state):
+        if event.get("resolution_id") == resolution_id and "outcome" not in event:
+            return event
+    return None
+
+
+def _require_resolution(state, resolution_id: str) -> dict:
+    found = resolution(state, resolution_id)
+    if found is None:
+        raise DriverStateError(f"no resolution {resolution_id!r} to amend")
+    return found
+
+
+def mark_split_attempted(state: dict, *, resolution_id: str) -> None:
+    """Record that a split is ABOUT to be called — before calling it.
+
+    The ordering is the whole safety property. With the marker landing first,
+    ``split_attempted=False`` proves nothing was created, and only that state authorises a
+    relaunch. If it landed after the split, a crash in between would be indistinguishable from
+    "never started" and could launch a second successor beside a live one.
+    """
+    _require_resolution(state, resolution_id)["split_attempted"] = True
+
+
+def record_successor_pane(state: dict, *, resolution_id: str, pane: str) -> None:
+    """Amend the resolution with the ownership-verified new pane id.
+
+    The one permitted in-place write, confined to a field that is null until the split returns.
+    """
+    _require_resolution(state, resolution_id)["successor_pane"] = pane
+
+
+def append_terminal_outcome(state: dict, *, resolution_id: str, outcome: str,
+                            now_ts: int) -> None:
+    """Close a resolution with an immutable terminal event."""
+    if outcome not in TERMINAL_OUTCOMES:
+        raise DriverStateError(
+            f"unknown terminal outcome {outcome!r}; expected one of "
+            f"{sorted(TERMINAL_OUTCOMES)}")
+    found = resolution(state, resolution_id)
+    if found is None:
+        raise DriverStateError(f"no resolution {resolution_id!r} to close")
+    state.setdefault(TRANSITIONS_KEY, []).append({
+        "resolution_id": resolution_id,
+        "transition_id": found.get("transition_id"),
+        "claim_attempt": found.get("resolution_id", "").rsplit("#", 1)[-1],
+        "outcome": outcome,
+        "observed_at": now_ts,
+    })
+
+
+def unterminated_resolutions(state) -> list:
+    """Resolution ids with no terminal event — the crash signature. PURE."""
+    closed = {e.get("resolution_id") for e in transition_events(state) if e.get("outcome")}
+    return [e["resolution_id"] for e in transition_events(state)
+            if "outcome" not in e and e.get("resolution_id") not in closed]
+
+
+def transport_set_blocked(state, *, now_ts: int, lease_s: int = 1800) -> tuple[bool, str]:
+    """May the sanctioned `transport set` command change the preference now? ``(blocked, reason)``.
+
+    #927 AC 2. Two refusals, and the second is the one that is easy to forget: a child in flight
+    is the `mid-child-handoff` case rather than this one, AND a live handoff claim means a
+    boundary is mid-launch — changing the recorded answer under it would let the launch and the
+    record disagree about what was chosen.
+    """
+    # Fail CLOSED (Step-11 finding 9). This is a guard: without a readable `issues` list there
+    # is no evidence that nothing is in flight, and reporting `ready` on no evidence would let
+    # the preference change during an active child or a launch.
+    if not isinstance(state, dict):
+        return (True, "state_unreadable")
+    issues = state.get("issues")
+    if not isinstance(issues, list):
+        return (True, "issues_unreadable")
+    for issue in issues:
+        if isinstance(issue, dict) and issue.get("status") == "in_progress":
+            return (True, "child_in_flight")
+    generation = state.get("generation")
+    if generation is not None and handoff_claim_is_live(
+            state, now_ts=now_ts, lease_s=lease_s):
+        return (True, "handoff_claim_active")
+    return (False, "ready")
+
+
+def _terminal_for(state, resolution_id: str) -> "dict | None":
+    """The LATEST terminal event for a resolution, or None. PURE.
+
+    Latest, not first (Step-11 finding 7): the log is append-ordered, so returning the first
+    match would keep reporting `parked_unreconcilable` after an unpark had already resolved it,
+    and `unpark_blocked` would go on permitting repeated, conflicting adopt/discard decisions
+    for the same resolution.
+    """
+    latest = None
+    for event in transition_events(state):
+        if event.get("resolution_id") == resolution_id and event.get("outcome"):
+            latest = event
+    return latest
+
+
+def unpark_blocked(state, *, resolution_id: str) -> tuple[bool, str]:
+    """May `transport unpark` clear this resolution? ``(blocked, reason)``. PURE.
+
+    Only a `parked_unreconcilable` resolution may be unparked. Without this the design's
+    "only an operator clears it" would mean hand-editing driver-state, which everything else
+    here forbids.
+    """
+    terminal = _terminal_for(state, resolution_id)
+    if terminal is None:
+        return (True, "unknown_resolution")
+    if terminal.get("outcome") != "parked_unreconcilable":
+        return (True, "not_parked")
+    return (False, "ready")
+
+
+def append_unpark(state: dict, *, resolution_id: str, outcome: str, operator: str,
+                  reason: str, now_ts: int) -> None:
+    """Record an operator's unpark decision as a NEW event.
+
+    Appends rather than rewriting: the `parked_unreconcilable` event stays as the audit record
+    of what the run could not decide for itself.
+    """
+    if outcome not in TERMINAL_OUTCOMES:
+        raise DriverStateError(
+            f"unknown unpark outcome {outcome!r}; expected one of {sorted(TERMINAL_OUTCOMES)}")
+    state.setdefault(TRANSITIONS_KEY, []).append({
+        "resolution_id": resolution_id,
+        "outcome": outcome,
+        "operator": operator,
+        "reason": reason,
+        "observed_at": now_ts,
+    })
+
+
+def boundary_advisory_line(*, preferred: str, effective: str, reason: str) -> "str | None":
+    """The one-line operator advisory for a degraded boundary, or None. PURE.
+
+    #927 AC 4: an operator must SEE the choice being made rather than infer it from silence.
+    Carries only a fixed reason token — never probe stdout, which would let odd daemon output
+    (terminal escapes included) reach an operator's console.
+    """
+    if effective == preferred:
+        return None
+    return (f"### epic-run: transport={effective} preferred={preferred} "
+            f"reason={reason} — re-probing next transition")
+
+
+def advisory_due(transition_id: str, already_emitted) -> bool:
+    """Has this transition already advised? PURE.
+
+    Keyed on ``transition_id``, NOT ``generation``: `creation` and `boundary_resume` do not bump
+    a generation, so a generation key would make them collide and silently suppress one.
+    """
+    return transition_id not in (already_emitted or set())
+
+
+#: What a reclaimer may do with an unterminated boundary resolution.
+RECONCILE_VERDICTS = frozenset({
+    "relaunch_permitted",   # PROVEN nothing survives
+    "adopt_successor",      # a live, running successor exists — never displace it
+    "start_failed",         # a pane exists but no agent runs in it
+    "park",                 # cannot prove either way; a human decides
+})
+
+
+def reconcile_boundary(record, *, fresh_panes, panes_with_agents,
+                       anchor_pane) -> tuple[str, str]:
+    """May a reclaimer relaunch this boundary transition? ``(verdict, reason)``. PURE.
+
+    This is where #927's Critical is actually enforced. The rule it exists to make impossible:
+    reading ``successor_pane: null`` as proof that nothing was created. With the amendment
+    ordering from `mark_split_attempted`, ``null`` has TWO meanings and only one of them is safe:
+
+    ``split_attempted`` False  -> the split was never called; relaunch is proven safe.
+    ``split_attempted`` True   -> INDETERMINATE. A pane may exist under a null. The question is
+                                  answered by DIFFING a fresh inventory against the recorded
+                                  ``panes_before``, never by trusting the null.
+
+    Everything unprovable parks. That is a deliberate liveness-for-safety trade: a stalled run a
+    human can restart beats two successors nobody notices.
+    """
+    if not isinstance(record, dict):
+        return ("park", "no_baseline_to_diff")
+    # An unreadable inventory can never authorise anything — checked before every other branch,
+    # because each of them depends on the inventory being trustworthy.
+    if fresh_panes is None:
+        return ("park", "inventory_unreadable")
+
+    successor = record.get("successor_pane")
+    if successor is not None:
+        if successor not in fresh_panes:
+            return ("relaunch_permitted", "successor_gone")
+        # UNKNOWN agent state is not "no agent" (Step-11 finding 4). Coercing an unreadable
+        # agent inventory to an empty set would classify a possibly-live successor as
+        # `start_failed` and authorise retiring it.
+        if panes_with_agents is None:
+            return ("park", "agent_state_unknown")
+        if successor not in panes_with_agents:
+            # A pane is not a running agent. Acking an empty pane as a live successor would
+            # stall the campaign forever with nothing to notice it.
+            return ("start_failed", "pane_without_agent")
+        return ("adopt_successor", "successor_alive")
+
+    # ONLY an explicit False proves the split was never called (Step-11 finding 3). A missing,
+    # null or malformed marker means a corrupt or partially-written resolution, and absence of
+    # evidence is not evidence of absence — fall through to the inventory diff instead of
+    # authorising a relaunch on a record we cannot read.
+    if record.get("split_attempted") is False:
+        return ("relaunch_permitted", "never_started")
+
+    # Indeterminate: prove by diff or park. Never by the null.
+    panes_before = record.get("panes_before")
+    if panes_before is None:
+        return ("park", "no_baseline_to_diff")
+    appeared = set(fresh_panes) - set(panes_before) - {anchor_pane}
+    if appeared:
+        return ("park", "indeterminate_pane_appeared")
+    return ("relaunch_permitted", "diff_proves_nothing_created")
+
+
+def child_boundary_precondition(state, next_issue) -> tuple[bool, str]:
+    """May a CHILD-BOUNDARY handoff open right now? Returns ``(ok, reason)``. PURE.
+
+    #845, folded into #927. The boundary and the mid-child paths reuse the same generation /
+    claim / lease / ack machinery and differ ONLY here, in what must be true before a claim is
+    taken:
+
+    - mid-child requires exactly one child ``in_progress`` matching the position record;
+    - the boundary requires the opposite — the next child ``queued`` and NOTHING in flight.
+
+    Keeping the difference in a precondition, rather than in the fence, is what lets the fence be
+    reused verbatim and leaves the mid-child path genuinely untouched.
+
+    Note what is deliberately NOT here (D232): no ``kind`` discriminator. ``_refuse_foreign_kind``
+    documents that this entry point serves only the boundary handoff, "which carries no kind at
+    all", and refuses any kind — including an unrecognised one — with rc 3. Introducing one would
+    make the boundary reject its own record.
+    """
+    if not isinstance(state, dict):
+        return (False, "next_child_not_queued")
+    issues = state.get("issues")
+    issues = issues if isinstance(issues, list) else []
+    # A child in flight is the mid-child case, and it is checked FIRST: a run with something
+    # in_progress must never fall through to a boundary handoff just because the named next
+    # child happens to look queued.
+    if any(isinstance(i, dict) and i.get("status") == "in_progress" for i in issues):
+        return (False, "child_in_flight")
+    for issue in issues:
+        if isinstance(issue, dict) and issue.get("number") == next_issue:
+            if issue.get("status") == "queued":
+                return (True, "ready")
+            return (False, "next_child_not_queued")
+    return (False, "next_child_not_queued")
+
+
+def legacy_session_mode(transport: str) -> "str | None":
+    """The write-only `session_mode` projection for a transport, or None if unknown. PURE.
+
+    This exists ONLY so a build rolled back to a pre-#927 version keeps behaving correctly: it
+    reads `session_mode` and knows nothing of `preferred_transport`. It is an OUTPUT, never a
+    source — new code reads the canonical field. Removed in a later cleanup issue.
+    """
+    return _TRANSPORT_TO_LEGACY.get(transport)
+
+
 BIND_DIRECTIVE = "/rawgentic:switch"
 
 # A bind directive WITH a project argument. The argument is the whole point: Step-4 review finding,

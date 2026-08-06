@@ -749,6 +749,53 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.132.0 (2026-08-05)
+- **The transport model and the one-successor fence, built and tested but NOT YET WIRED (#927
+  part 1, epic #871).** Read that scope line literally: this ships `hooks/` machinery with 96
+  tests and **no caller** — `_cmd_handoff` is unchanged, so the boundary still behaves exactly as
+  it did, and the fence does not execute until part 2 wires it. An earlier draft of this entry
+  claimed the boundary "finally has" a fence; the pre-PR cross-model review caught that as a
+  Critical, because the code and the claim disagreed. The one piece that IS live is the
+  `session_mode` projection, which is enforced inside `_locked_state_update` and therefore active
+  from this commit. `session_mode` was a hand-authored, permanent
+  answer to a question whose answer changes: herdr can be present at campaign creation and gone
+  by boundary four. It becomes `preferred_transport` (`pane_chain` | `inline`, durable) plus a
+  per-transition EFFECT that is never stored as a field — it lives in an append-only two-event
+  log, so a stale effect cannot become the next boundary's default. `transport_probe` reports its
+  two tiers **separately** rather than as one verdict, and that is not cosmetic: campaign creation
+  legitimately has no pane reference, so a collapsed verdict would report `inline` there and
+  silently preserve the very default this issue exists to invert — an AC-1 regression the design
+  gate caught before any code existed. Tier 1 (`herdr pane list`, no pane reference needed —
+  `--current` is exactly what fails in a pane-less session) reuses the shape `_pane_inventory`
+  already hardens; tier 2 requires the answer to BE about the requested pane, since an rc 0
+  response describing a different one is not evidence about this one. **The #845 fence is BUILT
+  here and wired in part 2**: the boundary and mid-child paths already shared the
+  generation/claim/lease/ack machinery and differed only in a precondition, so only the
+  precondition was added — no
+  `kind` discriminator, because `_refuse_foreign_kind` documents that this entry point serves the
+  handoff "which carries no kind at all" and would have made the boundary refuse its own record
+  (D232). The riskiest branch is reconciliation, where `successor_pane: null` must NEVER be read
+  as "nothing was created": with `split_attempted` recorded BEFORE the split, a null under a true
+  marker is INDETERMINATE and is resolved by diffing a fresh inventory against the recorded
+  `panes_before`, never by trusting the null — the Critical the cross-model design review raised
+  against an earlier draft that had documented the double-launch window and called it acceptable.
+  A pane is also not a running agent, so a recorded successor with no agent entry is
+  `start_failed` rather than acked as alive. `session_mode` survives as a write-only projection
+  enforced at the single locked writer (`_locked_state_update`), with a guard pinning that
+  `_atomic_write` has exactly one call site — a second writer would bypass the projection
+  silently. 96 tests added across `tests/hooks/test_launcher_lib.py` and `test_driver_lib.py`,
+  including the AC-1 creation test, the indeterminate-relaunch refusal, and the
+  unreadable-inventory park. The pre-PR cross-model review returned 1 Critical + 8 High + 1
+  Medium, all confirmed against the code and all FIXED in this commit: a missing
+  `split_attempted` marker no longer authorises a relaunch (only an explicit `False` does), an
+  unreadable agent inventory parks instead of being coerced to "no agent", a duplicate
+  `resolution_id` is refused, `_terminal_for` reports the LATEST outcome so an unpark cannot be
+  repeated, an unrecognised transport now REMOVES a stale projection rather than leaving a
+  rollback to run the opposite one, the guard fails closed on unreadable state, rc 2 is no
+  longer presented as a missing pane, and the probe's default runner bounds the stream in the
+  reader instead of checking length after buffering. Part 1 changes NO prose surface; the
+  epic-run skill and `docs/multi-issue-driver.md` rewrite is part 2. No workflow-spine change → no diagram REV. Suite 5488→5584.
+
 ### v3.131.1 (2026-08-05)
 - **Three supervision CLI tests carried a dated time bomb and broke `main` an hour after
   merging green (follow-up to #948, epic #871).** `tests/hooks/test_supervision_lib.py` and

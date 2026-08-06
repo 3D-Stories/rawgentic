@@ -1850,3 +1850,339 @@ class TestInsertPrompt:
     def test_cli_rejects_an_invalid_pane(self) -> None:
         proc = _cli("insert-prompt", "--pane", "not a pane", "--text", "please hand off")
         assert proc.returncode != 0
+
+
+# --------------------------------------------------------- #927 transport probe
+
+class _ProbeProc:
+    """Minimal stand-in for a completed subprocess."""
+
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _probe_pane_list(*pane_ids, agents=None):
+    """A `herdr pane list` response. `agents` names which panes have an agent."""
+    agents = {p: True for p in pane_ids} if agents is None else agents
+    return json.dumps({"result": {"panes": [
+        {"pane_id": p, "workspace_id": p.split(":")[0],
+         "agent": ("claude" if agents.get(p) else None),
+         "agent_status": ("working" if agents.get(p) else None)}
+        for p in pane_ids]}})
+
+
+def _probe_pane_get(pane_id, workspace_id=None):
+    ws = workspace_id if workspace_id is not None else pane_id.split(":")[0]
+    return json.dumps({"result": {"pane": {"pane_id": pane_id, "workspace_id": ws}}})
+
+
+class TestTransportProbe:
+    """#927: the two tiers are reported SEPARATELY, and nothing is asserted without a round trip.
+
+    The collapse of these two into one verdict was a self-review finding on the design: campaign
+    creation legitimately has no pane reference, so a single verdict would report `inline` there
+    and silently re-break the default this issue exists to invert.
+    """
+
+    def test_healthy_herdr_and_a_live_pane_gives_both_tiers(self) -> None:
+        def runner(argv, timeout=None):
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return _ProbeProc(0, _probe_pane_list("w1:aaa", "w1:bbb"))
+            if argv[:3] == ["herdr", "pane", "get"]:
+                return _ProbeProc(0, _probe_pane_get("w1:aaa"))
+            raise AssertionError(f"unexpected argv {argv}")
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:aaa", runner=runner)
+        assert (cap, pane) == (True, True)
+        assert reason == "probe_ok"
+
+    def test_no_pane_reference_still_proves_CAPABILITY(self) -> None:
+        """The creation path: no pane ref exists, but herdr is healthy.
+
+        `capability_ok` must be True so creation can record `pane_chain`. Returning a single
+        collapsed `inline` verdict here is exactly the AC-1 regression.
+        """
+        calls = []
+
+        def runner(argv, timeout=None):
+            calls.append(argv)
+            return _ProbeProc(0, _probe_pane_list("w1:aaa"))
+
+        cap, pane, reason = ll.transport_probe(pane_ref=None, runner=runner)
+        assert cap is True
+        assert pane is False
+        assert reason == "no_pane_ref"
+        assert all(a[:3] != ["herdr", "pane", "get"] for a in calls), (
+            "tier 2 must not run without a pane reference")
+
+    def test_unreachable_herdr_fails_both_tiers(self) -> None:
+        cap, pane, reason = ll.transport_probe(
+            pane_ref="w1:aaa", runner=lambda argv, timeout=None: _ProbeProc(1, ""))
+        assert (cap, pane) == (False, False)
+        assert reason == "herdr_unreachable"
+
+    def test_a_missing_binary_is_not_a_crash(self) -> None:
+        def runner(argv, timeout=None):
+            raise FileNotFoundError("herdr")
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:aaa", runner=runner)
+        assert (cap, pane) == (False, False)
+        assert reason == "herdr_absent"
+
+    def test_a_timeout_degrades_rather_than_raising(self) -> None:
+        def runner(argv, timeout=None):
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=5)
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:aaa", runner=runner)
+        assert (cap, pane) == (False, False)
+        assert reason == "probe_timeout"
+
+    def test_an_identity_mismatch_is_refused(self) -> None:
+        """An rc 0 response ABOUT A DIFFERENT PANE is not evidence about this one."""
+        def runner(argv, timeout=None):
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return _ProbeProc(0, _probe_pane_list("w1:aaa"))
+            return _ProbeProc(0, _probe_pane_get("w1:zzz"))
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:aaa", runner=runner)
+        assert cap is True
+        assert pane is False
+        assert reason == "probe_identity_mismatch"
+
+    def test_a_workspace_mismatch_is_refused(self) -> None:
+        def runner(argv, timeout=None):
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return _ProbeProc(0, _probe_pane_list("w1:aaa"))
+            return _ProbeProc(0, _probe_pane_get("w1:aaa", workspace_id="w9"))
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:aaa", runner=runner)
+        assert (cap, pane) == (True, False)
+        assert reason == "probe_identity_mismatch"
+
+    def test_a_pane_herdr_does_not_know_fails_tier_two_only(self) -> None:
+        def runner(argv, timeout=None):
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return _ProbeProc(0, _probe_pane_list("w1:aaa"))
+            return _ProbeProc(1, "")
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:bbb", runner=runner)
+        assert (cap, pane) == (True, False)
+        assert reason == "pane_not_found"
+
+    def test_oversized_output_is_refused_not_buffered_forever(self) -> None:
+        def runner(argv, timeout=None):
+            return _ProbeProc(0, "x" * (ll.PROBE_MAX_BYTES + 1))
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:aaa", runner=runner)
+        assert (cap, pane) == (False, False)
+        assert reason == "probe_oversized"
+
+    def test_unparseable_output_degrades(self) -> None:
+        cap, pane, reason = ll.transport_probe(
+            pane_ref="w1:aaa", runner=lambda argv, timeout=None: _ProbeProc(0, "{not json"))
+        assert (cap, pane) == (False, False)
+        assert reason == "probe_unparseable"
+
+    def test_an_invalid_pane_reference_never_reaches_herdr(self) -> None:
+        """A hostile or mistyped $HERDR_PANE_ID must not be passed to a subprocess."""
+        calls = []
+
+        def runner(argv, timeout=None):
+            calls.append(argv)
+            return _ProbeProc(0, _probe_pane_list("w1:aaa"))
+
+        cap, pane, reason = ll.transport_probe(pane_ref="not a pane; rm -rf /", runner=runner)
+        assert cap is True
+        assert pane is False
+        assert reason == "invalid_pane_ref"
+        assert all(a[:3] != ["herdr", "pane", "get"] for a in calls)
+
+    def test_any_unexpected_exception_degrades_rather_than_propagating(self) -> None:
+        def runner(argv, timeout=None):
+            raise RuntimeError("something nobody predicted")
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:aaa", runner=runner)
+        assert (cap, pane) == (False, False)
+        assert reason.startswith("probe_error:")
+
+    def test_the_probe_is_bounded_by_a_timeout(self) -> None:
+        seen = []
+
+        def runner(argv, timeout=None):
+            seen.append(timeout)
+            return _ProbeProc(0, _probe_pane_list("w1:aaa"))
+
+        ll.transport_probe(pane_ref=None, runner=runner)
+        assert seen and all(t == ll.PROBE_TIMEOUT_S for t in seen), (
+            "every probe call carries the bounded timeout")
+
+
+class TestCreationTransport:
+    """#927 AC 1: a NEW campaign's preference is DERIVED by probing, never asked and never defaulted.
+
+    This is the acceptance criterion the design nearly shipped broken. With only `inline` as a
+    no-field default, a healthy new campaign would inherit `inline` and preserve exactly the
+    behaviour #927 exists to invert. Creation therefore probes TIER 1 ONLY -- it has no pane
+    reference, and requiring one would fail closed on every new campaign.
+    """
+
+    def test_a_healthy_herdr_creates_a_pane_chain_campaign(self) -> None:
+        transport, reason = ll.resolve_creation_transport(
+            runner=lambda argv, timeout=None: _ProbeProc(0, _probe_pane_list("w1:aaa")))
+        assert transport == "pane_chain"
+        assert reason == "probe_ok"
+
+    def test_an_unreachable_herdr_creates_an_inline_campaign(self) -> None:
+        transport, reason = ll.resolve_creation_transport(
+            runner=lambda argv, timeout=None: _ProbeProc(1, ""))
+        assert transport == "inline"
+        assert reason == "herdr_unreachable"
+
+    def test_creation_never_needs_a_pane_reference(self) -> None:
+        """The whole point of tier 1: `--current` is what fails in a pane-less session."""
+        calls = []
+
+        def runner(argv, timeout=None):
+            calls.append(argv)
+            return _ProbeProc(0, _probe_pane_list("w1:aaa"))
+
+        transport, _ = ll.resolve_creation_transport(runner=runner)
+        assert transport == "pane_chain"
+        assert all(a[:3] != ["herdr", "pane", "get"] for a in calls), (
+            "creation must not depend on a pane reference it may not have")
+
+    def test_a_missing_binary_creates_an_inline_campaign_rather_than_raising(self) -> None:
+        def runner(argv, timeout=None):
+            raise FileNotFoundError("herdr")
+
+        assert ll.resolve_creation_transport(runner=runner) == ("inline", "herdr_absent")
+
+    def test_the_result_is_always_a_known_transport(self) -> None:
+        import driver_lib as _dl
+        for runner in (lambda argv, timeout=None: _ProbeProc(0, _probe_pane_list("w1:a")),
+                       lambda argv, timeout=None: _ProbeProc(1, ""),
+                       lambda argv, timeout=None: _ProbeProc(0, "{not json")):
+            transport, _reason = ll.resolve_creation_transport(runner=runner)
+            assert transport in _dl.TRANSPORTS
+
+
+class TestLegacyProjectionChokepoint:
+    """#927: `session_mode` is a WRITE-ONLY projection, enforced at the single locked writer.
+
+    Review finding A6: "every write also writes the projection" is a cross-cutting invariant, and
+    stating it as a convention means the first mutation path that forgets leaves `session_mode`
+    stale -- so a rolled-back build executes the WRONG transport, silently. Enforcing it inside
+    `_locked_state_update` makes it hold by construction instead of by discipline.
+    """
+
+    def _state_file(self, tmp_path, **fields):
+        p = tmp_path / "camp.json"
+        base = {"schema_version": 1, "campaign": "camp", "issues": []}
+        base.update(fields)
+        p.write_text(json.dumps(base))
+        return str(p)
+
+    def test_pane_chain_projects_on_write(self, tmp_path) -> None:
+        path = self._state_file(tmp_path, preferred_transport="pane_chain")
+        ll._locked_state_update(path, lambda st: st)
+        assert json.loads(open(path).read())["session_mode"] == "fresh-session"
+
+    def test_inline_projects_on_write(self, tmp_path) -> None:
+        path = self._state_file(tmp_path, preferred_transport="inline")
+        ll._locked_state_update(path, lambda st: st)
+        assert json.loads(open(path).read())["session_mode"] == "single-session"
+
+    def test_the_projection_lands_even_when_the_mutation_ignored_both_fields(self, tmp_path) -> None:
+        """The point of a chokepoint: an unrelated mutation still keeps the projection true."""
+        path = self._state_file(tmp_path, preferred_transport="pane_chain")
+
+        def unrelated(st):
+            st["notes"] = "something else entirely"
+            return st
+
+        ll._locked_state_update(path, unrelated)
+        on_disk = json.loads(open(path).read())
+        assert on_disk["notes"] == "something else entirely"
+        assert on_disk["session_mode"] == "fresh-session"
+
+    def test_a_stale_legacy_value_is_CORRECTED_by_the_canonical_field(self, tmp_path) -> None:
+        path = self._state_file(tmp_path, preferred_transport="inline",
+                                session_mode="fresh-session")
+        ll._locked_state_update(path, lambda st: st)
+        assert json.loads(open(path).read())["session_mode"] == "single-session"
+
+    def test_no_canonical_field_means_the_legacy_field_is_left_alone(self, tmp_path) -> None:
+        """A pre-#927 campaign must not have a projection invented for it."""
+        path = self._state_file(tmp_path, session_mode="fresh-session")
+        ll._locked_state_update(path, lambda st: st)
+        on_disk = json.loads(open(path).read())
+        assert on_disk["session_mode"] == "fresh-session"
+        assert "preferred_transport" not in on_disk
+
+    def test_an_unknown_canonical_value_writes_no_bogus_projection(self, tmp_path) -> None:
+        path = self._state_file(tmp_path, preferred_transport="teleport")
+        ll._locked_state_update(path, lambda st: st)
+        assert "session_mode" not in json.loads(open(path).read())
+
+    def test_an_aborted_mutation_writes_nothing(self, tmp_path) -> None:
+        path = self._state_file(tmp_path, preferred_transport="pane_chain")
+        assert ll._locked_state_update(path, lambda st: None) is None
+        assert "session_mode" not in json.loads(open(path).read())
+
+    def test_the_chokepoint_is_STRUCTURALLY_the_only_writer(self) -> None:
+        """The projection holds everywhere only because there is exactly one writer.
+
+        A second `_atomic_write` call site for driver state would bypass the projection and
+        re-open finding A6 -- silently, since every existing test would still pass. This is the
+        guard that makes the invariant enforceable rather than aspirational.
+        """
+        src = (Path(ll.__file__)).read_text()
+        call_sites = [ln for ln in src.splitlines()
+                      if "_atomic_write(" in ln and not ln.lstrip().startswith("def ")]
+        assert len(call_sites) == 1, (
+            f"expected exactly one _atomic_write call site, found {len(call_sites)}: "
+            f"{call_sites}. A new driver-state writer must route through "
+            f"_locked_state_update or the #927 legacy projection stops holding.")
+
+
+class TestStep11ProbeFixes:
+    """Regressions for the pre-PR review findings touching the probe and the projection."""
+
+    def test_f10_an_rc2_usage_error_is_not_reported_as_a_missing_pane(self) -> None:
+        """rc 2 is OUR bug; rc 1 is herdr saying the pane is gone. Collapsing them hides one."""
+        def runner(argv, timeout=None):
+            if argv[:3] == ["herdr", "pane", "list"]:
+                return _ProbeProc(0, _probe_pane_list("w1:aaa"))
+            return _ProbeProc(2, "")
+
+        cap, pane, reason = ll.transport_probe(pane_ref="w1:aaa", runner=runner)
+        assert (cap, pane) == (True, False)
+        assert reason == "probe_usage_error"
+
+    def test_f6_an_unknown_transport_REMOVES_a_stale_projection(self, tmp_path) -> None:
+        """The opposite-transport rollback regression the projection exists to prevent."""
+        p = tmp_path / "camp.json"
+        p.write_text(json.dumps({"schema_version": 1, "campaign": "c", "issues": [],
+                                 "preferred_transport": "teleport",
+                                 "session_mode": "fresh-session"}))
+        ll._locked_state_update(str(p), lambda st: st)
+        assert "session_mode" not in json.loads(p.read_text()), (
+            "a stale projection would run pane-chain after a rollback while this build runs inline")
+
+    def test_f8_the_default_probe_runner_bounds_its_streams(self) -> None:
+        """The real bound is in the runner, not a post-hoc len() on a buffered string."""
+        proc = ll._bounded_probe_runner(
+            [sys.executable, "-c",
+             "import sys; sys.stdout.write('x' * (200 * 1024))"],
+            timeout=15)
+        assert len(proc.stdout) <= ll.PROBE_MAX_BYTES + 1, (
+            "the runner must stop reading at the cap rather than buffering everything")
+
+    def test_f8_an_oversized_stream_still_degrades_the_probe(self) -> None:
+        cap, pane, reason = ll.transport_probe(
+            pane_ref=None,
+            runner=lambda argv, timeout=None: _ProbeProc(0, "x" * (ll.PROBE_MAX_BYTES + 1)))
+        assert (cap, pane) == (False, False)
+        assert reason == "probe_oversized"

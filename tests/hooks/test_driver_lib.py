@@ -1004,3 +1004,588 @@ class TestCliRefusalStub:
         assert proc.returncode == 0
         assert proc.stdout == ""
         assert proc.stderr == ""
+
+
+# ------------------------------------------------ #927 transport model + migration
+
+class TestCampaignTransport:
+    """#927: `session_mode` becomes a PREFERENCE, and the legacy field migrates on READ.
+
+    The migration is the highest-risk piece of this issue: a wrong mapping silently changes the
+    boundary behaviour of every campaign already on disk, and nothing would fail loudly.
+    """
+
+    def test_a_recorded_preference_wins(self) -> None:
+        st = {"preferred_transport": "pane_chain"}
+        assert dl.campaign_transport(st) == ("pane_chain", "recorded")
+
+    def test_legacy_fresh_session_migrates_to_pane_chain(self) -> None:
+        assert dl.campaign_transport({"session_mode": "fresh-session"}) == (
+            "pane_chain", "migrated")
+
+    def test_legacy_single_session_migrates_to_inline(self) -> None:
+        assert dl.campaign_transport({"session_mode": "single-session"}) == (
+            "inline", "migrated")
+
+    def test_neither_field_is_the_legacy_default_only(self) -> None:
+        """`inline` here is for a PRE-EXISTING campaign carrying neither field.
+
+        It must never be how a NEW campaign is defaulted — that is the creation contract, and
+        conflating the two is the AC-1 regression this issue exists to prevent.
+        """
+        assert dl.campaign_transport({}) == ("inline", "legacy_default")
+
+    def test_the_canonical_field_wins_over_a_disagreeing_legacy_field(self) -> None:
+        st = {"preferred_transport": "inline", "session_mode": "fresh-session"}
+        assert dl.campaign_transport(st) == ("inline", "recorded")
+
+    def test_an_unrecognised_legacy_value_is_never_guessed(self) -> None:
+        transport, provenance = dl.campaign_transport({"session_mode": "sideways"})
+        assert transport == "inline"
+        assert provenance == "unrecognized"
+
+    def test_an_unrecognised_CANONICAL_value_is_also_refused(self) -> None:
+        transport, provenance = dl.campaign_transport({"preferred_transport": "teleport"})
+        assert transport == "inline"
+        assert provenance == "unrecognized"
+
+    def test_a_non_dict_state_does_not_raise(self) -> None:
+        assert dl.campaign_transport(None) == ("inline", "legacy_default")
+
+    def test_the_transport_vocabulary_is_closed(self) -> None:
+        assert dl.TRANSPORTS == frozenset({"pane_chain", "inline"})
+        assert dl.PANE_CHAIN_TRANSPORT == "pane_chain"
+        assert dl.INLINE_TRANSPORT == "inline"
+
+    def test_the_legacy_mapping_is_exhaustive_over_the_old_vocabulary(self) -> None:
+        """Both legacy values must map, or a campaign silently lands on the default."""
+        for legacy in ("fresh-session", "single-session"):
+            transport, provenance = dl.campaign_transport({"session_mode": legacy})
+            assert provenance == "migrated", f"{legacy} did not migrate"
+            assert transport in dl.TRANSPORTS
+
+    def test_resolution_is_PURE_and_never_writes(self) -> None:
+        """Migration materialises on the next locked write, never on a read path."""
+        st = {"session_mode": "fresh-session"}
+        before = json.dumps(st, sort_keys=True)
+        dl.campaign_transport(st)
+        assert json.dumps(st, sort_keys=True) == before
+
+
+class TestTransportProjection:
+    """The write-only compatibility projection that keeps a rolled-back build correct."""
+
+    def test_pane_chain_projects_to_the_legacy_fresh_session(self) -> None:
+        assert dl.legacy_session_mode("pane_chain") == "fresh-session"
+
+    def test_inline_projects_to_the_legacy_single_session(self) -> None:
+        assert dl.legacy_session_mode("inline") == "single-session"
+
+    def test_the_projection_round_trips_through_the_resolver(self) -> None:
+        """The two directions must agree, or a rollback executes the wrong transport."""
+        for transport in sorted(dl.TRANSPORTS):
+            projected = dl.legacy_session_mode(transport)
+            back, provenance = dl.campaign_transport({"session_mode": projected})
+            assert (back, provenance) == (transport, "migrated")
+
+    def test_an_unknown_transport_has_no_projection(self) -> None:
+        assert dl.legacy_session_mode("teleport") is None
+
+
+class TestTransitionLog:
+    """#927: the effect of a transition is TWO immutable events, never one mutable field.
+
+    A single record carrying `outcome` would have to be written before the action that
+    determines the outcome -- so it would be invented early or mutated later, and an
+    append-only record you mutate is neither. Splitting them keeps both immutable and makes
+    "a resolution with no terminal event" the crash signature recovery keys on.
+    """
+
+    def _resolved(self, st, **kw):
+        kw.setdefault("transition_id", "b:camp:3")
+        kw.setdefault("generation", 3)
+        kw.setdefault("trigger", "child_boundary")
+        kw.setdefault("kind", "child_boundary")
+        kw.setdefault("preferred", "pane_chain")
+        kw.setdefault("effective", "pane_chain")
+        kw.setdefault("probe_reason", "probe_ok")
+        kw.setdefault("probe_ms", 12)
+        kw.setdefault("pane_ref", "w1:aaa")
+        kw.setdefault("panes_before", ["w1:aaa"])
+        kw.setdefault("now_ts", 1000)
+        return dl.append_resolution(st, **kw)
+
+    def test_a_resolution_lands_before_any_action(self) -> None:
+        st = {}
+        rid = self._resolved(st)
+        rec = dl.transition_events(st)[0]
+        assert rec["resolution_id"] == rid
+        assert rec["successor_pane"] is None, "nothing has been launched yet"
+        assert rec["split_attempted"] is False
+
+    def test_the_resolution_id_correlates_the_two_events(self) -> None:
+        st = {}
+        rid = self._resolved(st)
+        dl.append_terminal_outcome(st, resolution_id=rid, outcome="successor_acked", now_ts=1001)
+        terminals = [e for e in dl.transition_events(st) if e.get("outcome")]
+        assert len(terminals) == 1
+        assert terminals[0]["resolution_id"] == rid
+
+    def test_the_attempt_is_part_of_the_resolution_id(self) -> None:
+        """A reclaim is a second ATTEMPT at the same transition and must not collide."""
+        st = {}
+        first = self._resolved(st, attempt=1)
+        second = self._resolved(st, attempt=2)
+        assert first != second
+        assert first.startswith("b:camp:3#")
+        assert second.startswith("b:camp:3#")
+
+    def test_a_resolution_with_no_terminal_event_is_the_crash_signature(self) -> None:
+        st = {}
+        rid = self._resolved(st)
+        assert dl.unterminated_resolutions(st) == [rid]
+        dl.append_terminal_outcome(st, resolution_id=rid, outcome="inline_continued", now_ts=2)
+        assert dl.unterminated_resolutions(st) == []
+
+    def test_the_terminal_vocabulary_is_closed(self) -> None:
+        assert dl.TERMINAL_OUTCOMES == frozenset({
+            "successor_acked", "inline_continued", "launch_failed", "start_failed",
+            "reconciled_no_action", "created", "parked_unreconcilable"})
+
+    def test_launch_indeterminate_is_NOT_a_terminal_outcome(self) -> None:
+        """It was, in an earlier draft, while other sections required the same transition to
+        stay reclaimable -- so an implementation treating terminals as closed would strand it
+        forever. An indeterminate launch is the ABSENCE of a terminal event."""
+        assert "launch_indeterminate" not in dl.TERMINAL_OUTCOMES
+        st = {}
+        rid = self._resolved(st)
+        with pytest.raises(dl.DriverStateError):
+            dl.append_terminal_outcome(st, resolution_id=rid,
+                                       outcome="launch_indeterminate", now_ts=2)
+
+    def test_an_unknown_outcome_is_refused(self) -> None:
+        st = {}
+        rid = self._resolved(st)
+        with pytest.raises(dl.DriverStateError):
+            dl.append_terminal_outcome(st, resolution_id=rid, outcome="vibes", now_ts=2)
+
+    def test_a_terminal_event_for_an_unknown_resolution_is_refused(self) -> None:
+        with pytest.raises(dl.DriverStateError):
+            dl.append_terminal_outcome({}, resolution_id="b:camp:9#1",
+                                       outcome="created", now_ts=2)
+
+    def test_the_successor_pane_amendment_is_the_only_permitted_in_place_write(self) -> None:
+        st = {}
+        rid = self._resolved(st)
+        dl.mark_split_attempted(st, resolution_id=rid)
+        assert dl.resolution(st, rid)["split_attempted"] is True
+        dl.record_successor_pane(st, resolution_id=rid, pane="w1:bbb")
+        assert dl.resolution(st, rid)["successor_pane"] == "w1:bbb"
+
+    def test_split_attempted_lands_BEFORE_the_pane_id(self) -> None:
+        """The ordering that makes `null` unambiguous.
+
+        split_attempted False + successor_pane None means the split was never called, which is
+        the only state that authorises a relaunch. If the marker landed after the split, a crash
+        in between would look identical to "never started" and could launch a second successor
+        beside a live one -- the Critical this ordering exists to remove.
+        """
+        st = {}
+        rid = self._resolved(st)
+        rec = dl.resolution(st, rid)
+        assert (rec["split_attempted"], rec["successor_pane"]) == (False, None)
+        dl.mark_split_attempted(st, resolution_id=rid)
+        rec = dl.resolution(st, rid)
+        assert (rec["split_attempted"], rec["successor_pane"]) == (True, None), (
+            "the indeterminate window is representable")
+
+    def test_panes_before_is_carried_so_a_diff_is_possible_later(self) -> None:
+        st = {}
+        rid = self._resolved(st, panes_before=["w1:aaa", "w1:bbb"])
+        assert sorted(dl.resolution(st, rid)["panes_before"]) == ["w1:aaa", "w1:bbb"]
+
+    def test_events_are_appended_never_rewritten(self) -> None:
+        st = {}
+        first = self._resolved(st)
+        dl.append_terminal_outcome(st, resolution_id=first,
+                                   outcome="parked_unreconcilable", now_ts=2)
+        before = len(dl.transition_events(st))
+        second = self._resolved(st, attempt=2)
+        dl.append_terminal_outcome(st, resolution_id=second,
+                                   outcome="successor_acked", now_ts=3)
+        events = dl.transition_events(st)
+        assert len(events) == before + 2
+        assert any(e.get("outcome") == "parked_unreconcilable" for e in events), (
+            "the parked event survives a later attempt")
+
+    def test_a_validated_state_tolerates_the_transition_log(self) -> None:
+        st = {"schema_version": 1, "campaign": "camp", "issues": []}
+        self._resolved(st)
+        ok, errors = dl.validate_driver_state(st)
+        assert ok, list(errors)
+
+
+class TestChildBoundaryFence:
+    """#845, folded into #927: the child boundary gets the fence mid-child already has.
+
+    Deliberately NOT by adding a `kind` (D232). `_refuse_foreign_kind` documents that this entry
+    point handles only the boundary handoff "which carries no kind at all" and refuses ANY kind
+    with rc 3, and the record's three-key shape is pinned. The paths are already separate by the
+    absent-kind convention; what the boundary LACKS is the claim, so that is what is added.
+    """
+
+    def _st(self, **kw):
+        base = {"schema_version": 1, "campaign": "camp",
+                "issues": [{"number": 7, "status": "queued"},
+                           {"number": 8, "status": "queued"}]}
+        base.update(kw)
+        return base
+
+    def test_a_queued_next_child_with_none_in_flight_satisfies_the_precondition(self) -> None:
+        ok, reason = dl.child_boundary_precondition(self._st(), next_issue=7)
+        assert ok is True
+        assert reason == "ready"
+
+    def test_a_child_in_flight_is_the_MID_CHILD_case_not_this_one(self) -> None:
+        st = self._st(issues=[{"number": 7, "status": "in_progress"},
+                              {"number": 8, "status": "queued"}])
+        ok, reason = dl.child_boundary_precondition(st, next_issue=8)
+        assert ok is False
+        assert reason == "child_in_flight"
+
+    def test_a_next_child_that_is_not_queued_is_refused(self) -> None:
+        st = self._st(issues=[{"number": 7, "status": "merged"}])
+        ok, reason = dl.child_boundary_precondition(st, next_issue=7)
+        assert ok is False
+        assert reason == "next_child_not_queued"
+
+    def test_an_unknown_next_child_is_refused(self) -> None:
+        ok, reason = dl.child_boundary_precondition(self._st(), next_issue=999)
+        assert ok is False
+        assert reason == "next_child_not_queued"
+
+    def test_the_fence_refuses_a_second_caller_on_one_generation(self) -> None:
+        """The whole point: two boundary calls, one successor."""
+        st = self._st(generation=4,
+                      handoff_pending={"generation": 4, "next_issue": 7, "written_ts": 10})
+        first, claimed = dl.handoff_claim(st, 4, claimant="pane-a", now_ts=100)
+        assert first is True
+        # `handoff_claim` is PURE — the claim lives in the RETURNED state, not in `st`.
+        assert dl.handoff_claim_blocked_by_live_claim(
+            claimed, 4, now_ts=101, lease_s=1800) is True
+        second, _ = dl.handoff_claim(claimed, 4, claimant="pane-b", now_ts=101)
+        assert second is False, "a second claimant must not also launch a successor"
+
+    def test_an_expired_lease_becomes_reclaimable(self) -> None:
+        st = self._st(generation=4,
+                      handoff_pending={"generation": 4, "next_issue": 7, "written_ts": 10})
+        _ok, claimed = dl.handoff_claim(st, 4, claimant="pane-a", now_ts=100)
+        assert dl.handoff_claim_blocked_by_live_claim(
+            claimed, 4, now_ts=100 + 1801, lease_s=1800) is False
+
+    def test_opening_a_boundary_handoff_twice_reuses_the_generation(self) -> None:
+        """Idempotent open: a competing invocation gets the SAME generation, not a second one."""
+        st = self._st(generation=4)
+        disp = {"outcome": "ready", "generation": 5, "next_issue": 7}
+        once = dl.open_handoff(st, disp, now_ts=10)
+        twice = dl.open_handoff(once, disp, now_ts=11)
+        assert once["generation"] == twice["generation"] == 5
+        assert twice["handoff_pending"]["next_issue"] == 7
+
+    def test_the_boundary_record_still_carries_NO_kind(self) -> None:
+        """D232: the absent-kind convention is what keeps the two paths apart. Preserve it."""
+        st = self._st(generation=4)
+        new = dl.open_handoff(st, {"outcome": "ready", "generation": 5, "next_issue": 7},
+                              now_ts=10)
+        assert "kind" not in new["handoff_pending"], (
+            "an explicit kind would make _refuse_foreign_kind reject the boundary's own record")
+
+    def test_the_mid_child_precondition_is_untouched_by_this_helper(self) -> None:
+        """The boundary precondition must not become a way to bypass the mid-child one."""
+        st = self._st(issues=[{"number": 7, "status": "in_progress"}])
+        ok, _ = dl.child_boundary_precondition(st, next_issue=7)
+        assert ok is False
+
+
+class TestBoundaryReconciliation:
+    """#927: the Critical, enforced. `null` must NEVER be read as "nothing was created".
+
+    An earlier draft let a crash between `pane split` returning and the amendment landing leave
+    `successor_pane: null`, and treated that as proof no successor existed -- authorising a
+    relaunch beside a live pane. The fix is ordering plus an inventory diff, and these tests are
+    what hold it.
+    """
+
+    def _rec(self, **kw):
+        base = {"resolution_id": "b:camp:3#1", "panes_before": ["w1:anchor", "w1:old"],
+                "split_attempted": False, "successor_pane": None}
+        base.update(kw)
+        return base
+
+    def test_a_split_never_attempted_permits_a_relaunch(self) -> None:
+        verdict, reason = dl.reconcile_boundary(
+            self._rec(), fresh_panes={"w1:anchor", "w1:old"},
+            panes_with_agents=set(), anchor_pane="w1:anchor")
+        assert verdict == "relaunch_permitted"
+        assert reason == "never_started"
+
+    def test_an_INDETERMINATE_split_with_a_new_pane_REFUSES_a_relaunch(self) -> None:
+        """The Critical. split_attempted=True + null must not authorise a second successor."""
+        verdict, reason = dl.reconcile_boundary(
+            self._rec(split_attempted=True),
+            fresh_panes={"w1:anchor", "w1:old", "w1:orphan"},
+            panes_with_agents={"w1:orphan"}, anchor_pane="w1:anchor")
+        assert verdict != "relaunch_permitted", (
+            "a pane appeared after panes_before — relaunching would make two successors")
+        assert verdict == "park"
+        assert reason == "indeterminate_pane_appeared"
+
+    def test_an_indeterminate_split_with_NO_new_pane_permits_a_relaunch(self) -> None:
+        """Proven by diff, not assumed from a null."""
+        verdict, reason = dl.reconcile_boundary(
+            self._rec(split_attempted=True), fresh_panes={"w1:anchor", "w1:old"},
+            panes_with_agents=set(), anchor_pane="w1:anchor")
+        assert verdict == "relaunch_permitted"
+        assert reason == "diff_proves_nothing_created"
+
+    def test_the_anchor_is_excluded_from_the_diff(self) -> None:
+        """The predecessor's own pane must never look like a successor."""
+        verdict, _ = dl.reconcile_boundary(
+            self._rec(split_attempted=True, panes_before=["w1:old"]),
+            fresh_panes={"w1:anchor", "w1:old"},
+            panes_with_agents={"w1:anchor"}, anchor_pane="w1:anchor")
+        assert verdict == "relaunch_permitted"
+
+    def test_a_recorded_successor_that_is_alive_and_running_is_adopted(self) -> None:
+        verdict, reason = dl.reconcile_boundary(
+            self._rec(split_attempted=True, successor_pane="w1:new"),
+            fresh_panes={"w1:anchor", "w1:old", "w1:new"},
+            panes_with_agents={"w1:new"}, anchor_pane="w1:anchor")
+        assert verdict == "adopt_successor"
+        assert reason == "successor_alive"
+
+    def test_a_pane_with_NO_agent_is_start_failed_not_a_live_successor(self) -> None:
+        """`pane split` succeeding does not mean `agent start` did.
+
+        Acking an empty pane as a running successor would stall the campaign forever with
+        nothing to notice it.
+        """
+        verdict, reason = dl.reconcile_boundary(
+            self._rec(split_attempted=True, successor_pane="w1:new"),
+            fresh_panes={"w1:anchor", "w1:old", "w1:new"},
+            panes_with_agents=set(), anchor_pane="w1:anchor")
+        assert verdict == "start_failed"
+        assert reason == "pane_without_agent"
+
+    def test_a_recorded_successor_that_died_permits_a_relaunch(self) -> None:
+        verdict, reason = dl.reconcile_boundary(
+            self._rec(split_attempted=True, successor_pane="w1:new"),
+            fresh_panes={"w1:anchor", "w1:old"},
+            panes_with_agents=set(), anchor_pane="w1:anchor")
+        assert verdict == "relaunch_permitted"
+        assert reason == "successor_gone"
+
+    def test_an_unreadable_inventory_REFUSES_to_relaunch(self) -> None:
+        """A stalled run a human can restart beats two successors nobody notices."""
+        for record in (self._rec(), self._rec(split_attempted=True),
+                       self._rec(split_attempted=True, successor_pane="w1:new")):
+            verdict, reason = dl.reconcile_boundary(
+                record, fresh_panes=None, panes_with_agents=None, anchor_pane="w1:anchor")
+            assert verdict == "park"
+            assert reason == "inventory_unreadable"
+
+    def test_a_missing_panes_before_is_treated_as_unprovable(self) -> None:
+        """No baseline means no diff is possible, so nothing can be PROVEN absent."""
+        verdict, reason = dl.reconcile_boundary(
+            self._rec(split_attempted=True, panes_before=None),
+            fresh_panes={"w1:anchor"}, panes_with_agents=set(), anchor_pane="w1:anchor")
+        assert verdict == "park"
+        assert reason == "no_baseline_to_diff"
+
+    def test_every_verdict_is_from_the_closed_set(self) -> None:
+        assert dl.RECONCILE_VERDICTS == frozenset(
+            {"relaunch_permitted", "adopt_successor", "start_failed", "park"})
+
+
+class TestTransportSetGuard:
+    """#927 AC 2: an in-flight campaign's preference can be changed by a sanctioned command."""
+
+    def test_a_quiet_campaign_permits_the_change(self) -> None:
+        st = {"issues": [{"number": 7, "status": "queued"}]}
+        assert dl.transport_set_blocked(st, now_ts=100) == (False, "ready")
+
+    def test_a_child_in_flight_refuses(self) -> None:
+        """A mode flip while a child runs is the mid-child-handoff case, not this one."""
+        st = {"issues": [{"number": 7, "status": "in_progress"}]}
+        blocked, reason = dl.transport_set_blocked(st, now_ts=100)
+        assert blocked is True
+        assert reason == "child_in_flight"
+
+    def test_a_LIVE_CLAIM_also_refuses(self) -> None:
+        """Not just a child -- a boundary mid-launch must not have the answer changed under it."""
+        st = {"issues": [], "generation": 4,
+              "handoff_pending": {"generation": 4, "next_issue": 7, "written_ts": 1},
+              "handoff_claim": {"generation": 4, "claimant": "pane-a",
+                                "claimed_at": 100, "started": False}}
+        blocked, reason = dl.transport_set_blocked(st, now_ts=101)
+        assert blocked is True
+        assert reason == "handoff_claim_active"
+
+    def test_an_EXPIRED_claim_no_longer_refuses(self) -> None:
+        st = {"issues": [], "generation": 4,
+              "handoff_pending": {"generation": 4, "next_issue": 7, "written_ts": 1},
+              "handoff_claim": {"generation": 4, "claimant": "pane-a",
+                                "claimed_at": 100, "started": False}}
+        assert dl.transport_set_blocked(st, now_ts=100 + 1801)[0] is False
+
+
+class TestUnparkGuard:
+    """#927: unparking is a command, not hand-editing driver-state."""
+
+    def _parked(self):
+        st = {}
+        rid = dl.append_resolution(
+            st, transition_id="b:camp:3", generation=3, trigger="child_boundary",
+            kind="child_boundary", preferred="pane_chain", effective="pane_chain",
+            probe_reason="probe_ok", probe_ms=5, pane_ref="w1:a",
+            panes_before=["w1:a"], now_ts=1)
+        dl.append_terminal_outcome(st, resolution_id=rid,
+                                   outcome="parked_unreconcilable", now_ts=2)
+        return st, rid
+
+    def test_a_parked_resolution_may_be_unparked(self) -> None:
+        st, rid = self._parked()
+        assert dl.unpark_blocked(st, resolution_id=rid) == (False, "ready")
+
+    def test_a_resolution_that_is_not_parked_is_refused(self) -> None:
+        st = {}
+        rid = dl.append_resolution(
+            st, transition_id="b:camp:3", generation=3, trigger="child_boundary",
+            kind="child_boundary", preferred="inline", effective="inline",
+            probe_reason="probe_ok", probe_ms=5, pane_ref=None,
+            panes_before=[], now_ts=1)
+        dl.append_terminal_outcome(st, resolution_id=rid,
+                                   outcome="inline_continued", now_ts=2)
+        blocked, reason = dl.unpark_blocked(st, resolution_id=rid)
+        assert blocked is True
+        assert reason == "not_parked"
+
+    def test_an_unknown_resolution_is_refused(self) -> None:
+        assert dl.unpark_blocked({}, resolution_id="nope#1")[0] is True
+
+    def test_unparking_APPENDS_and_never_rewrites_the_parked_event(self) -> None:
+        st, rid = self._parked()
+        before = len(dl.transition_events(st))
+        dl.append_unpark(st, resolution_id=rid, outcome="reconciled_no_action",
+                         operator="owner", reason="pane was debris", now_ts=9)
+        events = dl.transition_events(st)
+        assert len(events) == before + 1
+        assert any(e.get("outcome") == "parked_unreconcilable" for e in events), (
+            "the parked event must survive as the audit record")
+        assert events[-1]["outcome"] == "reconciled_no_action"
+        assert events[-1]["operator"] == "owner"
+
+    def test_unparking_refuses_an_outcome_outside_the_closed_set(self) -> None:
+        st, rid = self._parked()
+        with pytest.raises(dl.DriverStateError):
+            dl.append_unpark(st, resolution_id=rid, outcome="vibes",
+                             operator="owner", reason="x", now_ts=9)
+
+
+class TestBoundaryAdvisory:
+    """#927 AC 4: an inline boundary is VISIBLE, and says so exactly once."""
+
+    def test_the_line_names_the_preference_and_the_reason(self) -> None:
+        line = dl.boundary_advisory_line(preferred="pane_chain", effective="inline",
+                                         reason="herdr_unreachable")
+        assert "inline" in line
+        assert "pane_chain" in line
+        assert "herdr_unreachable" in line
+
+    def test_a_pane_chain_boundary_has_nothing_to_advise(self) -> None:
+        assert dl.boundary_advisory_line(preferred="pane_chain", effective="pane_chain",
+                                         reason="probe_ok") is None
+
+    def test_the_advisory_never_echoes_probe_output(self) -> None:
+        """Only a fixed reason token. Raw daemon output must never reach a terminal."""
+        line = dl.boundary_advisory_line(
+            preferred="pane_chain", effective="inline",
+            reason="probe_unparseable") or ""
+        assert "\x1b" not in line and "\n" not in line.strip()
+
+    def test_it_fires_once_per_transition_not_once_per_generation(self) -> None:
+        """`creation` and `boundary_resume` do not bump a generation and would share a key."""
+        seen = set()
+        assert dl.advisory_due("b:camp:3#1", seen) is True
+        seen.add("b:camp:3#1")
+        assert dl.advisory_due("b:camp:3#1", seen) is False
+        assert dl.advisory_due("r:camp:3:2#1", seen) is True
+
+
+class TestStep11Fixes:
+    """Regressions for the ten findings the pre-PR cross-model review raised. Each names its own."""
+
+    def _rec(self, **kw):
+        base = {"resolution_id": "b:camp:3#1", "panes_before": ["w1:anchor"],
+                "split_attempted": False, "successor_pane": None}
+        base.update(kw)
+        return base
+
+    def test_f3_a_MISSING_split_marker_does_not_authorise_a_relaunch(self) -> None:
+        """Only an explicit False proves the split was never called.
+
+        A corrupt or partially-written resolution has no marker; absence of evidence is not
+        evidence of absence, and relaunching on it could put a second successor beside a live one.
+        """
+        rec = self._rec()
+        del rec["split_attempted"]
+        verdict, _ = dl.reconcile_boundary(
+            rec, fresh_panes={"w1:anchor", "w1:mystery"},
+            panes_with_agents=set(), anchor_pane="w1:anchor")
+        assert verdict != "relaunch_permitted"
+
+    def test_f3_a_malformed_split_marker_is_not_a_false(self) -> None:
+        verdict, _ = dl.reconcile_boundary(
+            self._rec(split_attempted="no"), fresh_panes={"w1:anchor", "w1:mystery"},
+            panes_with_agents=set(), anchor_pane="w1:anchor")
+        assert verdict != "relaunch_permitted"
+
+    def test_f4_unknown_agent_state_parks_rather_than_declaring_start_failed(self) -> None:
+        """An unreadable agent inventory must not be coerced to "no agent"."""
+        verdict, reason = dl.reconcile_boundary(
+            self._rec(split_attempted=True, successor_pane="w1:new"),
+            fresh_panes={"w1:anchor", "w1:new"}, panes_with_agents=None,
+            anchor_pane="w1:anchor")
+        assert verdict == "park"
+        assert reason == "agent_state_unknown"
+
+    def test_f5_a_duplicate_resolution_id_is_refused(self) -> None:
+        st = {}
+        kw = dict(transition_id="b:camp:3", generation=3, trigger="child_boundary",
+                  kind="child_boundary", preferred="pane_chain", effective="pane_chain",
+                  probe_reason="probe_ok", probe_ms=1, pane_ref=None, panes_before=[],
+                  now_ts=1)
+        dl.append_resolution(st, attempt=1, **kw)
+        with pytest.raises(dl.DriverStateError):
+            dl.append_resolution(st, attempt=1, **kw)
+
+    def test_f7_unparking_twice_is_refused(self) -> None:
+        """`_terminal_for` must report the LATEST outcome, not the original park."""
+        st = {}
+        rid = dl.append_resolution(
+            st, transition_id="b:camp:3", generation=3, trigger="child_boundary",
+            kind="child_boundary", preferred="pane_chain", effective="pane_chain",
+            probe_reason="probe_ok", probe_ms=1, pane_ref=None, panes_before=[], now_ts=1)
+        dl.append_terminal_outcome(st, resolution_id=rid,
+                                   outcome="parked_unreconcilable", now_ts=2)
+        assert dl.unpark_blocked(st, resolution_id=rid) == (False, "ready")
+        dl.append_unpark(st, resolution_id=rid, outcome="reconciled_no_action",
+                         operator="owner", reason="debris", now_ts=3)
+        blocked, reason = dl.unpark_blocked(st, resolution_id=rid)
+        assert blocked is True
+        assert reason == "not_parked", "a resolved park must not accept a second decision"
+
+    def test_f9_the_transport_guard_fails_CLOSED_without_readable_state(self) -> None:
+        assert dl.transport_set_blocked(None, now_ts=1)[0] is True
+        assert dl.transport_set_blocked({}, now_ts=1)[0] is True
+        assert dl.transport_set_blocked({"issues": "not a list"}, now_ts=1)[0] is True
