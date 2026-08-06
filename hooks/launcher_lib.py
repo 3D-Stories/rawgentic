@@ -3028,6 +3028,33 @@ def _locked_state_read(path: str) -> dict:
             return _load_state_strict(fh)
 
 
+def _project_legacy_session_mode(state) -> None:
+    """Keep the write-only `session_mode` projection true, in place (#927).
+
+    Called from `_locked_state_update` — the module's ONLY driver-state writer — so the
+    invariant holds by construction rather than by every future mutation path remembering it.
+    Review finding A6: stated as a convention, the first path that forgets leaves `session_mode`
+    stale and a rolled-back build then executes the OPPOSITE transport, silently.
+
+    Two deliberate non-actions:
+
+    - No canonical field ⇒ the legacy field is left ALONE. A pre-#927 campaign must not have a
+      projection invented for it; `campaign_transport` migrates it on read instead.
+    - An unrecognised canonical value ⇒ no projection is written. Guessing a legacy value from
+      an unknown transport is how a rollback would silently pick the wrong one.
+    """
+    if not isinstance(state, dict):
+        return
+    transport = state.get("preferred_transport")
+    if transport is None:
+        return
+    import driver_lib  # pylint: disable=import-outside-toplevel  (module convention)
+
+    legacy = driver_lib.legacy_session_mode(transport)
+    if legacy is not None:
+        state["session_mode"] = legacy
+
+
 def _locked_state_update(path: str, mutate):
     """The ONE locked read -> validate -> atomic-replace cycle for driver state (#665).
 
@@ -3048,6 +3075,7 @@ def _locked_state_update(path: str, mutate):
         new = mutate(state)
         if new is None:
             return None
+        _project_legacy_session_mode(new)
         _atomic_write(path, json.dumps(new, indent=2) + "\n")
         return new
 

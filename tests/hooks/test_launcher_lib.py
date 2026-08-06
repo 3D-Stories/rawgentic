@@ -2066,3 +2066,82 @@ class TestCreationTransport:
                        lambda argv, timeout=None: _ProbeProc(0, "{not json")):
             transport, _reason = ll.resolve_creation_transport(runner=runner)
             assert transport in _dl.TRANSPORTS
+
+
+class TestLegacyProjectionChokepoint:
+    """#927: `session_mode` is a WRITE-ONLY projection, enforced at the single locked writer.
+
+    Review finding A6: "every write also writes the projection" is a cross-cutting invariant, and
+    stating it as a convention means the first mutation path that forgets leaves `session_mode`
+    stale -- so a rolled-back build executes the WRONG transport, silently. Enforcing it inside
+    `_locked_state_update` makes it hold by construction instead of by discipline.
+    """
+
+    def _state_file(self, tmp_path, **fields):
+        p = tmp_path / "camp.json"
+        base = {"schema_version": 1, "campaign": "camp", "issues": []}
+        base.update(fields)
+        p.write_text(json.dumps(base))
+        return str(p)
+
+    def test_pane_chain_projects_on_write(self, tmp_path) -> None:
+        path = self._state_file(tmp_path, preferred_transport="pane_chain")
+        ll._locked_state_update(path, lambda st: st)
+        assert json.loads(open(path).read())["session_mode"] == "fresh-session"
+
+    def test_inline_projects_on_write(self, tmp_path) -> None:
+        path = self._state_file(tmp_path, preferred_transport="inline")
+        ll._locked_state_update(path, lambda st: st)
+        assert json.loads(open(path).read())["session_mode"] == "single-session"
+
+    def test_the_projection_lands_even_when_the_mutation_ignored_both_fields(self, tmp_path) -> None:
+        """The point of a chokepoint: an unrelated mutation still keeps the projection true."""
+        path = self._state_file(tmp_path, preferred_transport="pane_chain")
+
+        def unrelated(st):
+            st["notes"] = "something else entirely"
+            return st
+
+        ll._locked_state_update(path, unrelated)
+        on_disk = json.loads(open(path).read())
+        assert on_disk["notes"] == "something else entirely"
+        assert on_disk["session_mode"] == "fresh-session"
+
+    def test_a_stale_legacy_value_is_CORRECTED_by_the_canonical_field(self, tmp_path) -> None:
+        path = self._state_file(tmp_path, preferred_transport="inline",
+                                session_mode="fresh-session")
+        ll._locked_state_update(path, lambda st: st)
+        assert json.loads(open(path).read())["session_mode"] == "single-session"
+
+    def test_no_canonical_field_means_the_legacy_field_is_left_alone(self, tmp_path) -> None:
+        """A pre-#927 campaign must not have a projection invented for it."""
+        path = self._state_file(tmp_path, session_mode="fresh-session")
+        ll._locked_state_update(path, lambda st: st)
+        on_disk = json.loads(open(path).read())
+        assert on_disk["session_mode"] == "fresh-session"
+        assert "preferred_transport" not in on_disk
+
+    def test_an_unknown_canonical_value_writes_no_bogus_projection(self, tmp_path) -> None:
+        path = self._state_file(tmp_path, preferred_transport="teleport")
+        ll._locked_state_update(path, lambda st: st)
+        assert "session_mode" not in json.loads(open(path).read())
+
+    def test_an_aborted_mutation_writes_nothing(self, tmp_path) -> None:
+        path = self._state_file(tmp_path, preferred_transport="pane_chain")
+        assert ll._locked_state_update(path, lambda st: None) is None
+        assert "session_mode" not in json.loads(open(path).read())
+
+    def test_the_chokepoint_is_STRUCTURALLY_the_only_writer(self) -> None:
+        """The projection holds everywhere only because there is exactly one writer.
+
+        A second `_atomic_write` call site for driver state would bypass the projection and
+        re-open finding A6 -- silently, since every existing test would still pass. This is the
+        guard that makes the invariant enforceable rather than aspirational.
+        """
+        src = (Path(ll.__file__)).read_text()
+        call_sites = [ln for ln in src.splitlines()
+                      if "_atomic_write(" in ln and not ln.lstrip().startswith("def ")]
+        assert len(call_sites) == 1, (
+            f"expected exactly one _atomic_write call site, found {len(call_sites)}: "
+            f"{call_sites}. A new driver-state writer must route through "
+            f"_locked_state_update or the #927 legacy projection stops holding.")
