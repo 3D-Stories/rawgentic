@@ -40,13 +40,51 @@ The anchor: **Traycer replaces the custom-built pane-handoff machinery.** What t
 
 ```steps
 0 | Vet + pin | Supply-chain vet of all three Traycer components (host/desktop/cli), the #609 pattern: pinned versions, checksums, analytics audit (Sentry/PostHog off or built from source), BYOA local-only confirmed. | must
-1 | Delivery spike (GO/NO-GO) | Prove Traycer can create a **Terminal Agent** (the real `claude` CLI in a PTY — NOT the Chat interface; rawgentic's hooks, plugins, session JSONL, and goal machinery exist only in the real CLI) and deliver the three handoff turns — bind, multi-KB prompt, /goal — each verified by the existing artifact ladder (registry line, goal_status attachment). Exercise busy-agent, duplicate-send, restart, timeout. Stop the plan here if submission cannot be proven deterministically. | must
+1 | Delivery spike (GO/NO-GO) | Four questions, in order, per the pointer-envelope proposal below. **(a)** Does an envelope arrive as USER INPUT, so `/rawgentic:switch` and `/goal` expand? This one alone can stop the plan. **(b)** Does a ~200-byte envelope arrive byte-exact, under a busy agent and under a duplicate send? **(c)** Do the three ladder rungs still verify from the successor's own artifacts? **(d)** Record the largest `agent send` payload that survives intact — a measurement, not a gate. Target the **Terminal Agent** interface (the real `claude` CLI in a PTY), never Chat: rawgentic's hooks, plugins, session JSONL and goal machinery exist only in the real CLI. | must
 2 | Console adoption | Daily-drive Traycer Desktop (BYOA) as the console while ALL existing machinery keeps running on Herdr. Zero rawgentic code changes. Independently valuable; fully reversible. | should
 3 | Transport port | Add a `traycer` transport beside `pane_chain`/`inline` in `driver_lib`/`launcher_lib`, shaped by the consult's RuntimeTransport contract (probe/create/send-with-idempotency-key/status/notify/close, immutable IDs, no name-based cleanup). The pane-handoff and epic-run skills keep their invariants; only the backend changes. | must
 4 | Proving run | One full epic on the Traycer transport against the Herdr baseline. Fallback asymmetry (consult ⊕): auto-fallback to Herdr only BEFORE successor creation; after partial creation, fail closed. | must
 5 | Peripheral ports | Context-meter insert-prompt channel; pane_watch → Traycer notification hooks (URL/command); mid-turn-questions re-route. | should
 6 | Retirement + dispositions | Retire Herdr only after step 4 passes plus stable weeks of operation. Undo stays cheap: the herdr pin, runbook, and transport survive in git history. herdr-dashboard: usage half superseded by Traycer's tracking; the inspector gets an explicit owner disposition (port, park, or run inside a Traycer terminal panel — its follow-me dock behavior does not carry over). | must
 ```
+
+### Closing the delivery gap: the pointer-envelope proposal (owner-directed 2026-08-06)
+
+**The gap.** Spike question (d) asks whether `traycer agent send` carries a multi-KB message intact. No size limit is documented anywhere. Today's herdr path pushes 2,500-character prompts through a keystroke channel, and a 1,400-character paste that silently never submitted is the bug behind #696 and #835.
+
+**The proposal: stop sending payloads. Send a pointer envelope.**
+
+Every handoff message becomes a short, fixed-size envelope. The payload stays on disk, where the successor reads it itself. The envelope carries four fields and nothing else:
+
+```
+handoff <marker>
+file    <absolute path to the brief>
+sha256  <checksum of that file>
+then    read that file and follow it
+```
+
+That is roughly 200 bytes regardless of how large the brief is. Delivery size stops being a variable, so the multi-KB question stops gating the plan. It becomes a measurement taken once and recorded.
+
+**Why this is stronger than what it replaces, not merely equivalent.**
+
+1. **The channel stops being the risk.** A 200-byte envelope either arrives or it does not. There is no partial-paste state to detect, because there is no paste.
+2. **The checksum makes delivery self-verifying.** The successor hashes the file it actually read and writes that hash into its own receipt. A brief that arrived truncated, stale, or from the wrong run fails the compare. That is precisely the mechanical durable-path check #726 asks for, obtained as a side effect instead of as new machinery.
+3. **Acknowledgement becomes an artifact, not a poll.** The #729 residual asks the meter to record an insert and then watch for successor evidence. Here the receipt file *is* the evidence, written by the successor, on the same artifact ladder the handoff already trusts.
+4. **Failures arrive typed.** `traycer agent create --json` emits structured output. #731's complaint is that `agent_start` fails with no reason and cannot be retried. A JSON failure class replaces scraped pane text.
+
+**What this replaces in the recovery work now finishing.** Per issue, with the claim level stated:
+
+| Issue | Current scope | Under the pointer envelope |
+|---|---|---|
+| **#835** | goal send has no unsubmitted-paste recovery | **Obsolete.** No paste exists to recover. |
+| **#729** (residual) | acknowledgement tracking: record the insert, watch for successor evidence, re-fire if absent | **Mostly obsolete.** The receipt is the acknowledgement. Re-fire reduces to "receipt absent after timeout". |
+| **#726** | refuse handoff while background work is in flight, plus a mechanical durable-path check | **Half absorbed.** The checksum *is* the durable-path check. The in-flight-work gate is a separate concern and stays. |
+| **#731** | `agent_start` fails with no reason, leaks the successor name, is not retryable | **Mostly absorbed** if `--json` returns typed failures. *Inferred* — the failure taxonomy is not documented. |
+| **#586** | resume rewrite | **Partly absorbed.** Traycer resumes the upstream coding-agent session natively on its owning Host. |
+
+*Confirmed:* the CLI verbs (`agent create|send|transcript|inbox|list`, `monitor`, `worktree create`), the injected `TRAYCER_AGENT_ID` / `TRAYCER_EPIC_ID`, the Claude-Code-only message inbox, and that Traycer reads Terminal transcripts from the coding agent's own session history rather than scrollback (docs.traycer.ai/cli/commands, /concepts/agent-to-agent, /concepts/terminal-agents-vs-terminals, read 2026-08-06). *Inferred:* that `agent send` preserves a 200-byte body byte-exactly, and that `--json` carries typed create failures. Both are cheap to measure and are folded into step 1.
+
+**One caution.** This design leans harder on a shared filesystem: predecessor and successor must see the same path. That holds today, and Traycer already requires both agents to be local to the same Host for delivery at all. Cross-device Hosts, when they ship, would break the assumption — the brief would then have to ride inside the message after all. That is exactly why question (d) stays measured rather than dropped.
 
 ### The epic-run crossover, rationalized (owner input 2026-08-06)
 
