@@ -83,6 +83,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 
 # Pane ids are OPAQUE stable handles upstream, so this validates the security-relevant
 # properties rather than pretending to know the grammar: non-empty, not option-shaped, no
@@ -4560,6 +4561,44 @@ def _driver_lib():
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import driver_lib  # pylint: disable=import-outside-toplevel
     return driver_lib
+
+
+def _supervision_lib():
+    """Lazy, same direction as `_plan_lib`/`_driver_lib`, so `launcher_lib` stays importable
+    alone (#944 Task 9)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import supervision_lib  # pylint: disable=import-outside-toplevel
+    return supervision_lib
+
+
+def _find_workspace_root(start_dir: "str | None" = None) -> "str | None":
+    """Walk up from `start_dir` (default cwd) for `.rawgentic_workspace.json`.
+
+    Same walk-up idiom as `context_meter.find_workspace`, duplicated rather than imported —
+    `launcher_lib` stays importable without a `context_meter` dependency (#944 Task 9)."""
+    try:
+        current = os.path.realpath(start_dir or os.getcwd())
+    except OSError:
+        return None
+    while True:
+        if os.path.isfile(os.path.join(current, ".rawgentic_workspace.json")):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+
+
+def _supervision_view_for(start_dir: "str | None" = None):
+    """The effective supervision view for `start_dir` (default cwd). Never raises: no
+    workspace found resolves to `read_state`'s own "absent" root case, and a present-but-
+    unreadable state file resolves to its "invalid" case — `evaluate_workspace` maps BOTH
+    to `state="attended"`, so this wrapper inherits that safe default rather than
+    re-deriving it (#943 Part A's own never-raises, fail-open-for-availability contract,
+    `hooks/supervision_lib.py` module docstring; #944 Task 9)."""
+    sup = _supervision_lib()
+    root = _find_workspace_root(start_dir)
+    return sup.evaluate_workspace(sup.read_state(root), now=datetime.now(timezone.utc))
 
 
 def resume_prompt_for_state(state: dict, project: str | None = None, *,

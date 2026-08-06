@@ -2953,3 +2953,44 @@ class TestBoundarySweepReviewFixes:
         assert "reset" in err and '"boundary_sweeps": []' in err
         assert "delete the malformed" not in err
         assert "disarms the gate" in err, "the reason must travel with the instruction"
+
+
+# --------------------------------------------------------------------------- #
+# #944 Task 9 — workspace-root walk-up and the supervision view it feeds
+# --------------------------------------------------------------------------- #
+
+class TestFindWorkspaceRoot:
+    def test_found_at_the_start_dir_itself(self, tmp_path):
+        (tmp_path / ".rawgentic_workspace.json").write_text("{}", encoding="utf-8")
+        assert ll._find_workspace_root(str(tmp_path)) == os.path.realpath(str(tmp_path))
+
+    def test_found_several_levels_up(self, tmp_path):
+        (tmp_path / ".rawgentic_workspace.json").write_text("{}", encoding="utf-8")
+        nested = tmp_path / "a" / "b" / "c"
+        nested.mkdir(parents=True)
+        assert ll._find_workspace_root(str(nested)) == os.path.realpath(str(tmp_path))
+
+    def test_not_found_anywhere_up_returns_none(self, tmp_path):
+        nested = tmp_path / "a" / "b"
+        nested.mkdir(parents=True)
+        assert ll._find_workspace_root(str(nested)) is None
+
+
+class TestSupervisionViewFor:
+    def test_no_workspace_present_defaults_to_attended(self, tmp_path):
+        nested = tmp_path / "a" / "b"
+        nested.mkdir(parents=True)
+        view = ll._supervision_view_for(str(nested))
+        assert view.state == "attended"
+
+    def test_a_malformed_state_file_does_not_raise_and_stays_attended(self, tmp_path):
+        """Reuses `supervision_lib`'s own never-raises guarantee rather than merely citing it
+        (#944 Task 9's own trap note) — a genuinely malformed file must exercise that path,
+        not a synthetic stand-in for it."""
+        (tmp_path / ".rawgentic_workspace.json").write_text("{}", encoding="utf-8")
+        sup_dir = tmp_path / "claude_docs"
+        sup_dir.mkdir()
+        (sup_dir / ".supervision.json").write_text("{not json", encoding="utf-8")
+        view = ll._supervision_view_for(str(tmp_path))
+        assert view.state == "attended"
+        assert view.load_status == "invalid"
