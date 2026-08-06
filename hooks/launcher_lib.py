@@ -5005,9 +5005,16 @@ def _cmd_handoff(args) -> int:
         return after
 
     _locked_state_update(args.driver_state, _close_launch)
-    downgraded = bool(driver_lib.campaign_transport(
-        _locked_state_read(args.driver_state))[0] == driver_lib.INLINE_TRANSPORT
-        and preferred == driver_lib.PANE_CHAIN_TRANSPORT)
+    # Guarded: this runs AFTER a launch that may have succeeded, so an unreadable state file here
+    # must not turn rc 0 into a traceback (inline self-review, bug_logic lens). The advisory is the
+    # only thing that depends on it, and an advisory never changes an exit code.
+    try:
+        _post = _locked_state_read(args.driver_state)
+    except (OSError, ValueError, LauncherError):
+        _post = {}
+    downgraded = bool(driver_lib.campaign_transport(_post)[0] == driver_lib.INLINE_TRANSPORT
+                      and preferred == driver_lib.PANE_CHAIN_TRANSPORT
+                      and _post)
     if downgraded or effective != preferred:
         _emit_boundary_advisory(args.driver_state, transition_id=advisory_key,
                                resolution_id=resolution_id, preferred=preferred,

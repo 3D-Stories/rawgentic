@@ -1060,3 +1060,40 @@ other has claimed derives `generation + 1`, opens it, and claims it unopposed.
 | F6 | Medium | 0.83 | the claimant comes from an environment variable, lands in durable state, and is interpolated into the successor's generated prompt unvalidated | **applied** — `validate_claimant_id` enforces a bounded identifier grammar (letters, digits, dot, underscore, colon, hyphen; ≤128), so a newline or instruction-shaped value is refused rather than reshaping a prompt |
 
 **Suite after the fix round: 5636 passed, exit 0** (baseline 5584, +52 tests). Lint 10.00/10.
+
+## 22. Known limitation: teardown can kill the writer of the boundary's own terminal state
+
+Found by the author's inline bug-logic pass at Step 11, and stated here rather than left for
+somebody to hit.
+
+`_cmd_handoff` runs INSIDE the predecessor session, and with the default verification ladder
+`perform_handoff(teardown=True)` retires that predecessor — it closes the predecessor's pane, which
+kills this process. Everything §16.2 puts after the launch (`record_successor_pane`, the terminal
+outcome, the transport downgrade, the claim release, the `boundary_consumed` marker) is therefore
+written by a process that may not survive to write it.
+
+**Why this is bounded rather than broken.** The kill happens INSIDE `perform_handoff`, so there are
+only two outcomes, and the design already models both:
+
+- The call RETURNS ⇒ the process is alive ⇒ every post-launch write lands in the two locked
+  mutations that immediately follow. This is the normal path.
+- The process dies inside the call ⇒ the resolution stays unterminated with `split_attempted: true`
+  and `successor_pane: null` ⇒ that is precisely the crash signature §4.4 reconciles.
+
+**The honest cost, and it is a LIVENESS cost.** In that second case reconciliation takes a fresh
+inventory, finds a pane that appeared (the successor really did start), and cannot prove it is ours
+because `successor_pane` was never recorded — so `reconcile_boundary` returns **`park`**
+(`indeterminate_pane_appeared`) rather than `adopt_successor`. A successful handoff can therefore
+land the campaign in a park that needs an operator. It never launches a second successor, which is
+the property that matters.
+
+**The remedy already ships in this PR:** `transport unpark <resolution_id> --adopt <pane>`, which is
+exactly the operator decision this case needs. And `--no-teardown` avoids the window altogether, at
+the cost of leaving the predecessor pane alive for the successor to retire — which is this repo's own
+stated rule for a ladder carrying successor-owned checks ("retirement belongs to the successor").
+
+**Not fixed here, deliberately.** Making the boundary retire-by-successor is a change to who owns
+teardown, which is #665's design rather than this issue's, and #927 is already carrying #845. The
+narrow follow-up is: have `_cmd_handoff` default to `--no-teardown` and let `retire-predecessor`
+close the predecessor once the successor has acked. Recorded here rather than filed, per the D179
+issue throttle.
