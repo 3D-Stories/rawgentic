@@ -749,6 +749,27 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.135.1 (2026-08-06)
+- **Resume launcher gets a measured-not-guessed reset clock, Part 1 (#586, epic #871).** The
+  durable overnight launcher pinned a session ID at arm time, so a `/clear` minted a new ID and
+  broke `--resume`. Part 1 ships the testable core only: `hooks/reset_resume_lib.py` extracts and
+  validates `rate_limits.five_hour.resets_at` from a statusline-shaped payload (rejects a
+  non-numeric, past, or implausibly-far-future epoch), asserts freshness on the OBSERVATION
+  timestamp advancing rather than on `resets_at` changing (the wave log's measured herdr-tokens
+  defect showed a value can legitimately stay constant for hours — a frozen capture, not a
+  changed value, is the real failure), computes the one-shot resume epoch (`resets_at + 60s`),
+  and runs the conservative session-lineage identity check before any `--continue` (any mismatch,
+  tie, or empty transcript listing refuses the shortcut in favor of the generated fresh `-p`
+  prompt). The scheduler wiring, the `overnight-resume.sh` template rewrite, and the watchdog-to-
+  reconciler demotion are workspace-root changes outside any git repo and ship in a follow-up PR
+  (D250). Step-11 cross-model review (gpt-5.6-sol) found 2 High + 3 Medium — all fixed in this
+  PR: the freshness check now also bounds observation age against a live clock, the
+  session-lineage docstring makes explicit that Part 2 must resume via `--resume
+  <verified-tail>` immediately rather than a separately-resolved `--continue`, malformed
+  payload/state shapes return clean failures instead of raising, and the `read` CLI's failure
+  JSON moved to stdout to match its own documented contract.
+  No workflow-spine change → no diagram REV. Suite 5762→5804.
+
 ### v3.135.0 (2026-08-06)
 - **A handoff now has to say what the predecessor left running (#726, epic #871).** Every gate in
   `perform_handoff` looked FORWARD at the successor; nothing looked backward. Measured 2026-07-30: a
