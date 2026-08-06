@@ -2873,3 +2873,62 @@ widened — three new CLI verbs the jam matrix will not cover) and #851 (open, u
 
 **Status.** Suite 5584→5628 (+44), exit 0. No workflow-spine change → no diagram REV. PR, CI and
 merge SHA filled by the next slot's pass, per the established convention here.
+
+---
+
+## #947 — supervision behaviour Part B: preflight, routing, claims, authority (epic #871, M4 wave)
+
+**Shipped.** New `hooks/supervision_route.py` (`CampaignView`/`evaluate_campaign`/
+`route_for`/`authority_permits`/`consult_permitted`/`consult_check`/
+`validate_supervision_override`), `hooks/supervision_claims.py` (revision-bound action
+claims: `claim_action`/`begin_execution`/`mark_executed`/`cancel_claims`/
+`reconcile_claim`), `hooks/supervision_preflight.py` (departure-preflight staging).
+Modified `hooks/supervision_lib.py` (`transport_verified` on Part A's own view),
+`hooks/supervision_admin.py` (`declare(preflight_token=...)` fold-in,
+`mark_transport_verified`), `hooks/driver_lib.py` (`set_supervision_override`, the
+tighten-only field's sole writer), `hooks/review_runner.py` (`--allowed-backends`).
+Wired into `skills/away`, `skills/sleeping` (preflight sweep before declaring),
+`skills/back` (cancels pending claims on return), and this repo's three real
+`review_runner.py consult` call sites (implement-feature Step 3, peer-consult/WF13). New
+`tests/test_askuserquestion_registration.py` guard (AC8).
+
+**The design.** `docs/planning/2026-08-06-947-supervision-behaviour-part-b.md`. Three
+review rounds (§16 records provenance): round 1 fixed 6 High + 2 Medium, round 2 fixed
+7 High + 1 Medium (design loop-back budget then exhausted, 2/2), round 3 CLOSED
+budget-exhausted per the #798 carve-out with all 12 findings terminally disposed (10
+applied, 2 refuted with evidence — the `AskUserQuestion` platform-citation question,
+asked three times across the gate, is the same harness-tool refutation Part A's §12
+already made).
+
+**Step 6 (plan review) found what the design gate could not — that the plan itself
+didn't follow through.** A fourth cross-model pass, this time over the 14-task
+implementation plan rather than the design prose, found 2 Critical + 3 High + 3 Medium.
+Two were genuinely NEW: the design's own §1a already committed #947 to wiring the ONE
+`consult` call site through `consult_permitted`, but no task implemented it (fixed:
+Task T9b added) — and a High/High pair the design gate's three rounds had never reached
+because they lived in the PLAN's restatement of already-settled design mechanisms, not
+the mechanisms themselves (T8's RED criteria dropped an ordering the design's own §7
+already stated; fixed by rewording, no design change).
+
+**Two genuine design-level flaws surfaced at Step 6, with the design loop-back budget
+already exhausted — escalated to the owner rather than silently reworked (D267).** (1)
+The 500-token consumed-preflight-token cap could, after 500+ intervening departures,
+let an old undelivered staging file replay and re-fold; the design's own text called
+this "not load-bearing for correctness," which the reviewer correctly disputed as an
+overclaim, even though the design's operational-implausibility reasoning is sound. (2)
+`transport_verified` checked a 24h timestamp but never that the verifying session
+matched the CURRENT session — a verification from an OLDER session stayed trusted in a
+brand-new one. Owner reply (option 2 of 3, via `/rawgentic:ask-owner`, ~18 minutes):
+tighten (2) — Task T1 now requires `verified_session_id` to exactly match the current
+session — and accept (1) as documented risk, matching the design's own reasoning.
+
+**Decisions (this slot).** D267 (the ask-owner escalation above); the Step-6 ledger
+(`claude_docs/.wf2-state/947/dispositions.jsonl`, gate=6) carries all 8 plan-review
+findings' terminal dispositions, 3 gate=4 dispositions from the design rounds' own
+close, 15 entries total.
+
+**Status.** Suite 5896→(final, this PR) — filled at merge, per the established
+convention here. Branch `feat/947-supervision-behaviour-part-b`. PR, CI and merge SHA
+filled by the next slot's pass. #927's own deferred integration (wiring
+`authority_permits`/the claims lifecycle into `hooks/launcher_lib.py`'s merge step) is
+NOT this slot — it is a future issue by the design's own §1a scope boundary.

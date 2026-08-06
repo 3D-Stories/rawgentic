@@ -749,6 +749,26 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.137.0 (2026-08-06)
+- **Supervision behaviour Part B: preflight, routing, claims, authority (#947, epic
+  #871).** New `hooks/supervision_route.py` (`CampaignView`/`evaluate_campaign` — the
+  ONE authority-evaluating function, single-constructor AST-guarded — `route_for`,
+  `authority_permits`, `consult_permitted`), `hooks/supervision_claims.py`
+  (revision-bound action claims, execute-once via reconcile-before-retry), and
+  `hooks/supervision_preflight.py` (departure-preflight staging). `declare()` gains an
+  additive `preflight_token` fold-in and `mark_transport_verified` (Hermes-cross-checked
+  evidence); `driver_lib.set_supervision_override` is the tighten-only field's sole
+  writer; `review_runner.py` gains `--allowed-backends`. Wired into `skills/away`,
+  `skills/sleeping` (preflight sweep), `skills/back` (cancels pending claims), and this
+  repo's three real `consult` call sites. A Step-6 cross-model plan review (not just the
+  three-round design gate) caught a real gap the design gate couldn't see — the design's
+  own §1a already committed to wiring `consult_permitted` into that ONE call site, but no
+  task did — and two genuine design-level flaws with the design loop-back budget already
+  exhausted, escalated to the owner (D267): tightened `transport_verified` to require an
+  exact session match; accepted the 500-token replay-cap edge case as documented risk.
+  New `tests/test_askuserquestion_registration.py` guard (AC8). No workflow-spine change
+  → no diagram REV. Suite 5896→6062.
+
 ### v3.136.0 (2026-08-06)
 - **Claim-inventory coverage and the obsolete-child owner gate (#944, epic #871).**
   `rebuild-receipt --bodies` now refuses, before writing anything, when a revalidation record's
