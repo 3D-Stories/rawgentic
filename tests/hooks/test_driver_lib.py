@@ -1703,3 +1703,30 @@ def test_validate_operator_note_caps_length_and_rejects_control_characters():
         dl.validate_operator_note("line\x1b[31m", what="reason")
     with pytest.raises(dl.DriverStateError):
         dl.validate_operator_note("", what="operator")
+
+
+def test_with_boundary_clause_carries_the_resolution_id_and_never_a_launch_token():
+    """§4.5 / pass-3 finding C6: the design once demanded a `launch_token` pass 3 had deleted."""
+    out = dl.with_boundary_clause("fresh-session resume for epic #871: git fetch origin",
+                                  generation=4, claimant="sess-A", kind="child_boundary",
+                                  resolution_id="b:epic-871:4#1")
+    assert out.startswith("fresh-session resume for epic #871"), "APPENDED — the bind stays first"
+    assert "resolution b:epic-871:4#1" in out
+    assert "generation 4" in out and "claim sess-A" in out
+    assert "task list back up" in out
+    assert "launch_token" not in out
+    with pytest.raises(dl.DriverStateError):
+        dl.with_boundary_clause("  ", generation=1, claimant="x", kind="child_boundary",
+                                resolution_id="r")
+
+
+def test_inline_mode_advisory_names_the_recorded_preference_as_the_reason():
+    """AC 4's OTHER half: `next-child` returning ready under an inline campaign is a CHOICE, and
+    an operator must see it rather than infer it from silence. `boundary_advisory_line` cannot
+    express it — there is no degradation, preferred and effective agree."""
+    line = dl.inline_mode_advisory_line(preferred="inline", provenance="recorded", next_issue=612)
+    assert line is not None
+    assert "transport=inline" in line and "#612" in line and "recorded" in line
+    assert dl.inline_mode_advisory_line(preferred="pane_chain", provenance="recorded",
+                                        next_issue=612) is None, \
+        "a pane_chain campaign is not making this choice"

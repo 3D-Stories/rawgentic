@@ -533,16 +533,26 @@ def _cli(*args: str) -> subprocess.CompletedProcess:
                           text=True, check=False)
 
 
-def test_cli_absent_capability_flag_does_not_read_as_support() -> None:
-    """`store_true` with `default=True` made the flag a no-op (8a review, M-a)."""
+def test_cli_rejects_the_removed_capability_flag() -> None:
+    """#927 PR 2 (finding S2): `--herdr-available` was a caller-ASSERTED capability claim for
+    something this module can derive. A stale assertion is exactly what #927 exists to stop, so
+    the flag is gone rather than deprecated — a silently-ignored flag is worse than a refused one.
+    """
     proc = _cli("select-mode", "--terminal-backend", "herdr", "--herdr-available")
+    assert proc.returncode == 2
+    assert "unrecognized arguments" in proc.stderr
+
+
+def test_cli_derives_the_capability_and_still_needs_the_launcher_to_advertise() -> None:
+    """The `--launcher-herdr` half is NOT derived and must stay caller-asserted: it is a claim
+    about the LAUNCHER's own support, which this process cannot observe (8a review, M-a)."""
+    proc = _cli("select-mode", "--terminal-backend", "herdr")
     assert proc.returncode == 0, proc.stderr
     assert "single_session" in proc.stdout
 
 
-def test_cli_with_capability_flag_selects_herdr() -> None:
-    proc = _cli("select-mode", "--terminal-backend", "herdr", "--herdr-available",
-                "--launcher-herdr")
+def test_cli_with_launcher_support_selects_herdr(monkeypatch) -> None:
+    proc = _cli("select-mode", "--terminal-backend", "herdr", "--launcher-herdr")
     assert proc.returncode == 0 and "herdr\t" in proc.stdout
 
 
@@ -2393,3 +2403,221 @@ def dl_transitions(state):
 def dl_unterminated(state):
     closed = {e.get("resolution_id") for e in dl_all_events(state) if e.get("outcome")}
     return [e for e in dl_transitions(state) if e.get("resolution_id") not in closed]
+
+
+class TestTransportCommands:
+    """#927 AC 2 and design sections 16.6/16.8. PR 1 shipped the pure guards
+    (`transport_set_blocked`, `unpark_blocked`, `append_unpark`, `resolve_creation_transport`) and
+    NO command that called any of them, so AC 2 had no live path at all."""
+
+    def _state_file(self, tmp_path, **over):
+        payload = {"campaign": "epic-9", "epic": 9, "generation": 1, "project": PROJECT,
+                   "issues": [{"number": 1, "status": "queued"}]}
+        payload.update(over)
+        p = tmp_path / "ds.json"
+        p.write_text(json.dumps(payload), encoding="utf-8")
+        return p
+
+    def test_resolve_creation_records_pane_chain_when_the_capability_probe_passes(
+            self, tmp_path, monkeypatch) -> None:
+        """AC 1: the default is DERIVED by probing, not asked at setup and not defaulted."""
+        state = self._state_file(tmp_path)
+        monkeypatch.setattr(ll, "transport_probe", lambda **kw: (True, False, "no_pane_ref"))
+        rc = ll.main(["transport", "resolve-creation", "--driver-state", str(state),
+                      "--project-root", str(tmp_path)])
+        after = json.loads(state.read_text(encoding="utf-8"))
+        assert rc == 0
+        assert after["preferred_transport"] == "pane_chain"
+        assert after["session_mode"] == "fresh-session", "the write-only projection travels with it"
+        events = [e for e in after.get("transitions", [])]
+        assert events[0]["trigger"] == "creation"
+        assert events[0]["probe_reason"] == "probe_ok", "tier-1-only: no_pane_ref is not a degradation"
+        assert events[-1]["outcome"] == "created"
+
+    @pytest.mark.parametrize("reason", ["herdr_absent", "probe_timeout", "probe_unparseable",
+                                        "probe_error:RuntimeError"])
+    def test_resolve_creation_records_inline_and_the_reason_on_every_probe_failure(
+            self, tmp_path, monkeypatch, reason) -> None:
+        state = self._state_file(tmp_path)
+        monkeypatch.setattr(ll, "transport_probe", lambda **kw: (False, False, reason))
+        rc = ll.main(["transport", "resolve-creation", "--driver-state", str(state),
+                      "--project-root", str(tmp_path)])
+        after = json.loads(state.read_text(encoding="utf-8"))
+        assert rc == 0
+        assert after["preferred_transport"] == "inline"
+        assert after["transitions"][0]["probe_reason"] == reason
+
+    def test_resolve_creation_is_write_once(self, tmp_path, monkeypatch) -> None:
+        state = self._state_file(tmp_path, preferred_transport="inline")
+        monkeypatch.setattr(ll, "transport_probe", lambda **kw: (True, False, "no_pane_ref"))
+        rc = ll.main(["transport", "resolve-creation", "--driver-state", str(state),
+                      "--project-root", str(tmp_path)])
+        assert rc == 2, "changing a recorded preference is `transport set`, not a re-probe"
+        assert json.loads(state.read_text(encoding="utf-8"))["preferred_transport"] == "inline"
+
+    def test_set_changes_the_preference_and_its_projection(self, tmp_path) -> None:
+        state = self._state_file(tmp_path, preferred_transport="inline")
+        rc = ll.main(["transport", "set", "pane_chain", "--driver-state", str(state),
+                      "--reason", "herdr is back"])
+        after = json.loads(state.read_text(encoding="utf-8"))
+        assert rc == 0
+        assert after["preferred_transport"] == "pane_chain"
+        assert after["session_mode"] == "fresh-session"
+        assert after["transport_audit"][-1]["reason"] == "herdr is back"
+
+    def test_set_is_refused_mid_child_and_writes_NOTHING(self, tmp_path) -> None:
+        state = self._state_file(tmp_path, preferred_transport="inline",
+                                 issues=[{"number": 1, "status": "in_progress"}])
+        rc = ll.main(["transport", "set", "pane_chain", "--driver-state", str(state),
+                      "--reason", "nope"])
+        after = json.loads(state.read_text(encoding="utf-8"))
+        assert rc == 3
+        assert after["preferred_transport"] == "inline", "a blocked guard performs no write"
+        assert "transport_audit" not in after
+
+    def test_set_is_refused_while_a_claim_is_live_and_writes_NOTHING(self, tmp_path) -> None:
+        """A live claim means a boundary is mid-launch; changing the recorded answer under it
+        would let the launch and the record disagree about what was chosen."""
+        state = self._state_file(
+            tmp_path, preferred_transport="inline",
+            handoff_claim={"generation": 1, "claimant": "x", "claimed_at": 9_999_999_999,
+                           "started": False})
+        rc = ll.main(["transport", "set", "pane_chain", "--driver-state", str(state),
+                      "--reason", "nope"])
+        assert rc == 3
+        assert json.loads(state.read_text(encoding="utf-8"))["preferred_transport"] == "inline"
+
+    def test_set_refuses_a_value_outside_the_closed_set(self, tmp_path) -> None:
+        """Self-review S1: an arbitrary string in `preferred_transport` degrades every later
+        boundary to inline with a diagnostic nobody asked for."""
+        state = self._state_file(tmp_path, preferred_transport="inline")
+        rc = ll.main(["transport", "set", "pane-chain", "--driver-state", str(state),
+                      "--reason", "typo"])
+        assert rc == 2
+        assert json.loads(state.read_text(encoding="utf-8"))["preferred_transport"] == "inline"
+
+    def _parked(self, tmp_path):
+        state = self._state_file(tmp_path)
+        payload = json.loads(state.read_text(encoding="utf-8"))
+        payload["transitions"] = [
+            {"resolution_id": "b:epic-9:1#1", "transition_id": "b:epic-9:1", "generation": 1,
+             "split_attempted": True, "successor_pane": None, "panes_before": ["w1:pA"]},
+            {"resolution_id": "b:epic-9:1#1", "outcome": "parked_unreconcilable",
+             "observed_at": 5}]
+        state.write_text(json.dumps(payload), encoding="utf-8")
+        return state
+
+    def test_unpark_appends_a_new_terminal_and_never_rewrites_the_park(self, tmp_path) -> None:
+        state = self._parked(tmp_path)
+        rc = ll.main(["transport", "unpark", "b:epic-9:1#1", "--driver-state", str(state),
+                      "--adopt", "w1:pB", "--operator", "rocky", "--reason", "pane is alive"])
+        after = json.loads(state.read_text(encoding="utf-8"))
+        outcomes = [e["outcome"] for e in after["transitions"] if e.get("outcome")]
+        assert rc == 0
+        assert outcomes == ["parked_unreconcilable", "successor_acked"], \
+            "the park stays as the audit record of what the run could not decide"
+        assert after["transitions"][-1]["operator"] == "rocky"
+
+    def test_unpark_refuses_a_resolution_that_is_not_parked(self, tmp_path) -> None:
+        state = self._state_file(tmp_path)
+        rc = ll.main(["transport", "unpark", "b:epic-9:1#1", "--driver-state", str(state),
+                      "--discard", "--operator", "rocky", "--reason", "x"])
+        assert rc == 3
+
+    def test_unpark_is_one_shot(self, tmp_path) -> None:
+        state = self._parked(tmp_path)
+        ll.main(["transport", "unpark", "b:epic-9:1#1", "--driver-state", str(state),
+                 "--discard", "--operator", "rocky", "--reason", "gone"])
+        rc = ll.main(["transport", "unpark", "b:epic-9:1#1", "--driver-state", str(state),
+                      "--adopt", "w1:pB", "--operator", "rocky", "--reason", "again"])
+        assert rc == 3, "the LATEST terminal event decides, so a second unpark is refused"
+
+    def test_unpark_validates_the_adopted_pane_id_and_bounds_the_note(self, tmp_path) -> None:
+        state = self._parked(tmp_path)
+        assert ll.main(["transport", "unpark", "b:epic-9:1#1", "--driver-state", str(state),
+                        "--adopt", "not a pane", "--operator", "r", "--reason", "x"]) == 2
+        assert ll.main(["transport", "unpark", "b:epic-9:1#1", "--driver-state", str(state),
+                        "--discard", "--operator", "r", "--reason", "y" * 201]) == 2
+        after = json.loads(state.read_text(encoding="utf-8"))
+        assert [e["outcome"] for e in after["transitions"] if e.get("outcome")] == \
+            ["parked_unreconcilable"], "a refused unpark writes nothing"
+
+
+class TestAdvisoryEmission:
+    """#927 AC 4: a boundary that did NOT happen must be visible, from both surfaces, at most once.
+
+    Pass-2 finding F4 is the reason the claim is durable: `advisory_due` was a pure predicate over
+    a caller-supplied set that nothing persisted, so `handoff` and `next-child` could each pass an
+    empty set and both print the same line.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_live_issue_probe(self, monkeypatch):
+        monkeypatch.setenv(ll.ISSUE_PROBE_ENV, "0")
+
+    def test_next_child_announces_that_an_inline_campaign_is_choosing_in_session(
+            self, tmp_path, capsys) -> None:
+        state = _state(tmp_path)
+        payload = json.loads(state.read_text(encoding="utf-8"))
+        payload.pop("session_mode", None)
+        payload["preferred_transport"] = "inline"
+        state.write_text(json.dumps(payload), encoding="utf-8")
+        work, _head = _local_repo_with_origin(tmp_path)
+        rc = ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        streams = capsys.readouterr()
+        assert rc == 0
+        # STDERR: stdout is a JSON document the epic-run skill parses, so an advisory there would
+        # break it. Two pre-existing revalidation-gate tests proved that the hard way.
+        assert "transport=inline" in streams.err and "#612" in streams.err
+        assert json.loads(streams.out)["next_issue"] == 612, "stdout stays pure JSON"
+        after = json.loads(state.read_text(encoding="utf-8"))
+        assert [e["state"] for e in after["advisory_deliveries"]] == ["pending", "emitted"]
+
+    def test_a_second_next_child_does_not_repeat_the_line(self, tmp_path, capsys) -> None:
+        state = _state(tmp_path)
+        payload = json.loads(state.read_text(encoding="utf-8"))
+        payload.pop("session_mode", None)
+        payload["preferred_transport"] = "inline"
+        state.write_text(json.dumps(payload), encoding="utf-8")
+        work, _head = _local_repo_with_origin(tmp_path)
+        ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        capsys.readouterr()
+        ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        assert "transport=inline" not in capsys.readouterr().err
+
+    def test_a_pane_chain_campaign_gets_no_in_session_advisory(self, tmp_path, capsys) -> None:
+        state = _state(tmp_path)
+        work, _head = _local_repo_with_origin(tmp_path)
+        ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        assert "transport=inline" not in capsys.readouterr().err
+
+    def test_a_print_that_fails_leaves_the_claim_visibly_undelivered(
+            self, tmp_path, monkeypatch) -> None:
+        """AC 4 as at-most-once printing: the durable record is the authoritative surface, and a
+        `pending` that never became `emitted` IS the visible defect (pass-2 F4)."""
+        state = _state(tmp_path)
+        payload = json.loads(state.read_text(encoding="utf-8"))
+        payload.pop("session_mode", None)
+        payload["preferred_transport"] = "inline"
+        state.write_text(json.dumps(payload), encoding="utf-8")
+        work, _head = _local_repo_with_origin(tmp_path)
+
+        real_print = print
+
+        def _boom(*a, **k):
+            # ONLY the advisory line fails. Patching every print would also break the command's
+            # own JSON output and prove nothing about the advisory path.
+            if a and isinstance(a[0], str) and a[0].startswith("### epic-run:"):
+                raise OSError("stdout is gone")
+            return real_print(*a, **k)
+
+        monkeypatch.setattr("builtins.print", _boom)
+        rc = ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        after = json.loads(state.read_text(encoding="utf-8"))
+        assert [e["state"] for e in after["advisory_deliveries"]] == ["pending", "failed"]
+        pending = [e["transition_id"] for e in after["advisory_deliveries"]
+                   if e["state"] == "pending"]
+        emitted = {e["transition_id"] for e in after["advisory_deliveries"]
+                   if e["state"] == "emitted"}
+        assert [t for t in pending if t not in emitted] == ["n:epic-667:612"]
+        assert rc in (0, 1), "advisory-only: a failed advisory never becomes the command's verdict"

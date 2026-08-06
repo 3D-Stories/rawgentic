@@ -1882,6 +1882,26 @@ def boundary_advisory_line(*, preferred: str, effective: str, reason: str) -> "s
             f"reason={reason} — re-probing next transition")
 
 
+def inline_mode_advisory_line(*, preferred: str, provenance: str, next_issue) -> "str | None":
+    """The advisory for a boundary that is not happening BY CHOICE. PURE.
+
+    #927 AC 4 has two halves and `boundary_advisory_line` only covers one. That one fires when a
+    campaign wanted `pane_chain` and got `inline` — a DEGRADATION, where preferred and effective
+    disagree. This one fires when the campaign's recorded preference IS `inline`, so nothing
+    degraded and the two agree: `next-child` hands out the next child in-session because that is
+    what the campaign chose. The AC's words are "the run emits a one-line advisory naming the mode
+    as the reason, so an operator sees the choice being made instead of inferring it from silence",
+    and silence is exactly what the degradation line would produce here.
+
+    ``provenance`` comes from `campaign_transport`, so an operator can tell a deliberately recorded
+    preference from one a pre-#927 campaign fell into by default.
+    """
+    if preferred != INLINE_TRANSPORT:
+        return None
+    return (f"### epic-run: transport=inline ({provenance}) — child #{next_issue} runs in THIS "
+            "session; no process boundary. Change it with `transport set pane_chain`.")
+
+
 def advisory_due(transition_id: str, already_emitted) -> bool:
     """Has this transition already advised? PURE.
 
