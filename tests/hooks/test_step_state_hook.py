@@ -447,3 +447,31 @@ class TestFeatPrefixRebind:
     def test_fix_branch_still_rebinds(self):
         import step_state_post as ssp
         assert ssp._branch_issue("git checkout -b fix/77-null-deref origin/main") == 77
+
+
+class TestBrokerMergeSignature:
+    """#963: Step 14 stops shelling out raw `gh pr merge` when a campaign is active.
+
+    Without a needle for the broker, `detect_signature` returns None and the statusline
+    silently stops advancing to 14 on exactly the campaign runs that matter most. The
+    raw rows STAY: non-campaign runs, WF3 and hotfix paths still shell out directly.
+    """
+
+    def test_wf2_broker_merge_maps_to_step_14(self):
+        argv = "python3 hooks/launcher_lib.py broker-merge --pr 970 --issue 963"
+        assert ssp.detect_signature(argv, "wf2")[0] == "14"
+
+    def test_wf3_broker_merge_maps_to_its_merge_step(self):
+        argv = "python3 hooks/launcher_lib.py broker-merge --pr 970 --issue 963"
+        assert ssp.detect_signature(argv, "wf3") == ("12", "Merge and Deploy")
+
+    def test_the_raw_merge_rows_are_retained(self):
+        assert ssp.detect_signature("gh pr merge 500 --squash", "wf2")[0] == "14"
+        assert ssp.detect_signature("gh pr merge 7 --squash", "wf3") == \
+            ("12", "Merge and Deploy")
+
+    def test_the_prefilter_picks_up_the_new_needle(self):
+        """`_may_have_signature` derives from the table, so a needle that never passes
+        the prefilter would mean the hook never even reads state."""
+        assert ssp._may_have_signature(
+            "python3 hooks/launcher_lib.py broker-merge --pr 970") is True

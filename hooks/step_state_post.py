@@ -108,7 +108,11 @@ _SIGNATURES = {
         ("git checkout -b ", ("7", "Create Branch"), False),
         ("security_scan.py scan", ("11.5", "Security Scan"), False),
         ("gh pr create", ("12", "Create PR"), False),
+        # Both merge forms (#963): a campaign-scoped merge goes through the broker, and
+        # everything else still shells out raw. Dropping either row would silently stop
+        # the statusline advancing to 14 for that half of the runs.
         ("gh pr merge", ("14", "Merge"), False),
+        ("broker-merge", ("14", "Merge"), False),
         ("work_summary.py summarize", ("16", "Completion Summary"), False),
     ),
     "wf3": (
@@ -116,6 +120,7 @@ _SIGNATURES = {
         ("git checkout -b ", ("6", "Create Fix Branch"), False),
         ("gh pr create", ("10", "Create Pull Request"), False),
         ("gh pr merge", ("12", "Merge and Deploy"), False),
+        ("broker-merge", ("12", "Merge and Deploy"), False),
         ("work_summary.py summarize", ("14", "Completion Summary"), False),
     ),
 }
