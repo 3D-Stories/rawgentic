@@ -65,7 +65,7 @@ CAMPAIGN_WAIT_STATUSES = frozenset({"waiting_for_owner", "waiting_for_reset"})
 #: (both forbid merge and consult) — the poset treats them as equal, not ordered.
 SUPERVISION_OVERRIDE_MODES = frozenset(
     {"none", "no_merge", "no_consult", "no_merge_no_consult", "attended_only"})
-_SUPERVISION_OVERRIDE_RESTRICTIONS = {
+SUPERVISION_OVERRIDE_RESTRICTIONS = {
     "none": frozenset(),
     "no_merge": frozenset({"merge"}),
     "no_consult": frozenset({"consult"}),
@@ -3775,7 +3775,7 @@ def _supervision_override_effective_restrictions(value, now: str) -> frozenset:
     expires_at = value.get("expires_at")
     if isinstance(expires_at, str) and expires_at and expires_at <= now:
         return frozenset()
-    return _SUPERVISION_OVERRIDE_RESTRICTIONS.get(mode, frozenset())
+    return SUPERVISION_OVERRIDE_RESTRICTIONS.get(mode, frozenset())
 
 
 def set_supervision_override(state: dict, new_value, *, now: str) -> dict | None:
@@ -3798,7 +3798,7 @@ def set_supervision_override(state: dict, new_value, *, now: str) -> dict | None
             f"invalid supervision_override: {'; '.join(errors)}")
     current_restrictions = _supervision_override_effective_restrictions(
         state.get("supervision_override"), now)
-    new_restrictions = _SUPERVISION_OVERRIDE_RESTRICTIONS.get(new_value.get("mode"), frozenset())
+    new_restrictions = SUPERVISION_OVERRIDE_RESTRICTIONS.get(new_value.get("mode"), frozenset())
     if not (new_restrictions >= current_restrictions):
         raise DriverStateError(
             f"supervision_override must only TIGHTEN: current restrictions "
