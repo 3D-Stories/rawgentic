@@ -80,19 +80,39 @@ class TestEpicRunOwnerNotification:
 
 
 class TestFreshSessionPerChild:
-    """Drift guards for #569: fresh-session-per-child process boundary."""
+    """Drift guards for the per-child process boundary.
 
-    def test_step2_offers_fresh_session_mode(self):
+    #569 built it as an OPT-IN mode chosen at setup. #927 inverted that: the transport is PROBED
+    at campaign creation and `pane_chain` is the DEFAULT, so these guards moved with the contract
+    rather than being deleted -- what they protect is that Step 2 never goes back to ASKING, and
+    that the boundary still launches a genuinely fresh successor.
+    """
+
+    def test_step2_probes_the_transport_instead_of_asking(self):
         s = _section(_text(), "## Step 2:", "## Step 3:")
-        assert "fresh-session mode" in s, "Step 2 must offer the #569 session-mode choice"
-        assert "default single-session" in s or "single-session" in s, (
-            "the default must be the byte-identical single-session mode")
+        assert "transport resolve-creation" in s, (
+            "Step 2 must RECORD the transport by probing (#927 AC 1)")
+        assert "asks exactly TWO questions" in s, (
+            "the session-mode question is gone -- merge policy and the launcher are the two")
+        assert "`pane_chain` is the DEFAULT" in s, "the default is inverted (#927 AC 1)"
+        assert "Never assert the capability from `HERDR_ENV` or a flag" in s, (
+            "a recorded/asserted capability goes stale while the real one moves")
 
     def test_step4_ends_session_on_any_terminal_outcome(self):
         s = _section(_text(), "## Step 4:", "## Step 5:")
-        assert "Fresh-session boundary" in s
+        assert "The child boundary is the DEFAULT" in s
         assert "with NO `--resume`" in s, (
             "the fresh successor must launch without --resume (else AC1 fails, #569)")
+
+    def test_step4_documents_the_one_successor_fence_rather_than_its_absence(self):
+        """#845, closed inside #927. This prose used to state the OPPOSITE -- twice, in two
+        adjacent paragraphs -- because the fence genuinely did not exist. Shipping it without
+        rewriting them would have left the skill telling an operator to expect a double launch.
+        """
+        s = _section(_text(), "## Step 4:", "## Step 5:")
+        assert "exactly-one-successor fence IS here now" in s
+        assert "rc 7" in s, "the losing contender's distinct exit code must be documented"
+        assert "no exactly-one-successor" not in s, "the old absence claim must be gone"
 
     def test_step4_resolves_the_terminal_backend_verdict_at_the_boundary(self):
         """#611 Step-11 pass-3 High 2: deciding the launch mode only inside the launcher is too
