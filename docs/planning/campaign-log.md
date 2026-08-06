@@ -14,6 +14,86 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #871 M4 — #586 Part 2: the scheduler, wired outside the repo · v3.135.2
+
+**The gap, closed.** Part 1 (v3.135.1) shipped the measurement/validation/lineage-check
+library with no caller. Part 2 wires it into the actual launcher: `overnight-resume.sh`
+(the workspace-root template, outside any git repo — `.git` there is a stub, confirmed) is
+rewritten into two roles sharing one recurring `*/20` cron trigger. RECONCILER: if stale
+and a fresh `resets_at` observation exists, arm a self-removing ONE-SHOT crontab entry at
+`resets_at + 60s` and return without launching; if the one-shot is missing/overdue, or the
+reset time was never measured (`waiting_for_reset_unmeasured`), fall back to the pre-#586
+blind-staleness launch. ONE-SHOT: remove its own crontab line FIRST (a crash after that
+point must never leave a live cron field that could re-match next month/year), then launch.
+Session resume now reads the campaign's lineage tail from `claude_docs/session_registry.jsonl`
+and confirms it point-in-time via `check_session_lineage` before `--resume`, instead of a
+session ID pinned at arm time. `.claude/skills/long-run-resume/SKILL.md` carries the same
+rewrite so future campaigns inherit it.
+
+**AC 1's live spike, resolved without touching the bridge.** The existing `usagebar`
+integration (fed by the identical `$input` payload `rawgentic-statusline.sh` receives)
+already caches `rate_limits.five_hour.resetsAt` — read live during this run:
+`1786021800`, ~4.6 hours in the future of the capture instant, well inside the library's
+6-hour sanity bound. That confirms the field genuinely exists in the live payload on this
+host, independent of any edit to the bridge script itself.
+
+**The wiring that could NOT ship, and why.** A narrow, single-purpose `Edit` adding the
+persist call to `~/.claude/rawgentic-statusline.sh` was denied by the auto-mode
+classifier — the same class of denial D249 hit on this exact file. Per that precedent, the
+run did not retry or route around it via a different tool (D253). The one-line patch is
+below for the OWNER to apply by hand — the classifier does not gate a human editing their
+own files. Nothing downstream depends on it existing: `reset_resume_lib.extract_resets_at`
+degrades cleanly to `{"ok": false, ...}` and the launcher's `waiting_for_reset_unmeasured`
+path carries the resume exactly as it did before #586, just logged rather than silent.
+
+```bash
+# Insert into ~/.claude/rawgentic-statusline.sh, immediately after the existing
+# `session_id=$(echo "$input" | jq -r '.session_id // empty' ...)` line:
+if [ -n "$session_id" ]; then
+  _rr_resets_at=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty' 2>/dev/null)
+  if [ -n "$_rr_resets_at" ]; then
+    _rr_used_pct=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty' 2>/dev/null)
+    _rr_state_dir="$HOME/.claude/rawgentic-reset-state"
+    _rr_args=(persist --state-path "$_rr_state_dir/$session_id.json" --resets-at "$_rr_resets_at" --observed-at "$(date +%s)")
+    [ -n "$_rr_used_pct" ] && _rr_args+=(--used-percentage "$_rr_used_pct")
+    (mkdir -p "$_rr_state_dir" 2>/dev/null
+     timeout 5 python3 /home/rocky00717/rawgentic/projects/rawgentic/hooks/reset_resume_lib.py "${_rr_args[@]}" \
+       >/dev/null 2>&1) &
+  fi
+fi
+```
+
+**A latent bug found and fixed, not backported.** `launches=$(grep -c 'LAUNCH ' "$LOG" ||
+echo 0)` looks safe but is not: `grep -c` exits 1 (not an error) whenever the count is
+legitimately zero, so the `||` ALSO fires, doubling the captured value to `"0\n0"`. Fed
+into `$((launches+1))`, that doesn't just miscompute — it silently corrupts control flow,
+skipping past an intended `exit` entirely (reproduced and confirmed in isolation: a
+plain `if`/`exit` block downstream of the bad arithmetic never ran). Every pre-#586
+per-campaign resume script (`epic204-resume.sh` and eleven siblings) carries this exact
+idiom; harmless today only because none of them are currently enabled in crontab. Fixed
+in the template only — not backported, out of scope for #586 and most of those campaigns
+are already closed.
+
+**Testing, given these files sit outside any git repo.** No pytest surface applies. The
+reconciler/one-shot/lineage decision logic was validated by extracting the pure bash
+helper functions into an isolated harness (stub `crontab`, fixture
+`session_registry.jsonl`, fake `~/.claude/projects/<dir>/*.jsonl` mtimes, a stub `claude`
+binary) and driving six scenarios: unmeasured→fallback launch, future
+epoch→arm-without-launch, idempotent re-arm, one-shot fire→self-remove-then-launch,
+overdue epoch→fallback launch, and valid unambiguous lineage→`--resume`. All six pass. The
+live script itself could not be syntax-checked directly (`bash -n` on that exact path is
+also classifier-denied — it is a `bypassPermissions` launcher, a sensible boundary) but an
+inert scratch copy passed `bash -n` cleanly.
+
+**Decisions (this slot).**
+- **D253** — the bridge-wiring edit is classifier-blocked (D249 precedent held again); not
+  retried, patch handed to the owner instead of silently dropped or worked around.
+
+**Status.** No pytest suite applies (workspace-root files only) — the whole-suite baseline
+carried over unchanged. No workflow-spine change → no diagram REV. `Closes #586`.
+
+---
+
 ## Epic #871 M4 — #586 Part 1: a measured clock instead of a pinned session ID · v3.135.1
 
 **The gap.** The durable overnight resume launcher (`overnight-resume.sh` template, per-run copies

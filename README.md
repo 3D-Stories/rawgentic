@@ -749,6 +749,30 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.135.2 (2026-08-06)
+- **Resume launcher gets a measured-not-guessed reset clock, Part 2 (#586, epic #871).** Part 1
+  (v3.135.1) shipped the measurement/lineage-check library with no caller. Part 2 wires it in:
+  `overnight-resume.sh` (the workspace-root template, outside any git repo) is rewritten into a
+  RECONCILER role (fired by the unchanged recurring `*/20` cron — if stale and a fresh
+  `resets_at` observation exists, arms a self-removing ONE-SHOT crontab entry at `resets_at +
+  60s` and returns without launching; if missing/overdue or never measured, falls back to the
+  pre-#586 blind-staleness launch) and a ONE-SHOT role (removes its own crontab line first, then
+  launches — a crash after that point must never leave a live cron field that could re-match
+  next month/year). Session resume now reads the campaign's lineage tail from
+  `claude_docs/session_registry.jsonl` and confirms it via `check_session_lineage` before
+  `--resume`, instead of a session ID pinned at arm time. `.claude/skills/long-run-resume/
+  SKILL.md` carries the same rewrite. AC 1's live spike is confirmed via the existing `usagebar`
+  cache (fed by the same payload) rather than by touching the bridge script — a narrow edit
+  adding the actual persist call was denied by the auto-mode classifier (D249/D253 precedent);
+  the one-line patch is handed to the owner in the campaign log instead of silently dropped, and
+  the launcher degrades cleanly to `waiting_for_reset_unmeasured` until it's applied. Also fixed
+  (not backported): `grep -c PATTERN file || echo 0` doubles its output whenever the count is
+  legitimately zero, which then corrupts `$(( ))` arithmetic downstream badly enough to skip an
+  intended `exit` — every pre-#586 campaign script carries this idiom, harmless today only
+  because none are currently enabled. No pytest surface applies (workspace-root files only);
+  validated via an isolated bash harness (stub crontab, fixture registry, stub `claude`) across
+  six scenarios, all passing. No workflow-spine change → no diagram REV. Suite 5804→5804.
+
 ### v3.135.1 (2026-08-06)
 - **Resume launcher gets a measured-not-guessed reset clock, Part 1 (#586, epic #871).** The
   durable overnight launcher pinned a session ID at arm time, so a `/clear` minted a new ID and
