@@ -15,10 +15,23 @@ from __future__ import annotations
 
 import json
 import os
+from collections import namedtuple
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import supervision_lib as sl
+
+#: A single, self-identifying ask (round 3 finding 9). The CALLER is responsible for
+#: ensuring `token` is the exact token it minted for THIS blocker before ever
+#: constructing one — `route_for` does not independently verify it against anything
+#: else, since there is nothing else in this function's own inputs to check it against.
+AskAttempt = namedtuple("AskAttempt", "token confirmed_at disposition send_failed")
+
+#: `action` is a closed vocabulary of exactly 5 values (design §4), tested exhaustively.
+Route = namedtuple("Route", "action reason deadline")
+
+_ASK_DEADLINE_MINUTES = 20
+_TERMINAL_NON_ANSWER_DISPOSITIONS = frozenset({"ambiguous", "unreachable", "late"})
 
 #: The strictness poset (design §9): none < no_merge < no_merge_no_consult =
 #: attended_only; none < no_consult < no_merge_no_consult = attended_only.
@@ -135,3 +148,87 @@ def evaluate_campaign(*, workspace_root: str, campaign_id: str, project_root: st
         merge_permitted_by_grant=merge_permitted_by_grant,
         consult_providers=consult_providers, granted=granted,
     )
+
+
+def _compute_deadline(confirmed_at, until):
+    """`confirmed_at + 20min` if `until is None`, else `min(until, confirmed_at+20min)`
+    (finding 7 fix — `until` remains OPTIONAL on `SupervisionView`, required only for
+    `sleeping`, so this branches explicitly rather than assuming it is always present).
+    `None` when `confirmed_at` is absent — nothing to compute a deadline from yet."""
+    confirmed_dt = _parse_ts(confirmed_at)
+    if confirmed_dt is None:
+        return None
+    default_deadline = confirmed_dt + timedelta(minutes=_ASK_DEADLINE_MINUTES)
+    until_dt = _parse_ts(until)
+    if until_dt is None:
+        return default_deadline
+    return min(until_dt, default_deadline)
+
+
+def route_for(view: CampaignView, *, now: datetime, run_fatal: bool = False,
+              owner_only: bool = False, dependency_safe: bool = True,
+              ask_attempt: "AskAttempt | None" = None) -> Route:
+    """The blocker-routing decision (design §4). Only meaningful when
+    `nobody_to_ask(view.base)` is true — a caller routing while attended is a caller
+    error, not this function's job to re-derive.
+
+    `now` is REQUIRED (finding 7): defaulting it to `None` would let a caller silently
+    skip supplying one until the exact call that raises, which is strictly harder to
+    notice than failing at every call site immediately.
+
+    Precedence, checked in this order (owner-only exemption checked FIRST after
+    run-fatal, which is checked before everything):
+    1. `run_fatal` -> `notify_only`, regardless of anything else.
+    2. `owner_only` -> only the owner ever decides; never `decide_locally`.
+    3. `state == "sleeping"` (not owner-only) -> `decide_locally` immediately (M4
+       design: sleeping decides and logs, no wake-for-wait).
+    4. `state == "away"` -> gated on `view.base.transport_verified`, then on the ONE
+       `ask_attempt` value (mutually exclusive states, not first-match rows).
+    """
+    if run_fatal:
+        return Route("notify_only", "one-way heads-up regardless of anything else", None)
+
+    confirmed_at = ask_attempt.confirmed_at if ask_attempt is not None else None
+    disposition = ask_attempt.disposition if ask_attempt is not None else None
+    send_failed = bool(ask_attempt.send_failed) if ask_attempt is not None else False
+    deadline = _compute_deadline(confirmed_at, view.base.until)
+
+    if owner_only:
+        # Owner-only ALSO never trusts an ask that can't arrive, and never decides
+        # locally on a plain deadline pass — dependency_safe alone decides the outcome
+        # once waiting has stopped being productive.
+        exhausted = (
+            send_failed
+            or disposition in _TERMINAL_NON_ANSWER_DISPOSITIONS
+            or disposition == "timeout"
+            or not view.base.transport_verified
+            or (deadline is not None and now >= deadline)
+        )
+        if not exhausted:
+            return Route("ask_owner_and_wait",
+                         "only the owner clears it, so still worth asking", deadline)
+        if dependency_safe:
+            return Route("wait_for_owner",
+                         "owner-only decisions are never taken locally", None)
+        return Route("park_campaign",
+                     "owner-only and not safe to defer -- the campaign parks", None)
+
+    if view.base.state == "sleeping":
+        return Route("decide_locally",
+                     "M4 design: sleeping decides and logs immediately, no "
+                     "wake-for-wait", None)
+
+    # view.base.state == "away" from here — route_for's own precondition
+    # (nobody_to_ask) rules out every other value reaching this point.
+    if not view.base.transport_verified:
+        return Route("wait_for_owner", "never ask if the ask can't be trusted to arrive",
+                     None)
+
+    if disposition == "timeout" and deadline is not None and now >= deadline:
+        return Route("decide_locally", "the ONLY case authorizing a local decision", None)
+    if send_failed or disposition in _TERMINAL_NON_ANSWER_DISPOSITIONS:
+        return Route("wait_for_owner", "never read as 'chose not to answer'", None)
+    if ask_attempt is None:
+        return Route("ask_owner_and_wait",
+                     "send not yet confirmed; nothing to compute a deadline from", None)
+    return Route("ask_owner_and_wait", "deadline computed from confirmed_at", deadline)

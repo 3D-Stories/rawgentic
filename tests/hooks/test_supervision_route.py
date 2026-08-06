@@ -190,3 +190,135 @@ class TestCampaignViewSingleConstructor:
                     constructors.append(fn.name)
         assert constructors == ["evaluate_campaign"], \
             f"CampaignView must be constructed only inside evaluate_campaign, found: {constructors}"
+
+
+# ------------------------------------------------------------------ route_for (§4)
+
+def _view(state="away", transport_verified=True, granted=True):
+    base = sl.SupervisionView(
+        state=state, declared=state, until=None, expired=False, revision=1,
+        declared_at=_iso(NOW), load_status="valid", consult_providers=("gpt",),
+        granted=granted, transport_verified=transport_verified,
+        transport_verified_at=_iso(NOW) if transport_verified else None,
+        transport_verified_session_id="sess-1" if transport_verified else None,
+    )
+    return sr.CampaignView(base=base, merge_denied=False, merge_permitted_by_grant=False,
+                           consult_providers=("gpt",), granted=granted)
+
+
+class TestRouteForBasics:
+    def test_now_is_required(self):
+        with pytest.raises(TypeError):
+            sr.route_for(_view())  # pylint: disable=no-value-for-parameter
+
+    def test_run_fatal_wins_regardless_of_everything_else(self):
+        view = _view(state="sleeping")
+        route = sr.route_for(view, now=NOW, run_fatal=True, owner_only=True,
+                             dependency_safe=False,
+                             ask_attempt=sr.AskAttempt("t1", None, "timeout", False))
+        assert route.action == "notify_only"
+
+    def test_sleeping_decides_immediately_with_no_ask_attempt(self):
+        view = _view(state="sleeping")
+        route = sr.route_for(view, now=NOW)
+        assert route.action == "decide_locally"
+
+    def test_confirmed_at_none_never_crashes_and_never_sets_a_deadline(self):
+        view = _view(state="away")
+        route = sr.route_for(view, now=NOW,
+                             ask_attempt=sr.AskAttempt("t1", None, None, False))
+        assert route.deadline is None
+
+    def test_until_none_with_confirmed_at_set_computes_deadline_from_20min_alone(self):
+        view = _view(state="away")
+        confirmed = _iso(NOW)
+        route = sr.route_for(view, now=NOW,
+                             ask_attempt=sr.AskAttempt("t1", confirmed, None, False))
+        assert route.deadline == NOW + timedelta(minutes=20)
+
+
+class TestRouteForOwnerOnly:
+    def test_no_answer_yet_deadline_not_passed_asks_and_waits(self):
+        view = _view(state="away")
+        route = sr.route_for(view, now=NOW, owner_only=True,
+                             ask_attempt=sr.AskAttempt("t1", _iso(NOW), None, False))
+        assert route.action == "ask_owner_and_wait"
+
+    def test_timeout_dependency_safe_defers(self):
+        view = _view(state="away")
+        route = sr.route_for(view, now=NOW, owner_only=True, dependency_safe=True,
+                             ask_attempt=sr.AskAttempt("t1", _iso(NOW - timedelta(minutes=25)),
+                                                       "timeout", False))
+        assert route.action == "wait_for_owner"
+
+    def test_timeout_not_dependency_safe_parks(self):
+        view = _view(state="away")
+        route = sr.route_for(view, now=NOW, owner_only=True, dependency_safe=False,
+                             ask_attempt=sr.AskAttempt("t1", _iso(NOW - timedelta(minutes=25)),
+                                                       "timeout", False))
+        assert route.action == "park_campaign"
+
+    def test_owner_only_wins_over_sleepings_immediate_decide(self):
+        """Owner-only exemption is checked BEFORE the generic sleeping row — sleeping
+        never authorizes a local decision when owner_only is set."""
+        view = _view(state="sleeping")
+        route = sr.route_for(view, now=NOW, owner_only=True, dependency_safe=True,
+                             ask_attempt=sr.AskAttempt("t1", _iso(NOW - timedelta(minutes=25)),
+                                                       "timeout", False))
+        assert route.action != "decide_locally"
+
+
+class TestRouteForAway:
+    def test_unverified_transport_never_reaches_ask_owner_and_wait(self):
+        view = _view(state="away", transport_verified=False)
+        route = sr.route_for(view, now=NOW,
+                             ask_attempt=sr.AskAttempt("t1", _iso(NOW), None, False))
+        assert route.action == "wait_for_owner"
+
+    def test_timeout_past_deadline_decides_locally(self):
+        view = _view(state="away", transport_verified=True)
+        confirmed = _iso(NOW - timedelta(minutes=25))
+        route = sr.route_for(view, now=NOW,
+                             ask_attempt=sr.AskAttempt("t1", confirmed, "timeout", False))
+        assert route.action == "decide_locally"
+
+    def test_timeout_before_deadline_keeps_waiting(self):
+        view = _view(state="away", transport_verified=True)
+        confirmed = _iso(NOW - timedelta(minutes=5))
+        route = sr.route_for(view, now=NOW,
+                             ask_attempt=sr.AskAttempt("t1", confirmed, "timeout", False))
+        assert route.action != "decide_locally"
+
+    @pytest.mark.parametrize("disposition", ["ambiguous", "unreachable", "late"])
+    def test_terminal_non_answer_dispositions_never_decide_locally(self, disposition):
+        view = _view(state="away", transport_verified=True)
+        route = sr.route_for(view, now=NOW,
+                             ask_attempt=sr.AskAttempt("t1", _iso(NOW), disposition, False))
+        assert route.action == "wait_for_owner"
+
+    def test_send_failed_never_decides_locally(self):
+        view = _view(state="away", transport_verified=True)
+        route = sr.route_for(view, now=NOW,
+                             ask_attempt=sr.AskAttempt("t1", _iso(NOW), None, True))
+        assert route.action == "wait_for_owner"
+
+    def test_no_ask_attempt_yet_asks_with_no_deadline(self):
+        view = _view(state="away", transport_verified=True)
+        route = sr.route_for(view, now=NOW, ask_attempt=None)
+        assert route.action == "ask_owner_and_wait"
+        assert route.deadline is None
+
+
+class TestRouteActionVocabulary:
+    def test_action_is_always_one_of_the_five(self):
+        assert set(sr.Route._fields) == {"action", "reason", "deadline"}
+        valid = {"notify_only", "ask_owner_and_wait", "wait_for_owner",
+                 "park_campaign", "decide_locally"}
+        for kwargs in [
+            dict(run_fatal=True),
+            dict(),
+            dict(owner_only=True, ask_attempt=sr.AskAttempt("t", _iso(NOW), "timeout", False)),
+        ]:
+            route = sr.route_for(_view(state="sleeping" if not kwargs.get("owner_only") else "away"),
+                                 now=NOW, **kwargs)
+            assert route.action in valid
