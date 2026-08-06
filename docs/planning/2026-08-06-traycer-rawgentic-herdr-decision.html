@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>Traycer × rawgentic × Herdr — decision analysis</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-analysis{background:radial-gradient(1100px 560px at 82% -12%,#1a243f 0%,transparent 60%),radial-gradient(900px 500px at -12% 8%,#17203a 0%,transparent 55%),var(--bg)}
+.tpl-analysis .wrap{max-width:880px;padding:0 24px 96px}
+.tpl-analysis header{padding:48px 0 10px;border-bottom:none;margin-bottom:26px}
+.tpl-analysis h1{font-size:clamp(28px,5vw,42px)}
+.tpl-analysis h2{font-size:22px;margin:40px 0 14px}
+
+/* #76 — the frame's companions. The FRAME slots above own ground, measure and type scale; these
+   are the treatments that only make sense once those exist.
+
+   THE EYEBROW, as the reference has it: an inline-block pill in accent over a tint of itself,
+   not a bare line of small caps. `--req-c-bg` rather than a new value — it is the accent hue's
+   own tint, already in the token layer and already contrast-scored there. */
+.tpl-analysis header .eyebrow{display:inline-block;color:var(--accent);
+background:var(--req-c-bg);border:1px solid var(--line);border-radius:999px;padding:5px 13px;
+font-size:11.5px;letter-spacing:.14em}
+/* The headline gets the reference's tight leading and a measure of its own: a display line that
+   runs the full 880px reads as a paragraph, not a title. */
+.tpl-analysis h1{line-height:1.12;max-width:20ch}
+/* The lede — the reference's `.lead`. This type's first-read element is the headline ANSWER, and
+   the subtitle is where it lands. */
+.tpl-analysis header .sub{font-size:17.5px;line-height:1.6;color:var(--ink-2);max-width:62ch}
+.tpl-analysis .an-index{background:var(--surface);border:1px solid var(--line);
+border-radius:12px;padding:10px 18px;margin:18px 0}
+.tpl-analysis .an-index ol{margin:.2em 0;padding-left:1.2em}
+.tpl-analysis .an-index li{margin:.25em 0}
+.tpl-analysis .an-index a{color:var(--ink-2);text-decoration:none;border-bottom:1px solid var(--line)}
+.tpl-analysis .an-index a:hover{color:var(--accent);border-bottom-color:var(--accent)}
+.tpl-analysis .an-q{border-top:1px solid var(--line);padding-top:14px;margin-top:24px}
+/* #76/D70: the reference's 22px section scale and 40px rhythm, applied where the page can
+   actually read them. The FRAME's h2 slots cannot reach a sectioned style. */
+.tpl-analysis .an-q>h3{font-size:22px;margin:40px 0 14px}
+.tpl-analysis .an-q h3{font-size:17px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.tpl-analysis .an-answer{font-size:16.5px;line-height:1.55;color:var(--ink);font-weight:550;
+border-left:3px solid var(--accent);padding-left:14px;margin:.5em 0 .9em}
+/* The base .chip shape lives in _ROADMAP_STYLE, which only roadmap and
+   dashboard inject — so an analysis chip needs its own shape, not just a
+   colour, or it renders as tight coloured text. */
+.tpl-analysis .an-conf{font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;
+text-transform:uppercase;white-space:nowrap}
+.tpl-analysis .c-measured{color:var(--req-c);background:var(--req-c-bg)}
+.tpl-analysis .c-confirmed{color:var(--req-c);background:var(--req-c-bg)}
+.tpl-analysis .c-inferred{color:var(--sev-med);background:var(--sev-med-bg)}
+.tpl-analysis .c-unstated{color:var(--ink-3);background:var(--code)}
+/* Stepped figure — the reference's `<ol class="steps">`: the number is the quiet index, the lead
+   sentence carries the weight, and the detail drops to the note voice underneath it. Static, so
+   there is nothing to open; see the docstring for why this is `steps` and not `steprail`. */
+.tpl-analysis .an-figure{background:var(--surface);border:1px solid var(--line);
+border-radius:12px;padding:14px 18px;margin:18px 0}
+.tpl-analysis .an-figure ol{display:grid;gap:12px;margin:0;padding:0}
+.tpl-analysis .an-figure .blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px}
+.tpl-analysis .an-figure .blk-n{grid-row:1/3;font:700 13px/1.5 ui-monospace,Menlo,Consolas,
+monospace;color:var(--accent);align-self:start}
+.tpl-analysis .an-figure .blk-title{font-weight:650;color:var(--ink)}
+.tpl-analysis .an-figure .blk-text{color:var(--ink-3);font-size:13.5px;line-height:1.55}
+/* Measurement callout — the reference's `.note` voice, promoted to a panel because in this type
+   a measurement is the evidence the answer rests on. */
+.tpl-analysis .an-measure>.blk-callout{background:var(--code);border-left-color:var(--accent);
+border-radius:10px;padding:10px 15px}
+.tpl-analysis .an-measure .blk-title{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+/* Comparison table — the reference's `<table class="compare">`. No marker: a markdown table gets
+   no CLASS or wrapper hook from the renderer (its structural hooks — table/thead/tbody/td — are
+   all it has), so this styles the bare element scoped to this template, exactly as `review` and
+   `dashboard` do for their zebra rows.
+   `:not(.telemetry):not(.gates)` is NOT defensive dressing. The renderer appends its own
+   `table.gates` and `table.telemetry` inside `<main>`, so an unqualified `.tpl-analysis table`
+   restyled them too — a leak the cross-style gate CANNOT see, because it stays inside `analysis`.
+   Found by review, reproduced, then excluded.
+   The row-header column is `tbody td:first-child`, NOT `tbody th`: markdown emits every body
+   cell as `<td>`, so the `th` form was a dead selector that styled nothing. Also review's. */
+.tpl-analysis table:not(.telemetry):not(.gates){border:1px solid var(--line);border-radius:12px;
+border-collapse:separate;border-spacing:0;overflow:hidden;margin:18px 0}
+.tpl-analysis table:not(.telemetry):not(.gates) thead th{background:var(--code);
+font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.06em;text-transform:uppercase;
+color:var(--ink-3);text-align:left}
+.tpl-analysis table:not(.telemetry):not(.gates) tbody td:first-child{font-weight:650;
+color:var(--ink)}
+.tpl-analysis table:not(.telemetry):not(.gates) tbody tr:nth-child(even){background:var(--code)}
+
+:root{--accent:#f2a65e;}
+:root[data-theme=dark]{--accent:#f2a65e;}
+:root[data-theme=light]{--accent:#a26211;}
+@media print{:root,:root[data-theme=dark]{--accent:#a26211;}}
+</style>
+</head>
+<body class="tpl-analysis">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-05 21:52 MDT</div>
+<h1>Traycer × rawgentic × Herdr — decision analysis</h1>
+
+</header>
+<main>
+<p><strong>Do not switch.</strong> Traycer competes with Herdr and half of herdr-dashboard — not with rawgentic — and a switch today would discard the workspace&#x27;s most battle-tested layer to re-buy its youngest one. Run a $0 BYOA trial of Traycer Desktop in parallel if curiosity warrants it; re-evaluate on a named trigger, not on a date.</p>
+<p><strong>Date:</strong> 2026-08-06 · <strong>Status:</strong> decision document, report-only · <strong>Author:</strong> Claude Fable 5, owner-directed run <strong>Scope:</strong> should this workspace switch to, combine with, or ignore <a href="https://github.com/traycerai/traycer">Traycer</a>? <strong>Method:</strong> three parallel inventory/research agents + first-hand verification of every load-bearing claim; live Claude Code docs for harness claims; cross-model Codex consult (see §Consult). Sources listed in §Sources.</p>
+<div class="blk blk-chips"><span class="blk-chip is-done">Traycer Desktop/CLI/Host: MIT, verified first-hand</span><span class="blk-chip is-done">Codex peer consult: obtained, converges</span><span class="blk-chip is-blocked">BYOA $0 permanence past 2026-08-31</span><span class="blk-chip is-wip">Delivery-semantics spike</span></div>
+<hr>
+<nav class="an-index"><ol><li><a href="#s1">Recommendation (read this first)</a></li><li><a href="#s2">The armed /goal for this run (verbatim, per owner instruction)</a></li><li><a href="#s3">The four systems, one line each</a></li><li><a href="#s4">Capability matrix</a></li><li><a href="#s5">Q1. What is the intersection between rawgentic, Herdr, herdr-dashboard, and Traycer?</a></li><li><a href="#s6">Q2. Could rawgentic&#x27;s functionality be combined with Traycer, using mechanisms like `/rawgentic:pane-handoff`?</a></li><li><a href="#s7">Q3. Is there anything in herdr-dashboard that Traycer does not do?</a></li><li><a href="#s8">Q4. What functionality gaps would exist after a direct switch to Traycer, running rawgentic(&#x27;s workflows) inside it?</a></li><li><a href="#s9">Q5. What would an MVP look like that brings Traycer, rawgentic, and the Herdr functionality together inside Traycer?</a></li><li><a href="#s10">Q6. How much effort to reach that MVP?</a></li><li><a href="#s11">Q7. What else is decision-relevant?</a></li><li><a href="#s12">Consult (cross-model, WF13)</a></li><li><a href="#s13">Open questions for the owner</a></li><li><a href="#s14">Follow-ups (no issues filed — D179 issue throttle)</a></li><li><a href="#s15">Sources</a></li></ol></nav>
+<section class="an-q" id="s1"><h3>Recommendation (read this first) <span class="chip c-confirmed an-conf">CONFIRMED</span></h3><div class="blk blk-verdict"><div class="blk-row is-ship"><span class="blk-key">ship</span><span class="blk-text">Keep rawgentic + Herdr + herdr-dashboard as the production stack; Traycer obsoletes almost none of the open roadmap.</span></div><div class="blk-row is-risk"><span class="blk-key">risk</span><span class="blk-text">Traycer&#x27;s multi-account-per-provider is genuinely attractive for the 5-hour-window pain (#586) — evaluate it as a separate capability purchase, never as a reason to switch runtimes.</span></div><div class="blk-row is-risk"><span class="blk-key">risk</span><span class="blk-text">A switch would kill the just-shipped pane-handoff transport (#927), the herdr-dashboard whole, and terminal-native operation, for a GUI app from a ~10–20-person startup with promo-dependent pricing.</span></div></div>
+<p>The three decision-critical findings:</p>
+<ol>
+<li><strong>The overlap is at the runtime/console layer, not the process layer.</strong> Traycer is an MIT-licensed orchestration app that plans, spawns coding agents (Claude Code included) in worktrees, and verifies results against plans. It has nothing resembling rawgentic&#x27;s process engine: no cross-model pinned-reviewer gates, no security-scan gate, no TDD enforcement, no loop-back budgets, no run-record telemetry, no append-only decision/goal machinery. rawgentic rides INSIDE any Claude Code session, so it survives a Traycer adoption unchanged — which also means Traycer obsoletes almost none of it. <em>(Confirmed: capability matrix below, each cell cited.)</em></li>
+<li><strong>A switch kills the just-shipped handoff transport and the whole herdr-dashboard, and obsoletes only a thin slice of the open roadmap.</strong> The pane-handoff chain (#927 merged 2026-08-06, <code>origin/main</code> 224ddace) and its verification ladder are herdr-coupled at the spawn/delivery layer; herdr-dashboard (10,386 source LOC + 17,274 test LOC, 1123-test suite) is a herdr pane by GATE C decision. Of the 7 open milestone epics, Traycer meaningfully overlaps only the herdr-transport slice of M2/M4 and the usage half of herdr-dashboard. M2.5, M3, M5, M6, M7 are untouched. <em>(Confirmed: §Q7 epic-by-epic walk.)</em></li>
+<li><strong>Traycer&#x27;s one genuinely attractive, hard-to-replicate capability is multi-account-per-provider with in-app usage tracking</strong> — several Claude/Codex accounts, choosing which account an agent uses, credit/usage UI. That lands squarely on this workspace&#x27;s 5-hour-window pain (#586 resume rewrite, long-run-resume). It is the strongest single argument for the parallel trial. <em>(Confirmed: Traycer Host changelog via docs.traycer.ai/host/changelog.md; #586 scope from epic #871.)</em></li>
+</ol>
+<p><strong>Re-evaluation triggers</strong> (any one): Traycer ships a terminal-native (non-GUI) runtime; herdr development stalls (&gt;8 weeks without a release); the M2/M4 handoff work fails its proving runs; BYOA tier survives past 2026-08-31 with local-only guarantees intact and the workspace starts a new machine/team context where cloud sync matters.</p>
+<hr></section>
+<section class="an-q" id="s2"><h3>The armed /goal for this run (verbatim, per owner instruction) <span class="chip c-unstated an-conf">—</span></h3><pre><code>Traycer decision analysis. Met when ALL true: (1) projects/rawgentic/docs/planning/2026-08-06-traycer-rawgentic-herdr-decision.md answers the 7 decision questions (intersection; combining rawgentic+Traycer via pane-handoff; herdr-dashboard uniques; post-switch gaps; MVP shape; effort range; other decision factors incl. licensing/lock-in/maturity/roadmap overlap) with confirmed-vs-inferred evidence; (2) the doc is rendered and deployed via design-doc-publish, live Vercel URL verified cache-busted OR the failure honestly documented after 2 attempts; (3) the md+html pair is committed by name on branch docs/traycer-analysis with a PR open against 3D-Stories/rawgentic main — do NOT merge; (4) the final in-chat summary leads with the recommendation plus the Vercel and PR URLs. If blocked, record it in the doc&#x27;s &quot;Open questions for the owner&quot; section and continue — never hang the run.</code></pre>
+<hr></section>
+<section class="an-q" id="s3"><h3>The four systems, one line each <span class="chip c-inferred an-conf">INFERRED</span></h3><table>
+<thead><tr><th>System</th><th>What it is</th><th>Layer</th></tr></thead>
+<tbody>
+<tr><td><strong>rawgentic</strong></td><td>Claude Code plugin: 24 skills, ~30 hook modules, 5,487-test suite (campaign log, #943 slot). WF1/2/3/5/13 SDLC workflows with mandatory gates, cross-model review runner, security scan, epic driver, telemetry, goal/supervision machinery.</td><td><strong>Process engine</strong> (inside the agent session)</td></tr>
+<tr><td><strong>Herdr</strong></td><td>Third-party Rust terminal multiplexer for coding agents (herdr.dev; pinned v0.8.0, <code>hooks/herdr-pin.json</code>). Always-on server, real PTY panes, agent detection, socket API. AGPL-3.0 dual-licensed.</td><td><strong>Runtime/console</strong> (around the agent session)</td></tr>
+<tr><td><strong>herdr-dashboard</strong></td><td>In-house Python/Textual side-pane app: gated tools-off session inspector over headless <code>claude -p</code> + usage strip. 1123 tests, no CI, v0.1.0, never published.</td><td><strong>Companion console</strong> (a herdr pane, by GATE C)</td></tr>
+<tr><td><strong>Traycer</strong></td><td>Traycer AI&#x27;s orchestration product: MIT open-source Desktop app + CLI + Host that plans, spawns BYO coding agents (Claude Code, Codex, OpenCode, Cursor, +12 more) in worktrees, verifies implementations against plans. Plus a separate closed(-inferred) VS Code extension.</td><td><strong>Planner + runtime/console</strong> (around the agent session)</td></tr>
+</tbody>
+</table></section>
+<section class="an-q" id="s4"><h3>Capability matrix <span class="chip c-confirmed an-conf">VERIFIED</span></h3><p class="an-answer">Legend: ● = has it, first-class · ◐ = partial/adjacent · ○ = absent. Every ● claim is cited in the question sections below.</p>
+<table>
+<thead><tr><th>Capability</th><th>rawgentic</th><th>Herdr</th><th>herdr-dashboard</th><th>Traycer</th></tr></thead>
+<tbody>
+<tr><td>SDLC workflows with mandatory gates (TDD, review, security scan)</td><td>●</td><td>○</td><td>○</td><td>○</td></tr>
+<tr><td>Cross-model review, pinned reviewer identity</td><td>●</td><td>○</td><td>○</td><td>◐ agent-to-agent review possible, no enforced gate</td></tr>
+<tr><td>Plan → execute → verify-against-plan loop</td><td>◐ (Steps 5/9/11 verify AC + drift)</td><td>○</td><td>○</td><td>● Verification mode, severity-tagged</td></tr>
+<tr><td>Multi-agent parallel sessions</td><td>◐ (subagents; epic driver is serial by design)</td><td>● panes</td><td>○</td><td>● parallel agents, Smart YOLO</td></tr>
+<tr><td>Fresh-session-per-task boundary</td><td>● epic-run pane_chain (#927)</td><td>◐ (the substrate)</td><td>○</td><td>◐ worktree-per-agent, fixed at launch</td></tr>
+<tr><td>Git-worktree isolation per work unit</td><td>● (per-dispatch; this doc was authored in one)</td><td>● <code>worktree.*</code> API</td><td>○</td><td>● Local / new / existing worktree per workspace folder</td></tr>
+<tr><td>Session handoff chain with verified delivery</td><td>● 3-rung/7-rung artifact ladder</td><td>◐ (primitives only)</td><td>○</td><td>◐ stores upstream session id for resume; clone-to-host = new agent</td></tr>
+<tr><td>Agent-to-agent messaging</td><td>◐ (peer-consult via runner; not free-form)</td><td>◐ send-text primitives</td><td>○</td><td>● first-class, lineage tree, capability matrix</td></tr>
+<tr><td>Terminal-native (lives in a terminal, headless server)</td><td>n/a</td><td>●</td><td>● (Textual in a pane)</td><td>○ GUI app; CLI exists but the panes live in the GUI</td></tr>
+<tr><td>Remote/phone attach</td><td>n/a</td><td>● SSH bridge</td><td>via herdr</td><td>◐ cloud sync ($10/mo tier), device switch</td></tr>
+<tr><td>Usage/limit tracking</td><td>◐ run-records (per-run, not live)</td><td>via plugin (usagebar)</td><td>● 5h/7d windows + per-project attribution</td><td>● in-app credit/usage, multi-profile</td></tr>
+<tr><td><strong>Multiple accounts per provider</strong></td><td>○</td><td>○</td><td>○ (delegated to usagebar profiles)</td><td>● incl. per-agent account choice</td></tr>
+<tr><td>Gated, tools-off session inspector (approval gate, sandbox, redaction)</td><td>○</td><td>○</td><td>●</td><td>○</td></tr>
+<tr><td>Run telemetry as an append-only store</td><td>● run_records.jsonl</td><td>○</td><td>● (its own)</td><td>○ (nothing documented)</td></tr>
+<tr><td>Goal/Stop-hook contract machinery</td><td>●</td><td>○</td><td>○</td><td>○</td></tr>
+<tr><td>Supervision/away-mode (who is watching)</td><td>● #943 Part A shipped</td><td>○</td><td>○</td><td>○</td></tr>
+<tr><td>Blocked-agent notification</td><td>● pane_watch → notify-owner</td><td>● events</td><td>○</td><td>● notification center + URL/command hooks</td></tr>
+<tr><td>Open source</td><td>● (private repo, own code)</td><td>◐ AGPL + commercial</td><td>● (own code, no LICENSE file)</td><td>● MIT (Desktop/CLI/Host); extension inferred closed</td></tr>
+</tbody>
+</table>
+<hr></section>
+<section class="an-q" id="s5"><h3>Q1. What is the intersection between rawgentic, Herdr, herdr-dashboard, and Traycer? <span class="chip c-confirmed an-conf">CONFIRMED</span></h3><p class="an-answer"><strong>Traycer ≈ (Herdr&#x27;s runtime role) + (herdr-dashboard&#x27;s usage role) + (a planning/verification layer rawgentic already has in stronger, process-enforced form).</strong></p>
+<ul>
+<li><strong>Traycer ∩ Herdr — large.</strong> Both are the <em>substrate around</em> coding agents: spawn agents, manage their sessions/panes, watch liveness, notify on stops. Traycer adds a plan/artifact layer and agent-to-agent messaging; Herdr adds terminal-nativeness, an always-on detachable server, and a same-user socket API this workspace already automates against (confirmed: <code>hooks/launcher_lib.py</code> builds herdr argv end-to-end; Traycer feature set from its README and docs.traycer.ai/concepts/*).</li>
+<li><strong>Traycer ∩ herdr-dashboard — the usage half.</strong> Traycer Desktop 1.1.7 shipped multi-profile usage tracking for multiple Claude &amp; Codex accounts (confirmed: Host changelog). That covers the dashboard&#x27;s usage strip — and exceeds it on the account dimension. It does NOT cover the dashboard&#x27;s other half, the gated session inspector (§Q3).</li>
+<li><strong>Traycer ∩ rawgentic — conceptual, not mechanical.</strong> Traycer&#x27;s Plan→Execute→Verify loop, Review mode, and Epic mode rhyme with WF2&#x27;s plan/gates, WF5, and the epic driver. But Traycer&#x27;s loop is advisory UX (severity-tagged review comments handed back to an agent), while rawgentic&#x27;s is an enforced process (mandatory steps with named skip-refusals, budgets, fail-closed exits). Neither replaces the other: rawgentic runs <em>inside</em> the Claude Code session; Traycer runs <em>outside</em> it. (Confirmed: WF2 mandatory-step table <code>skills/implement-feature/SKILL.md:70-83</code>; Traycer verification semantics from docs.traycer.ai/extension/tasks/verification.md.)</li>
+<li><strong>Herdr ∩ herdr-dashboard — host and tenant.</strong> The dashboard is a herdr pane (GATE C, 2026-07-31: &quot;pane approach, permanently... no fork, no upstream ask&quot;, README.md:8) reading herdr via CLI + socket.</li>
+</ul>
+<p>The four are two stacks, not four rivals: <strong>process engine (rawgentic) × runtime console (Herdr + dashboard)</strong> on one side, and Traycer as a vertically-integrated <strong>planner + runtime console</strong> on the other — with an empty slot where the process engine would be.</p></section>
+<section class="an-q" id="s6"><h3>Q2. Could rawgentic&#x27;s functionality be combined with Traycer, using mechanisms like <code>/rawgentic:pane-handoff</code>? <span class="chip c-confirmed an-conf">CONFIRMED</span></h3><p class="an-answer"><strong>Yes — rawgentic itself needs no port at all; the handoff transport does.</strong> Two separable facts:</p>
+<ol>
+<li><strong>rawgentic runs inside Traycer as-is.</strong> Traycer Terminal Agents run the real <code>claude</code> CLI in a PTY, and Claude Code loads plugins, skills, and hooks identically in interactive and <code>-p</code> modes (&quot;Without <code>--bare</code>, <code>claude -p</code> loads the same context an interactive session would&quot; — confirmed, live doc code.claude.com/docs/en/headless.md; hooks fire everywhere Claude Code runs — code.claude.com/docs/en/hooks.md). Custom CLI Agents accept custom argv/flags and Traycer injects <code>TRAYCER_AGENT_ID</code> / <code>TRAYCER_EPIC_ID</code> env (confirmed: docs.traycer.ai/extension/integrations/custom-cli-agents.md, clients/traycer-cli README via Context7). So every WF gate, WAL guard, the goal Stop-hook, and the supervision state work unchanged in a Traycer-hosted session. <strong>One caveat marked inferred:</strong> PTY-driven behavior differences (keystroke submission races, paste collapse) are NOT documented by Claude Code (confirmed absent from live docs) — herdr integration surfaced exactly this class of bug (<code>pane run</code> silently not submitting a 1,400-char prompt, rawgentic#696), and Traycer will have its own equivalents; what would confirm: a live spike sending a rawgentic-sized prompt through a Traycer terminal agent.</li>
+<li><strong>The pane-handoff chain is portable in principle because its verification is transport-agnostic.</strong> The chain&#x27;s hard part — the 3-rung/7-rung ladder proving bind → prompt → goal each arrived — reads artifacts the <em>successor&#x27;s own Claude Code</em> writes to disk (session-registry line, <code>goal_status</code> transcript attachment), not herdr state (confirmed: <code>hooks/launcher_lib.py:212-221</code>; <code>docs/runbooks/herdr.md</code> §7.4 &quot;verification never from scraped pane text&quot;). Only the spawn/delivery layer is herdr-specific (pane split, <code>agent start</code>, send-text + separate Enter, <code>agent_pane_busy</code> retry). Traycer exposes the analogous surface: <code>traycer worktree create</code>, agent create/message, transcript read, NDJSON <code>--json</code> output, <code>CI</code>/<code>TRAYCER_NONINTERACTIVE</code> (confirmed: docs.traycer.ai/cli/commands.md, read first-hand). A <code>traycer</code> transport backend beside <code>pane_chain</code>/<code>inline</code> in <code>driver_lib</code>/<code>launcher_lib</code> is the natural shape — the #927 design even anticipates transports as a probed, pluggable enum (confirmed: <code>hooks/driver_lib.py:1611-1622</code>).</li>
+</ol>
+<p>So: combining is feasible and the architecture is already shaped for it. Whether it is <em>worth</em> building is Q5/Q6&#x27;s question.</p></section>
+<section class="an-q" id="s7"><h3>Q3. Is there anything in herdr-dashboard that Traycer does not do? <span class="chip c-confirmed an-conf">CONFIRMED</span></h3><p class="an-answer"><strong>Yes — the entire session-inspector half, and the security posture around it.</strong> Nothing in Traycer&#x27;s docs, README, or changelogs matches:</p>
+<ul>
+<li><strong>The gated, tools-off Q&amp;A inspector</strong>: ask questions about any running agent&#x27;s live transcript via a headless <code>claude -p</code> thread that is <em>denied all tools</em> (<code>--tools &quot;&quot;</code>, empty MCP config), with answers marked as provenance-limited (confirmed: <code>qa_engine.py:1645-1661</code>, inspector provenance note). Traycer&#x27;s agent-to-agent transcript read is the adjacent capability, but the reader there is another full agent, not a tools-off sandboxed inspector.</li>
+<li><strong>The capsule approval gate</strong>: digest-bound, one-use, TTL&#x27;d modal confirmation showing the <em>exact bytes</em> leaving the machine, with redaction counts and cost already spent (confirmed: <code>qa_engine.py:221-260, 901-929</code>). No Traycer equivalent documented.</li>
+<li><strong>bwrap confinement</strong> of the inspector subprocess (tmpfs <code>~/.claude</code>, allowlisted env, refuse-if-missing; confirmed: <code>confinement.py</code>, #37) and the <strong>preflight canary</strong> proving the sandbox actually blocks tools before user data moves (confirmed: <code>qa_engine.py:2022-2052</code>).</li>
+<li><strong>Per-project token attribution including closed panes</strong>, recovered per-transcript-line from Claude Code&#x27;s own JSONL cross-referenced with rawgentic&#x27;s session registry, with an honest <code>unattributed</code> row (confirmed: <code>project_usage.py</code>). Traycer tracks usage per profile/account — nothing documented at per-project granularity recovered from provider transcripts.</li>
+<li><strong>Terminal residency</strong>: the dashboard is a follow-me pane inside the terminal multiplexer; Traycer&#x27;s panels live in its GUI app.</li>
+</ul>
+<p>What Traycer <em>does</em> cover: the usage strip&#x27;s 5h/7d windows (and better: multi-account). If the workspace ever adopted Traycer, herdr-dashboard&#x27;s usage half is superseded; its inspector half has no replacement.</p></section>
+<section class="an-q" id="s8"><h3>Q4. What functionality gaps would exist after a direct switch to Traycer, running rawgentic(&#x27;s workflows) inside it? <span class="chip c-measured an-conf">MEASURED</span></h3><p class="an-answer">Assume: Herdr retired, Traycer Desktop hosts all agent sessions, rawgentic plugin unchanged inside them.</p>
+<p><strong>Survives unchanged (confirmed reasoning per Q2):</strong> all 24 skills, all hooks/gates (WAL, security-guard, context-meter emission, goal machinery, supervision state), mempalace (Claude Code-level MCP config is untouched — Traycer&#x27;s remote-only MCP limit applies to <em>Traycer&#x27;s</em> platform integrations, not to Claude Code&#x27;s own <code>--mcp-config</code>), telemetry, the epic driver&#x27;s <code>inline</code> transport.</p>
+<p><strong>The gaps:</strong></p>
+<table>
+<thead><tr><th>#</th><th>Gap</th><th>Severity</th><th>Mitigation</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><strong>pane-handoff / mid-child-handoff dead</strong> — spawn+delivery is herdr argv (<code>launcher_lib.py</code> builders, <code>:386-545</code>). Epic-run degrades to the <code>inline</code> single-session transport (a designed, visible fallback — <code>skills/epic-run/SKILL.md:211-215</code>) — losing the fresh-context-per-child boundary that D176 made load-bearing.</td><td><strong>High</strong></td><td>Build the <code>traycer</code> transport (Q5).</td></tr>
+<tr><td>2</td><td><strong>Context-meter&#x27;s mid-turn insert-prompt channel dead</strong> (<code>context_meter.py:1017-1050</code> shells <code>launcher_lib insert-prompt --pane</code>). The meter still <em>emits</em>; the forced-handoff acting path breaks.</td><td>High</td><td>Same port; or accept advisory-only meter.</td></tr>
+<tr><td>3</td><td><strong>pane_watch blocked-agent watcher dead</strong> (polls herdr snapshot — <code>pane_watch_lib.py</code>).</td><td>Medium</td><td>Traycer&#x27;s notification hooks (&quot;call a URL or run a command, filtered by severity&quot; — Host changelog) are a plausible, likely <em>better</em> replacement. Inferred; a spike would confirm.</td></tr>
+<tr><td>4</td><td><strong>herdr-dashboard dead entirely</strong> (a herdr pane by GATE C; dock, follow-me, inspector, attribution). Biggest sunk-cost casualty: 10,386 + 17,274 test LOC.</td><td>High</td><td>Usage half → Traycer&#x27;s tracking. Inspector half → no replacement (Q3).</td></tr>
+<tr><td>5</td><td><strong>Terminal-native operation lost.</strong> Herdr is a headless server whose panes survive lid-close/SSH; Traycer Desktop is a GUI app (native installers; its CLI manages the Host but the working surface is the GUI). Phone/SSH attach → replaced by $10/mo cloud sync, a different trust model.</td><td>Medium–High (owner works terminal-first)</td><td>None clean.</td></tr>
+<tr><td>6</td><td><strong>mid-turn-questions workspace skill dead</strong> (spawns a sibling herdr pane).</td><td>Low</td><td>Re-route via Traycer agent-create, or answer inline.</td></tr>
+<tr><td>7</td><td><strong>Supply-chain posture resets.</strong> herdr is pinned by sha256 with a vet doc (<code>hooks/herdr-pin.json</code>, #609); Traycer would need the same vetting from zero, on a 3-component (host/desktop/cli) weekly-RC release train.</td><td>Medium</td><td>Repeat the #609 process.</td></tr>
+<tr><td>8</td><td><strong>Workspace muscle memory + runbooks</strong> (<code>docs/runbooks/herdr.md</code>, 631 lines of measured behaviors) all stale.</td><td>Medium</td><td>Rewrite against Traycer; the herdr one took weeks of live falsification.</td></tr>
+<tr><td>9</td><td><strong>CLAUDE.md vs AGENTS.md</strong>: Traycer&#x27;s own planner reads AGENTS.md, not CLAUDE.md (confirmed: docs.traycer.ai/extension/tasks/agents-md.md). Claude Code inside still reads CLAUDE.md, so this only matters if Traycer&#x27;s planning layer is actually used.</td><td>Low</td><td>Symlink/duplicate if needed.</td></tr>
+</tbody>
+</table>
+<p><strong>Not gaps (checked and cleared):</strong> goal arming (Claude Code-level), session resume across processes (documented, cwd-scoped — code.claude.com/docs/en/sessions.md), plugin loading, run-records.</p></section>
+<section class="an-q" id="s9"><h3>Q5. What would an MVP look like that brings Traycer, rawgentic, and the Herdr functionality together inside Traycer? <span class="chip c-unstated an-conf">—</span></h3><p class="an-answer"><strong>Shape: keep rawgentic as the process engine, adopt Traycer as the runtime, port one transport.</strong></p>
+<p><strong>IN (the MVP cut):</strong></p>
+<ol>
+<li><strong>Traycer Desktop on BYOA ($0, local-only)</strong> hosting Claude Code as a Terminal Agent; supply-chain vet + pin first (the #609 pattern).</li>
+<li><strong>A <code>traycer</code> transport backend</strong> in <code>launcher_lib</code>/<code>driver_lib</code> beside <code>pane_chain</code>/<code>inline</code>: spawn successor via <code>traycer worktree create</code> + agent create; deliver the three turns (bind / prompt / goal) via the CLI agent-message surface; verify with the <em>existing</em> on-disk artifact ladder (registry line below offset, <code>goal_status</code> attachment) — unchanged by design.</li>
+<li><strong>Transport probe extension</strong>: <code>transport resolve-creation</code> learns to answer <code>traycer</code> when the Traycer host responds, keeping #927&#x27;s probed-not-asserted rule.</li>
+<li><strong>pane_watch replacement</strong> wired to Traycer notification hooks (URL/command).</li>
+<li><strong>One epic proving run</strong> on the new transport (the #559-style gate herdr got) before anything herdr-coupled is retired.</li>
+</ol>
+<p><strong>OUT (deliberately):</strong></p>
+<ul>
+<li>Traycer&#x27;s planning layer (Plan/Phases/Epic/YOLO modes) — WF2 owns planning; running both would double-plan every issue.</li>
+<li>Traycer cloud sync, credits, Traycer-provider inference — BYOA only; no egress change.</li>
+<li>Porting the herdr-dashboard inspector — stays parked; decide separately.</li>
+<li>Retiring herdr during the MVP — both runtimes coexist; herdr remains the fallback exactly as tmux did during herdr&#x27;s own adoption (the workspace has run this playbook before).</li>
+<li>Multi-account adoption (#586 territory) — attractive, but a follow-on, not MVP.</li>
+</ul>
+<div class="blk blk-callout"><div class="blk-callout is-warn"><div class="blk-title">Riskiest integration assumption</div><p>That Traycer&#x27;s CLI agent-message surface can deliver a multi-KB prompt into a running interactive
+Claude Code session and have it <strong>verifiably submit</strong>. This exact seam was herdr&#x27;s hardest bug class
+(#696 unsubmitted paste; <code>agent_pane_busy</code> races; Enter-as-separate-send), the Claude Code docs are
+silent on PTY-driven input semantics (confirmed NOT DOCUMENTED, live docs), and Traycer&#x27;s docs
+describe agent messaging for <em>Traycer-managed</em> automation without byte-size or submission-semantics
+guarantees. Spike this first; if it fails, the MVP collapses to &quot;Traycer as console for ad-hoc work only.&quot;</p></div></div></section>
+<section class="an-q" id="s10"><h3>Q6. How much effort to reach that MVP? <span class="chip c-inferred an-conf">INFERRED</span></h3><p class="an-answer"><strong>Range: roughly 15–35 focused working sessions ≈ 3–7 calendar weeks at this workspace&#x27;s current cadence — longer if the delivery-semantics spike fails or Traycer&#x27;s weekly RC train breaks the pin mid-build.</strong> A single number would be false precision; the drivers of uncertainty:</p>
+<table>
+<thead><tr><th>Driver</th><th>Range impact</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Delivery-semantics spike (the Q5 risk)</td><td>go/no-go, not hours</td><td>If agent-message cannot verifiably submit large prompts, the transport port is dead on arrival.</td></tr>
+<tr><td>Transport backend port</td><td>8–20 sessions</td><td>The verification ladder reuses; spawn/delivery/retry-taxonomy is new. Calibration: herdr&#x27;s equivalent spanned #611→#927 over ~6 weeks, but most of the generic machinery (ladders, transport enum, fail-closed dispositions) now exists and was the majority of that time.</td></tr>
+<tr><td>Supply-chain vet + pin</td><td>1–2 sessions</td><td>#609 pattern, but ×3 components (host/desktop/cli).</td></tr>
+<tr><td>pane_watch → notification hooks</td><td>1–3 sessions</td><td>Simple if the hook payload carries agent identity; unknown until read.</td></tr>
+<tr><td>Proving run + UAT</td><td>2–5 sessions</td><td>One full epic on the new transport, per the herdr precedent.</td></tr>
+<tr><td>Traycer churn</td><td>+0–30% schedule</td><td>Weekly RCs across 3 components; no stated back-compat guarantee found (inferred from release cadence; their protocol docs weren&#x27;t deep-read).</td></tr>
+<tr><td>Single-owner review bandwidth</td><td>pacing, not size</td><td>Every PR here is owner-merged.</td></tr>
+</tbody>
+</table>
+<p>Excluded from the range: porting the dashboard inspector (add ~2–4 weeks if wanted), multi-account adoption, herdr retirement.</p></section>
+<section class="an-q" id="s11"><h3>Q7. What else is decision-relevant? <span class="chip c-confirmed an-conf">CONFIRMED</span></h3><p class="an-answer"><strong>Licensing &amp; pricing.</strong></p>
+<ul>
+<li>Traycer Desktop/CLI/Host: <strong>MIT</strong> — confirmed first-hand (raw LICENSE fetched: &quot;MIT License, Copyright (c) 2026 Traycer AI&quot;; GitHub API <code>license: MIT</code>). Forkable, vendorable, no copyleft. The VS Code <strong>extension is absent from the OSS repo</strong> — inferred closed-source; what would confirm: an explicit Traycer statement.</li>
+<li>Pricing (confirmed first-hand from docs.traycer.ai/account/pricing): BYOA <strong>$0</strong> local-only; Sync $10/user/mo; Lite/Pro/Ultra $20/$40/$100 with credits. <strong>Driving Claude Code consumes no Traycer credits and adds no markup.</strong> Caveat: the marketing page says BYOA &quot;Free till 31st Aug&quot; — BYOA&#x27;s permanence past 2026-08-31 is <strong>unverified</strong>.</li>
+<li>Herdr comparison: AGPL-3.0 + commercial dual license (<code>2026-07-21-herdr-console-plan.md:179-184</code>) — already analyzed as no-obligation for CLI/socket use. MIT is strictly more permissive.</li>
+</ul>
+<p><strong>Lock-in &amp; data egress.</strong></p>
+<ul>
+<li>BYOA is local-only by definition (no cloud sync). Privacy Mode: prompts/code not persisted when ON (default for teams, opt-in individual). <strong>Sentry crash reporting and PostHog analytics &quot;may be enabled in release builds&quot;</strong> (confirmed: repo README) — a build-from-source or opt-out check belongs in the vet. Agent traffic goes direct to the provider (no Traycer proxy) on BYOA paths.</li>
+<li>Structural lock-in is low: MIT source + the rawgentic-side port living in <em>our</em> transport enum means the exit is &quot;delete one backend,&quot; same as tmux→herdr was.</li>
+</ul>
+<p><strong>Maturity &amp; community.</strong></p>
+<ul>
+<li>Traycer AI, Inc.: founded 2024 (Tanveer Gill, ex-FluxNinja CTO), ~10–20 people (sources conflict on countries), funding <strong>contradictory across sources</strong> (Tracxn &quot;unfunded&quot; vs a LinkedIn convertible-note entry + Flex Capital portfolio listing) — unresolved. Repo public since ~2026-06-25 (Desktop launch), 1,100 stars (API-confirmed), last commit hours old, weekly RC cadence, 132 open issues. 40,860 VS Code Marketplace installs (live count); the 240K Open VSX claim is vendor-stated, unverified.</li>
+<li>Herdr for contrast: 18.9k stars, single dominant author, ~weekly releases, already vetted + pinned here (0.8.0), 333k installs claimed on herdr.dev.</li>
+<li>Both are young single-vendor risks; herdr&#x27;s is a risk <em>already paid for</em> (vet, pin, runbook, falsified behaviors). Traycer&#x27;s would be bought new.</li>
+</ul>
+<p><strong>Roadmap overlap — what a switch obsoletes vs leaves untouched</strong> (all 7 open epics walked, bodies read):</p>
+<table>
+<thead><tr><th>Epic</th><th>Verdict under a Traycer switch</th></tr></thead>
+<tbody>
+<tr><td>#906 M2 pane-handoff chain (10 open children)</td><td><strong>Partially obsoleted/reshaped</strong>: #835 (herdr paste recovery) dies with the transport; #797/#729/#734 (meter) survive minus the insert-prompt channel; #864/#772/#878 (goal reader), #806, #923, #899 survive untouched.</td></tr>
+<tr><td>#871 M4 session continuity (5 open children)</td><td><strong>Mostly survives</strong>: #769/#726/#944/#947 are process logic. #586 (resume rewrite) <strong>meaningfully overlaps</strong> Traycer&#x27;s session-resume + multi-account — the one place Traycer would <em>reduce</em> open work.</td></tr>
+<tr><td>#935 M2.5 telemetry truth</td><td>Untouched.</td></tr>
+<tr><td>#936 M3 runner/review/config</td><td>Untouched.</td></tr>
+<tr><td>#937 M5 identity &amp; concurrency</td><td>Untouched (worktree-per-agent mildly helps #594&#x27;s problem).</td></tr>
+<tr><td>#938 M6 tail</td><td>Untouched.</td></tr>
+<tr><td>#939 M7 skills &amp; tooling</td><td>Untouched.</td></tr>
+</tbody>
+</table>
+<p><strong>What already-built work survives a switch:</strong> the entire rawgentic plugin (all skills, hooks, 5,487 tests), mempalace, decision logs, goal machinery, run-records, the transport <em>architecture</em> (#927&#x27;s enum + artifact ladder). <strong>What dies:</strong> launcher_lib&#x27;s herdr argv layer, pane_watch_lib (1,546 lines), herdr-pin + vet, the herdr runbook, mid-turn-questions, the herdr workspace skill, and herdr-dashboard&#x27;s shipped whole (its inspector concepts could be re-hosted later, at new cost).</p>
+<p><strong>The strategic asymmetry, plainly:</strong> this workspace spent June–August making Herdr boring — vetted, pinned, runbooked, falsified, and now load-bearing (D176). Traycer at best re-buys that layer with a GUI, cloud options, and multi-account; at worst it re-opens every race-condition class that was just closed. The process layer, where the actual differentiation lives, gains nothing from the switch.</p>
+<hr></section>
+<section class="an-q" id="s12"><h3>Consult (cross-model, WF13) <span class="chip c-unstated an-conf">—</span></h3><p class="an-answer"><strong>Obtained.</strong> A Codex peer consult (backend <code>gpt</code>, reviewer <code>gpt-5.6-sol</code>, via <code>/rawgentic:peer-consult</code> → <code>hooks/review_runner.py consult</code>, exit 0, one attempt) ran on this draft; the full proposal was written to <code>docs/reviews/peer-2026-08-06-traycer-rawgentic-herdr-decision-2026-08-06.md</code> (retained locally — <code>docs/reviews/</code> is gitignored in this repo, so the report rides no PR; its substance is folded below). The peer <strong>independently converges on the same recommendation</strong>: no switch, Herdr stays the production runtime, Traycer at most an opt-in experimental transport behind a go/no-go delivery spike, multi-account evaluated as a separate capability purchase.</p>
+<p>Points from the consult now folded into this doc (marked ⊕ = consult-sourced):</p>
+<ul>
+<li>⊕ <strong>Transport contract first (Phase 0):</strong> before any spike code, specify a <code>RuntimeTransport</code> contract — <code>probe() / create(worktree, argv) / send(agent_id, payload, idempotency_key) / status() / notify_target() / close()</code> — with immutable runtime IDs, structured errors, bounded retries, and <strong>no name-based cleanup</strong>. This generalizes the #927 transport enum into an interface a third backend can be held to.</li>
+<li>⊕ <strong>Fallback asymmetry:</strong> during any proving run, fall back to Herdr automatically <strong>only before successor creation</strong>; after a partial creation, fail closed and require identified recovery — never auto-fallback around a half-created agent/worktree.</li>
+<li>⊕ <strong>Coexistence risk named:</strong> running two runtimes adds routing/diagnosis complexity and can produce <strong>ambiguous ownership of sessions and worktrees</strong>; the adapter must map Traycer agent/worktree IDs into run-records so ownership stays attributable.</li>
+<li>⊕ <strong>Multi-account second-order risk:</strong> per-agent account choice could complicate billing attribution, session resume, and the <strong>pinned-reviewer identity guarantee</strong> (an account switch mid-run must not change which model reviewed) — a reason to spike multi-account separately rather than bundling it into the MVP.</li>
+<li>⊕ <strong>Planning-authority conflict:</strong> if Traycer&#x27;s own Plan/Verification modes were enabled alongside WF2, the workspace would have two planners with unclear authority; the peer recommends explicitly disabling them, which this doc&#x27;s OUT cut-line already does — upgraded here from a scope choice to a named risk.</li>
+</ul></section>
+<section class="an-q" id="s13"><h3>Open questions for the owner <span class="chip c-unstated an-conf">—</span></h3><ol>
+<li><strong>Is BYOA-permanence worth watching?</strong> The &quot;Free till 31st Aug&quot; line makes Traycer&#x27;s $0 tier a promo, not a contract. If the trial appeals, the pricing re-check on 2026-09-01 is the first gate.</li>
+<li><strong>Does multi-account-per-provider justify a scoped spike on its own</strong> (independent of any switch), given #586? Traycer&#x27;s Host could conceivably be used <em>only</em> for account brokering while herdr stays the console — unexplored, possibly silly, noted for completeness.</li>
+<li><strong>Should the herdr-dashboard inspector&#x27;s approval-gate pattern be written up</strong> as a standalone design note before any runtime decision? It is the one artifact here with no external equivalent.</li>
+</ol></section>
+<section class="an-q" id="s14"><h3>Follow-ups (no issues filed — D179 issue throttle) <span class="chip c-unstated an-conf">—</span></h3><ul>
+<li>Run the delivery-semantics spike (Q5 risk) <em>only if</em> the owner opts into the parallel trial.</li>
+<li>Re-check BYOA pricing after 2026-08-31.</li>
+<li>Reconcile the herdr version skew found during inventory: pin says 0.8.0 (<code>hooks/herdr-pin.json</code>), while the workspace herdr SKILL.md, <code>pane_watch_lib.py:22</code>, and mid-turn-questions target 0.7.5 — a doc-rot fix, unrelated to Traycer.</li>
+</ul></section>
+<section class="an-q" id="s15"><h3>Sources <span class="chip c-confirmed an-conf">VERIFIED</span></h3><div class="blk blk-provenance"><dl><dt>artifact</dt><dd>docs/planning/2026-08-06-traycer-rawgentic-herdr-decision.md</dd><dt>peer consult</dt><dd>gpt-5.6-sol, exit 0 — report local-only (docs/reviews/ is gitignored)</dd><dt>traycer repo</dt><dd>github.com/traycerai/traycer @ 2026-08-06 (MIT, 1,100 stars, API-confirmed)</dd><dt>measured</dt><dd>2026-08-06</dd><dt>branch</dt><dd>docs/traycer-analysis (cut from origin/main 224ddace)</dd></dl></div>
+<p><strong>First-hand (this session):</strong> raw LICENSE + GitHub API for traycerai/traycer; docs.traycer.ai/account/pricing; docs.traycer.ai/cli/commands.md; herdr.dev; epic bodies #756/#871/#906/#935/#936/#937/#938/#939 via <code>gh</code>; <code>docs/planning/2026-08-03-756-rationalization-roadmap.md</code>; <code>docs/planning/2026-07-21-herdr-console-plan.md</code>; campaign-log head; spot-checks of <code>driver_lib.py:1611</code>, <code>herdr-pin.json</code>, <code>pane-handoff/SKILL.md:18-20</code>, <code>epic-run/SKILL.md:57-66</code>, <code>launcher_lib.py:5481</code>. <strong>Agent-gathered, spot-verified:</strong> Traycer web sweep (48 URLs, incl. docs.traycer.ai extension/concepts/host pages, marketplace listing, third-party comparisons — full list in the research agent&#x27;s SOURCES READ, retained in session transcript); rawgentic + Herdr integration inventory (file:line cited throughout); herdr-dashboard inventory (file:line cited throughout); live Claude Code docs (headless.md, hooks.md, sessions.md, agent-sdk/overview.md). <strong>Known-unverified items are marked inferred inline</strong>; the research agent&#x27;s COULD-NOT-VERIFY list (Discord size, roadmap board contents, extension license, funding, Open VSX count) carries into this doc&#x27;s claims wherever cited.</p></section>
+
+</main>
+<footer>Last updated: 2026-08-05 21:52 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
