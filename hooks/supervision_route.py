@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 import driver_lib
 import review_runner
 import supervision_lib as sl
+import supervision_telemetry as stel
 
 #: A single, self-identifying ask (round 3 finding 9). The CALLER is responsible for
 #: ensuring `token` is the exact token it minted for THIS blocker before ever
@@ -379,6 +380,15 @@ def consult_check(*, workspace_root: str, project_root: str, campaign_id: str,
                              project_root=project_root, now=now or datetime.now(timezone.utc),
                              session_id=session_id)
     permitted, reason = consult_permitted(view, backend)
+    # #963 AC5: every authority decision leaves a line. Best-effort here — the decision
+    # is already made and returned, and a telemetry disk error must not turn an
+    # otherwise-permitted consult into a refusal.
+    stel.emit(workspace_root, {
+        "kind": "authority", "action": "consult", "backend": backend,
+        "decision": "permitted" if permitted else "denied", "reason": reason,
+        "campaign": campaign_id, "supervision_state": view.base.state,
+        "load_status": view.base.load_status, "revision": view.base.revision,
+    }, strict=False)
     return {
         "permitted": permitted, "reason": reason,
         "allowed_backends": sorted(view.consult_providers),

@@ -297,7 +297,7 @@ class TestMarkExecuted:
             session_id="sess-1")
         sc.begin_execution(project_root=str(tmp_path), workspace_root=str(tmp_path),
                            campaign_id="epic-871", claim_id=c1["claim_id"])
-        done = sc.mark_executed(project_root=str(tmp_path), campaign_id="epic-871",
+        done = sc.mark_executed(project_root=str(tmp_path), workspace_root=str(tmp_path), campaign_id="epic-871",
                                 claim_id=c1["claim_id"], evidence={"merge_sha": "abc123"})
         assert done["state"] == "executed"
 
@@ -309,7 +309,7 @@ class TestMarkExecuted:
             action_target="pr:x/y#1", action_params=_params(), bound_revision=rev,
             session_id="sess-1")
         with pytest.raises(sc.ClaimError):
-            sc.mark_executed(project_root=str(tmp_path), campaign_id="epic-871",
+            sc.mark_executed(project_root=str(tmp_path), workspace_root=str(tmp_path), campaign_id="epic-871",
                              claim_id=c1["claim_id"], evidence={})
 
     def test_refuses_from_executed(self, tmp_path):
@@ -321,10 +321,10 @@ class TestMarkExecuted:
             session_id="sess-1")
         sc.begin_execution(project_root=str(tmp_path), workspace_root=str(tmp_path),
                            campaign_id="epic-871", claim_id=c1["claim_id"])
-        sc.mark_executed(project_root=str(tmp_path), campaign_id="epic-871",
+        sc.mark_executed(project_root=str(tmp_path), workspace_root=str(tmp_path), campaign_id="epic-871",
                          claim_id=c1["claim_id"], evidence={})
         with pytest.raises(sc.ClaimError):
-            sc.mark_executed(project_root=str(tmp_path), campaign_id="epic-871",
+            sc.mark_executed(project_root=str(tmp_path), workspace_root=str(tmp_path), campaign_id="epic-871",
                              claim_id=c1["claim_id"], evidence={})
 
 
@@ -350,7 +350,7 @@ class TestCancelClaims:
             session_id="sess-1")
         sc.begin_execution(project_root=str(tmp_path), workspace_root=str(tmp_path),
                            campaign_id="epic-871", claim_id=executed["claim_id"])
-        sc.mark_executed(project_root=str(tmp_path), campaign_id="epic-871",
+        sc.mark_executed(project_root=str(tmp_path), workspace_root=str(tmp_path), campaign_id="epic-871",
                          claim_id=executed["claim_id"], evidence={})
 
         cancelled = sc.cancel_claims(project_root=str(tmp_path), campaign_id="epic-871")
@@ -442,3 +442,101 @@ class TestReconcileClaim:
         path = sc.claims_path(str(tmp_path), "epic-871")
         data = json.loads(Path(path).read_text())
         assert data["claims"][0]["state"] == "executing"
+
+
+# ------------------------------------ claim-transition telemetry (#963 AC5)
+#
+# "Every claim transition appends one line to an append-only JSONL surface." The
+# fail mode is the CALLER's: `telemetry_mode="strict"` re-raises, so the broker
+# aborts before an outward action it could not record; the default `best_effort`
+# warns and continues, so a telemetry disk error can never wedge `cancel_claims`
+# in the `back` skill.
+
+import supervision_telemetry as stel  # noqa: E402
+
+
+def _transitions(root):
+    return [e["transition"] for e in stel.read_events(str(root))
+            if e.get("kind") == "claim"]
+
+
+class TestClaimTelemetry:
+
+    def _mint(self, tmp_path, **kw):
+        rev = _declare_and_get_revision(tmp_path)
+        return sc.claim_action(
+            project_root=str(tmp_path), workspace_root=str(tmp_path),
+            campaign_id="epic-871", blocker_id="b1", action_kind="merge",
+            action_target="pr:o/r#1", action_params=_params(), bound_revision=rev,
+            session_id="sess-1", **kw)
+
+    def test_minting_records_one_line(self, tmp_path):
+        claim = self._mint(tmp_path)
+        events = [e for e in stel.read_events(str(tmp_path)) if e["kind"] == "claim"]
+        assert len(events) == 1
+        assert events[0]["transition"] == "minted"
+        assert events[0]["claim_id"] == claim["claim_id"]
+        assert events[0]["campaign"] == "epic-871"
+        assert events[0]["action"] == "merge"
+
+    def test_returning_an_existing_claim_records_a_resume_not_a_second_mint(self, tmp_path):
+        """The re-run path. A second 'minted' line would overstate what happened, and
+        the resume line is what makes a crash-window gap self-heal at the next touch."""
+        self._mint(tmp_path)
+        self._mint(tmp_path)
+        assert _transitions(tmp_path) == ["minted", "resumed"]
+
+    def test_the_full_lifecycle_records_every_step(self, tmp_path):
+        claim = self._mint(tmp_path)
+        assert sc.begin_execution(project_root=str(tmp_path),
+                                  workspace_root=str(tmp_path),
+                                  campaign_id="epic-871",
+                                  claim_id=claim["claim_id"]) is True
+        sc.mark_executed(project_root=str(tmp_path), workspace_root=str(tmp_path),
+                         campaign_id="epic-871", claim_id=claim["claim_id"],
+                         evidence={"merge_sha": "abc"})
+        assert _transitions(tmp_path) == ["minted", "executing", "executed"]
+
+    def test_reconcile_records_its_outcome(self, tmp_path):
+        claim = self._mint(tmp_path)
+        sc.begin_execution(project_root=str(tmp_path), workspace_root=str(tmp_path),
+                           campaign_id="epic-871", claim_id=claim["claim_id"])
+        sc.reconcile_claim(project_root=str(tmp_path), workspace_root=str(tmp_path),
+                           campaign_id="epic-871", claim_id=claim["claim_id"],
+                           evidence_probe=lambda c: "resolved")
+        assert _transitions(tmp_path)[-1] == "reconciled"
+        last = [e for e in stel.read_events(str(tmp_path)) if e["kind"] == "claim"][-1]
+        assert last["outcome"] == "resolved"
+
+    def test_cancelling_records_a_line_per_claim(self, tmp_path):
+        self._mint(tmp_path)
+        sc.cancel_claims(project_root=str(tmp_path), workspace_root=str(tmp_path))
+        assert _transitions(tmp_path) == ["minted", "cancelled"]
+
+    def test_a_refused_begin_execution_records_nothing(self, tmp_path):
+        """No transition happened, so no line may claim one."""
+        claim = self._mint(tmp_path)
+        sa.mark_attended(str(tmp_path), session_id="s", reason="back",
+                         expected_revision=1)
+        assert sc.begin_execution(project_root=str(tmp_path),
+                                  workspace_root=str(tmp_path),
+                                  campaign_id="epic-871",
+                                  claim_id=claim["claim_id"]) is False
+        assert _transitions(tmp_path) == ["minted"]
+
+    def test_strict_mode_raises_so_the_caller_aborts_before_acting(self, tmp_path):
+        """The broker mints with strict=True: a claim it could not record must not
+        become a merge."""
+        Path(stel.telemetry_path(str(tmp_path))).parent.mkdir(parents=True, exist_ok=True)
+        Path(stel.telemetry_path(str(tmp_path))).mkdir()
+        with pytest.raises(OSError):
+            self._mint(tmp_path, telemetry_mode="strict")
+
+    def test_best_effort_is_the_default_and_never_wedges_the_lifecycle(self, tmp_path):
+        """`cancel_claims` in the `back` skill must work on a full disk."""
+        Path(stel.telemetry_path(str(tmp_path))).parent.mkdir(parents=True, exist_ok=True)
+        Path(stel.telemetry_path(str(tmp_path))).mkdir()
+        claim = self._mint(tmp_path)                      # default: best_effort
+        assert claim["state"] == "pending"
+        assert sc.cancel_claims(project_root=str(tmp_path),
+                                workspace_root=str(tmp_path)) != []

@@ -740,3 +740,52 @@ class TestGovernedCampaignMissingDriverState:
         view = sr.evaluate_campaign(workspace_root=str(tmp_path), campaign_id="c1",
                                     project_root=str(tmp_path), now=NOW)
         assert view.granted is True
+
+
+# ----------------------------------- authority-decision telemetry (#963 AC5)
+
+import supervision_telemetry as stel  # noqa: E402
+
+
+class TestConsultDecisionTelemetry:
+    """"Every authority decision appends one line." `consult_check` is the one
+    authority call site that exists outside the broker."""
+
+    def _authority_lines(self, root):
+        return [e for e in stel.read_events(str(root)) if e["kind"] == "authority"]
+
+    def test_a_permitted_consult_records_its_decision(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sr.review_runner, "backend_available", lambda name: True)
+        _declare_governing(tmp_path, campaign_ids=["c1"], granted=True)
+        _write_driver_state(tmp_path, "c1", {"policy": {}})
+        sr.consult_check(workspace_root=str(tmp_path), project_root=str(tmp_path),
+                         campaign_id="c1", backend="gpt", now=NOW)
+        line = self._authority_lines(tmp_path)[-1]
+        assert line["action"] == "consult"
+        assert line["decision"] == "permitted"
+        assert line["campaign"] == "c1"
+        assert line["supervision_state"] == "away"
+        assert line["load_status"] == "valid"
+
+    def test_a_denied_consult_records_the_reason(self, tmp_path):
+        _declare_governing(tmp_path, campaign_ids=[], granted=True)
+        os.unlink(sl.supervision_path(str(tmp_path)))          # the #963 defect
+        sr.consult_check(workspace_root=str(tmp_path), project_root=str(tmp_path),
+                         campaign_id="c1", backend="gpt", now=NOW)
+        line = self._authority_lines(tmp_path)[-1]
+        assert line["decision"] == "denied"
+        assert line["reason"]
+        assert line["load_status"] == "invalid"
+
+    def test_telemetry_failure_never_turns_a_permitted_consult_into_a_refusal(
+            self, tmp_path, monkeypatch):
+        """Best-effort here: the decision is already made, and no outward action is
+        being gated on the line landing."""
+        monkeypatch.setattr(sr.review_runner, "backend_available", lambda name: True)
+        _declare_governing(tmp_path, campaign_ids=["c1"], granted=True)
+        _write_driver_state(tmp_path, "c1", {"policy": {}})
+        Path(stel.telemetry_path(str(tmp_path))).mkdir(parents=True)
+        result = sr.consult_check(workspace_root=str(tmp_path),
+                                  project_root=str(tmp_path),
+                                  campaign_id="c1", backend="gpt", now=NOW)
+        assert result["permitted"] is True

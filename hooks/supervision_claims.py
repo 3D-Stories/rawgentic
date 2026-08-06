@@ -33,6 +33,7 @@ from atomic_write_lib import atomic_write_text
 
 import plan_lib
 import supervision_lib as sl
+import supervision_telemetry as stel
 
 SCHEMA_VERSION = 1
 CLAIM_STATES = ("pending", "executing", "executed", "cancelled")
@@ -134,9 +135,31 @@ def _current_supervision_revision(workspace_root: str) -> int:
     return int(loaded.record.get("revision", 0))
 
 
+def _emit(workspace_root, claim: dict, transition: str, mode: str, **extra) -> None:
+    """Record one claim transition (#963 AC5). The fail mode belongs to the CALLER.
+
+    `telemetry_mode="strict"` re-raises, so a caller about to take an outward action
+    aborts rather than take it unrecorded. The default `best_effort` warns on stderr and
+    continues: the claims file — not the telemetry file — is the authoritative lifecycle
+    record, so a disk error must never wedge `cancel_claims` in the `back` skill.
+
+    Emitted AFTER the state write and inside the caller's locks, with the telemetry lock
+    innermost (supervision -> claims -> telemetry) and never held while taking another.
+    """
+    event = {
+        "kind": "claim", "transition": transition,
+        "claim_id": claim.get("claim_id"), "campaign": claim.get("campaign_id"),
+        "action": claim.get("action_kind"), "action_target": claim.get("action_target"),
+        "revision": claim.get("bound_revision"), "state": claim.get("state"),
+    }
+    event.update(extra)
+    stel.emit(workspace_root, event, strict=(mode == "strict"))
+
+
 def claim_action(*, project_root: str, workspace_root: str, campaign_id: str,
                  blocker_id: str, action_kind: str, action_target: str,
-                 action_params: dict, bound_revision: int, session_id: str) -> dict:
+                 action_params: dict, bound_revision: int, session_id: str,
+                 telemetry_mode: str = "best_effort") -> dict:
     """Mint (or return the existing) claim for this identity. Locked read-modify-write
     on the claims file; re-reads the CURRENT supervision revision inside the SAME call
     and refuses to mint a NEW claim if it no longer matches the caller's `bound_revision`
@@ -178,6 +201,11 @@ def claim_action(*, project_root: str, workspace_root: str, campaign_id: str,
             for existing in data["claims"]:
                 if _identity(existing) == _identity(wanted) \
                         and existing["state"] in ("pending", "executing", "executed"):
+                    # A re-run picking up its own claim. `resumed`, never a second
+                    # `minted`: the line has to say what happened, and this is also
+                    # what heals a crash between a claims write and its transition
+                    # line at the next touch.
+                    _emit(workspace_root, existing, "resumed", telemetry_mode)
                     return dict(existing)
 
             claim = {
@@ -190,11 +218,13 @@ def claim_action(*, project_root: str, workspace_root: str, campaign_id: str,
             }
             data["claims"].append(claim)
             _write_claims(path, data)
+            _emit(workspace_root, claim, "minted", telemetry_mode,
+                  blocker_id=blocker_id)
             return dict(claim)
 
 
 def begin_execution(*, project_root: str, workspace_root: str, campaign_id: str,
-                    claim_id: str) -> bool:
+                    claim_id: str, telemetry_mode: str = "best_effort") -> bool:
     """Atomic `pending -> executing`. Takes the supervision-file lock FIRST (a short
     critical section — just reading the current revision), then the claims-file lock;
     verifies state is still `pending` AND `bound_revision` still equals the revision
@@ -215,13 +245,20 @@ def begin_execution(*, project_root: str, workspace_root: str, campaign_id: str,
                     return False
                 claim["state"] = "executing"
                 _write_claims(claims_file, data)
+                _emit(workspace_root, claim, "executing", telemetry_mode)
                 return True
     return False
 
 
-def mark_executed(*, project_root: str, campaign_id: str, claim_id: str,
-                  evidence: dict) -> dict:
-    """Atomic `executing -> executed`. Refuses (raises) from any other state."""
+def mark_executed(*, project_root: str, workspace_root: str, campaign_id: str,
+                  claim_id: str, evidence: dict,
+                  telemetry_mode: str = "best_effort") -> dict:
+    """Atomic `executing -> executed`. Refuses (raises) from any other state.
+
+    `workspace_root` is required rather than optional (#963): it locates the telemetry
+    store, and an optional one would let a caller silently produce an unrecorded
+    terminal transition — exactly the invisibility this store exists to end.
+    """
     path = claims_path(project_root, campaign_id)
     with plan_lib.file_lock(path):
         data = _read_claims(path)
@@ -234,16 +271,24 @@ def mark_executed(*, project_root: str, campaign_id: str, claim_id: str,
                 claim["state"] = "executed"
                 claim["evidence"] = evidence
                 _write_claims(path, data)
+                _emit(workspace_root, claim, "executed", telemetry_mode,
+                      evidence=evidence)
                 return dict(claim)
         raise ClaimError(f"no such claim: {claim_id!r}")
 
 
-def cancel_claims(*, project_root: str, campaign_id: "str | None" = None) -> list:
+def cancel_claims(*, project_root: str, workspace_root: "str | None" = None,
+                  campaign_id: "str | None" = None) -> list:
     """Cancel every claim still `pending` — NEVER `executing`/`executed`. Called by
     `/rawgentic:back`, under the same fixed lock order `begin_execution` uses. With
     `campaign_id=None`, sweeps every campaign's claims file under `project_root` (the
     owner's return clears pending claims workspace-wide, not one campaign at a time).
-    Returns the list of claims actually cancelled."""
+    Returns the list of claims actually cancelled.
+
+    `workspace_root` locates the telemetry store and is OPTIONAL here alone: the
+    `back` skill's own one-liner predates it, and the owner getting their session
+    unstuck must never depend on a telemetry path being resolvable. Emission is
+    best-effort by construction — this call has no outward side effect to gate."""
     if campaign_id is not None:
         paths = [claims_path(project_root, campaign_id)]
     else:
@@ -255,19 +300,23 @@ def cancel_claims(*, project_root: str, campaign_id: "str | None" = None) -> lis
             continue
         with plan_lib.file_lock(path):
             data = _read_claims(path)
-            changed = False
+            cancelled_here = []
             for claim in data["claims"]:
                 if claim["state"] == "pending":
                     claim["state"] = "cancelled"
-                    cancelled.append(dict(claim))
-                    changed = True
-            if changed:
+                    cancelled_here.append(dict(claim))
+            if cancelled_here:
                 _write_claims(path, data)
+                cancelled.extend(cancelled_here)
+                if workspace_root:
+                    for claim in cancelled_here:
+                        _emit(workspace_root, claim, "cancelled", "best_effort")
     return cancelled
 
 
 def reconcile_claim(*, project_root: str, workspace_root: str, campaign_id: str,
-                    claim_id: str, evidence_probe) -> str:
+                    claim_id: str, evidence_probe,
+                    telemetry_mode: str = "best_effort") -> str:
     """Reconcile-before-retry (no idempotency key — GitHub's merge API takes none).
     `evidence_probe(claim) -> "resolved"|"retry"|"unknown"` is the caller's own check of
     whether the real-world side effect actually happened.
@@ -298,6 +347,8 @@ def reconcile_claim(*, project_root: str, workspace_root: str, campaign_id: str,
                 if outcome == "resolved":
                     claim["state"] = "executed"
                     _write_claims(claims_file, data)
+                    _emit(workspace_root, claim, "reconciled", telemetry_mode,
+                          outcome="resolved")
                     return "resolved"
                 if outcome == "retry":
                     if claim["bound_revision"] == current_revision:
@@ -305,8 +356,15 @@ def reconcile_claim(*, project_root: str, workspace_root: str, campaign_id: str,
                     else:
                         claim["state"] = "cancelled"
                     _write_claims(claims_file, data)
+                    _emit(workspace_root, claim, "reconciled", telemetry_mode,
+                          outcome="retry")
                     return "retry"
                 if outcome == "unknown":
+                    # No state change, so no transition line — but the PARK itself is
+                    # the event a human needs to find later, and it is the one outcome
+                    # that stops automation dead.
+                    _emit(workspace_root, claim, "parked", telemetry_mode,
+                          outcome="unknown")
                     return "unknown"
                 raise ClaimError(
                     f"evidence_probe returned {outcome!r}, must be one of "
