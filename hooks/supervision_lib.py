@@ -43,7 +43,7 @@ import stat
 import sys
 from collections import namedtuple
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 #: Declared states. `attended-overdue` is EFFECTIVE-only — never written to the file.
 STATES = ("attended", "away", "sleeping")
@@ -88,6 +88,9 @@ class SupervisionView:
     load_status: str
     consult_providers: tuple
     granted: bool
+    transport_verified: bool
+    transport_verified_at: "str | None"
+    transport_verified_session_id: "str | None"
 
 
 def _warn(msg: str) -> None:
@@ -238,7 +241,44 @@ def read_state(workspace_root) -> Loaded:
     return Loaded(record, "valid")
 
 
-def evaluate_workspace(loaded: Loaded, *, now: datetime) -> SupervisionView:
+#: transport_verification.verified_at is trusted for at most this long (#947 Part B §5).
+_TRANSPORT_VERIFY_WINDOW_HOURS = 24
+
+
+def _compute_transport_verified(record: dict, *, now: datetime, session_id):
+    """(verified, verified_at_raw, verified_session_id_raw) for #947 Part B §4a.
+
+    `verified` is True only when ALL hold: the record carries a well-formed
+    `transport_verification` object, `verified_at` parses, is not future-dated, is
+    within `_TRANSPORT_VERIFY_WINDOW_HOURS` of `now`, AND `verified_session_id` exactly
+    equals the CALLER-supplied `session_id` (Step-6 finding 5 / owner decision D267 —
+    timestamp freshness alone let a verification from an OLDER session stay trusted in
+    a brand-new one; absence of a caller session_id must never read as a match).
+    The two raw values are returned regardless of `verified`, mirroring `declared_at`'s
+    own convention: observability survives even when the effective answer is False.
+    """
+    tv = record.get("transport_verification")
+    if not isinstance(tv, dict):
+        return False, None, None
+    verified_at_raw = tv.get("verified_at")
+    verified_session_id_raw = tv.get("verified_session_id")
+    if not isinstance(verified_session_id_raw, str) or not verified_session_id_raw:
+        verified_session_id_raw = None
+    if not isinstance(verified_at_raw, str):
+        return False, None, verified_session_id_raw
+    verified_at = _parse_ts(verified_at_raw)
+    if verified_at is None:
+        return False, None, verified_session_id_raw
+    if verified_at > now:
+        return False, verified_at_raw, verified_session_id_raw
+    if now - verified_at > timedelta(hours=_TRANSPORT_VERIFY_WINDOW_HOURS):
+        return False, verified_at_raw, verified_session_id_raw
+    if not session_id or verified_session_id_raw != session_id:
+        return False, verified_at_raw, verified_session_id_raw
+    return True, verified_at_raw, verified_session_id_raw
+
+
+def evaluate_workspace(loaded: Loaded, *, now: datetime, session_id=None) -> SupervisionView:
     """Workspace-global evaluation: "is the human watching, at all?".
 
     Deliberately NOT narrowed by `governed_campaign_ids`. The consumers are two hooks
@@ -246,6 +286,11 @@ def evaluate_workspace(loaded: Loaded, *, now: datetime) -> SupervisionView:
     meaningless — an earlier design overloaded one evaluator with both this question and
     the campaign-scoped one, which would have shipped a declaration that silently did
     nothing at exactly the sites it exists for. The campaign-scoped evaluator is #947.
+
+    `session_id` (#947 Part B, additive, default `None`) is the CURRENT session's id,
+    used only to compute `transport_verified` — every pre-#947 caller omits it and gets
+    byte-identical behavior for every other field, with `transport_verified` correctly
+    False (no current session to match against).
     """
     if loaded.load_status != "valid":
         return SupervisionView(
@@ -258,6 +303,9 @@ def evaluate_workspace(loaded: Loaded, *, now: datetime) -> SupervisionView:
             load_status=loaded.load_status,
             consult_providers=(),
             granted=False,
+            transport_verified=False,
+            transport_verified_at=None,
+            transport_verified_session_id=None,
         )
 
     record = loaded.record
@@ -277,6 +325,9 @@ def evaluate_workspace(loaded: Loaded, *, now: datetime) -> SupervisionView:
             expired = True
             state = ATTENDED_OVERDUE
 
+    tv_verified, tv_at, tv_session = _compute_transport_verified(
+        record, now=now, session_id=session_id)
+
     return SupervisionView(
         state=state,
         declared=declared,
@@ -287,6 +338,9 @@ def evaluate_workspace(loaded: Loaded, *, now: datetime) -> SupervisionView:
         load_status="valid",
         consult_providers=providers,
         granted=bool(grant.get("granted")),
+        transport_verified=tv_verified,
+        transport_verified_at=tv_at,
+        transport_verified_session_id=tv_session,
     )
 
 
@@ -363,7 +417,8 @@ def validate_providers(values):
 
 def _load_view(args) -> SupervisionView:
     return evaluate_workspace(read_state(args.workspace),
-                              now=datetime.now(timezone.utc))
+                              now=datetime.now(timezone.utc),
+                              session_id=getattr(args, "session_id", None))
 
 
 def _cmd_installs_forbidden(args) -> int:
@@ -389,6 +444,9 @@ def _cmd_effective(args) -> int:
         "load_status": view.load_status,
         "consult_providers": list(view.consult_providers),
         "granted": view.granted,
+        "transport_verified": view.transport_verified,
+        "transport_verified_at": view.transport_verified_at,
+        "transport_verified_session_id": view.transport_verified_session_id,
         "nobody_to_ask": nobody_to_ask(view),
         "installs_forbidden": installs_forbidden(view),
     }, sort_keys=True))
@@ -412,6 +470,11 @@ def main(argv=None) -> int:
         p.add_argument("--workspace", required=True,
                        help="absolute path of the directory holding "
                             ".rawgentic_workspace.json")
+        if name == "effective":
+            p.add_argument("--session-id", default=None,
+                           help="current session id, used only to evaluate "
+                                "transport_verified (#947 Part B); omit for the "
+                                "pre-#947 behavior (transport_verified always False)")
         p.set_defaults(fn=fn)
 
     args = parser.parse_args(argv)   # argparse usage errors exit 2

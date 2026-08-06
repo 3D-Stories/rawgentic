@@ -158,6 +158,93 @@ def test_a_fifo_in_place_of_the_state_file_is_invalid_and_does_not_block(tmp_pat
     assert loaded.load_status == "invalid"
 
 
+# ------------------------------------------------------ transport_verified (#947 Part B)
+#
+# Step-6 finding 5 (High, owner decision D267): a timestamp-freshness check alone lets a
+# verification minted in an OLDER session stay trusted for up to 24h in a brand-new one.
+# `transport_verified` is therefore True only when BOTH the 24h freshness window AND an
+# exact match of the CURRENT session id hold — never on freshness alone.
+
+def _tv_record(verified_at=None, verified_session_id="sess-current", **kw):
+    rec = _record()
+    if verified_at is not None:
+        rec["transport_verification"] = {
+            "verified_at": _iso(verified_at),
+            "verified_session_id": verified_session_id,
+            "evidence_token": "pf-tv-1",
+        }
+    rec.update(kw)
+    return rec
+
+
+def test_transport_verified_true_within_window_and_matching_session(tmp_path):
+    _write(tmp_path, _tv_record(verified_at=NOW - timedelta(hours=1)))
+    view = sl.evaluate_workspace(sl.read_state(str(tmp_path)), now=NOW, session_id="sess-current")
+    assert view.transport_verified is True
+
+
+def test_transport_verified_false_when_absent(tmp_path):
+    _write(tmp_path, _tv_record(verified_at=None))
+    view = sl.evaluate_workspace(sl.read_state(str(tmp_path)), now=NOW, session_id="sess-current")
+    assert view.transport_verified is False
+    assert view.transport_verified_at is None
+    assert view.transport_verified_session_id is None
+
+
+def test_transport_verified_false_when_stale_past_24h(tmp_path):
+    _write(tmp_path, _tv_record(verified_at=NOW - timedelta(hours=25)))
+    view = sl.evaluate_workspace(sl.read_state(str(tmp_path)), now=NOW, session_id="sess-current")
+    assert view.transport_verified is False
+
+
+def test_transport_verified_false_when_future_dated(tmp_path):
+    """A record claiming a `verified_at` after `now` must never read as verified."""
+    _write(tmp_path, _tv_record(verified_at=NOW + timedelta(hours=1)))
+    view = sl.evaluate_workspace(sl.read_state(str(tmp_path)), now=NOW, session_id="sess-current")
+    assert view.transport_verified is False
+
+
+def test_transport_verified_false_when_session_mismatched(tmp_path):
+    """The carried Step-6 finding: a fresh verification from a DIFFERENT session."""
+    _write(tmp_path, _tv_record(verified_at=NOW - timedelta(minutes=5), verified_session_id="sess-OLD"))
+    view = sl.evaluate_workspace(sl.read_state(str(tmp_path)), now=NOW, session_id="sess-current")
+    assert view.transport_verified is False
+    # Raw fields still surface the record's own claim, for reporting/debugging.
+    assert view.transport_verified_session_id == "sess-OLD"
+
+
+def test_transport_verified_false_when_record_has_no_session_id(tmp_path):
+    rec = _tv_record(verified_at=NOW - timedelta(minutes=5))
+    rec["transport_verification"].pop("verified_session_id")
+    _write(tmp_path, rec)
+    view = sl.evaluate_workspace(sl.read_state(str(tmp_path)), now=NOW, session_id="sess-current")
+    assert view.transport_verified is False
+
+
+def test_transport_verified_false_when_caller_omits_session_id(tmp_path):
+    """Pre-#947 callers (scanner_bootstrap, context_meter, launcher_lib) never pass
+    `session_id` at all — byte-identical existing behavior for them, and never a
+    silent True since there is no current session to match against."""
+    _write(tmp_path, _tv_record(verified_at=NOW - timedelta(minutes=5)))
+    view = sl.evaluate_workspace(sl.read_state(str(tmp_path)), now=NOW)
+    assert view.transport_verified is False
+
+
+def test_transport_verified_false_when_malformed(tmp_path):
+    rec = _record()
+    rec["transport_verification"] = "not-a-dict"
+    _write(tmp_path, rec)
+    view = sl.evaluate_workspace(sl.read_state(str(tmp_path)), now=NOW, session_id="sess-current")
+    assert view.transport_verified is False
+
+
+def test_transport_verified_absent_state_file_defaults_false(tmp_path):
+    view = sl.evaluate_workspace(sl.read_state(str(tmp_path)), now=NOW, session_id="sess-current")
+    assert view.transport_verified is False
+    assert view.transport_verified_at is None
+    assert view.transport_verified_session_id is None
+
+
 def test_a_directory_in_place_of_the_state_file_is_invalid(tmp_path):
     p = Path(sl.supervision_path(str(tmp_path)))
     p.mkdir(parents=True)
