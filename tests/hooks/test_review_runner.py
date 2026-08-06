@@ -857,6 +857,106 @@ class TestGlmAndBackendSwitch:
         assert res["backend_switched"] is False
 
 
+class TestAllowedBackends:
+    """#947 Part B §8/AC6 — supervision's `consult_permitted` gate is only real if a
+    mid-flight 429 switch can't land on a provider the caller never allowed."""
+
+    def test_no_flag_is_byte_identical_to_existing_behavior(self, stub, project,
+                                                             monkeypatch):
+        """Every EXISTING caller (WF2 Steps 4/8a/11, WF5, WF13) never passes the
+        flag, so `allowed_backends=None` and the switch behaves exactly as before."""
+        monkeypatch.setenv("PATH", stub.env["PATH"])
+        monkeypatch.setenv("CODEX_STUB_COUNT_FILE", str(stub.count_file))
+        monkeypatch.setenv("CODEX_STUB_RC", "1")
+        monkeypatch.setenv("CODEX_STUB_STDERR",
+                           "429: rate limit reached for account")
+
+        def fake_glm(prompt, *, model, effort, timeout):
+            return VALID_BODY, ""
+        res = rr.run_review(
+            verb="review-artifact",
+            artifact=str(project / "artifact.md"), artifact_type="design",
+            author_model="claude-fable-5", reviewer="gpt-5.5-codex",
+            backend="gpt", project_root=str(project),
+            out_path=str(project / "r.json"), glm_fn=fake_glm,
+            glm_available=True, allowed_backends=None,
+        )
+        assert res["status"] == "success"
+        assert res["backend_switched"] is True
+        assert res["backend"] == "glm"
+
+    def test_switch_refused_when_target_backend_not_in_allowed_set(
+            self, stub, project, monkeypatch):
+        monkeypatch.setenv("PATH", stub.env["PATH"])
+        monkeypatch.setenv("CODEX_STUB_COUNT_FILE", str(stub.count_file))
+        monkeypatch.setenv("CODEX_STUB_RC", "1")
+        monkeypatch.setenv("CODEX_STUB_STDERR",
+                           "429: rate limit reached for account")
+
+        def fake_glm(prompt, *, model, effort, timeout):  # pragma: no cover
+            raise AssertionError("switch must be refused before glm egress")
+        res = rr.run_review(
+            verb="review-artifact",
+            artifact=str(project / "artifact.md"), artifact_type="design",
+            author_model="claude-fable-5", reviewer="gpt-5.5-codex",
+            backend="gpt", project_root=str(project),
+            out_path=str(project / "r.json"), glm_fn=fake_glm,
+            glm_available=True, allowed_backends=frozenset({"gpt"}),
+        )
+        assert res["status"] == "failure"
+        assert res["error_class"] == "account_quota"
+        assert res["backend_switched"] is False
+
+    def test_switch_permitted_when_target_backend_is_in_allowed_set(
+            self, stub, project, monkeypatch):
+        monkeypatch.setenv("PATH", stub.env["PATH"])
+        monkeypatch.setenv("CODEX_STUB_COUNT_FILE", str(stub.count_file))
+        monkeypatch.setenv("CODEX_STUB_RC", "1")
+        monkeypatch.setenv("CODEX_STUB_STDERR",
+                           "429: rate limit reached for account")
+
+        def fake_glm(prompt, *, model, effort, timeout):
+            return VALID_BODY, ""
+        res = rr.run_review(
+            verb="review-artifact",
+            artifact=str(project / "artifact.md"), artifact_type="design",
+            author_model="claude-fable-5", reviewer="gpt-5.5-codex",
+            backend="gpt", project_root=str(project),
+            out_path=str(project / "r.json"), glm_fn=fake_glm,
+            glm_available=True, allowed_backends=frozenset({"gpt", "glm"}),
+        )
+        assert res["status"] == "success"
+        assert res["backend_switched"] is True
+        assert res["backend"] == "glm"
+
+    def test_cli_flag_parses_to_a_frozenset(self, project, monkeypatch, capsys):
+        """`--allowed-backends gpt` on the CLI must reach run_review as a frozenset,
+        not a raw CSV string (a truthy non-empty string would never correctly
+        restrict membership checks)."""
+        calls = {}
+        real_run_review = rr.run_review
+
+        def spy(**kwargs):
+            calls.update(kwargs)
+            return real_run_review(**kwargs)
+        monkeypatch.setattr(rr, "run_review", spy)
+        monkeypatch.setattr(
+            sys, "argv",
+            ["review_runner", "review-artifact",
+             "--artifact", str(project / "artifact.md"), "--type", "design",
+             "--author-model", "claude-fable-5", "--reviewer", "gpt-5.5-codex",
+             "--backend", "gpt", "--allowed-backends", "gpt,glm",
+             "--out", str(project / "r.json"), "--project-root", str(project)])
+        rr.main()
+        assert calls["allowed_backends"] == frozenset({"gpt", "glm"})
+
+    def test_backend_available_agrees_with_the_private_checks(self, monkeypatch):
+        monkeypatch.setattr(rr, "_gpt_available", lambda: True)
+        monkeypatch.setattr(rr, "_glm_available", lambda: False)
+        assert rr.backend_available("gpt") is True
+        assert rr.backend_available("glm") is False
+
+
 # ===========================================================================
 # Adversarial review round 1 (2026-08-03, gpt-5.6-sol) — one red test per fix
 # ===========================================================================
