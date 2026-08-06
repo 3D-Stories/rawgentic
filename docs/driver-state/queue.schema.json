@@ -196,6 +196,69 @@
           "minLength": 1
         }
       }
+    },
+    "preferred_transport": {
+      "description": "#927. The campaign's DURABLE transport preference, recorded once at creation from a herdr capability probe. The per-transition EFFECT is never stored here -- it lives in `transitions`, so a stale effect cannot become the next boundary's default.",
+      "enum": [
+        "pane_chain",
+        "inline"
+      ]
+    },
+    "session_mode": {
+      "description": "DEPRECATED (#927). A write-only compatibility PROJECTION derived from `preferred_transport` at the single locked writer, so a build rolled back to a pre-#927 version still behaves correctly. Never a source of truth: when both are present, `preferred_transport` wins. Removed in a later cleanup issue.",
+      "enum": [
+        "fresh-session",
+        "single-session"
+      ]
+    },
+    "transitions": {
+      "description": "#927. Append-only two-event log. A `resolution` lands BEFORE any action; a `terminal_outcome` closes it afterwards, correlated by `resolution_id`. A resolution with no terminal event is the crash signature reconciliation keys on -- so events are appended, never rewritten.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "resolution_id"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "resolution_id": {
+            "type": "string",
+            "description": "<transition_id>#<attempt>; the sole correlation key."
+          },
+          "outcome": {
+            "description": "Present ONLY on a terminal event.",
+            "enum": [
+              "successor_acked",
+              "inline_continued",
+              "launch_failed",
+              "start_failed",
+              "reconciled_no_action",
+              "created",
+              "parked_unreconcilable"
+            ]
+          },
+          "split_attempted": {
+            "type": "boolean",
+            "description": "Set BEFORE the split is called. With successor_pane null it means INDETERMINATE, never 'nothing was created'."
+          },
+          "successor_pane": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "panes_before": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Inventory baseline so a reclaim can diff instead of trusting a null."
+          }
+        }
+      }
     }
   }
 }
