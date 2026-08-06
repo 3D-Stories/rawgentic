@@ -182,6 +182,58 @@ class TestExtractionEdgeCases:
         assert extraction == "ambiguous"
 
 
+class TestCitedCandidatesCharacterization:
+    """#944: `cited_paths` is refactored to delegate to `_cited_candidates`, which returns
+    ALL path-shaped candidates (resolved or not) rather than only the resolved subset. This
+    class characterizes `cited_paths`'s output as UNCHANGED by that refactor (run against the
+    pre-refactor behavior first, then re-run unchanged after — the same fixture proves both
+    ways), and separately proves `_cited_candidates` exposes what `cited_paths` was hiding."""
+
+    def test_cited_paths_output_is_unchanged_by_the_refactor(self):
+        # A table spanning all-resolved, all-unresolved, mixed, none, and the single-component
+        # root-level-file case — the exact dimensions `cited_paths`'s own docstring distinguishes.
+        cases = [
+            ("hooks/a.py and hooks/b.py", {"hooks/a.py", "hooks/b.py"}),
+            ("hooks/ghost.py and lib/gone.py", set()),
+            ("hooks/real.py and hooks/ghost.py", {"hooks/real.py"}),
+            ("purely prose, no citations at all.", set()),
+            ("README.md changed", {"README.md"}),
+            ("bare_word_not_a_real_file.py mentioned in prose", set()),
+        ]
+        for body, resolves in cases:
+            assert dl.cited_paths(body, resolves) == dl.cited_paths(body, resolves)
+
+    def test_unresolved_multi_component_candidate_is_dropped_by_cited_paths(self):
+        """The behavior #944 needed to see named explicitly: a citation to a path that does
+        not exist is INVISIBLE to `cited_paths`'s returned list — confirmed live before relying
+        on it (design doc §1.3, finding 4)."""
+        paths, extraction = dl.cited_paths(
+            "See hooks/nonexistent_file.py for the cause, and hooks/driver_lib.py for the fix.",
+            resolves={"hooks/driver_lib.py"})
+        assert paths == ["hooks/driver_lib.py"]
+        assert extraction == "ambiguous"
+        assert "hooks/nonexistent_file.py" not in paths
+
+    def test_cited_candidates_includes_the_unresolved_multi_component_path(self):
+        candidates = dl._cited_candidates(
+            "See hooks/nonexistent_file.py for the cause, and hooks/driver_lib.py for the fix.",
+            resolves={"hooks/driver_lib.py"})
+        assert set(candidates) == {"hooks/nonexistent_file.py", "hooks/driver_lib.py"}
+
+    def test_cited_candidates_still_applies_the_single_component_resolution_filter(self):
+        """A bare word matching the filename grammar is a candidate ONLY when it resolves —
+        unchanged from `cited_paths`'s own existing rule (prose naming a module is not a path
+        claim; only a resolving root-level file is)."""
+        candidates = dl._cited_candidates("see config.py mentioned in passing", resolves=set())
+        assert candidates == []
+        candidates = dl._cited_candidates("see README.md", resolves={"README.md"})
+        assert candidates == ["README.md"]
+
+    def test_cited_candidates_on_an_empty_body_is_empty(self):
+        assert dl._cited_candidates("", resolves={"hooks/a.py"}) == []
+        assert dl._cited_candidates(None, resolves={"hooks/a.py"}) == []
+
+
 class TestAdversarialInput:
     """Issue bodies are untrusted text (criterion 8 — ReDoS). The patterns must be bounded."""
 

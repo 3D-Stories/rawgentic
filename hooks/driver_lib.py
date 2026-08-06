@@ -187,6 +187,41 @@ def _candidate_path(token: str):
     return token
 
 
+def _cited_candidates(body: str, resolves) -> list[str]:
+    """Every path-shaped candidate token in `body`, resolved or not (#944).
+
+    Extracted from `cited_paths` (Step-4 review round 1, finding 4): `cited_paths` itself only
+    ever returns the RESOLVED subset, for its own purpose (deep/quick classification). But the
+    revalidation claim schema documents an UNRESOLVED citation as a valid claim form
+    (`checked_against: "<no-file: reasoning>"`) — the claim-inventory coverage check (#944) needs
+    to know about a cited path that no longer exists, not only the ones that still do, so it has
+    something to require a claim for. `resolves` is still needed here: a bare single-component
+    token counts as a candidate only when it resolves (the existing root-level-file rule below),
+    since an unresolved one is usually prose naming a module, not a path claim.
+    """
+    if not isinstance(body, str) or not body:
+        return []
+    known = set(resolves or ())
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for token in _TOKEN_SPLIT_RE.split(body):
+        path = _candidate_path(token)
+        if path is None or path in seen:
+            continue
+        # A SINGLE-component token (`supervisor.py`) counts only when it really is a
+        # root-level file. Supporting root-level citations at all was a review finding —
+        # `README.md` was previously invisible — but measurement against five real issue
+        # bodies then showed the naive version turning every bare filename mentioned in
+        # prose into an UNRESOLVED citation, which dragged four of five fixtures to
+        # `ambiguous`. Prose naming a module is not a path claim; a resolving root-level
+        # file is. Multi-component tokens keep failing loudly when they do not resolve.
+        if "/" not in path and path not in known:
+            continue
+        seen.add(path)
+        candidates.append(path)
+    return candidates
+
+
 def cited_paths(body: str, resolves) -> tuple[list[str], str]:
     """Repository paths an issue body CITES, plus how confident that reading is.
 
@@ -206,29 +241,14 @@ def cited_paths(body: str, resolves) -> tuple[list[str], str]:
     ``resolves`` is the set of paths known to exist in one of the two endpoint trees. It is
     INJECTED rather than probed here because this module is pure — no I/O, no subprocess —
     a promise enforced by a source grep in `tests/hooks/test_driver_state_write_back.py`.
+
+    Thin filter over `_cited_candidates` (#944) — this function's own returned `paths` is
+    unchanged by that split; only the RESOLVED subset ever left this function.
     """
-    if not isinstance(body, str) or not body:
-        return ([], "none")
-    known = set(resolves or ())
-    candidates: list[str] = []
-    seen: set[str] = set()
-    for token in _TOKEN_SPLIT_RE.split(body):
-        path = _candidate_path(token)
-        if path is None or path in seen:
-            continue
-        # A SINGLE-component token (`supervisor.py`) counts only when it really is a
-        # root-level file. Supporting root-level citations at all was a review finding —
-        # `README.md` was previously invisible — but measurement against five real issue
-        # bodies then showed the naive version turning every bare filename mentioned in
-        # prose into an UNRESOLVED citation, which dragged four of five fixtures to
-        # `ambiguous`. Prose naming a module is not a path claim; a resolving root-level
-        # file is. Multi-component tokens keep failing loudly when they do not resolve.
-        if "/" not in path and path not in known:
-            continue
-        seen.add(path)
-        candidates.append(path)
+    candidates = _cited_candidates(body, resolves)
     if not candidates:
         return ([], "none")
+    known = set(resolves or ())
     resolved = [c for c in candidates if c in known]
     if len(resolved) != len(candidates):
         return (resolved, "ambiguous")
