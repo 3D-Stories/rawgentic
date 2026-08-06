@@ -61,6 +61,19 @@ VALID_STATUSES = frozenset(
 # owner-ordered pause three times in one measured run.
 CAMPAIGN_WAIT_STATUSES = frozenset({"waiting_for_owner", "waiting_for_reset"})
 
+#: #947 Part B §9. no_merge_no_consult and attended_only carry the SAME restriction set
+#: (both forbid merge and consult) — the poset treats them as equal, not ordered.
+SUPERVISION_OVERRIDE_MODES = frozenset(
+    {"none", "no_merge", "no_consult", "no_merge_no_consult", "attended_only"})
+_SUPERVISION_OVERRIDE_RESTRICTIONS = {
+    "none": frozenset(),
+    "no_merge": frozenset({"merge"}),
+    "no_consult": frozenset({"consult"}),
+    "no_merge_no_consult": frozenset({"merge", "consult"}),
+    "attended_only": frozenset({"merge", "consult"}),
+}
+_SUPERVISION_OVERRIDE_FIELDS = ("set_by_session", "set_at")
+
 # `clears_when` is required with the rest: a pause whose exit condition nobody can state
 # is a stall wearing a pause's clothes.
 _CAMPAIGN_WAIT_FIELDS = ("status", "reason", "blocker_id", "entered_at", "clears_when")
@@ -3718,6 +3731,84 @@ def _campaign_wait_errors(wait) -> list[str]:
     return errors
 
 
+def _supervision_override_errors(value) -> list[str]:
+    """Validate the optional top-level `supervision_override` object (#947 Part B §9).
+
+    Structural + enum only, mirroring `_campaign_wait_errors`. Purely additive: absent
+    or null means "no override", so every pre-#947 campaign file validates unchanged.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, dict):
+        return ["supervision_override must be a JSON object or null"]
+    errors = []
+    mode = value.get("mode")
+    if not isinstance(mode, str) or mode not in SUPERVISION_OVERRIDE_MODES:
+        errors.append(
+            f"supervision_override.mode must be one of "
+            f"{sorted(SUPERVISION_OVERRIDE_MODES)}, got {mode!r}")
+    for field in _SUPERVISION_OVERRIDE_FIELDS:
+        v = value.get(field)
+        if not isinstance(v, str) or not v.strip():
+            errors.append(f"supervision_override.{field} must be a non-empty string")
+    expires_at = value.get("expires_at")
+    if expires_at is not None and (not isinstance(expires_at, str) or not expires_at.strip()):
+        errors.append("supervision_override.expires_at must be a string or null")
+    if not _is_int(value.get("bound_revision")):
+        errors.append("supervision_override.bound_revision must be an int")
+    return errors
+
+
+def _supervision_override_effective_restrictions(value, now: str) -> frozenset:
+    """The restriction set `value` imposes at `now`, treating an expired override as `none`.
+
+    `now` and `expires_at` are ISO-8601 UTC strings in the same fixed-width
+    `%Y-%m-%dT%H:%M:%SZ` shape used everywhere else in this project's state files, so a
+    plain string comparison IS a correct chronological comparison — this module carries
+    no `datetime` import (a deliberate no-I/O-module property; see the header note that
+    the same is true of `json`), and introducing one for a single expiry check is not
+    worth breaking that property.
+    """
+    if not isinstance(value, dict):
+        return frozenset()
+    mode = value.get("mode")
+    expires_at = value.get("expires_at")
+    if isinstance(expires_at, str) and expires_at and expires_at <= now:
+        return frozenset()
+    return _SUPERVISION_OVERRIDE_RESTRICTIONS.get(mode, frozenset())
+
+
+def set_supervision_override(state: dict, new_value, *, now: str) -> dict | None:
+    """Set the campaign's `supervision_override`. PURE — returns a NEW state.
+
+    The ONLY function in this module allowed to write `state["supervision_override"]`
+    (AST-tested) — #947 Part B §9's fix for a design gap: the tighten-only rule was
+    previously documented, not enforced, so an ordinary driver-state mutation could
+    silently restore `none` over a restrictive override while still passing structural
+    validation. Raises `DriverStateError` when `new_value` fails
+    `_supervision_override_errors`, OR when its restriction set is not a SUPERSET of the
+    CURRENT override's effective restriction set (treating an expired current as
+    `none`, so expiry always relaxes — §4.3's own expiry-relaxes-advice precedent).
+    `no_merge` and `no_consult` are incomparable: neither tightens the other, so a
+    direct transition between them refuses.
+    """
+    errors = _supervision_override_errors(new_value)
+    if errors:
+        raise DriverStateError(
+            f"invalid supervision_override: {'; '.join(errors)}")
+    current_restrictions = _supervision_override_effective_restrictions(
+        state.get("supervision_override"), now)
+    new_restrictions = _SUPERVISION_OVERRIDE_RESTRICTIONS.get(new_value.get("mode"), frozenset())
+    if not (new_restrictions >= current_restrictions):
+        raise DriverStateError(
+            f"supervision_override must only TIGHTEN: current restrictions "
+            f"{sorted(current_restrictions)} are not a subset of the new mode "
+            f"{new_value.get('mode')!r}'s restrictions {sorted(new_restrictions)}")
+    new = dict(state)
+    new["supervision_override"] = new_value
+    return new
+
+
 def validate_driver_state(state: dict) -> tuple[bool, list[str]]:
     """Minimal readability check for a driver-state object (schema v1 and v2).
 
@@ -3777,6 +3868,7 @@ def validate_driver_state(state: dict) -> tuple[bool, list[str]]:
             errors.append(f"issues[{idx}].depends_on must be a list of ints")
 
     errors.extend(_campaign_wait_errors(state.get("campaign_wait")))
+    errors.extend(_supervision_override_errors(state.get("supervision_override")))
 
     # Serial-active invariant: the driver builds one issue at a time, so at most
     # one issue may be in_progress. pr_open is NOT counted — PRs may accumulate

@@ -10,6 +10,7 @@ decision = Codex option C):
 The fuller state-transition validator (record_outcome/defer_issue/queue mutation)
 is intentionally NOT part of this module (deferred, #134 follow-up #2).
 """
+import ast
 import json
 import subprocess
 import sys
@@ -2634,3 +2635,153 @@ class TestBuildRevalidationRecordCoverage:
             validated_at=1, resolves=set(), outcome=None,
             pending_disposition="issue_obsolete")
         assert record["pending_disposition"] == "issue_obsolete"
+
+
+# --------------------------------------------------- supervision_override (#947 Part B)
+#
+# §9: an override may only TIGHTEN. `set_supervision_override` is the ONE function in
+# this module allowed to write the field, and it refuses a transition that would weaken
+# it. Strictness poset: none < no_merge < no_merge_no_consult = attended_only,
+# none < no_consult < no_merge_no_consult = attended_only. no_merge and no_consult are
+# themselves incomparable (neither is a tightening of the other).
+
+def _base_campaign_state():
+    return {"schema_version": 2, "campaign": "epic-871", "issues": [{"number": 947}]}
+
+
+class TestSupervisionOverrideErrors:
+    def test_none_is_valid(self):
+        assert dl._supervision_override_errors(None) == []
+
+    def test_non_dict_is_rejected(self):
+        assert dl._supervision_override_errors("no_merge") != []
+
+    def test_every_pre_947_fixture_still_validates_unchanged(self):
+        for name in ("example-v2.campaign.json", "example-v1.campaign.json"):
+            data = json.loads((DRIVER_STATE_DIR / name).read_text())
+            ok, errors = dl.validate_driver_state(data)
+            assert ok, f"{name}: {errors}"
+
+    @pytest.mark.parametrize("mode", ["none", "no_merge", "no_consult",
+                                       "no_merge_no_consult", "attended_only"])
+    def test_valid_modes_pass(self, mode):
+        value = {"mode": mode, "set_by_session": "s1", "set_at": "2026-08-06T00:00:00Z",
+                 "expires_at": None, "bound_revision": 1}
+        assert dl._supervision_override_errors(value) == []
+
+    def test_off_vocabulary_mode_rejected(self):
+        value = {"mode": "no_everything", "set_by_session": "s1",
+                 "set_at": "2026-08-06T00:00:00Z", "expires_at": None, "bound_revision": 1}
+        errors = dl._supervision_override_errors(value)
+        assert any("mode" in e for e in errors)
+
+    def test_missing_required_string_fields_rejected(self):
+        value = {"mode": "no_merge", "set_by_session": "", "set_at": "2026-08-06T00:00:00Z",
+                 "expires_at": None, "bound_revision": 1}
+        errors = dl._supervision_override_errors(value)
+        assert any("set_by_session" in e for e in errors)
+
+    def test_non_int_bound_revision_rejected(self):
+        value = {"mode": "no_merge", "set_by_session": "s1",
+                 "set_at": "2026-08-06T00:00:00Z", "expires_at": None, "bound_revision": "7"}
+        errors = dl._supervision_override_errors(value)
+        assert any("bound_revision" in e for e in errors)
+
+    def test_wired_into_validate_driver_state(self):
+        state = _base_campaign_state()
+        state["supervision_override"] = {"mode": "not-a-real-mode"}
+        ok, errors = dl.validate_driver_state(state)
+        assert not ok
+        assert any("supervision_override" in e for e in errors)
+
+
+class TestSetSupervisionOverride:
+    def _override(self, mode, **kw):
+        value = {"mode": mode, "set_by_session": "s1", "set_at": "2026-08-06T00:00:00Z",
+                 "expires_at": None, "bound_revision": 1}
+        value.update(kw)
+        return value
+
+    def test_none_to_anything_is_a_legal_tighten(self):
+        state = _base_campaign_state()
+        new = dl.set_supervision_override(state, self._override("no_merge"), now="2026-08-06T01:00:00Z")
+        assert new["supervision_override"]["mode"] == "no_merge"
+        # pure — the input state is untouched
+        assert "supervision_override" not in state
+
+    @pytest.mark.parametrize("frm,to", [
+        ("no_merge", "no_merge_no_consult"),
+        ("no_consult", "no_merge_no_consult"),
+        ("no_merge", "attended_only"),
+        ("no_consult", "attended_only"),
+        ("no_merge_no_consult", "attended_only"),
+        ("attended_only", "no_merge_no_consult"),
+    ])
+    def test_legal_tightening_transitions(self, frm, to):
+        state = _base_campaign_state()
+        state["supervision_override"] = self._override(frm)
+        new = dl.set_supervision_override(state, self._override(to), now="2026-08-06T01:00:00Z")
+        assert new["supervision_override"]["mode"] == to
+
+    @pytest.mark.parametrize("frm,to", [
+        ("no_merge", "none"),
+        ("no_consult", "none"),
+        ("attended_only", "none"),
+        ("no_merge_no_consult", "no_merge"),
+        ("attended_only", "no_consult"),
+        ("no_merge", "no_consult"),       # incomparable — not a tighten either direction
+        ("no_consult", "no_merge"),
+    ])
+    def test_illegal_weakening_transitions_refused(self, frm, to):
+        state = _base_campaign_state()
+        state["supervision_override"] = self._override(frm)
+        with pytest.raises(dl.DriverStateError):
+            dl.set_supervision_override(state, self._override(to), now="2026-08-06T01:00:00Z")
+
+    def test_expired_current_treated_as_none_so_any_new_value_is_legal(self):
+        state = _base_campaign_state()
+        state["supervision_override"] = self._override(
+            "attended_only", expires_at="2026-08-06T00:30:00Z")
+        # now is PAST expires_at -> current is effectively "none"
+        new = dl.set_supervision_override(
+            state, self._override("no_merge"), now="2026-08-06T01:00:00Z")
+        assert new["supervision_override"]["mode"] == "no_merge"
+
+    def test_not_yet_expired_current_still_enforces_tighten(self):
+        state = _base_campaign_state()
+        state["supervision_override"] = self._override(
+            "attended_only", expires_at="2026-08-06T23:00:00Z")
+        with pytest.raises(dl.DriverStateError):
+            dl.set_supervision_override(
+                state, self._override("no_merge"), now="2026-08-06T01:00:00Z")
+
+    def test_invalid_new_value_refuses_before_write(self):
+        state = _base_campaign_state()
+        with pytest.raises(dl.DriverStateError):
+            dl.set_supervision_override(state, {"mode": "bogus"}, now="2026-08-06T01:00:00Z")
+
+    def test_every_other_top_level_field_survives_untouched(self):
+        state = _base_campaign_state()
+        state["campaign_wait"] = {"status": "waiting_for_owner", "reason": "x",
+                                  "blocker_id": "b1", "entered_at": "2026-08-06T00:00:00Z",
+                                  "clears_when": "y"}
+        new = dl.set_supervision_override(state, self._override("no_merge"), now="2026-08-06T01:00:00Z")
+        assert new["campaign_wait"] == state["campaign_wait"]
+        assert new["issues"] == state["issues"]
+
+    def test_set_supervision_override_is_the_only_writer_in_driver_lib(self):
+        src = (HOOKS_DIR / "driver_lib.py").read_text(encoding="utf-8")
+        writers = set()
+        for fn in ast.walk(ast.parse(src)):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Assign):
+                    continue
+                for target in node.targets:
+                    if isinstance(target, ast.Subscript) \
+                            and isinstance(target.slice, ast.Constant) \
+                            and target.slice.value == "supervision_override":
+                        writers.add(fn.name)
+        assert writers == {"set_supervision_override"}, \
+            f"supervision_override must have exactly one writer in driver_lib, found {writers}"
