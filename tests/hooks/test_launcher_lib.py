@@ -2994,3 +2994,157 @@ class TestSupervisionViewFor:
         view = ll._supervision_view_for(str(tmp_path))
         assert view.state == "attended"
         assert view.load_status == "invalid"
+
+
+# --------------------------------------------------------------------------- #
+# #944 Task 10 — the obsolete-child owner gate, composed into next-child/handoff
+# --------------------------------------------------------------------------- #
+
+def _declare_supervision(workspace_root, state, *, until=None):
+    """Hand-rolled `.supervision.json`, matching `supervision_lib`'s schema — same convention as
+    `_armed` hand-rolling a revalidation receipt rather than calling the write-side admin CLI."""
+    Path(workspace_root, ".rawgentic_workspace.json").write_text("{}", encoding="utf-8")
+    sup_dir = Path(workspace_root, "claude_docs")
+    sup_dir.mkdir(parents=True, exist_ok=True)
+    record = {"schema_version": 1, "revision": 1, "state": state, "until": until,
+             "declared_at": "2026-08-01T00:00:00Z", "declared_by_session": "s1"}
+    (sup_dir / ".supervision.json").write_text(json.dumps(record), encoding="utf-8")
+
+
+def _pending_state(tmp_path, *, dependent=False, boundary_sweeps=None):
+    """A campaign whose only ready child (612) carries `pending_disposition` — the selection
+    layer must refuse it (#944 Task 7), never pick it. `dependent=True` adds 613, which depends
+    on 612 and is not yet terminal, so `has_pending_dependents` reads True."""
+    work, head = _local_repo_with_origin(tmp_path)
+    issues = [{"number": 611, "status": "merged"}, {"number": 612, "status": "queued"}]
+    if dependent:
+        issues.append({"number": 613, "status": "queued", "depends_on": [612]})
+    state = {"campaign": "epic-944t10", "epic": 944, "project": PROJECT,
+             "session_mode": "fresh-session", "issues": issues}
+    if boundary_sweeps is not None:
+        state["boundary_sweeps"] = boundary_sweeps
+    _armed(state, head)
+    rec = state["queue_revalidation"]["children"]["612"]
+    rec["pending_disposition"] = "issue_obsolete"
+    rec["outcome"] = None
+    p = tmp_path / "driver-state.json"
+    p.write_text(json.dumps(state), encoding="utf-8")
+    return p, work
+
+
+class TestObsoletePendingGate:
+    """#944 Task 10 — rc 11 on both `next-child` and `handoff`, behind the self-clearing gates
+    (sweep, in-flight) per design §2.3, text branching on supervision state per §2.4, and never
+    claiming automatic continuation (Step-4 review round 2 finding 6 partially overturns D256)."""
+
+    @pytest.fixture(autouse=True)
+    def _no_live_issue_probe(self, monkeypatch):
+        monkeypatch.setenv(ll.ISSUE_PROBE_ENV, "0")
+
+    def test_next_child_refuses_rc_11_and_names_the_remedy_when_attended(self, tmp_path, capsys):
+        state, work = _pending_state(tmp_path)
+        rc = ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        captured = capsys.readouterr()
+        assert rc == 11
+        out = json.loads(captured.out)
+        assert out["outcome"] == "obsolete_pending"
+        assert out["issue"] == 612
+        assert out["has_pending_dependents"] is False
+        assert "record-child-outcome --issue 612" in captured.err
+        assert "ask the owner" in captured.err.lower()
+
+    def test_next_child_sleeping_no_dependents_is_recommendation_only(self, tmp_path, capsys):
+        state, work = _pending_state(tmp_path)
+        _declare_supervision(tmp_path, "sleeping", until="2099-01-01T00:00:00Z")
+        rc = ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        captured = capsys.readouterr()
+        assert rc == 11
+        err = captured.err.lower()
+        assert "record-child-outcome --issue 612" in captured.err
+        assert "recommended" in err
+        assert "not executed automatically" in err
+        assert "and continues" not in err and "then continues" not in err
+
+    def test_next_child_sleeping_with_dependents_recommends_park(self, tmp_path, capsys):
+        state, work = _pending_state(tmp_path, dependent=True)
+        _declare_supervision(tmp_path, "sleeping", until="2099-01-01T00:00:00Z")
+        rc = ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        captured = capsys.readouterr()
+        assert rc == 11
+        out = json.loads(captured.out)
+        assert out["has_pending_dependents"] is True
+        assert "park" in captured.err.lower()
+
+    def test_next_child_attended_overdue_still_asks_the_owner(self, tmp_path, capsys):
+        state, work = _pending_state(tmp_path)
+        _declare_supervision(tmp_path, "away", until="2020-01-01T00:00:00Z")  # long past -> overdue
+        rc = ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        captured = capsys.readouterr()
+        assert rc == 11
+        assert "ask the owner" in captured.err.lower()
+
+    def test_next_child_sweep_gate_wins_over_obsolete_pending(self, tmp_path, capsys):
+        state, work = _pending_state(tmp_path, boundary_sweeps=[])
+        rc = ll.main(["next-child", "--driver-state", str(state), "--project-root", work])
+        assert rc == ll.SWEEP_REQUIRED_RC
+
+    def test_handoff_refuses_rc_11_preflight(self, tmp_path, capsys):
+        state, work = _pending_state(tmp_path)
+        argv = _handoff_argv(state, tmp_path, **{"--project-root": work})
+        rc = ll.main(argv)
+        captured = capsys.readouterr()
+        assert rc == 11
+        out = json.loads(captured.out)
+        assert out["outcome"] == "obsolete_pending"
+        assert out["issue"] == 612
+        assert "record-child-outcome --issue 612" in captured.err
+
+    def test_handoff_inflight_gate_wins_over_obsolete_pending(self, tmp_path, capsys):
+        state, work = _pending_state(tmp_path)
+        argv = _handoff_argv(state, tmp_path, **{
+            "--project-root": work, "--inflight-none": False,
+            "--inflight": "dispatch:x:running:y"})
+        rc = ll.main(argv)
+        assert rc == ll.INFLIGHT_REQUIRED_RC
+
+    def test_handoff_sweep_gate_wins_over_obsolete_pending(self, tmp_path, capsys):
+        state, work = _pending_state(tmp_path, boundary_sweeps=[])
+        argv = _handoff_argv(state, tmp_path, **{"--project-root": work})
+        rc = ll.main(argv)
+        assert rc == ll.SWEEP_REQUIRED_RC
+
+    def test_handoff_locked_recheck_race_maps_to_the_same_rc_11_payload(
+            self, tmp_path, monkeypatch, capsys):
+        """#944 Task 8's race: the unlocked preflight read sees a clean queued child, but a
+        concurrent write lands `pending_disposition` before `_open_and_claim` takes its lock.
+        The locked recheck must refuse with the SAME rc-11 shape as the preflight path (design
+        §2.6), not the generic precondition-failure branch."""
+        work, head = _local_repo_with_origin(tmp_path)
+        state = {"campaign": "epic-944t10race", "epic": 944, "project": PROJECT,
+                "session_mode": "fresh-session",
+                "issues": [{"number": 611, "status": "merged"},
+                           {"number": 612, "status": "queued"}]}
+        _armed(state, head)
+        state_path = tmp_path / "driver-state.json"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        real_update = ll._locked_state_update
+
+        def _race(path, mutator):
+            def _mutator_with_race(s):
+                rec = s["queue_revalidation"]["children"]["612"]
+                rec["pending_disposition"] = "issue_obsolete"
+                rec["outcome"] = None
+                return mutator(s)
+            return real_update(path, _mutator_with_race)
+
+        monkeypatch.setattr(ll, "_locked_state_update", _race)
+        argv = _handoff_argv(state_path, tmp_path, **{
+            "--project-root": work, "--launcher-armed": None,
+            "--fresh-launch-supported": None})
+        rc = ll.main(argv)
+        captured = capsys.readouterr()
+        assert rc == 11
+        out = json.loads(captured.out)
+        assert out["outcome"] == "obsolete_pending"
+        assert out["issue"] == 612

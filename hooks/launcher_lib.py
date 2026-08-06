@@ -4659,6 +4659,50 @@ SWEEP_HEAD_MOVED_RC = 9
 # 8 and 9 (sweep) are taken; a distinct code lets a driver tell 'declare and retry'
 # apart from a bad argument (rc 2).
 INFLIGHT_REQUIRED_RC = 10
+# #944 AC2-4 — the obsolete-child owner gate. NOT self-clearing (a human, or the write-back
+# command a human runs, must act), so it is checked LAST among the boundary gates: revalidation
+# (6) -> sweep (8/9) -> in-flight (10, handoff only) -> obsolete-pending (11) -> ready (0). A
+# self-clearing gate ahead of this one would otherwise be masked by a refusal the run could have
+# cleared itself (design doc §2.3).
+OBSOLETE_PENDING_RC = 11
+
+
+def _obsolete_pending_refusal_text(issue: int, has_pending_dependents: bool, view) -> str:
+    """rc-11's operator text (design §2.4). ALWAYS a plain refusal: #944 ships the MECHANICAL
+    refusal only, in every supervision state, with no automatic continuation of any kind (Step-4
+    review round 2 finding 6, High — partially overturns D256's round-1 resolution, which had
+    wrongly treated 'defer, post the blocker, run the write-back, retry' as one remedy command
+    the way the other refusal codes name one). The remedy named is identical in every branch;
+    only which action is RECOMMENDED, and to whom, changes by supervision state."""
+    remedy = (f"python3 hooks/launcher_lib.py record-child-outcome --issue {issue} "
+              "--status deferred|abandoned|merged --project-root .")
+    if view.state != "sleeping":
+        # attended / away / attended-overdue: a human (or the next skill invocation) is the
+        # right audience — name the remedy, do not decide for them.
+        return (f"refusing: child #{issue} is pending an owner disposition (marked obsolete by "
+                f"revalidate-children) — this is an owner-gated refusal, not self-clearing. Ask "
+                f"the owner which status applies, then run:\n  {remedy}")
+    if has_pending_dependents:
+        return (f"refusing: child #{issue} is pending an owner disposition, and another queued "
+                f"child depends on it — nothing past it can advance either. Recommended, NOT "
+                f"executed automatically: PARK this run until a human resolves #{issue}; a "
+                f"sleeping run must not choose between deferred/abandoned/merged on its own.")
+    return (f"refusing: child #{issue} is pending an owner disposition (marked obsolete by "
+            f"revalidate-children). Recommended, NOT executed automatically: post the "
+            f"ERROR-comment-protocol blocker on #{issue}, run:\n  {remedy}\nthen retry selection. "
+            f"This run performs none of that itself.")
+
+
+def _print_obsolete_pending_refusal(issue: int, has_pending_dependents: bool, *,
+                                    observed_head: "str | None", project_root: str) -> None:
+    """The rc-11 payload+text pair, shared by every site that can discover this same refusal:
+    `next-child`'s preflight, `handoff`'s preflight, and `handoff`'s locked recheck (#944 Task 8's
+    race). One place so the three cannot drift on shape (design §2.3/§2.4/§2.6)."""
+    view = _supervision_view_for(project_root)
+    print(json.dumps({"outcome": "obsolete_pending", "issue": issue,
+                      "has_pending_dependents": has_pending_dependents,
+                      "observed_head": observed_head}, indent=2))
+    print(_obsolete_pending_refusal_text(issue, has_pending_dependents, view), file=sys.stderr)
 
 
 def _sweep_gate(state, observed_head) -> "tuple[int, dict] | None":
@@ -4879,7 +4923,10 @@ def _cmd_next_child(args) -> int:
               "driver-state file. This is a config error, NOT 'nothing ready' (#840)",
               file=sys.stderr)
         return 2
-    if outcome != "ready":
+    # #944 design §2.3: `obsolete_pending` runs through the SAME self-clearing gates below as
+    # `ready` — a caller who has not yet swept the last boundary sees THAT refusal first and
+    # clears it before ever learning about the obsolete child underneath it.
+    if outcome not in ("ready", "obsolete_pending"):
         print(json.dumps({"outcome": outcome, "observed_head": observed_head}, indent=2))
         return 3
     # #769 — the boundary-sweep gate, AFTER the not-ready check so a finished campaign is never
@@ -4890,6 +4937,11 @@ def _cmd_next_child(args) -> int:
         print(json.dumps(payload, indent=2))
         print(_sweep_refusal_text(payload["status"], args.driver_state), file=sys.stderr)
         return rc
+    if outcome == "obsolete_pending":
+        _print_obsolete_pending_refusal(
+            disposition["issue"], disposition["has_pending_dependents"],
+            observed_head=observed_head, project_root=getattr(args, "project_root", None) or ".")
+        return OBSOLETE_PENDING_RC
     # #927 AC 4, the in-session half. A `ready` here under an `inline` campaign means the run is
     # about to take the next child IN THIS SESSION — a choice the campaign recorded, not a
     # degradation. `boundary_advisory_line` cannot speak for it (preferred and effective agree),
@@ -5486,7 +5538,11 @@ def _cmd_handoff(args) -> int:
                           "worklist": disposition.get("worklist", []),
                           "reason": disposition.get("reason")}, indent=2))
         return 6
-    if disposition.get("outcome") != "ready":
+    # #944 design §2.3: `obsolete_pending` runs through the SAME self-clearing gates below as
+    # `ready` (sweep, then in-flight) — a caller who hasn't yet swept the last boundary or
+    # declared in-flight work sees THAT refusal first and clears it before ever learning about
+    # the obsolete child underneath it.
+    if disposition.get("outcome") not in ("ready", "obsolete_pending"):
         print(f"no handoff: campaign disposition is {disposition.get('outcome')!r} "
               f"(session_mode {mode!r})")
         return 3
@@ -5511,6 +5567,12 @@ def _cmd_handoff(args) -> int:
                           "observed_head": observed_head}, indent=2))
         print(f"refusing: {reason}", file=sys.stderr)
         return INFLIGHT_REQUIRED_RC
+
+    if disposition.get("outcome") == "obsolete_pending":
+        _print_obsolete_pending_refusal(
+            disposition["issue"], disposition["has_pending_dependents"],
+            observed_head=observed_head, project_root=getattr(args, "project_root", None) or ".")
+        return OBSOLETE_PENDING_RC
 
     # Probes are DERIVED or asserted by the launcher about itself — never hardcoded True. A
     # launcher that does not pass --launcher-armed/--fresh-launch-supported is telling us it
@@ -5558,6 +5620,11 @@ def _cmd_handoff(args) -> int:
         if not ok:
             gate["verdict"] = "precondition"
             gate["reason"] = why
+            if why == "next_child_pending_disposition":
+                # #944 Task 10 (design §2.6): the SAME rc-11 payload the preflight path emits,
+                # recomputed against the LOCKED state `s` — this is the actual race window Task
+                # 8 closed, not merely a stale unlocked read.
+                gate["has_pending_dependents"] = driver_lib.has_pending_dependents(s, next_issue)
             return None                     # no write at all
         opened = driver_lib.open_handoff(s, disposition, now_ts=int(time.time()))
         claimed, after = driver_lib.handoff_claim(
@@ -5573,6 +5640,16 @@ def _cmd_handoff(args) -> int:
 
     _locked_state_update(args.driver_state, _open_and_claim)
     if gate.get("verdict") == "precondition":
+        if gate.get("reason") == "next_child_pending_disposition":
+            # #944 Task 10 (design §2.6): the IDENTICAL rc-11 payload/text the preflight path
+            # emits, not the generic precondition-failure branch below — this is an ACTUAL race
+            # caught under the lock, and losing the rc-11 shape here would lose the write-back
+            # remedy at the moment it matters most.
+            _print_obsolete_pending_refusal(
+                next_issue, gate.get("has_pending_dependents", False),
+                observed_head=observed_head,
+                project_root=getattr(args, "project_root", None) or ".")
+            return OBSOLETE_PENDING_RC
         print(f"no handoff: {gate['reason']} — the child-boundary precondition needs the next "
               f"child queued and nothing in flight (a child in flight is the `mid-child-handoff` "
               f"case, not this one)")
