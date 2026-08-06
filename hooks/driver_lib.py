@@ -513,6 +513,98 @@ def validate_claims(claims) -> int:
     return len(claims)
 
 
+# --------------------------------------------------------------------------- #
+# #944 — claim-inventory coverage matching (AC1)
+# --------------------------------------------------------------------------- #
+_DEPTH_REQUIRED_CLAIM_KINDS = {"deep": ("citation", "cause", "ac"), "quick": ("cause", "ac")}
+
+
+def _max_bipartite_match(n_left: int, adjacency: dict) -> dict:
+    """Standard augmenting-path maximum matching. `adjacency[i]` is the set of right-node
+    indices left-node `i` may match. Returns `{left_index: right_index}` for matched pairs
+    (an unmatched left node is simply absent). O(V·E) — the per-issue item/claim counts this
+    runs over are small, so the naive algorithm is more than fast enough.
+
+    Round-2 review, finding 2: a GREEDY first-match can report a false coverage gap when a
+    complete matching exists, because an earlier item can consume a claim a later item also
+    needed. This finds a matching of MAXIMUM size, so a reported gap is real, not an artifact
+    of processing order.
+    """
+    match_right: dict = {}
+
+    def try_assign(u, visited):
+        for v in adjacency.get(u, ()):
+            if v in visited:
+                continue
+            visited.add(v)
+            if v not in match_right or try_assign(match_right[v], visited):
+                match_right[v] = u
+                return True
+        return False
+
+    for u in range(n_left):
+        try_assign(u, set())
+    return {u: v for v, u in match_right.items()}
+
+
+def _normalize_claim_text(value) -> str:
+    return " ".join(str(value).split()).casefold()
+
+
+def _claim_matches_citation(claim: dict, path: str) -> bool:
+    checked = claim.get("checked_against", "")
+    if isinstance(checked, str) and checked.startswith(f"{path}@"):
+        return True
+    quoted = claim.get("quoted_from_body", "")
+    return isinstance(quoted, str) and path in quoted
+
+
+def _claim_matches_text_item(claim: dict, item: str) -> bool:
+    """Round-2 review, finding 3: EXACT normalized equality, never substring containment — the
+    field is documented 'verbatim' (`SKILL.md:159`), and a substring rule let a short generic
+    claim fragment ("the", "error") spuriously cover any item containing it."""
+    quoted = claim.get("quoted_from_body", "")
+    return isinstance(quoted, str) and _normalize_claim_text(quoted) == _normalize_claim_text(item)
+
+
+def _missing_for_kind(items: list, claims: list, kind: str, match_fn) -> list:
+    """One-to-one coverage for a single claim kind, via maximum bipartite matching."""
+    if not items:
+        return []
+    kind_claims = [c for c in claims if isinstance(c, dict) and c.get("kind") == kind]
+    adjacency = {i: {j for j, claim in enumerate(kind_claims) if match_fn(claim, item)}
+                for i, item in enumerate(items)}
+    matched = _max_bipartite_match(len(items), adjacency)
+    return [item for i, item in enumerate(items) if i not in matched]
+
+
+def missing_claim_coverage(inventory: dict, claims: list, depth: str) -> dict:
+    """Which inventory items (per kind) have no matching claim, at `depth`. `deep` requires all
+    three kinds covered; `quick` requires `cause` + `ac` only — the skill's own existing depth
+    semantics (`SKILL.md:139-143`), made mechanically enforceable (#944, AC1).
+    """
+    if depth not in _DEPTH_REQUIRED_CLAIM_KINDS:
+        raise DriverStateError(
+            f"depth must be one of {sorted(_DEPTH_REQUIRED_CLAIM_KINDS)}, got {depth!r}")
+    claims = claims if isinstance(claims, list) else []
+    required = _DEPTH_REQUIRED_CLAIM_KINDS[depth]
+    missing = {"citation": [], "cause": [], "ac": []}
+    if "citation" in required:
+        missing["citation"] = _missing_for_kind(
+            inventory.get("citation") or [], claims, "citation", _claim_matches_citation)
+    if "cause" in required:
+        missing["cause"] = _missing_for_kind(
+            inventory.get("cause") or [], claims, "cause", _claim_matches_text_item)
+    if "ac" in required:
+        missing["ac"] = _missing_for_kind(
+            inventory.get("ac") or [], claims, "ac", _claim_matches_text_item)
+    return missing
+
+
+def claim_coverage_ok(missing: dict) -> bool:
+    return not missing["citation"] and not missing["cause"] and not missing["ac"]
+
+
 def validate_revalidation_child(record) -> bool:
     """Fail-closed structural check of one `queue_revalidation.children[<n>]` record."""
     if not isinstance(record, dict):

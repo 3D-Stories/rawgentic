@@ -2292,3 +2292,90 @@ class TestExtractClaimInventory:
     def test_no_headings_at_all_is_a_fully_empty_inventory(self):
         inv = dl.extract_claim_inventory("Just a short bug report with no structure.", set())
         assert inv == {"citation": [], "cause": [], "ac": [], "errors": []}
+
+
+# --------------------------------------------------------------------------- #
+# missing_claim_coverage / claim_coverage_ok (#944 — AC1, maximum bipartite matching)
+# --------------------------------------------------------------------------- #
+class TestMissingClaimCoverage:
+    def _claim(self, kind, quoted, checked="<no-file: reasoning>", verdict="holds"):
+        return {"kind": kind, "quoted_from_body": quoted, "checked_against": checked,
+                "evidence": "x", "verdict": verdict}
+
+    def test_deep_requires_all_three_kinds(self):
+        inventory = {"citation": ["hooks/a.py"], "cause": ["The cause."], "ac": ["The AC."]}
+        missing = dl.missing_claim_coverage(inventory, [], "deep")
+        assert missing == {"citation": ["hooks/a.py"], "cause": ["The cause."], "ac": ["The AC."]}
+
+    def test_quick_does_not_require_citation(self):
+        inventory = {"citation": ["hooks/a.py"], "cause": ["The cause."], "ac": ["The AC."]}
+        missing = dl.missing_claim_coverage(inventory, [], "quick")
+        assert missing == {"citation": [], "cause": ["The cause."], "ac": ["The AC."]}
+
+    def test_full_coverage_reports_nothing_missing(self):
+        inventory = {"citation": ["hooks/a.py"], "cause": ["The cause."], "ac": ["The AC."]}
+        claims = [
+            self._claim("citation", "hooks/a.py mentioned", checked="hooks/a.py@" + "0" * 40),
+            self._claim("cause", "The cause."),
+            self._claim("ac", "The AC."),
+        ]
+        missing = dl.missing_claim_coverage(inventory, claims, "deep")
+        assert dl.claim_coverage_ok(missing)
+
+    def test_exact_match_required_for_ac_and_cause_not_substring(self):
+        """Round-2 review finding 3: a short generic claim fragment must NOT cover an item it
+        is merely a substring of — the field is documented 'verbatim', not 'clipped'."""
+        inventory = {"citation": [], "cause": [], "ac": ["The system must validate all input."]}
+        claims = [self._claim("ac", "the")]
+        missing = dl.missing_claim_coverage(inventory, claims, "deep")
+        assert missing["ac"] == ["The system must validate all input."]
+
+    def test_exact_match_tolerates_only_whitespace_and_case_normalization(self):
+        inventory = {"citation": [], "cause": [], "ac": ["The AC.  "]}
+        claims = [self._claim("ac", "  the ac.")]
+        missing = dl.missing_claim_coverage(inventory, claims, "deep")
+        assert missing["ac"] == []
+
+    def test_maximum_matching_finds_an_assignment_greedy_would_miss(self):
+        """Round-2 review finding 2: a GREEDY first-match can report a false coverage gap when
+        a complete matching exists. Citation matching (substring/containment) is where this
+        naturally arises: one claim mentions BOTH paths, another mentions only one — processing
+        the multi-match item first and greedily taking the shared claim starves the other item,
+        even though a valid assignment (swap) covers both."""
+        inventory = {"citation": ["hooks/a.py", "hooks/b.py"], "cause": [], "ac": []}
+        claims = [
+            self._claim("citation", "See hooks/a.py and hooks/b.py, both gone."),
+            self._claim("citation", "hooks/a.py was removed."),
+        ]
+        missing = dl.missing_claim_coverage(inventory, claims, "deep")
+        assert missing["citation"] == [], (
+            "a complete matching exists (item hooks/a.py -> claim 1, item hooks/b.py -> "
+            "claim 0) but a greedy first-match would report hooks/b.py as missing")
+
+    def test_citation_coverage_via_checked_against_prefix_for_resolved_path(self):
+        inventory = {"citation": ["hooks/a.py"], "cause": [], "ac": []}
+        claims = [self._claim("citation", "irrelevant text", checked="hooks/a.py@" + "1" * 40)]
+        missing = dl.missing_claim_coverage(inventory, claims, "deep")
+        assert missing["citation"] == []
+
+    def test_citation_coverage_via_quoted_from_body_for_unresolved_path(self):
+        inventory = {"citation": ["hooks/ghost.py"], "cause": [], "ac": []}
+        claims = [self._claim("citation", "hooks/ghost.py no longer exists")]
+        missing = dl.missing_claim_coverage(inventory, claims, "deep")
+        assert missing["citation"] == []
+
+    def test_a_claim_of_the_wrong_kind_never_covers_an_item(self):
+        inventory = {"citation": [], "cause": [], "ac": ["The AC."]}
+        claims = [self._claim("cause", "The AC.")]
+        missing = dl.missing_claim_coverage(inventory, claims, "deep")
+        assert missing["ac"] == ["The AC."]
+
+    def test_one_to_one_a_single_claim_cannot_cover_two_items(self):
+        inventory = {"citation": [], "cause": [], "ac": ["Same text.", "Same text."]}
+        claims = [self._claim("ac", "Same text.")]
+        missing = dl.missing_claim_coverage(inventory, claims, "deep")
+        assert len(missing["ac"]) == 1
+
+    def test_unknown_depth_raises(self):
+        with pytest.raises(dl.DriverStateError):
+            dl.missing_claim_coverage({"citation": [], "cause": [], "ac": []}, [], "bogus")
