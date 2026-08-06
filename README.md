@@ -767,9 +767,12 @@ For major changes, please open an issue first to discuss the approach.
   this issue exists to remove. Two cross-model design passes drew 1 Critical + 11 High + 4 Medium
   (15 applied, 1 refuted with file:line evidence, dispositions in the design doc's §18/§19), the
   §11 negative `pane split` probe part 1 owed was RUN LIVE, and the four dispositions this issue
-  owed are recorded on #846/#849/#850/#851. Adds 44 tests in
-  `tests/hooks/test_launcher_lib.py` and `tests/hooks/test_driver_lib.py`. No workflow-spine change
-  → no diagram REV. Suite 5584→5628.
+  owed are recorded on #846/#849/#850/#851. The pre-PR code review then found the fence still had a
+  replay hole — the claim is per-GENERATION, and a second invocation opens its own generation, so
+  two successors were reachable after the first launch returned; `child_boundary_precondition` now
+  also refuses while any boundary resolution is unterminated and after a boundary for that child was
+  consumed (4 High + 2 Medium, all applied). Adds 52 tests in `tests/hooks/test_launcher_lib.py` and
+  `tests/hooks/test_driver_lib.py`. No workflow-spine change → no diagram REV. Suite 5584→5636.
 
 ### v3.132.0 (2026-08-05)
 - **The transport model and the one-successor fence, built and tested but NOT YET WIRED (#927

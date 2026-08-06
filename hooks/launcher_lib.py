@@ -4302,7 +4302,7 @@ def _cmd_next_child(args) -> int:
                                                 next_issue=disposition["next_issue"])
     if line is not None:
         _emit_advisory_once(args.driver_state,
-                            transition_id=f"n:{state.get('campaign', 'campaign')}:"
+                            transition_id=f"bnd:{state.get('campaign', 'campaign')}:"
                                           f"{disposition['next_issue']}",
                             line=line)
     print(json.dumps({"outcome": "ready", "next_issue": disposition["next_issue"],
@@ -4579,7 +4579,11 @@ def _claimant_id(args) -> str:
     fallback for a cron-spawned launcher that has no session of its own. Never
     `claude_docs/.current_session_id` — a shared file every session overwrites.
     """
-    return os.environ.get("CLAUDE_CODE_SESSION_ID") or f"launcher:{getattr(args, 'name', '?')}"
+    raw = os.environ.get("CLAUDE_CODE_SESSION_ID") or f"launcher:{getattr(args, 'name', '?')}"
+    # Step-11 F6: this lands in durable state AND is interpolated into the successor's generated
+    # prompt, so it must be an opaque identifier. A hostile or merely odd environment value
+    # carrying newlines could otherwise reshape those instructions.
+    return _driver_lib().validate_claimant_id(raw)
 
 
 def _classify_launch(out: dict, *, panes_before) -> tuple[str | None, bool]:
@@ -4741,7 +4745,16 @@ def _cmd_handoff(args) -> int:
     # deference, not forcing — the launcher asks the campaign what it chose and obeys it; all that
     # changed is which field carries the answer. A campaign carrying neither field is the one
     # genuinely defaulted case and stays `inline`/single-session, byte-identical to before.
-    preferred, _provenance = driver_lib.campaign_transport(state)
+    # Step-11 F1: read the recorded answer under the LOCK. This used to use the unlocked snapshot
+    # taken at the top of the command, so a `transport set pane_chain` committing in between was
+    # ignored and the boundary returned rc 3 ("continue in-session") against a campaign that had
+    # just asked for the opposite. `_locked_state_read` is already this function's idiom for
+    # re-reading before a decision that matters.
+    try:
+        _locked = _locked_state_read(args.driver_state)
+    except (OSError, ValueError, LauncherError):
+        _locked = state                      # fail to the unlocked snapshot rather than refusing
+    preferred, _provenance = driver_lib.campaign_transport(_locked)
     mode = driver_lib.legacy_session_mode(preferred) or "single-session"
     # include_bind=False: this disposition feeds `perform_handoff`, which sends the bind as SEND 1
     # of its own (#694). `resume_prompt_for_state` above keeps the default True — it serves the
@@ -4878,6 +4891,11 @@ def _cmd_handoff(args) -> int:
     # exactly-one-successor never depends on the probe being deterministic. It runs even under an
     # `inline` preference so every transition carries fresh capability evidence (recorded, never
     # acted on to upgrade).
+    # Step-11 F5: the advisory claim is keyed on the BOUNDARY (campaign + next child), not on the
+    # generation. Keyed on the generation, `handoff` and `next-child` used different ids for the
+    # same boundary, so both could speak — a degradation line from one and an in-session line from
+    # the other, for one situation.
+    advisory_key = f"bnd:{state.get('campaign', 'campaign')}:{next_issue}"
     probe_started = time.time()
     capability_ok, pane_ok, probe_reason = transport_probe(pane_ref=args.anchor_pane)
     probe_ms = int((time.time() - probe_started) * 1000)
@@ -4920,7 +4938,7 @@ def _cmd_handoff(args) -> int:
             return after
 
         _locked_state_update(args.driver_state, _close_inline)
-        _emit_boundary_advisory(args.driver_state, transition_id=transition_id,
+        _emit_boundary_advisory(args.driver_state, transition_id=advisory_key,
                                 resolution_id=resolution_id, preferred=preferred,
                                 effective=effective, reason=probe_reason)
         print(json.dumps({"outcome": "inline_continued", "transport": effective,
@@ -4958,7 +4976,21 @@ def _cmd_handoff(args) -> int:
             return s
         driver_lib.append_terminal_outcome(s, resolution_id=resolution_id, outcome=outcome,
                                            now_ts=int(time.time()))
-        if downgrade:
+        if outcome == "successor_acked":
+            # Step-11 F2. The claim is released below, and the child stays `queued` until the
+            # SUCCESSOR marks it `in_progress` — a window in which a second invocation would pass
+            # every check and launch again. `child_boundary_precondition` refuses on this marker.
+            s["boundary_consumed"] = {"issue": next_issue, "generation": generation,
+                                      "resolution_id": resolution_id,
+                                      "observed_at": int(time.time())}
+        # Step-11 F3: design section 16.4 restricts the downgrade to a campaign where
+        # `successor_acked` has NEVER occurred, and the first implementation dropped that half —
+        # so a campaign that had been chaining panes successfully for six children would be
+        # durably switched to inline by one `pane_not_found`. `_classify_launch` answers "was the
+        # refusal measured"; only state can answer "has this ever worked here".
+        ever_acked = any(e.get("outcome") == "successor_acked"
+                         for e in driver_lib.transition_events(s))
+        if downgrade and not ever_acked:
             # One transaction with the terminal event (F2): a crash between them would leave a
             # terminal resolution without the promised downgrade, and a delayed downgrade could
             # overwrite a concurrent operator `transport set`.
@@ -4973,11 +5005,14 @@ def _cmd_handoff(args) -> int:
         return after
 
     _locked_state_update(args.driver_state, _close_launch)
-    if downgrade or effective != preferred:
-        _emit_boundary_advisory(args.driver_state, transition_id=transition_id,
+    downgraded = bool(driver_lib.campaign_transport(
+        _locked_state_read(args.driver_state))[0] == driver_lib.INLINE_TRANSPORT
+        and preferred == driver_lib.PANE_CHAIN_TRANSPORT)
+    if downgraded or effective != preferred:
+        _emit_boundary_advisory(args.driver_state, transition_id=advisory_key,
                                resolution_id=resolution_id, preferred=preferred,
-                               effective=(driver_lib.INLINE_TRANSPORT if downgrade else effective),
-                               reason="creation_refused" if downgrade else probe_reason)
+                               effective=(driver_lib.INLINE_TRANSPORT if downgraded else effective),
+                               reason="creation_refused" if downgraded else probe_reason)
     print(json.dumps({k: out.get(k) for k in
                       ("ok", "results", "failed_step", "new_pane", "session_id",
                        "truncated", "cleanup")} | {"resolution_id": resolution_id,

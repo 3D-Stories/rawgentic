@@ -2378,6 +2378,43 @@ class TestBoundaryFenceWiring:
         assert [e["outcome"] for e in dl_all_events(after) if e.get("outcome")] == ["start_failed"]
         assert dl_transitions(after)[0]["successor_pane"] == "w1:pNEW"
 
+    def test_a_second_invocation_after_a_successful_launch_is_REFUSED(
+            self, tmp_path, monkeypatch) -> None:
+        """Step-11 F2, confirmed: after a successful launch the claim is RELEASED and the child is
+        still `queued` until the SUCCESSOR marks it in_progress. In that window a replay used to
+        pass every check — the claim could not see it, because the replay opens its own
+        generation."""
+        state_path = _state(tmp_path)
+        rc1, after1, calls1 = self._run(tmp_path, monkeypatch, state=state_path)
+        assert rc1 == 0 and len(calls1) == 1
+        assert after1["boundary_consumed"]["issue"] == 612
+        rc2, after2, calls2 = self._run(tmp_path, monkeypatch, state=state_path)
+        assert rc2 == 3, "the replay is refused"
+        assert calls2 == [], "and launches NOTHING"
+        assert len([e for e in dl_all_events(after2) if e.get("outcome")]) == 1
+
+    def test_a_campaign_that_HAS_worked_is_not_downgraded_by_one_refusal(
+            self, tmp_path, monkeypatch) -> None:
+        """Step-11 F3: design §16.4 restricts the downgrade to a campaign where `successor_acked`
+        has NEVER occurred. Without that half, six successful children then one `pane_not_found`
+        would durably switch a healthy campaign to inline."""
+        state_path = _state(tmp_path)
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        payload["transitions"] = [
+            {"resolution_id": "b:epic-667:3#1", "transition_id": "b:epic-667:3", "generation": 3,
+             "split_attempted": True, "successor_pane": "w1:pOLD", "panes_before": []},
+            {"resolution_id": "b:epic-667:3#1", "outcome": "successor_acked", "observed_at": 1}]
+        state_path.write_text(json.dumps(payload), encoding="utf-8")
+        rc, after, _c = self._run(tmp_path, monkeypatch, state=state_path, handoff={
+            "ok": False, "results": {}, "failed_step": "split", "new_pane": None,
+            "session_id": None, "truncated": False, "cleanup": None,
+            "failure_code": "pane_not_found"}, panes_after=["w1:p1"])
+        assert rc == 4
+        assert after.get("preferred_transport") != "inline", "a proven-working campaign is kept"
+        assert "transport_audit" not in after
+        assert [e["outcome"] for e in dl_all_events(after)
+                if e.get("outcome")] == ["successor_acked", "launch_failed"]
+
     def test_the_launcher_still_defers_to_the_recorded_answer(self, tmp_path, monkeypatch) -> None:
         """AC 3 / #611 Step-11 pass-3 High 2. A campaign recorded as `inline` gets NO process
         boundary at all -- the launcher reads the recorded answer and never forces one."""
@@ -2619,5 +2656,7 @@ class TestAdvisoryEmission:
                    if e["state"] == "pending"]
         emitted = {e["transition_id"] for e in after["advisory_deliveries"]
                    if e["state"] == "emitted"}
-        assert [t for t in pending if t not in emitted] == ["n:epic-667:612"]
+        # Keyed on the BOUNDARY (campaign + next child), not the generation — Step-11 F5: a
+        # generation key let `handoff` and `next-child` each speak for the same boundary.
+        assert [t for t in pending if t not in emitted] == ["bnd:epic-667:612"]
         assert rc in (0, 1), "advisory-only: a failed advisory never becomes the command's verdict"

@@ -1031,3 +1031,32 @@ repo's build discipline says must never be simplified away.
 with an existing shipped call site or a live spike; PR 2 adds no new external call. The one claim
 that rested on reasoning rather than measurement — what a refused `pane split` does — was measured
 this session (§17) and the design was then narrowed to fit what the measurement actually proves.
+
+## 21. PR 2 Step-11 code-review findings and dispositions
+
+Cross-model diff review of the committed branch (`gpt-5.6-sol` via
+`hooks/review_runner.py review-code --base origin/main`, `status: success`, `diagnostic: false`,
+freshness verified — the result's `head_sha` matched `HEAD` at disposition time). **4 High,
+2 Medium, 0 Critical**, confidence 0.83–0.99. Merged High = 4, BELOW the volume threshold of 5, so
+no loop-back was triggered; every finding was applied anyway. Each was verified against the code
+before acceptance.
+
+**The headline: the fence as reviewed did not deliver exactly-one-successor.** F2 and F4 are the
+same hole seen from two directions, and the code says so plainly —
+`handoff_claim_blocked_by_live_claim` returns False whenever the held claim's generation differs
+from the one being claimed, `handoff_claim_is_live` is scoped to the CURRENT generation, and
+`open_handoff` has never consulted the claim at all (that last fact is recorded in
+`handoff_claim_is_live`'s own docstring as the #846 limit). So the claim protects only two
+invocations that derived the SAME generation from the same snapshot; one that reads state after the
+other has claimed derives `generation + 1`, opens it, and claims it unopposed.
+
+| id | sev | conf | finding | disposition |
+|---|---|---|---|---|
+| F1 | High | 0.94 | the transport read and the mode-dependent rc 3 refusal came from an UNLOCKED snapshot taken before the locked step 1, so a `transport set pane_chain` committing in between was ignored | **applied** — the decision now reads through `_locked_state_read`, this function's existing idiom, and falls back to the unlocked snapshot only if the locked read itself fails |
+| F2 | High | 0.84 | after `successor_acked` the claim is released while the child is still `queued`, so a replay in that window passes every check and launches again | **applied** — `_close_launch` records a `boundary_consumed` marker and `child_boundary_precondition` refuses on it (`boundary_already_consumed`), fail-CLOSED on an unreadable marker. Carried `ambiguity_flag: true`; resolved from the code, not escalated (D240) |
+| F3 | High | 0.99 | the downgrade fired on the failure classification alone, dropping §16.4's "only when `successor_acked` has NEVER occurred" — so a campaign that had been chaining panes for six children would be durably switched to inline by one `pane_not_found` | **applied** — the guard now consults the transitions log. This was my omission, not a design gap: §16.4 always said it |
+| F4 | High | 0.87 | `_claimant_id` is not per-process, so the fence's identity is not what it claims | **applied, via F2's mechanism.** The identity concern is real but secondary: the actual hole is the generation bump, which no claimant id can close. `child_boundary_precondition` now refuses while ANY boundary resolution is unterminated (`boundary_in_flight`), using `unterminated_resolutions` — a function PR 1 shipped and nothing called. Also `ambiguity_flag: true`; resolved from the code (D240) |
+| F5 | Medium | 0.96 | `handoff` keyed the advisory claim on the generation and `next-child` on the issue, so the two surfaces never contended and both could speak for one boundary | **applied** — one canonical key, `bnd:<campaign>:<issue>`, on both surfaces |
+| F6 | Medium | 0.83 | the claimant comes from an environment variable, lands in durable state, and is interpolated into the successor's generated prompt unvalidated | **applied** — `validate_claimant_id` enforces a bounded identifier grammar (letters, digits, dot, underscore, colon, hyphen; ≤128), so a newline or instruction-shaped value is refused rather than reshaping a prompt |
+
+**Suite after the fix round: 5636 passed, exit 0** (baseline 5584, +52 tests). Lint 10.00/10.

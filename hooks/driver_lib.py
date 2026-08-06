@@ -2005,6 +2005,27 @@ def validate_operator_note(text, *, what: str) -> str:
     return text
 
 
+#: Step-11 F6. The claimant is read from the environment, stored durably, and interpolated into a
+#: generated successor prompt, so it must be an opaque identifier and nothing else.
+_CLAIMANT_RE = re.compile(r"\A[A-Za-z0-9_.:-]{1,128}\Z")
+
+
+def validate_claimant_id(value) -> str:
+    """A claim holder's identity, safe to persist and to render into a prompt. PURE.
+
+    Step-11 finding F6. `$CLAUDE_CODE_SESSION_ID` is normally a uuid, but it is an ENVIRONMENT
+    value: nothing stops it carrying a newline and instruction-shaped text, and
+    `with_boundary_clause` interpolates it into the successor's instructions. A bounded
+    identifier grammar makes it an opaque token rather than an injection surface — the same
+    reasoning as the probe's fixed reason tokens and `validate_pane_id`.
+    """
+    if not isinstance(value, str) or not _CLAIMANT_RE.match(value):
+        raise DriverStateError(
+            "a claimant id must be 1-128 characters of letters, digits, dot, underscore, colon or "
+            f"hyphen; got {value!r}")
+    return value
+
+
 def handoff_claim_release(state: dict, generation: int, *, claimant: str) -> tuple[bool, dict]:
     """Release a boundary claim whose transition has REACHED a terminal outcome. PURE.
 
@@ -2136,6 +2157,32 @@ def child_boundary_precondition(state, next_issue) -> tuple[bool, str]:
     # child happens to look queued.
     if any(isinstance(i, dict) and i.get("status") == "in_progress" for i in issues):
         return (False, "child_in_flight")
+    # **Two refusals the per-generation claim cannot provide (Step-11 F2/F4, both CONFIRMED against
+    # this module).** `handoff_claim_blocked_by_live_claim` returns False whenever the held claim's
+    # generation differs from the one being claimed, `handoff_claim_is_live` is scoped to the
+    # CURRENT generation, and `open_handoff` never consults the claim at all — that last fact is
+    # recorded in `handoff_claim_is_live`'s own docstring as the #846 limit. So the claim protects
+    # only two invocations that derived the SAME generation from the same snapshot. A second
+    # invocation reading state AFTER the first has claimed derives generation+1, opens it, and
+    # claims it unopposed: two successors on one child, which is precisely the property #845 was
+    # folded into #927 to provide.
+    #
+    # Both refusals are about the BOUNDARY rather than about a claim, which is why they live here:
+    if unterminated_resolutions(state):
+        # Somebody is mid-boundary. An unterminated resolution is the design's crash signature, so
+        # this also refuses after a crash — correctly: recovery there is reconciliation's job
+        # (`reconcile_boundary`), never a fresh claim taken beside a possibly-live successor.
+        return (False, "boundary_in_flight")
+    consumed = state.get("boundary_consumed")
+    if consumed is not None:
+        # FAIL-CLOSED on an unreadable marker: this is a fence, and "I cannot read it" must never
+        # be reported as "no boundary was consumed".
+        if not isinstance(consumed, dict) or not _is_int(consumed.get("issue")):
+            return (False, "boundary_consumed_unreadable")
+        if consumed["issue"] == next_issue:
+            # The window F2 found: after a successful launch the claim is RELEASED and the child is
+            # still `queued` until the successor marks it `in_progress`.
+            return (False, "boundary_already_consumed")
     for issue in issues:
         if isinstance(issue, dict) and issue.get("number") == next_issue:
             if issue.get("status") == "queued":
