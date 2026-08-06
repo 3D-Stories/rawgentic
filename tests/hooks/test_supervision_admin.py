@@ -258,6 +258,203 @@ def test_concurrent_writers_keep_revisions_monotonic(tmp_path):
     assert sl.read_state(str(tmp_path)).load_status == "valid"
 
 
+# --------------------------------------------------- preflight fold-in (#947 Part B §3)
+
+import supervision_preflight as sp  # noqa: E402
+
+
+def _stage_and_answer(root, *, campaign_id="epic-871", applied_ref="D267"):
+    token = sp.begin_preflight(str(root), session_id="sess-1", campaign_ids=[campaign_id])
+    sp.record_preflight_answer(
+        str(root), token, campaign_id=campaign_id, blocker_id="b1",
+        question_kind="merge_policy", answer="proceed", disposition="resolved",
+        authority_basis="owner-only", applied_ref=applied_ref)
+    return token
+
+
+class TestDeclarePreflightFoldIn:
+    def test_folds_staged_answers_and_stamps_the_new_revision(self, tmp_path):
+        token = _stage_and_answer(tmp_path)
+        rec = _declare(tmp_path, preflight_token=token)
+        assert rec["revision"] == 1
+        assert len(rec["preflight_results"]) == 1
+        assert rec["preflight_results"][0]["supervision_revision"] == 1
+        assert rec["preflight_results"][0]["applied_ref"] == "D267"
+
+    def test_appends_the_token_to_consumed_preflight_tokens(self, tmp_path):
+        token = _stage_and_answer(tmp_path)
+        rec = _declare(tmp_path, preflight_token=token)
+        assert rec["consumed_preflight_tokens"] == [token]
+
+    def test_staging_file_is_deleted_after_a_successful_fold(self, tmp_path):
+        token = _stage_and_answer(tmp_path)
+        _declare(tmp_path, preflight_token=token)
+        with pytest.raises(sp.PreflightError):
+            sp.read_preflight(str(tmp_path), token)
+
+    def test_retry_with_an_already_consumed_token_returns_the_current_record_unchanged(
+            self, tmp_path):
+        token = _stage_and_answer(tmp_path)
+        first = _declare(tmp_path, preflight_token=token)
+        # A second declare() call with the SAME token must be a pure no-op replay.
+        second = sa.declare(str(tmp_path), state="sleeping", until=_iso(LATER),
+                            session_id="sess-2", campaign_ids=[], consult_providers=[],
+                            consult_granted=False, preflight_token=token, now=NOW)
+        assert second == first
+        assert second["revision"] == 1  # NOT bumped to 2
+
+    def test_consumed_token_survives_an_unrelated_intervening_declaration(self, tmp_path):
+        token = _stage_and_answer(tmp_path)
+        first = _declare(tmp_path, preflight_token=token)
+        # An unrelated declaration (no preflight token) bumps the revision.
+        _declare(tmp_path, state="sleeping", until=_iso(LATER))
+        # A delayed retry of the FIRST token must still be recognized as consumed —
+        # it must NOT re-fold or bump the revision again, even though the ledger
+        # entry is now two revisions behind current.
+        third = sa.declare(str(tmp_path), state="away", until=None, session_id="sess-1",
+                           campaign_ids=[], consult_providers=["gpt"],
+                           consult_granted=True, preflight_token=token, now=NOW)
+        assert third["revision"] == 2  # the intervening declaration's own revision
+        assert third["consumed_preflight_tokens"] == [token]
+
+    def test_consumed_tokens_capped_at_500_fifo_trim(self, tmp_path):
+        # Seed 500 already-consumed tokens directly (folding 500 real ones would be slow).
+        seeded = [f"pf-seed-{i}" for i in range(500)]
+        rec = {
+            "schema_version": sa.SCHEMA_VERSION, "revision": 1, "state": "away",
+            "until": None, "declared_at": _iso(NOW), "declared_by_session": "sess-1",
+            "governed_campaign_ids": [], "consult_grant": {"providers": [], "granted": False},
+            "consumed_preflight_tokens": seeded,
+        }
+        path = sl.supervision_path(str(tmp_path))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        Path(path).write_text(json.dumps(rec))
+
+        token = sp.begin_preflight(str(tmp_path), session_id="sess-1", campaign_ids=["epic-871"])
+        new = sa.declare(str(tmp_path), state="sleeping", until=_iso(LATER),
+                         session_id="sess-1", campaign_ids=[], consult_providers=[],
+                         consult_granted=False, preflight_token=token, now=NOW)
+        assert len(new["consumed_preflight_tokens"]) == 500
+        assert new["consumed_preflight_tokens"][-1] == token
+        assert "pf-seed-0" not in new["consumed_preflight_tokens"]  # oldest evicted
+
+    def test_no_preflight_token_is_byte_identical_to_existing_behavior(self, tmp_path):
+        rec = _declare(tmp_path)
+        assert "preflight_results" not in rec
+        assert "consumed_preflight_tokens" not in rec
+
+
+# ------------------------------------------------- mark_transport_verified (#947 Part B §5)
+
+def _hermes_ask_record(state_dir, token, run_id, *, answered=True, guid="guid-1"):
+    asks_dir = Path(state_dir) / "asks"
+    asks_dir.mkdir(parents=True, exist_ok=True)
+    rec = {"token": token, "run_id": run_id, "question": "verify?",
+          "sent_ts_ms": 0, "status": "answered" if answered else "sent",
+          "recipient": "+1", "response_mode": "free_text"}
+    if answered:
+        rec["answered_guid"] = guid
+    (asks_dir / f"{token}.json").write_text(json.dumps(rec))
+
+
+def _evidence_file(tmp_path, *, token, run_id, date_created_ms, guid="guid-1"):
+    doc = {"delivery_id": "d1", "run_id": run_id, "token": token, "guid": guid,
+          "dateCreated": date_created_ms, "question": "verify?", "reply_text": "OK",
+          "state": "ready", "reply": {"raw": "OK", "interpretation": "free_text"}}
+    path = tmp_path / "evidence.json"
+    path.write_text(json.dumps(doc))
+    return str(path)
+
+
+class TestMarkTransportVerified:
+    def _ms(self, dt):
+        return int(dt.timestamp() * 1000)
+
+    def test_happy_path_writes_the_transport_verification_record(self, tmp_path):
+        sa.mark_attended(str(tmp_path), session_id="sess-1", reason="verify", expected_revision=0, now=NOW)  # attended baseline
+        hermes_dir = tmp_path / "hermes"
+        run_id = "supervision-transport-verify-sess-1"
+        _hermes_ask_record(hermes_dir, "tok1", run_id)
+        evidence = _evidence_file(tmp_path, token="tok1", run_id=run_id,
+                                  date_created_ms=self._ms(NOW - timedelta(minutes=2)))
+        rec = sa.mark_transport_verified(
+            str(tmp_path), evidence_path=evidence, session_id="sess-1",
+            hermes_state_dir=str(hermes_dir), now=NOW)
+        assert rec["transport_verification"]["verified_session_id"] == "sess-1"
+        assert rec["transport_verification"]["evidence_token"] == "tok1"
+
+    def test_wrong_run_id_refused(self, tmp_path):
+        sa.mark_attended(str(tmp_path), session_id="sess-1", reason="verify", expected_revision=0, now=NOW)
+        hermes_dir = tmp_path / "hermes"
+        _hermes_ask_record(hermes_dir, "tok1", "supervision-transport-verify-OTHER-session")
+        evidence = _evidence_file(tmp_path, token="tok1",
+                                  run_id="supervision-transport-verify-OTHER-session",
+                                  date_created_ms=self._ms(NOW))
+        with pytest.raises(sa.DeclarationRefused):
+            sa.mark_transport_verified(str(tmp_path), evidence_path=evidence,
+                                       session_id="sess-1", hermes_state_dir=str(hermes_dir),
+                                       now=NOW)
+
+    def test_stale_evidence_past_10_minutes_refused(self, tmp_path):
+        sa.mark_attended(str(tmp_path), session_id="sess-1", reason="verify", expected_revision=0, now=NOW)
+        hermes_dir = tmp_path / "hermes"
+        run_id = "supervision-transport-verify-sess-1"
+        _hermes_ask_record(hermes_dir, "tok1", run_id)
+        evidence = _evidence_file(tmp_path, token="tok1", run_id=run_id,
+                                  date_created_ms=self._ms(NOW - timedelta(minutes=11)))
+        with pytest.raises(sa.DeclarationRefused):
+            sa.mark_transport_verified(str(tmp_path), evidence_path=evidence,
+                                       session_id="sess-1", hermes_state_dir=str(hermes_dir),
+                                       now=NOW)
+
+    def test_not_currently_attended_refused(self, tmp_path):
+        _declare(tmp_path, state="away", until=_iso(LATER))
+        hermes_dir = tmp_path / "hermes"
+        run_id = "supervision-transport-verify-sess-1"
+        _hermes_ask_record(hermes_dir, "tok1", run_id)
+        evidence = _evidence_file(tmp_path, token="tok1", run_id=run_id,
+                                  date_created_ms=self._ms(NOW))
+        with pytest.raises(sa.DeclarationRefused):
+            sa.mark_transport_verified(str(tmp_path), evidence_path=evidence,
+                                       session_id="sess-1", hermes_state_dir=str(hermes_dir),
+                                       now=NOW)
+
+    def test_ask_record_not_answered_refused(self, tmp_path):
+        sa.mark_attended(str(tmp_path), session_id="sess-1", reason="verify", expected_revision=0, now=NOW)
+        hermes_dir = tmp_path / "hermes"
+        run_id = "supervision-transport-verify-sess-1"
+        _hermes_ask_record(hermes_dir, "tok1", run_id, answered=False)
+        evidence = _evidence_file(tmp_path, token="tok1", run_id=run_id,
+                                  date_created_ms=self._ms(NOW))
+        with pytest.raises(sa.DeclarationRefused):
+            sa.mark_transport_verified(str(tmp_path), evidence_path=evidence,
+                                       session_id="sess-1", hermes_state_dir=str(hermes_dir),
+                                       now=NOW)
+
+    def test_answered_guid_mismatch_refused(self, tmp_path):
+        sa.mark_attended(str(tmp_path), session_id="sess-1", reason="verify", expected_revision=0, now=NOW)
+        hermes_dir = tmp_path / "hermes"
+        run_id = "supervision-transport-verify-sess-1"
+        _hermes_ask_record(hermes_dir, "tok1", run_id, guid="guid-REAL")
+        evidence = _evidence_file(tmp_path, token="tok1", run_id=run_id,
+                                  date_created_ms=self._ms(NOW), guid="guid-FORGED")
+        with pytest.raises(sa.DeclarationRefused):
+            sa.mark_transport_verified(str(tmp_path), evidence_path=evidence,
+                                       session_id="sess-1", hermes_state_dir=str(hermes_dir),
+                                       now=NOW)
+
+    def test_missing_ask_record_refused(self, tmp_path):
+        sa.mark_attended(str(tmp_path), session_id="sess-1", reason="verify", expected_revision=0, now=NOW)
+        hermes_dir = tmp_path / "hermes"
+        (hermes_dir / "asks").mkdir(parents=True)
+        evidence = _evidence_file(tmp_path, token="tok-does-not-exist",
+                                  run_id="supervision-transport-verify-sess-1",
+                                  date_created_ms=self._ms(NOW))
+        with pytest.raises(sa.DeclarationRefused):
+            sa.mark_transport_verified(str(tmp_path), evidence_path=evidence,
+                                       session_id="sess-1", hermes_state_dir=str(hermes_dir),
+                                       now=NOW)
+
 # ----------------------------------------------------------------------- CLI
 
 def _cli(*args):
@@ -308,3 +505,5 @@ def test_cli_stale_revision_exits_1(tmp_path):
 
 def test_cli_missing_required_argument_is_a_usage_error(tmp_path):
     assert _cli("declare", "--workspace", str(tmp_path)).returncode == 2
+
+
