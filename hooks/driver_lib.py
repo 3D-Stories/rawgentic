@@ -2609,6 +2609,13 @@ def child_boundary_precondition(state, next_issue) -> tuple[bool, str]:
     for issue in issues:
         if isinstance(issue, dict) and issue.get("number") == next_issue:
             if issue.get("status") == "queued":
+                # #944 Task 8: closes the preflight/locked-commit race. A `revalidate-children`
+                # write-back can land `pending_disposition` on the receipt record WITHOUT
+                # touching `status` — the child is still `queued` here. This recheck runs
+                # under the SAME lock `_open_and_claim` already holds, so it catches the write
+                # even when it landed after an earlier, unlocked disposition read.
+                if _child_pending_disposition(state, next_issue) is not None:
+                    return (False, "next_child_pending_disposition")
                 return (True, "ready")
             return (False, "next_child_not_queued")
     return (False, "next_child_not_queued")

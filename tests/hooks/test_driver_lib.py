@@ -1933,6 +1933,25 @@ def test_a_malformed_consumed_marker_fails_CLOSED():
         assert ok is False, bad
 
 
+def test_child_boundary_precondition_refuses_a_pending_disposition_queued_child():
+    """#944 Task 8: closes the preflight/locked-commit race. A `revalidate-children` write-back
+    can land `pending_disposition` on the receipt record WITHOUT touching `status` — the child
+    is still `queued` by the time `_open_and_claim` takes its lock, so `status == "queued"`
+    alone is not enough; the precondition must also recheck the receipt under the same lock."""
+    state = _campaign_with_boundary(next_issue=10)
+    state["queue_revalidation"] = {"children": {"10": {"pending_disposition": "issue_obsolete"}}}
+    ok, why = dl.child_boundary_precondition(state, 10)
+    assert ok is False
+    assert why == "next_child_pending_disposition"
+
+
+def test_child_boundary_precondition_still_ready_with_no_pending_disposition():
+    """Sibling of the refusal above: an unrelated or absent `queue_revalidation` block must not
+    false-positive the new check."""
+    state = _campaign_with_boundary(next_issue=10)
+    assert dl.child_boundary_precondition(state, 10) == (True, "ready")
+
+
 def test_validate_claimant_id_rejects_prompt_shaped_and_oversized_values():
     """Step-11 F6: the claimant is read from the environment, stored durably, and interpolated
     into the successor's generated prompt."""
