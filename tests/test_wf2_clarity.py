@@ -1967,3 +1967,45 @@ class TestRunRecordLandsExactlyOnce:
         """The guard must not be presented as the plan — prose that leans on it
         would restore the blind double-summarize this issue removed."""
         assert "that guard is the BACKSTOP, not the plan" in self._norm("step-16.md")
+
+
+class TestCampaignMergesGoThroughTheBroker:
+    """#963 AC4: the prose cutover is what gives the broker its callers.
+
+    #871 shipped the authority-and-claims core with ZERO live callers — the same
+    unreachable-machinery signature that killed the executor (D174). Step 14 running
+    raw `gh pr merge` from prose is precisely why a supervised absence could not gate a
+    merge. These are LOCATION pins (Step 14's own file, whitespace-normalized), because
+    the drift worth catching is the instruction quietly reverting to the raw command.
+
+    The raw command legitimately REMAINS for the no-campaign branch, so this pins the
+    CONDITIONAL structure — never the mere absence of `gh pr merge`.
+    """
+
+    REFS = (Path(__file__).resolve().parent.parent
+            / "skills" / "implement-feature" / "references")
+
+    def _norm(self, name: str) -> str:
+        return " ".join((self.REFS / name).read_text().split())
+
+    def test_step14_invokes_the_broker_when_a_campaign_is_active(self):
+        step14 = self._norm("step-14.md")
+        assert "WHEN A CAMPAIGN IS ACTIVE" in step14
+        assert "python3 hooks/launcher_lib.py broker-merge" in step14
+
+    def test_step14_still_merges_directly_with_no_campaign(self):
+        """The cutover must not strand ordinary single-issue runs."""
+        step14 = self._norm("step-14.md")
+        assert "With no campaign active" in step14
+        assert "gh pr merge <pr_number>" in step14
+
+    def test_step14_documents_every_broker_exit_code(self):
+        """A merge gate whose refusal path is unwritten is one operators route around."""
+        step14 = self._norm("step-14.md")
+        for branch in ("`0` merged", "`12` refused", "`13` parked"):
+            assert branch in step14, branch
+
+    def test_step14_forbids_falling_back_to_the_raw_command_on_a_refusal(self):
+        """The one sentence that keeps the gate from being advisory."""
+        assert ("Never fall back to the raw command to get past a refusal"
+                in self._norm("step-14.md"))

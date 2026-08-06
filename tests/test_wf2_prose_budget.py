@@ -69,7 +69,7 @@ SKILL_DIR = REPO_ROOT / "skills" / "implement-feature"
 # residual growth over the pre-#761 4_108 is a genuinely NEW gated sub-step, not commentary —
 # resolve-and-snapshot did not exist before, and its three failure gates are the Step-8a/Step-11
 # findings. That is the honest distinction: trim commentary, keep operative prose.
-TOTAL_CEILING_BYTES = 251_618
+TOTAL_CEILING_BYTES = 253_190
 PER_FILE_CEILING_BYTES = {
     "SKILL.md": 46_099,
     "references/quality-bar.md": 3_616,
@@ -91,7 +91,7 @@ PER_FILE_CEILING_BYTES = {
     "references/step-11_5.md": 4_543,
     "references/step-12.md": 14_999,
     "references/step-13.md": 3_621,
-        # #888 raised this one, trim-first per the #903 precedent: the merge-grant
+    # #888 raised this one, trim-first per the #903 precedent: the merge-grant
     # sub-step (persist -> commit -> per-sha CI re-verify -> prove-landed -> merge)
     # is genuinely NEW gated prose, not commentary — Step 14 had no run-record
     # ordering at all before, and the gap it closes cost 5 of 6 records on saystory
@@ -99,7 +99,14 @@ PER_FILE_CEILING_BYTES = {
     # before raising, and step-16.md's companion edit was trimmed to fit under its
     # existing ceiling rather than raised alongside.
     #   references/step-14.md  actual 4_975 + headroom 256 -> ceiling 5_231
-    "references/step-14.md": 5_231,
+    # #963 raised it again, trim-first per the same precedent: the broker cutover is the
+    # gated prose that gives #871's authority core a live caller, and it must carry the
+    # campaign condition, the command, and all three exit-code branches — a merge gate
+    # whose refusal path is unwritten is a gate operators route around. Compressed by
+    # dropping the worked example and the rationale paragraph (the design doc holds
+    # both), leaving only what an operator must DO.
+    #   references/step-14.md  actual 6_479 + headroom 324 -> ceiling 6_803
+    "references/step-14.md": 6_803,
     "references/step-15.md": 1_520,
     "references/step-16.md": 11_545,
     "references/whole-issue-delegation.md": 8_236,

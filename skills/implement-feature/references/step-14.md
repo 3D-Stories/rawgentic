@@ -30,7 +30,29 @@ pre-merge too**: it omits what the merge, CI re-verify and wrap-up still spend, 
 same note rather than let a consumer read it as full-run cost. Step 16 then renders from it
 rather than summarizing twice (§16 item 3a).
 
-1. **Merge PR (squash merge):**
+1. **Merge PR (squash merge).** WHEN A CAMPAIGN IS ACTIVE — this issue is a child of a
+   campaign under `claude_docs/.driver-state/` — the merge goes through the broker, never
+   the raw command (#963). The broker is the ONE place a campaign merge is authorized
+   (`authority_permits`), claimed execute-once, executed and reconciled, and it is what
+   makes a supervised absence actually gate a merge instead of merely describing one:
+   ```bash
+   python3 hooks/launcher_lib.py broker-merge --pr <pr_number> --issue <issue> \
+     --campaign <campaign-id> --project-root .
+   ```
+   It prints ONE JSON line — `{status, reason, claim_id, merge_sha, next_action}` — and
+   branches on its exit code:
+   - `0` merged. `merge_sha` is probe-confirmed, not inferred from the merge command's
+     exit code. Continue to item 2.
+   - `12` refused, and NOTHING was merged. Read `reason` (authority denial, target
+     binding, a moved authorization, unrecordable telemetry, or a merge GitHub refused),
+     fix that cause, and re-run the identical command. Never fall back to the raw command
+     to get past a refusal — the refusal is the gate working.
+   - `13` parked: the outcome could not be established. Inspect the PR, then re-run the
+     identical command; it reconciles from real evidence and never merges twice.
+   Re-running is always safe: an executed claim is terminal, an executing or parked one
+   reconciles, a pending one continues.
+
+   **With no campaign active** (the ordinary single-issue run), merge directly:
    ```bash
    gh pr merge <pr_number> --repo ${capabilities.repo} --squash --delete-branch
    ```
