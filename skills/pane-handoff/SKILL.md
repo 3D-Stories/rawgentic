@@ -162,7 +162,10 @@ And one the command CANNOT enforce, so it is on you (#819):
 
 **The goal condition.** The goal is OWNER-AUTHORED text and it carries VERBATIM (#758). Read this
 session's live goal with `read-goal-condition` and pass that text byte-for-byte — never retype,
-summarize, or extend it. Model state (STATE/MODE lines, progress, queue position) travels in the
+summarize, or extend it. Since #864 that command is origin-bound and reports a STATE: it exits 0
+only for `LIVE`, and exits 3 for `CLEARED`, `NEVER_ARMED` or `AMBIGUOUS`. Read the state rather
+than only the exit code — `CLEARED` means the guard is SPENT, so there is nothing to carry, and
+carrying its old condition would hand the successor an authorization the owner already retired. Model state (STATE/MODE lines, progress, queue position) travels in the
 handoff FILE, never inside the goal — the measured failure is accretion: owner goals run
 1,200–2,000 chars, model-drafted successor goals ballooned to 4,000–5,400, and the #720 override
 rode inside one. The command enforces this on the retirement path: it reads your own transcript

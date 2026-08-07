@@ -749,6 +749,35 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.141.6 (2026-08-07)
+- **`read-goal-condition` reads trusted rows and reports which not-live state it found (#864, epic
+  #906).** The CLI dispatched `last_unmet_goal_condition`, the historical reader: it recurses into
+  arbitrary message content, keys only on `type == "goal_status"`, has no sentinel or origin check,
+  and treats the last `met: false` row as live regardless of anything after it. Two consequences,
+  both reproduced by execution — a goal cleared by a later trusted row was still reported as armed,
+  which revives a merge authorization the owner already retired, and a `goal_status` object forged
+  inside ordinary message content was returned verbatim, the #758 forgery direction still open on
+  this path. `live_owner_goal` closed both but returns `None` for CLEARED and NEVER_ARMED alike, so
+  a reader swap alone could not tell a spent guard from one that never existed. Now
+  `_owner_goal_scan` holds the trust rules in one place, lifted out with no predicate changed;
+  `owner_goal_state` returns `LIVE | CLEARED | NEVER_ARMED | AMBIGUOUS` with the condition present
+  only when LIVE; and the CLI consumes it with its `rc 0` / `rc 3` contract preserved. The repo's
+  own fixture was the reproduction: `goal_status_transcript.jsonl` ends with a trusted `met: true`
+  row, so its guard is spent, and the suite asserted the stale answer — that test now asserts
+  CLEARED. Step-8a review then found a second hole and it was fixed: the scan's cheap
+  `"goal_status" not in line` prefilter cannot see a tear landing before that literal, so a torn
+  tail let a stale row pass as LIVE; the tail is now parsed, opt-in, with `live_owner_goal`
+  deliberately unchanged so its four destructive-path callers keep byte-identical behaviour. SCOPE,
+  stated plainly: this fixes the CLI only — campaign handoff and mid-child handoff still use the
+  historical reader and are #772's subject. `docs/runbooks/herdr.md`, its `.html` twin and
+  `skills/pane-handoff/SKILL.md` now describe what the command actually does — with the scope stated
+  in the runbook itself, because Step-11 review caught that the new prose sat immediately above the
+  mid-child paragraph and implied the trusted rule reached that path too. Step-11 review also found
+  a fifth outcome the four-state contract did not cover: a transcript the command cannot open or
+  decode escaped as an uncaught traceback with rc 1, and now reports AMBIGUOUS with rc 3. 16 tests
+  added in `tests/hooks/test_launcher_lib.py`.
+  No workflow-spine change, so no diagram REV. Suite 6405→6421.
+
 ### v3.141.5 (2026-08-07)
 - **The context meter now says when it is blind, and its state says what is true NOW (#734, epic
   #906).** `hooks/context_meter.py` records a diagnostic through `_diagnose`, which is
