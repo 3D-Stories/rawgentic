@@ -19,12 +19,23 @@
    ```
    `BASE_MISMATCH` → STOP and reconcile before writing any code (do not build on a wrong base). Because nothing is pulled into the current checkout, no pre-existing branch is mutated as a side effect.
 
-3. Push empty branch to origin:
+3. **MANDATORY step-state bootstrap — before anything else on the branch.**
+   ```bash
+   python3 hooks/step_state.py write --project <project> --workflow wf2 --step 7 \
+     --step-title "Create Branch" --issue <issue number> \
+     --session-id "$CLAUDE_CODE_SESSION_ID"
+   ```
+   The hook stamps later steps ONLY once the pointer names this session, and only a
+   `— DONE` marker or this call creates it. Skip it and the run records **no timing at
+   all** (#976 did). Fail-open — run it anyway. Why:
+   `TestSignatureStampingNeedsABootstrap`.
+
+4. Push empty branch to origin:
    ```bash
    git push -u origin <branch_name>
    ```
 
-4. Link branch to issue:
+5. Link branch to issue:
    ```bash
    gh issue comment <issue_number> --repo ${capabilities.repo} --body "Implementation started on branch \`<branch_name>\`"
    ```

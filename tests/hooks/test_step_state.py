@@ -267,9 +267,15 @@ def test_step_entry_prose_pin_all_five_skills():
         assert "step_state.py write --project" in text, f"{skill}: entry-call line missing"
         assert token in text, f"{skill}: wrong workflow token"
         assert "fail-open" in text.lower(), f"{skill}: fail-open clause missing"
-        # #499: emission is hook-owned; the manual call is optional belt-and-suspenders.
+        # #499: emission is hook-owned. #976 follow-up: "hook-owned" never meant
+        # "unaided" — the pointer must be bootstrapped before any signature can stamp,
+        # so the two branch-cut workflows mark the call MANDATORY and the rest OPTIONAL.
         assert "hook-emitted since #499" in text, f"{skill}: hook-emission clause missing"
-        assert "OPTIONAL" in text, f"{skill}: the manual call must be marked optional"
+        expected_mode = "MANDATORY" if skill in ("implement-feature", "fix-bug") \
+            else "OPTIONAL"
+        assert expected_mode in text, (
+            f"{skill}: the manual call must be marked {expected_mode} — see "
+            "TestBranchCutBootstrapIsMandatory for why the branch-cut ones differ")
 
 
 # --- Step-11 join fixes (#480): reader honesty + import fail-open ------------------
@@ -520,3 +526,62 @@ def test_status_complete_reachable_at_live_assembly():
     wf3 = [_ev("1", "2026-07-19T10:00:00Z", workflow="wf3"),
            _ev("10", "2026-07-19T10:30:00Z", workflow="wf3")]
     assert ss.compute_timing(wf3, idle_threshold_s=1800)["status"] == "complete"
+
+
+# --- #976 follow-up: the branch-cut bootstrap is MANDATORY, not optional ----------
+
+class TestBranchCutBootstrapIsMandatory:
+    """The #976 run produced ZERO timing, and the prose is why.
+
+    The signature path only stamps when the pointer already names this session, and
+    only a session-note DONE marker or an explicit `step_state.py write` creates that
+    pointer. While every skill called that write "OPTIONAL belt-and-suspenders", a run
+    that wrote no markers could — and did — contribute no timing at all.
+
+    The behavioral proof lives in
+    `tests/hooks/test_step_state_hook.py::TestSignatureStampingNeedsABootstrap`.
+    These pin the prose that makes it happen.
+    """
+
+    #: The two workflows that cut a branch and carry an issue number, so the two whose
+    #: runs can produce timing at all.
+    BRANCH_CUT_SKILLS = {
+        "implement-feature": ("wf2", "7"),
+        "fix-bug": ("wf3", "6"),
+    }
+
+    ALL_SKILLS = ("create-issue", "implement-feature", "fix-bug",
+                  "adversarial-review", "epic-run")
+
+    def _corpus(self, skill):
+        base = HOOKS_DIR.parent / "skills" / skill
+        text = (base / "SKILL.md").read_text(encoding="utf-8")
+        refs = base / "references"
+        if refs.is_dir():
+            for path in sorted(refs.glob("*.md")):
+                text += "\n" + path.read_text(encoding="utf-8")
+        return text
+
+    def test_no_skill_still_claims_the_hook_needs_no_action(self):
+        """The false sentence that caused the gap. It must be gone everywhere."""
+        for skill in self.ALL_SKILLS:
+            assert "no per-step action required" not in self._corpus(skill), (
+                f"{skill}: the hook does NOT stamp unaided — the pointer must be "
+                "bootstrapped before any signature command can stamp")
+
+    def test_the_branch_cut_skills_mark_the_bootstrap_mandatory(self):
+        for skill, (workflow, step) in self.BRANCH_CUT_SKILLS.items():
+            corpus = self._corpus(skill)
+            assert "MANDATORY step-state bootstrap" in corpus, \
+                f"{skill}: the bootstrap must be named as mandatory"
+            assert f"--workflow {workflow} --step {step}" in corpus, \
+                f"{skill}: the bootstrap must name the branch-cut step"
+
+    def test_the_bootstrap_sits_at_the_branch_cut(self):
+        """Next to `git checkout -b`, so it runs once, early, and cannot be forgotten."""
+        for skill in self.BRANCH_CUT_SKILLS:
+            corpus = self._corpus(skill)
+            cut = corpus.index("git checkout -b")
+            call = corpus.index("MANDATORY step-state bootstrap")
+            assert abs(call - cut) < 2500, \
+                f"{skill}: the bootstrap drifted away from the branch cut"

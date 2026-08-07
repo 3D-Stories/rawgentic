@@ -69,7 +69,15 @@ SKILL_DIR = REPO_ROOT / "skills" / "implement-feature"
 # residual growth over the pre-#761 4_108 is a genuinely NEW gated sub-step, not commentary —
 # resolve-and-snapshot did not exist before, and its three failure gates are the Step-8a/Step-11
 # findings. That is the honest distinction: trim commentary, keep operative prose.
-TOTAL_CEILING_BYTES = 253_190
+# #976 follow-up (2026-08-07): step-07.md 2_124 -> 2_545 and the total 253_190 -> 253_611.
+# TRIMMED FIRST, per the #903 precedent: the rationale was cut twice (3_142 -> 2_501 -> 2_422)
+# before any raise. The residual is a genuinely NEW operative sub-step, not commentary — a
+# MANDATORY `step_state.py write` at the branch cut. Without it the PostToolUse hook can never
+# stamp a signature command, because it stamps only once the step-state pointer names this
+# session, and only a `— DONE` marker or that write creates the pointer. The #976 run proved
+# the cost: `{"status": "absent", "steps": [], "skipped_lines": 0}` — a whole run with no
+# timing. Trim commentary, keep operative prose: the command and its four-line why are operative.
+TOTAL_CEILING_BYTES = 253_611
 PER_FILE_CEILING_BYTES = {
     "SKILL.md": 46_099,
     "references/quality-bar.md": 3_616,
@@ -83,7 +91,7 @@ PER_FILE_CEILING_BYTES = {
     "references/step-04.md": 23_727,
     "references/step-05.md": 7_818,
     "references/step-06.md": 2_995,
-    "references/step-07.md": 2_124,
+    "references/step-07.md": 2_545,
     "references/step-08.md": 23_557,
     "references/step-09.md": 6_416,
     "references/step-10.md": 1_201,
