@@ -3474,6 +3474,37 @@ class TestBrokerMergeOutcomes:
         assert resumed.merge_calls == 0
 
 
+class TestBrokerMergeContractHoldsUnderRaces:
+    """Self-review (Step 11, bug/logic lens): every HANDLER exit owes a JSON line.
+
+    `reconcile_claim` raises `ClaimError` when the claim is no longer `executing` — a
+    concurrent process finishing the same claim is exactly the race claims exist for.
+    `ClaimError` is not a `LauncherError`, so before the fix it escaped `main`'s handler
+    as a traceback: rc 1, no JSON, and a caller branching on the documented contract
+    silently mis-reads a security gate's outcome.
+    """
+
+    def test_a_claim_error_during_reconcile_still_returns_the_contract(
+            self, tmp_path, capsys, monkeypatch):
+        """Drive the seam directly: `reconcile_claim` raising is the race, and a
+        `ClaimError` is not a `LauncherError`, so before the fix it escaped `main` as a
+        traceback — rc 1, no JSON line, and a caller branching on the documented
+        contract silently mis-reads a security gate's outcome."""
+        root = _broker_workspace(tmp_path)
+        import supervision_claims as sc_mod
+
+        def _boom(**_kw):
+            raise sc_mod.ClaimError("claim is 'executed', not 'executing'")
+        monkeypatch.setattr(sc_mod, "reconcile_claim", _boom)
+
+        runner = BrokerRunner(merge_raises=subprocess.TimeoutExpired("gh", 180))
+        rc, out = _broker(root, runner=runner, capsys=capsys)
+        assert out is not None, "handler exited without its JSON contract line"
+        assert rc == BROKER_PARKED_RC
+        assert out["status"] == "parked"
+        assert out["claim_id"]
+
+
 class TestBrokerMergeTelemetry:
 
     def _events(self, root):

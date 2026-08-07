@@ -5496,9 +5496,20 @@ def _broker_reconcile(supervision_claims, args, workspace_root, campaign, claim_
         state, _sha = _pr_merge_state(runner, repo, pr)
         return {"merged": "resolved", "open": "retry"}.get(state, "unknown")
 
-    outcome = supervision_claims.reconcile_claim(
-        project_root=args.project_root, workspace_root=workspace_root,
-        campaign_id=campaign, claim_id=claim_id, evidence_probe=probe)
+    try:
+        outcome = supervision_claims.reconcile_claim(
+            project_root=args.project_root, workspace_root=workspace_root,
+            campaign_id=campaign, claim_id=claim_id, evidence_probe=probe)
+    except supervision_claims.ClaimError as exc:
+        # The claim moved under us — a concurrent process finishing the same claim is
+        # exactly the race claims exist for. `ClaimError` is not a `LauncherError`, so
+        # letting it escape would exit `main` as a traceback: rc 1, no JSON line, and a
+        # caller branching on this command's documented contract silently mis-reading a
+        # security gate's outcome. Park instead, which is what "we cannot establish the
+        # outcome" already means here.
+        return _broker_result("parked", f"claim state moved during reconcile: {exc}",
+                              rc=BROKER_PARKED_RC, claim_id=claim_id,
+                              next_action="inspect the PR and the claim, then re-run")
 
     if outcome == "resolved":
         _state, sha = _pr_merge_state(runner, repo, pr)
