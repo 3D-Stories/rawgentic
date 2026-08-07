@@ -232,6 +232,31 @@ def _step_num(step) -> "float | None":
     return float(m.group(1)) if m else None
 
 
+#: Quoted runs, single or double. Non-greedy so adjacent quoted spans stay separate.
+_QUOTED_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
+
+
+def executable_text(command: str) -> str:
+    """`command` with quoted strings and any heredoc body removed. PURE.
+
+    A command that MENTIONS a needle is not a command that RUNS it, and matching raw
+    text could not tell the difference: measured on the #963 run, `grep -rn 'gh pr
+    merge' skills/` and a brief whose heredoc quoted the broker command each stamped a
+    merge, putting 30% of that run's wall clock under a step it never entered.
+
+    Quotes are stripped first so a quoted heredoc tag (`<< 'EOF'`) still reads as an
+    opener, then everything from the opener onward goes — a heredoc body is data being
+    written, never a command being run. Both directions err toward removing text: a
+    missed stamp leaves the previous position standing, while a wrong one corrupts the
+    record that phase telemetry is derived from.
+    """
+    if not isinstance(command, str):
+        return ""
+    text = _QUOTED_RE.sub(" ", command)
+    cut = text.find("<<")
+    return text if cut == -1 else text[:cut]
+
+
 def detect_signature(command: str, workflow, current_step=None) -> "tuple[str, str] | None":
     """Match a per-step command AGAINST THE WORKFLOW'S OWN table; None when the
     workflow is unknown or carries no table (marker-only workflows). entry_only
@@ -239,8 +264,9 @@ def detect_signature(command: str, workflow, current_step=None) -> "tuple[str, s
     the row's target — no recorded position, no entry stamp (conservative)."""
     if not isinstance(command, str) or not isinstance(workflow, str):
         return None
+    text = executable_text(command)
     for needle, hit, entry_only in _SIGNATURES.get(workflow, ()):
-        if needle not in command:
+        if needle not in text:
             continue
         if entry_only:
             cur, target = _step_num(current_step), _step_num(hit[0])
@@ -259,7 +285,10 @@ def _may_have_signature(command) -> bool:
     only knowable after the state read, which this gate avoids on misses)."""
     if not isinstance(command, str):
         return False
-    return any(needle in command
+    # The SAME stripped text `detect_signature` will match against: a prefilter that
+    # passed a grep would pay for the state read this gate exists to avoid.
+    text = executable_text(command)
+    return any(needle in text
                for table in _SIGNATURES.values() for needle, _, _ in table)
 
 

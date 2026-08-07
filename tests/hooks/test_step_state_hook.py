@@ -475,3 +475,59 @@ class TestBrokerMergeSignature:
         the prefilter would mean the hook never even reads state."""
         assert ssp._may_have_signature(
             "python3 hooks/launcher_lib.py broker-merge --pr 970") is True
+
+
+class TestSignaturesIgnoreQuotedAndHeredocText:
+    """A command that MENTIONS a needle is not a command that RUNS it (#963 follow-up).
+
+    Measured on the #963 run: 18 of 38 recorded step-transitions were stamped
+    "Step 14 Merge", accounting for 2,661s — 30% of the run's wall clock — with no
+    merge anywhere near them. `grep -rn 'gh pr merge' skills/` stamped a merge. So did
+    writing a brief whose heredoc body quoted the broker command. Every phase-timing
+    number in run_records.jsonl inherits that error, which makes the telemetry unusable
+    for exactly the optimization work it exists to serve.
+
+    A missed stamp leaves the prior position standing; a WRONG stamp corrupts the
+    record. So the stripper errs toward removing text, never toward matching more.
+    """
+
+    def test_a_grep_for_a_needle_is_not_that_command(self):
+        for cmd in ("grep -rn 'gh pr merge' skills/",
+                    'grep -rn "gh pr create" docs/',
+                    "rg \"security_scan.py scan\" hooks/"):
+            assert ssp.detect_signature(cmd, "wf2") is None, cmd
+
+    def test_a_heredoc_body_quoting_a_command_is_not_that_command(self):
+        cmd = ("cat > brief.md << 'EOF'\n"
+               "Run: python3 hooks/launcher_lib.py broker-merge --pr 973\n"
+               "EOF")
+        assert ssp.detect_signature(cmd, "wf2") is None
+
+    def test_a_python_c_string_mentioning_a_needle_does_not_stamp(self):
+        assert ssp.detect_signature(
+            'python3 -c "print(\'gh pr merge\')"', "wf2") is None
+
+    def test_real_invocations_still_stamp(self):
+        assert ssp.detect_signature("gh pr merge 973 --repo o/r --squash",
+                                    "wf2") == ("14", "Merge")
+        assert ssp.detect_signature("cd /repo && gh pr merge 973 --squash",
+                                    "wf2") == ("14", "Merge")
+        assert ssp.detect_signature(
+            "python3 hooks/launcher_lib.py broker-merge --pr 973 --issue 963",
+            "wf2") == ("14", "Merge")
+        assert ssp.detect_signature("gh pr create --fill", "wf2") == ("12", "Create PR")
+        assert ssp.detect_signature(
+            "python3 hooks/security_scan.py scan --base origin/main",
+            "wf2") == ("11.5", "Security Scan")
+
+    def test_a_commit_whose_message_mentions_a_needle_is_still_a_commit(self):
+        """The row ordering already handled this; now it holds because the message
+        text is gone before matching, not because `git commit ` happens to sort first."""
+        cmd = 'git commit -m "feat(driver): broker-merge and gh pr create (#963)"'
+        assert ssp.detect_signature(cmd, "wf2", current_step="7") == ("8", "Implementation")
+
+    def test_the_prefilter_agrees_with_the_matcher(self):
+        """A prefilter that passes text the matcher then rejects still pays for a
+        state read on every grep — the cost the prefilter exists to avoid."""
+        assert ssp._may_have_signature("grep -rn 'gh pr merge' skills/") is False
+        assert ssp._may_have_signature("gh pr merge 973 --squash") is True

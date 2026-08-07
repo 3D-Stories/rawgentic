@@ -37,7 +37,14 @@ from typing import Final
 # Env-frozen constants (clamped, loaded once at import — mirrors plan_lib.py)
 # ============================================================================
 
-_MAX_BYTES_DEFAULT = 200_000
+# 400_000 since 2026-08-07 (owner decision, #963 follow-up). At 200_000 a routine
+# rawgentic feature diff was refused — #963's own was 256,989 bytes, roughly 70% of it
+# tests — and the caller only learned that by spending a whole review round trip. A
+# reviewer who cannot see the tests cannot judge coverage, so the cap moved rather than
+# the diff shrinking. The REFUSAL is untouched (#834): oversize input is never
+# truncated-and-continued, because a silently shortened diff yields a review that looks
+# complete and is not.
+_MAX_BYTES_DEFAULT = 400_000
 _MAX_BYTES_MIN, _MAX_BYTES_MAX = 1_000, 5_000_000
 # 600s (not 300s): the review now pins high reasoning effort (below), which runs
 # ~1.4x slower than the medium default a fresh ~/.codex/config.toml would use.
