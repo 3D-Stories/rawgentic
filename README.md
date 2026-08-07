@@ -749,6 +749,20 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.140.0 (2026-08-07)
+- **Context-meter thresholds to 55/75, and older decisions get a rolling summary instead of
+  silence (#797, epic #906).** Owner-directed on 2026-08-01 — *"if 60-80 is the degredation point
+  lets change to 55 and 75"*. `DEFAULT_CHECK_IN_PCT` 35→55 and `DEFAULT_ACT_PCT` 50→75 in
+  `hooks/context_meter.py`; the tier gap is now 20, still above `MIN_TIER_GAP_PCT`, and both stay
+  env-tunable. Separately, the decision store is never trimmed and `session-start` bounded its
+  injection by taking only the newest 15 — so everything older was **silently dropped**, not
+  summarized. `decision_log.summarize_elided()` plus an opt-in `--summarize-elided` flag now
+  prepends one bounded block naming what was cut (count, id span, date span, busiest runs, never a
+  record body), and `session-start` passes it. The meter-overshoot caveat is deferred to #729/#734
+  with its reason recorded in `docs/context-meter.md`, which the issue's own acceptance criterion
+  permits. Two tests that hard-coded the old thresholds now derive them from the constants. No
+  workflow-spine change → no diagram REV. Suite 6342→6349.
+
 ### v3.139.4 (2026-08-07)
 - **The `/goal` send now recovers an unsubmitted paste, so a handoff stops dying at `goal_armed`
   (#835, epic #906).** SEND 3 of `perform_handoff` pasted the goal and polled, with no recovery
