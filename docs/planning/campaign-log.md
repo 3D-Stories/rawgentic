@@ -3302,3 +3302,63 @@ convention here. Branch `feat/947-supervision-behaviour-part-b`. PR, CI and merg
 filled by the next slot's pass. #927's own deferred integration (wiring
 `authority_permits`/the claims lifecycle into `hooks/launcher_lib.py`'s merge step) is
 NOT this slot — it is a future issue by the design's own §1a scope boundary.
+
+---
+
+## #892 — fuzzy candidate layer widens the #393 join backstop's recall (small-standard lane)
+
+**Shipped.** New `hooks/plan_lib.py::fuzzy_disposition_candidates(finding,
+folded_entries)` — pure function, no I/O, no new dependency. Wired into the single
+canonical join-backstop paragraph (`skills/implement-feature/references/step-04.md`
+item 7), which Steps 6 and 11 already reference by name, so all three gates pick it up
+from one edit. 12 new unit tests (`tests/hooks/test_plan_lib_dispositions.py::TestFuzzyDispositionCandidates`)
+plus 4 new drift guards (`tests/test_wf2_clarity.py::TestDispositionLedger`). Design
+addenda in `docs/planning/2026-07-15-393-disposition-ledger.md` and
+`docs/design/workflow-adversarial-review.md`. Version 3.138.1 → 3.139.0.
+
+**The problem.** The #393 join backstop's byte-identical `finding_key` match rarely
+re-fires: reviewers rephrase findings every pass, so an exact match against a settled
+ledger entry almost never recurs. On #880 the same settled `_retires` security claim
+was hand-adjudicated six times across gates because the mechanical path never fired
+once — filed as one of ten friction-assessment issues from that run (#888-#895).
+
+**The design.** Widen recall to the two STABLE identity fields — `location` +
+`category` — against DECLINED/DISSOLVED ledger entries only; ADOPTED matches keep
+their existing exact-match-only "possible failed remediation" surfacing, untouched. A
+fuzzy match surfaces as `possible re-litigation of <id>` for orchestrator adjudication
+and NEVER auto-dissolves — only the byte-identical join keeps that power, preserving
+the #393 honest bound exactly. Ran on the **small-standard lane**
+(`lane_decision('standard_feature', 4, ...)` → `lane`) — Step 3 collapsed to a brief
+design note (no peer consult despite the project's opt-in, no multi-approach
+brainstorm), Step 4 to the quality-bar self-review only, Step 5 to a 4-task checklist
+plan, Step 6 skipped, Step 9 to evidence-only. Step 11 (code review) and Step 11.5
+(security scan) ran unchanged, per the lane's non-negotiable retained set.
+
+**Step 4's self-review found two test-coverage gaps before any code existed** — missing
+multi-candidate-ordering and REOPENS-interaction test cases — both self-applied
+directly to the test plan (Medium, self-repairable, no loop-back).
+
+**Step 9 caught a real CI byte-ceiling overage**: the new step-04.md sentence pushed
+the file 630 bytes over its `test_wf2_prose_budget.py` ceiling. Trim-first per the
+#903/#963 precedent — compressed the new sentence plus three pre-existing
+non-operative rationale passages (no guard, command, or failure clause touched),
+landing 60 bytes under ceiling rather than raising it.
+
+**Step 11's cross-model review (gpt-5.6-sol, confidence 0.96) caught a real defect**:
+`fuzzy_disposition_candidates` hashed a finding's raw description while the existing
+exact-match join hashes it AFTER stripping a valid `REOPENS <id>:` prefix — so a
+finding legitimately reopening ledger entry X got X re-flagged as a candidate of
+itself, the exact case the exact-match exclusion exists to prevent. Fixed by mirroring
+the exact join's own stripping before hashing (red-first test reproducing the reported
+scenario, then green).
+
+**Decisions (this slot).** Split Task T4 (version bump + changelog) so the changelog's
+`Suite` token would reflect the real Step-9 count rather than an estimate — the version
+bump landed in one commit, the changelog in a second once the final count was known
+(then corrected again after Step 11's fix added a 12th test). Split the byte-ceiling
+fix into its own commit rather than amending the commit that caused it, per this
+project's never-amend convention.
+
+**Status.** Suite 6210→6226 (+16 net new tests, 0 regressions). Branch
+`feat/892-join-backstop-fuzzy-match`. PR, CI and merge SHA filled by the next slot's
+pass, per the established convention here.
