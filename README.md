@@ -749,6 +749,27 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.139.2 (2026-08-07)
+- **WAL rotation no longer destroys concurrent sessions' log entries.** `session-start`
+  filtered a snapshot of the WAL and `cp`-ed the result back over the live file with **no
+  lock**, so every append another session made between the read and the `cp` was lost.
+  Measured on a six-pane host: **3034 `INTENT` entries across all projects carry no outcome
+  at all** — 19% of 16037 operations — and one session lost a contiguous hour of entries
+  while a sibling pane ran. Losing a `DONE` whose `INTENT` survives orphans that operation
+  **forever**, because rotation deliberately keeps incomplete entries regardless of age, so
+  the pile can only grow; July, the heaviest concurrent-run month, holds 1715 of them. The
+  rewrite now holds an exclusive `flock` on `<wal>.lock` and **re-reads the WAL inside the
+  lock** — filtering the pre-lock snapshot would clobber exactly the appends the lock
+  exists to protect — and `wal_append_phase` takes the same lock. The two sides fail in
+  **opposite** directions on purpose: rotation is rare and destructive, so no lock means
+  **no rotation** (a growing file is recoverable, a clobbered one is not); the append runs
+  on every tool call and is additive, so it **proceeds** past a busy lock rather than cost a
+  log line. Verified red against the pre-fix hook: it rewrote 10400 lines to 5200 while a
+  child process held the lock, where the fixed hook leaves the file untouched. Waits are
+  env-tunable (`RAWGENTIC_WAL_ROTATE_LOCK_WAIT_S`, `RAWGENTIC_WAL_APPEND_LOCK_WAIT_S`).
+  `wal-guard` still denies under `strict`, confirmed directly. No workflow-spine change →
+  no diagram REV. Suite 6323→6328.
+
 ### v3.139.1 (2026-08-07)
 - **A WF2 or WF3 run can no longer finish having recorded no timing at all (#976
   follow-up).** The #976 run produced `{"status": "absent", "steps": [],

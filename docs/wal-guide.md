@@ -107,6 +107,20 @@ runs WAL recovery:
 2. **Sanitize** -- pipes through `jq -c '.'`, discarding non-JSON lines.
 3. **Rotate** -- when the file exceeds **5000 lines**, entries older than
    **7 days** are pruned. Incomplete operations are preserved regardless of age.
+   The rewrite happens **under an exclusive `flock` on `<wal>.lock`**, and the filter
+   **re-reads the WAL inside that lock** -- `wal_append_phase` takes the same lock, so an
+   append can never land in the window where rotation is truncating the file. Before this,
+   rotation filtered a snapshot taken *before* the rewrite and `cp`-ed the result back with
+   no lock at all, so every append another session made in between was destroyed. Measured
+   2026-08-07: **3034 INTENT entries across all projects carried no outcome** -- 19% of
+   16037 operations -- and one session lost a contiguous hour of entries while a sibling
+   pane ran. Losing a `DONE` whose `INTENT` survives orphans that operation *forever*,
+   because this step keeps incomplete entries regardless of age, so the pile only grows.
+   **No lock, no rotation:** if `flock` is missing or the lock is held past
+   `RAWGENTIC_WAL_ROTATE_LOCK_WAIT_S` (default 5), the rewrite is skipped. A growing file
+   is recoverable; a clobbered one is not. The append side is the opposite --
+   **fail-OPEN** past `RAWGENTIC_WAL_APPEND_LOCK_WAIT_S` (default 2) -- because it runs on
+   every tool call and must never cost a log line.
 4. **Report** -- incomplete INTENT entries (no DONE/FAIL) are injected into the
    session context as a recovery notice (up to 20 shown). Entries older than
    **`WAL_RECOVERY_MAX_AGE_DAYS`** (default **7**, clamped to [1,365]; a malformed
