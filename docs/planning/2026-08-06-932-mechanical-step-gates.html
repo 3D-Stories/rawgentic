@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>#932 Mechanical step gates</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-design{background:radial-gradient(1200px 600px at 50% -10%,rgba(124,156,255,.10),transparent 60%),var(--bg)}
+.tpl-design .wrap{max-width:1080px;padding:0 clamp(16px,4vw,32px) 64px}
+.tpl-design header{padding:clamp(24px,4vw,56px) 0 12px;border-bottom:none;margin-bottom:18px}
+.tpl-design h1{font-size:clamp(26px,3.4vw,40px)}
+.tpl-design h2{font-size:20.8px;margin:1.9em 0 .6em}
+
+/* #76 — the frame's companions only. Two rules, deliberately few.
+   An earlier draft of this PR also added a two-column `.dz-options` grid "so the wide measure
+   pays for itself". Both wrong: the grid was DEAD (the `.dz-options` rule further down sets
+   `display:block` at equal specificity and later source order), and it contradicted a decision
+   this file already records — cards stack FULL WIDTH because "a trade-off you have to READ is
+   not a 220px tile". The width pays for itself inside each card, where the for/against grid is
+   two columns and needs the room. Deleted rather than reconciled. */
+.tpl-design h1{line-height:1.2;max-width:22ch}
+.tpl-design header .eyebrow{font-size:11px;letter-spacing:.14em}
+.tpl-design .dz-lead{background:var(--surface);border:1px solid var(--line);
+border-left:4px solid var(--accent);border-radius:12px;padding:4px 20px 14px;margin:6px 0 26px}
+.tpl-design .dz-lead>p:first-child{font-size:17.5px;line-height:1.55;color:var(--ink);font-weight:550}
+/* Option cards. Stacked full-width, because a trade-off you have to READ is not a 220px tile;
+   the shared layer's flex row is overridden here at higher specificity. */
+.tpl-design .dz-options{margin:22px 0;display:block;counter-reset:dz-opt}
+.tpl-design .dz-options .blk-opt{counter-increment:dz-opt;display:grid;gap:10px 14px;
+grid-template-columns:1fr 1fr;grid-template-areas:"head head" "pro con";
+background:var(--surface);border:1px solid var(--line);border-radius:14px;
+padding:16px 18px;margin:0 0 16px;flex:none}
+.tpl-design .dz-options .blk-opt>.blk-title{grid-area:head;display:flex;gap:12px;
+align-items:baseline;font-size:19px;letter-spacing:-.01em;margin:0}
+.tpl-design .dz-options .blk-opt>.blk-title::before{content:counter(dz-opt,decimal-leading-zero);
+font:700 22px/1.1 ui-monospace,Menlo,Consolas,monospace;color:var(--accent);flex:none}
+.tpl-design .dz-options .blk-for{grid-area:pro;background:var(--req-c-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+.tpl-design .dz-options .blk-against{grid-area:con;background:var(--sev-high-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+/* #134 SETTLED THE FOLLOW-UP THIS COMMENT USED TO NAME. It said these labels were CSS-generated
+   content, so not dependable semantic markup, that the reference uses real DOM text
+   (`<h4>Pros</h4>`), and that making it semantic "means changing the renderer, which moves every
+   style's bytes and so cannot ride in a per-template PR". That is exactly what #134 did: `_options`
+   now emits a real `.blk-lbl` element, every rich style's bytes moved, and `plain` did not.
+   So this is no longer a `::before` at all — it RESTYLES the markup label the renderer emits.
+   Only the typography is set here; the colours come from the shared layer, which reaches this
+   template because the wrapper carries both `blk-options` and `dz-options`. `text-transform`
+   keeps the visible form FOR/AGAINST while the accessible name stays the emitted "For"/"Against".
+   The space the renderer emits after the label collapses harmlessly against a block. */
+.tpl-design .dz-options .blk-lbl{display:block;font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;text-transform:uppercase}
+/* Restated at (0,4,0): the card rule above is (0,3,0) and was silently beating the shared
+   `.blk-options .is-chosen` (0,2,0), so the chosen card lost its accent border. Measured. */
+.tpl-design .dz-options .blk-opt.is-chosen{border-color:var(--accent);border-width:2px}
+.tpl-design .dz-options .blk-opt.is-rejected{opacity:.72}
+.tpl-design .dz-options .is-chosen>.blk-title::after{content:"CHOSEN";font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent);
+border:1px solid var(--accent);border-radius:999px;padding:1px 8px;margin-left:auto;flex:none}
+@media(max-width:640px){.tpl-design .dz-options .blk-opt{grid-template-columns:1fr;
+grid-template-areas:"head" "pro" "con"}}
+/* A today/proposed pair is TWO ROOTS in one `nodes compare` block, so the
+   grid goes on the top-level list. Two separate fences cannot pair — each is
+   its own wrapper with a single child. */
+@media(min-width:720px){.tpl-design .dz-compare>ul{grid-template-columns:1fr 1fr}}
+.tpl-design .dz-compare{background:var(--code);border-radius:12px;padding:10px 14px}
+/* The verdict band — `.recommend` in the reference. A gradient wash rather than a flat fill, so
+   the decision reads as the page's conclusion and not as one more callout. */
+.tpl-design .dz-decision{margin:24px 0 8px}
+.tpl-design .dz-decision>.blk-callout{border:1px solid var(--accent);border-left-width:1px;
+border-radius:14px;padding:16px 18px;
+background:linear-gradient(180deg,var(--accent-soft),transparent)}
+.tpl-design .dz-decision>.blk-callout>.blk-title::before{content:"DECISION";display:block;
+font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent)}
+/* Trade-off table. Styled, deliberately NOT markered: a markdown table emits a bare <table> with
+   no hook, and `section_class` is not a table marker — using it would flip `design` into
+   sectioned rendering and demote its h2s. */
+.tpl-design table{border-collapse:collapse;width:100%;margin:14px 0}
+.tpl-design thead th{font:700 11px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);
+border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
+.tpl-design tbody td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.tpl-design tbody tr:nth-child(even){background:var(--code)}
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+
+.blk-options{display:flex;flex-wrap:wrap;gap:12px}
+.blk-options .blk-opt{flex:1 1 220px;background:var(--surface);border:1px solid var(--line);
+border-radius:12px;padding:12px 14px}
+.blk-options .is-chosen{border-color:var(--accent);border-width:2px}
+.blk-options .is-rejected{opacity:.72}
+.blk-options .blk-title{display:block;font-weight:700;margin-bottom:6px}
+.blk-options .blk-for,.blk-options .blk-against{display:block;font-size:13px}
+/* #134 — the stance label is MARKUP now (`_options` emits `.blk-lbl`), not `content:"+ "`/`"- "`
+   on a pseudo-element. Generated content is not dependable semantic markup, and keeping a copy
+   here beside the real one would both drift and double-announce. A word also beats a bare sign at
+   a glance and does not lean on colour alone — the argument `design.py` had already made for its
+   own labels. Styled, never hidden: with the glyphs gone, hiding this leaves no stance signal.
+
+   The gap between label and prose is a REAL SPACE in the markup, not a margin here. The old
+   `content:"+ "` carried its own trailing space; an early version of this dropped it and leaned on
+   `margin-right`, which separates the label visually while leaving the DOM text fused as
+   "Forfewest files" — so text extraction, copy-paste, and any consumer that concatenates text nodes
+   got the exact failure this change exists to prevent. One space does both jobs, so there is no
+   margin here to keep in sync with it. Found twice independently: in a browser, and by review. */
+.blk-options .blk-lbl{font-weight:700}
+.blk-options .blk-for .blk-lbl{color:var(--req-c)}
+.blk-options .blk-against .blk-lbl{color:var(--sev-high)}
+
+:root{--accent:#f2a65e;}
+:root[data-theme=dark]{--accent:#f2a65e;}
+:root[data-theme=light]{--accent:#a26211;}
+@media print{:root,:root[data-theme=dark]{--accent:#a26211;}}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-06 20:27 MDT</div>
+<h1>#932 Mechanical step gates</h1>
+
+</header>
+<main>
+<div class="dz-lead"><p>WF2&#x27;s mandatory-step list is prose, and a session under context pressure skips it. This proposes the one change that makes the list enforceable: <strong>an append-only completion ledger, gated at <code>PreToolUse</code> on the artifact each step alone can produce.</strong> Everything else the gate needs — detection, the deny mechanism, session binding — already exists in this repo.</p>
+<div class="blk blk-verdict"><div class="blk-row is-adopt"><span class="blk-key">adopt</span><span class="blk-text">The mechanism AND its fail-mode split already shipped in #976; only the ledger is missing.</span></div><div class="blk-row is-correct"><span class="blk-key">correct</span><span class="blk-text">The obvious framing — &quot;gate on the WAL&quot; — is wrong: the WAL logs tool calls, not steps.</span></div><div class="blk-row is-risk"><span class="blk-key">risk</span><span class="blk-text">A false positive blocks every session in the workspace, so shadow mode is not optional.</span></div></div>
+<p><strong>Feeds:</strong> #932 (<code>decide(gates)</code>) — supplies its AC (i) candidate list and a trial for AC (ii). <strong>Builds on:</strong> #976, <strong>merged as PR #978 on 2026-08-06</strong> — <code>hooks/campaign-merge-guard.py</code> and <code>hooks/campaign_merge_guard_lib.py</code>, registered <code>PreToolUse</code> on matcher <code>Bash</code>. <strong>Status:</strong> design proposal, report-only. No code written, no issues filed (D179).</p></div>
+<h2>The problem, as an incident rather than a preference</h2>
+<p><code>projects/rawgentic/CLAUDE.md</code> mistake #8 records the failure by name:</p>
+<blockquote><strong>Skipping WF2 mandatory steps under context pressure.</strong> Step 11 (code review) once caught two</blockquote>
+<blockquote>Critical vulnerabilities on a run judged &quot;too simple to review&quot;.</blockquote>
+<p>Steps 1–5, 7–9, 11, 11.5, 12 and 16 are declared mandatory in a Markdown list. The workspace manual repeats the rule. The repo manual repeats it again. It has still happened.</p>
+<p>This is not a discipline problem awaiting a firmer sentence. Metaswarm&#x27;s authors reached the same conclusion after shipping regressions past a checklist (<code>docs/coverage-enforcement.md</code>):</p>
+<blockquote>Telling agents &quot;check coverage before pushing&quot; in a checklist is not enforcement — it&#x27;s a</blockquote>
+<blockquote>suggestion. Agents skip steps, misread thresholds, or run the wrong command.</blockquote>
+<h2>The design fork</h2>
+<div class="blk blk-options dz-options"><div class="blk-opt is-chosen"><span class="blk-title">Deterministic PreToolUse gate on artifact evidence</span><span class="blk-for"><span class="blk-lbl">For</span> Objective, cheap, reuses #976&#x27;s proven deny path</span><span class="blk-against"><span class="blk-lbl">Against</span> Needs a completion ledger that does not exist yet</span></div><div class="blk-opt"><span class="blk-title">LLM-judged prompt/agent hook (#932&#x27;s new capability)</span><span class="blk-for"><span class="blk-lbl">For</span> Can evaluate subjective gates no artifact can prove</span><span class="blk-against"><span class="blk-lbl">Against</span> Per-fire cost, non-deterministic, unmeasured here</span></div><div class="blk-opt is-rejected"><span class="blk-title">Repurpose step_state.py as the gate</span><span class="blk-for"><span class="blk-lbl">For</span> No new store; the file already exists</span><span class="blk-against"><span class="blk-lbl">Against</span> Inverts a documented FAIL-OPEN contract two consumers depend on</span></div><div class="blk-opt is-rejected"><span class="blk-title">Keep it prose, dial the wording harder</span><span class="blk-for"><span class="blk-lbl">For</span> Zero build cost</span><span class="blk-against"><span class="blk-lbl">Against</span> Already measured to fail, repeatedly</span></div></div>
+<p>The first two are complements, not rivals. Objective conditions belong in the deterministic gate; subjective ones are exactly what #932&#x27;s <code>type:&#x27;prompt&#x27;</code> and <code>type:&#x27;agent&#x27;</code> hooks are for, and are where D175 correctly left prose.</p>
+<h2>What already exists, and why none of it can be the gate today</h2>
+<p>This section exists because the obvious proposal is wrong, and the reason is only visible in the code. Each claim below was verified first-hand on 2026-08-06.</p>
+<div class="blk blk-nodes dz-compare"><ul><li class="blk-node"><span class="blk-label">Already built — reuse</span><ul><li class="blk-node"><span class="blk-edge">PostToolUse:Bash</span><span class="blk-label">step_state_post.py</span><span class="blk-text">derives step transitions from artifacts</span></li><li class="blk-node"><span class="blk-edge">shipped</span><span class="blk-label">wal-guard</span><span class="blk-text">the PreToolUse deny wire format</span></li><li class="blk-node"><span class="blk-edge">shipped #978</span><span class="blk-label">campaign-merge-guard.py</span><span class="blk-text">PreToolUse hard enforcement + split fail-mode</span></li><li class="blk-node"><span class="blk-edge">$CLAUDE_CODE_SESSION_ID</span><span class="blk-label">session registry</span><span class="blk-text">binds session to project</span></li></ul></li><li class="blk-node"><span class="blk-label">Missing — must be built</span><ul><li class="blk-node"><span class="blk-edge is-proposed">new</span><span class="blk-label">completion ledger</span><span class="blk-text">append-only record of which steps passed</span></li><li class="blk-node"><span class="blk-edge is-proposed">new</span><span class="blk-label">artifact evaluator</span><span class="blk-text">re-checks evidence on disk</span></li></ul></li></ul></div>
+<h3>The WAL logs tool calls, not workflow steps</h3>
+<p><code>claude_docs/wal/&lt;project&gt;.jsonl</code> carries four phases. Counted live on this workspace&#x27;s own file: <code>INTENT</code> 2,486 · <code>DONE</code> 1,881 · <code>FAIL</code> 73 · <code>STOP</code> 79. The record shape is <code>{ts, phase, session, tool, tool_use_id, summary, cwd}</code>, plus <code>project</code> on <code>STOP</code>.</p>
+<p>There is no workflow field, no step field, and no verdict for anything larger than one tool call. <strong>The WAL cannot answer &quot;did Step 11 run and pass?&quot;</strong> It answers only &quot;was a command executed.&quot;</p>
+<h3><code>step_state.py</code> is a now-pointer, and forbids this use in capitals</h3>
+<p><code>claude_docs/wal/&lt;project&gt;.state.json</code> holds exactly one record, overwritten at each step entry:</p>
+<pre><code>{&quot;schema_version&quot;:1,&quot;project&quot;:&quot;rawgentic&quot;,&quot;workflow&quot;:&quot;wf2&quot;,&quot;step&quot;:&quot;14&quot;,
+ &quot;step_title&quot;:&quot;Merge&quot;,&quot;issue&quot;:964,&quot;session_id&quot;:&quot;...&quot;,&quot;entered_at&quot;:&quot;2026-08-07T01:16:04Z&quot;}</code></pre>
+<p>Entering Step 14 erases any trace of Step 11, so &quot;was Step 11 reached&quot; is unanswerable by construction. Its own docstring settles the rest:</p>
+<blockquote>FAIL-OPEN, EVERYWHERE, ALWAYS: this is never a gate. [...] Contrast <code>hooks/wal-guard</code>, which is</blockquote>
+<blockquote>fail-CLOSED [...] that hook is a security boundary; this one is pure telemetry.</blockquote>
+<p>Two consumers — the statusline and <code>hooks/wal-context</code> — already depend on that contract.</p>
+<h3><code>step_state_post.py</code> already solved the hard half</h3>
+<p>It derives the now-pointer from artifacts the orchestrator reliably produces, precisely because the manual write was under-complied with (&quot;observed under-complied twice under batching on 2026-07-19&quot;). Its MARKER detector parses <code>### WF&lt;n&gt; Step &lt;X&gt; … DONE (#&lt;issue&gt;)</code> from a session-notes append; its SIGNATURE detector recognises per-step commands. <strong>Detection is not the gap. Durable recording is.</strong></p>
+<h2>The missing primitive: a completion ledger</h2>
+<div class="blk blk-callout dz-decision"><div class="blk-callout is-note"><div class="blk-title">Add an append-only step-completion record; do not repurpose the now-pointer</div><p>A fifth WAL phase, or a sibling <code>&lt;project&gt;.steps.jsonl</code>. It must be append-only, must name an
+evidence artifact rather than only a verdict, and must be written by the detector that already
+exists — one helper, one home.</p></div></div>
+<pre><code>{&quot;ts&quot;:&quot;2026-08-06T22:41:09Z&quot;,&quot;phase&quot;:&quot;STEP&quot;,&quot;session&quot;:&quot;&lt;uuid&gt;&quot;,&quot;project&quot;:&quot;rawgentic&quot;,
+ &quot;workflow&quot;:&quot;wf2&quot;,&quot;issue&quot;:964,&quot;step&quot;:&quot;11&quot;,&quot;step_title&quot;:&quot;Code Review&quot;,
+ &quot;verdict&quot;:&quot;pass&quot;,&quot;evidence&quot;:&quot;docs/reviews/2026-08-06-964-review.md&quot;}</code></pre>
+<h3>Gate on artifacts, not on self-declaration</h3>
+<p>The strongest form never reads <code>verdict</code>. It re-checks the artifact. This is not a new principle here — the workspace manual already requires it for deploys:</p>
+<blockquote>Gate &quot;the new build is live&quot; on a signal only the new build emits [...] During a zero-downtime</blockquote>
+<blockquote>swap a 200 can be the OLD container.</blockquote>
+<p>A marker saying &quot;Step 11 — DONE&quot; is the 200. The review report matching this run&#x27;s issue and branch is the signal only the real step emits.</p>
+<table>
+<thead><tr><th>Step</th><th>Artifact only that step can produce</th></tr></thead>
+<tbody>
+<tr><td>11 — code review</td><td>a review report under <code>docs/reviews/</code> naming this issue</td></tr>
+<tr><td>11.5 — adversarial diff review</td><td>the WF5 report for this branch</td></tr>
+<tr><td>12 — security scan</td><td>a <code>security_scan.py</code> receipt for this tree</td></tr>
+<tr><td>16 — run record</td><td>the appended line in <code>docs/measurements/run_records.jsonl</code></td></tr>
+</tbody>
+</table>
+<p><strong>Honest limit:</strong> this proves an artifact exists, not that thought went into it. A determined model could forge a file. That is acceptable — the failure being fixed is <em>skipping under pressure</em>, not deception. Raising the cost from &quot;say nothing&quot; to &quot;forge a report&quot; is the whole win. Do not oversell it as tamper-proof.</p>
+<h2>Fail mode: the split that keeps this safe</h2>
+<p>Repo convention says fail mode is per-hook: security boundary → fail-closed, convenience → fail-open. This gate is neither, and forcing it into one is the main way this design could hurt.</p>
+<p><strong>The correct axis is not open versus closed. It is &quot;could not evaluate&quot; versus &quot;evaluated, and the evidence is absent.&quot;</strong></p>
+<p>This is not a new proposal. <strong>#976 shipped exactly this split, as decision D186</strong>, and <code>hooks/campaign-merge-guard.py</code> states it in its own docstring:</p>
+<blockquote>Policy: SPLIT at the classification boundary (#976 AC3, decision D186)</blockquote>
+<blockquote>  - before a command is classified  -&gt; fail-OPEN, with a stderr diagnostic</blockquote>
+<blockquote>  - after it is a raw <code>gh pr merge</code>  -&gt; fail-CLOSED</blockquote>
+<p>So the safety question this design most needed to answer is already settled in the repo, by a merged hook with a decision ID. This proposal adopts it verbatim rather than re-deciding it.</p>
+<table>
+<thead><tr><th>Condition</th><th>Decision</th></tr></thead>
+<tbody>
+<tr><td>Ledger unreadable, Python missing, any exception</td><td><strong>allow</strong>, log to stderr</td></tr>
+<tr><td>No WF2/WF3 run in progress for this session and project</td><td><strong>allow</strong>, silently — this is most work</td></tr>
+<tr><td>Run in progress, evidence artifact present</td><td><strong>allow</strong></td></tr>
+<tr><td>Run in progress, evidence artifact <strong>absent</strong></td><td><strong>deny</strong>, naming the exact remedy</td></tr>
+</tbody>
+</table>
+<p>A hook that denies because it crashed is an outage. A hook that allows because it crashed is a gate reporting green while broken — the manufactured-green failure the operating instructions forbid. This split refuses both: it never denies on ignorance, and every could-not-evaluate leaves a log line, so an allow is never silently mistaken for a pass.</p>
+<h3>Scope guard — the highest-risk detail</h3>
+<p>The gate must fire <strong>only</strong> when a WF2/WF3 run is genuinely in progress for this session and this project. A docs PR, a hotfix, an ad-hoc session, another project in the same workspace — all pass untouched. Getting this wrong blocks the workspace, which is why it is the first thing the trial measures. Session binding comes from <code>$CLAUDE_CODE_SESSION_ID</code>, never <code>.current_session_id</code> (workspace mistake #3).</p>
+<h3>The override is loud, not absent</h3>
+<p>Metaswarm wrote an escape hatch into its own gate — skippable when the agent judges the work simple. That is a gate disabled by the thing it gates. A gate with no override is also wrong: it strands a real emergency. Proposal: an override that works but is <strong>visible</strong> — it allows the command, writes a <code>STEP</code> record with <code>verdict:&quot;override&quot;</code> and the reason, and surfaces in the run record. Bypass stays possible; silent bypass does not.</p>
+<h2>Candidate list — #932&#x27;s AC (i)</h2>
+<p>#932&#x27;s test is <em>&quot;if violating it once is an incident, make it a hook.&quot;</em> Applied:</p>
+<div class="blk blk-chips"><span class="blk-chip is-done">Step 11 review before gh pr create</span><span class="blk-chip is-done">Step 12 security scan before PR</span><span class="blk-chip is-done">Step 16 run record before completion</span><span class="blk-chip is-wip">Steps 1-5 ordering (needs ledger first)</span><span class="blk-chip is-wip">Completion honesty (LLM-judged)</span><span class="blk-chip is-wip">Marker discipline (LLM-judged)</span><span class="blk-chip is-blocked">One-question-at-a-time (stays prose)</span></div>
+<p>Tier 1 is deterministic and objective — the three marked done above are the adopt candidates, and <strong>Step 11 before <code>gh pr create</code> is the trial for AC (ii)</strong>: it is the rule whose violation already cost two Critical vulnerabilities. Tier 2 (step ordering) is objective but meaningless without the ledger. Tier 3 — completion honesty, marker discipline — is genuinely subjective; no artifact can prove it, which is exactly where the LLM-judged hooks earn their place. The register and one-question rules are explicit non-candidates: violating them is friction, not an incident.</p>
+<h2>Rollout: shadow mode first, and it is not optional</h2>
+<p>A hook that denies <code>gh pr create</code> has workspace-wide blast radius.</p>
+<ol>
+<li><strong>Shadow.</strong> Ship the ledger writer and evaluator with the deny path disabled. Log every decision</li>
+</ol>
+<p>   it <em>would</em> have made.</p>
+<ol start="2">
+<li><strong>Measure.</strong> Over real runs, classify each would-have-denied event as a true skip or a false</li>
+</ol>
+<p>   positive. One unexplained false positive resets the clock.</p>
+<ol start="3">
+<li><strong>Enforce</strong> one rule — Step 11 before <code>gh pr create</code>.</li>
+<li><strong>Widen</strong> one rule at a time, each with its own shadow period.</li>
+</ol>
+<p>Undo at any stage is removing one entry from <code>hooks/hooks.json</code> and reinstalling the plugin.</p>
+<h2>Risks, including the one most likely to be wrong</h2>
+<ul>
+<li><strong>Highest blast radius:</strong> the scope guard. Wrong, it blocks the workspace. Shadow mode measures</li>
+</ul>
+<p>  exactly this.</p>
+<ul>
+<li><strong>The claim I would most expect to be wrong:</strong> that <code>step_state_post.py</code>&#x27;s detectors fire</li>
+</ul>
+<p>  reliably enough to drive a ledger. Its own docstring reports the manual path was under-complied   with twice, which is why it exists — but its detectors have never carried a <em>blocking</em> decision.</p>
+<ul>
+<li><strong>Concurrency.</strong> Several sessions share this workspace. The ledger must be append-only with</li>
+</ul>
+<p>  per-line records, never read-modify-write.</p>
+<ul>
+<li><strong>Scope creep into #976.</strong> #976 (merged, #978) owns campaign merges; this owns WF2/WF3 step</li>
+</ul>
+<p>  completion. Two PreToolUse:Bash hooks now coexist, so a third must not re-classify commands the   merge guard already owns. If they converge on one evaluator, that is a follow-up, not a reason to   couple them now.</p>
+<h2>What this does not decide</h2>
+<p>Whether to adopt at all — that is #932&#x27;s ruling, and it needs the trial first. Where the ledger lives: a fifth WAL phase (reuses existing rotation and path resolution) or a sibling file (cleaner separation). Whether Tier 3 uses <code>type:&#x27;prompt&#x27;</code> or <code>type:&#x27;agent&#x27;</code> — that needs #932&#x27;s cost measurement.</p>
+<h2>Confirmed vs inferred</h2>
+<p><strong>Confirmed</strong> (read first-hand in this repo and workspace, 2026-08-06): the WAL&#x27;s four phases and record shape, counted from the live file; <code>step_state.json</code>&#x27;s single-record structure and its fail-open docstring; <code>step_state_post.py</code>&#x27;s two detectors; <code>wal-guard</code>&#x27;s deny wire format; the text of #976 and #932; that #976 merged as PR #978 and its D186 split-fail-mode docstring, read from <code>hooks/campaign-merge-guard.py</code> on <code>origin/main</code> at <code>16c07b8d</code>; metaswarm&#x27;s <code>coverage-enforcement.md</code> quotation.</p>
+<p><strong>Inferred, not confirmed:</strong> that <code>step_state_post.py</code>&#x27;s detectors are reliable enough to gate on; that no fourth mechanism already records step completion somewhere unread; that the artifact table names the right file for every step. Each needs checking against the current WF2 skill text before implementation.</p>
+<div class="blk blk-provenance"><dl><dt>feeds</dt><dd>#932 decide(gates)</dd><dt>builds on</dt><dd>#976 PreToolUse hard enforcement</dd><dt>prior art</dt><dd>dsifry/metaswarm, read 2026-08-06</dd><dt>verified</dt><dd>2026-08-06</dd></dl></div>
+
+</main>
+<footer>Last updated: 2026-08-06 20:27 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
