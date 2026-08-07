@@ -116,6 +116,13 @@ Campaign-wide policy lives in the state file's `policy` object so a mid-run
 compaction can't lose it:
 
 - `order` — `impact` (hand-ordered) or `dependency` (topo-sorted; see below).
+- `merge_policy` — `auto-merge-scoped-to-run` or `pr-only`, written from the epic-run
+  Step-2 answer. **This is the field the supervision authority gate actually reads**
+  (`supervision_route.evaluate_campaign`): during a declared absence, a merge is
+  permitted only on the EXACT string `auto-merge-scoped-to-run` and only when no
+  tightening override denies it. Any other value, and an absent key, are no grant — so
+  `broker-merge` refuses. Documented here since #963, when the gate turned out to be
+  reading a key no prose had ever told anyone to write.
 - `deploy` — `per-issue` (deploy after each merge), `batch` (deploy once at the
   end), or `none` (library / PR-terminal campaigns — rawgentic itself). Default
   `none` for libraries, `per-issue` when `has_deploy` and not headless.

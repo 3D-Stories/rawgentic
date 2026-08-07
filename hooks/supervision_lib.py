@@ -64,6 +64,15 @@ _MAX_CAMPAIGN_ID = 128
 
 _REL_PATH = ("claude_docs", ".supervision.json")
 
+#: The durable declaration marker (#963 AC2). It sits BESIDE the state file and answers
+#: the one question the state file cannot answer once it is gone: "was a declaration
+#: live?". Without it, deleting `.supervision.json` mid-absence read as `absent` ->
+#: `attended` -> `authority_permits` True for every action kind (#947 Step 11 findings
+#: 1/4/7). It is deliberately NOT an "ever declared" tombstone: `mark_attended` clears it
+#: (`declared: false`), because deleting an ATTENDED record widens nothing and denying
+#: there would be a pure fail-closed outage.
+_MARKER_REL_PATH = ("claude_docs", ".supervision.declared.json")
+
 #: (record, load_status) where load_status is "absent" | "valid" | "invalid".
 Loaded = namedtuple("Loaded", "record load_status")
 
@@ -121,6 +130,11 @@ def supervision_path(workspace_root: str) -> str:
     return os.path.join(workspace_root, *_REL_PATH)
 
 
+def declared_marker_path(workspace_root: str) -> str:
+    """The declaration marker's path — a sibling of the state file (#963)."""
+    return os.path.join(workspace_root, *_MARKER_REL_PATH)
+
+
 #: Every key the writer emits. A record missing any of them is INVALID rather than
 #: partially-honoured: a schema-incomplete file must fail SAFE (invalid forbids installs),
 #: never read as a permissive `attended` (pre-PR review finding). `until` may be null but
@@ -155,15 +169,150 @@ def _record_is_sane(record) -> bool:
     return True
 
 
-def read_state(workspace_root) -> Loaded:
-    """Read the state file. NEVER raises, and never searches for the workspace root.
+def _read_json_capped(path: str, what: str):
+    """`(data, status)` with status "absent" | "present" | "invalid". NEVER raises.
 
-    The caller supplies the root because both consumers already have it:
-    `context_meter` from `find_workspace(cwd)`, `scanner_bootstrap` from `--workspace`.
-    Searching again here would pay for it twice.
+    Shared by the state file and the declaration marker (#963) — both are small JSON
+    files read on a per-tool-call path, and every failure mode below was a real review
+    finding on the state read. Only `ENOENT` at `stat` time is an absence; everything
+    else is invalid, so a corrupt or racing file can never read as "nobody declared".
+    """
+    # A DANGLING symlink is not an absence — something was put there deliberately and now
+    # does not resolve. `os.stat` follows the link and would report FileNotFoundError,
+    # which would read as "nobody declared anything" and permit installs (pre-PR review
+    # finding). `lstat` sees the link itself.
+    try:
+        if os.path.islink(path) and not os.path.exists(path):
+            _warn(f"{what} is a dangling symlink; treating as invalid")
+            return None, "invalid"
+    except OSError:
+        return None, "invalid"
+
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return None, "absent"
+    except OSError as exc:
+        _warn(f"{what} unreadable ({exc}); treating as invalid")
+        return None, "invalid"
+
+    # Refuse non-regular files BEFORE opening. A FIFO here would block `open` and hang a
+    # hook that runs on every tool call; a device or directory would misbehave in its own
+    # way. `context_meter._read_capped` refuses non-regular files for the same reason.
+    if not stat.S_ISREG(st.st_mode):
+        _warn(f"{what} is not a regular file; treating as invalid")
+        return None, "invalid"
+    if st.st_size > READ_CAP_BYTES:
+        _warn(f"{what} exceeds {READ_CAP_BYTES} bytes; treating as invalid")
+        return None, "invalid"
+
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = fh.read(READ_CAP_BYTES + 1)
+    except FileNotFoundError:
+        # `stat` succeeded a moment ago, so the file EXISTED and then vanished. That is a
+        # race, not an absence: reporting absent here would let a delete-during-read
+        # permit installs while a declaration was in force (pre-PR review finding).
+        _warn(f"{what} vanished while being read; treating as invalid")
+        return None, "invalid"
+    # ValueError catches UnicodeDecodeError, which is NOT an OSError: invalid UTF-8 in
+    # the file would otherwise raise straight out of a hook that runs on every tool call
+    # and break the never-raises contract (pre-PR review finding, confirmed live).
+    except (OSError, ValueError) as exc:
+        _warn(f"{what} unreadable ({exc}); treating as invalid")
+        return None, "invalid"
+
+    # The size check above and this read are not atomic, so re-check what actually
+    # arrived: a file that grew past the cap in between must not slip through just
+    # because it still happens to parse.
+    if len(raw) > READ_CAP_BYTES:
+        _warn(f"{what} exceeds {READ_CAP_BYTES} bytes; treating as invalid")
+        return None, "invalid"
+
+    try:
+        return json.loads(raw), "present"
+    except ValueError as exc:
+        _warn(f"{what} is not valid JSON ({exc}); treating as invalid")
+        return None, "invalid"
+
+
+def _marker_is_sane(marker) -> bool:
+    if not isinstance(marker, dict):
+        return False
+    if not isinstance(marker.get("schema_version"), int) or isinstance(
+            marker.get("schema_version"), bool):
+        return False
+    if not isinstance(marker.get("declared"), bool):
+        return False
+    revision = marker.get("revision")
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+        return False
+    return True
+
+
+def read_marker(workspace_root: str):
+    """`(marker, status)` with status "absent" | "valid" | "invalid" (#963). Never raises."""
+    marker, status = _read_json_capped(
+        declared_marker_path(workspace_root), "declaration marker")
+    if status != "present":
+        return {}, status
+    if not _marker_is_sane(marker):
+        _warn("declaration marker does not match its schema; treating as invalid")
+        return {}, "invalid"
+    return marker, "valid"
+
+
+def _apply_declaration_marker(workspace_root: str, loaded: Loaded) -> Loaded:
+    """Reconcile the state record against the durable declaration marker (#963 AC2).
+
+    The marker answers what the state file cannot once it is gone or torn: was a
+    declaration LIVE? Every inconsistency maps to the existing `invalid` status rather
+    than to a fourth value, because `authority_permits`, `installs_forbidden`,
+    `consult_permitted` and the claims revision fence ALREADY deny there — one branch
+    here closes the hole at every consumer instead of N consumer cases that each risk
+    failing open.
+    """
+    marker, status = read_marker(workspace_root)
+    if status == "absent":
+        # No marker: a workspace that never declared, or one predating #963. Today's
+        # semantics exactly — this is the back-compat path.
+        return loaded
+    if status == "invalid":
+        # A security boundary that cannot evaluate fails CLOSED (repo convention).
+        return Loaded({}, "invalid")
+    if not marker.get("declared"):
+        # Positively cleared by `mark_attended`. Deleting an ATTENDED record widens
+        # nothing, so the state file governs.
+        return loaded
+
+    # A declaration is live; the state record must corroborate it.
+    if loaded.load_status != "valid":
+        _warn("a declaration is live but the state file is missing or invalid "
+              "(declared-then-deleted); treating as invalid")
+        return Loaded({}, "invalid")
+    if loaded.record.get("state") == "attended":
+        # `declare` writes the marker first, so an attended record under a live marker
+        # means the state replacement never landed.
+        _warn("a declaration is live but the state file still reads attended "
+              "(interrupted declare); treating as invalid")
+        return Loaded({}, "invalid")
+    if loaded.record.get("revision", 0) < marker.get("revision", 0):
+        _warn("the state file is older than the declaration marker (torn write); "
+              "treating as invalid")
+        return Loaded({}, "invalid")
+    return loaded
+
+
+def read_state(workspace_root) -> Loaded:
+    """Read the state file, reconciled against the declaration marker. NEVER raises.
+
+    Never searches for the workspace root: the caller supplies it because both consumers
+    already have it (`context_meter` from `find_workspace(cwd)`, `scanner_bootstrap` from
+    `--workspace`). Searching again here would pay for it twice.
     """
     if not workspace_root:
-        # Genuinely no rawgentic workspace context — today's unset-env default.
+        # Genuinely no rawgentic workspace context — today's unset-env default. No
+        # workspace means no marker to consult either.
         return Loaded({}, "absent")
     if not isinstance(workspace_root, str):
         # `os.path.isdir([])` raises TypeError, which would escape the never-raises
@@ -176,69 +325,12 @@ def read_state(workspace_root) -> Loaded:
         _warn(f"workspace root is not a directory: {workspace_root!r}")
         return Loaded({}, "invalid")
 
-    path = supervision_path(workspace_root)
-    # A DANGLING symlink is not an absence — something was put there deliberately and now
-    # does not resolve. `os.stat` follows the link and would report FileNotFoundError,
-    # which would read as "nobody declared anything" and permit installs (pre-PR review
-    # finding). `lstat` sees the link itself.
-    try:
-        if os.path.islink(path) and not os.path.exists(path):
-            _warn("state file is a dangling symlink; treating as invalid")
-            return Loaded({}, "invalid")
-    except OSError:
-        return Loaded({}, "invalid")
-
-    try:
-        st = os.stat(path)
-    except FileNotFoundError:
-        return Loaded({}, "absent")
-    except OSError as exc:
-        _warn(f"state file unreadable ({exc}); treating as invalid")
-        return Loaded({}, "invalid")
-
-    # Refuse non-regular files BEFORE opening. A FIFO here would block `open` and hang a
-    # hook that runs on every tool call; a device or directory would misbehave in its own
-    # way. `context_meter._read_capped` refuses non-regular files for the same reason.
-    if not stat.S_ISREG(st.st_mode):
-        _warn("state file is not a regular file; treating as invalid")
-        return Loaded({}, "invalid")
-    if st.st_size > READ_CAP_BYTES:
-        _warn(f"state file exceeds {READ_CAP_BYTES} bytes; treating as invalid")
-        return Loaded({}, "invalid")
-
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            raw = fh.read(READ_CAP_BYTES + 1)
-    except FileNotFoundError:
-        # `stat` succeeded a moment ago, so the file EXISTED and then vanished. That is a
-        # race, not an absence: reporting absent here would let a delete-during-read
-        # permit installs while a declaration was in force (pre-PR review finding).
-        _warn("state file vanished while being read; treating as invalid")
-        return Loaded({}, "invalid")
-    # ValueError catches UnicodeDecodeError, which is NOT an OSError: invalid UTF-8 in
-    # the file would otherwise raise straight out of a hook that runs on every tool call
-    # and break the never-raises contract (pre-PR review finding, confirmed live).
-    except (OSError, ValueError) as exc:
-        _warn(f"state file unreadable ({exc}); treating as invalid")
-        return Loaded({}, "invalid")
-
-    # The size check above and this read are not atomic, so re-check what actually
-    # arrived: a file that grew past the cap in between must not slip through just
-    # because it still happens to parse.
-    if len(raw) > READ_CAP_BYTES:
-        _warn(f"state file exceeds {READ_CAP_BYTES} bytes; treating as invalid")
-        return Loaded({}, "invalid")
-
-    try:
-        record = json.loads(raw)
-    except ValueError as exc:
-        _warn(f"state file is not valid JSON ({exc}); treating as invalid")
-        return Loaded({}, "invalid")
-
-    if not _record_is_sane(record):
+    record, status = _read_json_capped(supervision_path(workspace_root), "state file")
+    if status == "present" and not _record_is_sane(record):
         _warn("state file does not match the supervision schema; treating as invalid")
-        return Loaded({}, "invalid")
-    return Loaded(record, "valid")
+        status = "invalid"
+    loaded = Loaded(record, "valid") if status == "present" else Loaded({}, status)
+    return _apply_declaration_marker(workspace_root, loaded)
 
 
 #: transport_verification.verified_at is trusted for at most this long (#947 Part B §5).

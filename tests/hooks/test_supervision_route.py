@@ -641,3 +641,151 @@ class TestConsultCheck:
                      "--project-root", str(tmp_path), "--campaign-id", "epic-871",
                      "--backend", "gpt"])
         assert rc == 0
+
+
+# ------------------------- deleted-declaration denial, end to end (#963 AC2)
+#
+# #947 Step 11 deferred findings 1, 4 and 7 to this issue. Nothing in the tree
+# previously deleted a previously-declared state file and asserted ANYTHING; these
+# tests are that missing coverage, at the caller level rather than the unit level.
+
+
+def _declare_governing(workspace_root, *, campaign_ids, granted=True, state="away"):
+    sa.declare(str(workspace_root), state=state, until=None, session_id="sess-1",
+               campaign_ids=list(campaign_ids), consult_providers=["gpt"],
+               consult_granted=granted, now=NOW)
+
+
+def _delete_state(root):
+    os.unlink(sl.supervision_path(str(root)))
+
+
+class TestDeletedDeclarationDeniesEveryPath:
+
+    def test_authority_permits_denies_every_action_kind(self, tmp_path):
+        """Finding 1, verbatim: deleting the file made this return True for EVERY
+        action_kind — merge, publish, deploy, delete and anything added later."""
+        _declare_governing(tmp_path, campaign_ids=[])
+        _delete_state(tmp_path)
+        view = sr.evaluate_campaign(workspace_root=str(tmp_path), campaign_id="c1",
+                                    project_root=str(tmp_path), now=NOW)
+        for kind in ("merge", "publish", "deploy", "delete", "anything-new"):
+            assert sr.authority_permits(kind, view=view) is False, kind
+
+    def test_consult_is_refused(self, tmp_path):
+        """Finding 4: the consult gate saw the same absence-reads-as-attended state."""
+        _declare_governing(tmp_path, campaign_ids=[], granted=True)
+        _delete_state(tmp_path)
+        result = sr.consult_check(
+            workspace_root=str(tmp_path), project_root=str(tmp_path),
+            campaign_id="c1", backend="gpt", now=NOW)
+        assert result["permitted"] is False
+
+    def test_a_claim_cannot_be_minted(self, tmp_path):
+        """The claims fence: `absent` mapped to revision 0, which is also a legitimate
+        never-declared revision, so a claim could be minted under a deleted file."""
+        import supervision_claims as sc
+        _declare_governing(tmp_path, campaign_ids=[])
+        _delete_state(tmp_path)
+        with pytest.raises(sc.ClaimError):
+            sc.claim_action(project_root=str(tmp_path), workspace_root=str(tmp_path),
+                            campaign_id="c1", blocker_id="b1", action_kind="merge",
+                            action_target="o/r#1", action_params={"pr": 1},
+                            bound_revision=1, session_id="sess-1")
+
+    def test_an_attended_workspace_is_unaffected(self, tmp_path):
+        """AC3: attended sessions pass through unchanged, deletion or not."""
+        view = sr.evaluate_campaign(workspace_root=str(tmp_path), campaign_id="c1",
+                                    project_root=str(tmp_path), now=NOW)
+        assert sr.authority_permits("merge", view=view) is True
+
+
+class TestGovernedCampaignMissingDriverState:
+    """#947 Step 11 finding 7's consult residual — MEASURED and left deferred (#963).
+
+    The proposed hardening (governed campaign + missing state file => deny) was
+    implemented, run against this suite, and REFUTED by
+    `TestConsultCheck::test_permitted_derives_allowed_backends_from_the_view_never_hardcoded`:
+    the owner legitimately declares away naming a campaign that has not STARTED yet, so
+    its driver-state file does not exist and denying there refuses consult for exactly
+    the campaign the declaration authorized. Missing and never-created are
+    indistinguishable without the durable campaign registry finding 7 itself named.
+
+    Merge needs no such rule (no policy already means no grant). These tests pin the
+    ordering that must keep working, so the refuted hardening is not re-added blind.
+    """
+
+    def test_a_governed_campaign_that_has_not_started_still_gets_its_grant(self, tmp_path):
+        _declare_governing(tmp_path, campaign_ids=["c1"], granted=True)
+        view = sr.evaluate_campaign(workspace_root=str(tmp_path), campaign_id="c1",
+                                    project_root=str(tmp_path), now=NOW)
+        assert view.granted is True
+        # ...and merge still denies, because no policy means no grant.
+        assert sr.authority_permits("merge", view=view) is False
+
+    def test_a_CORRUPT_driver_state_still_denies_both(self, tmp_path):
+        """The distinction that IS decidable: the file exists and cannot be read."""
+        _declare_governing(tmp_path, campaign_ids=["c1"], granted=True)
+        path = _driver_state_path(str(tmp_path), "c1")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        Path(path).write_text("{corrupt")
+        view = sr.evaluate_campaign(workspace_root=str(tmp_path), campaign_id="c1",
+                                    project_root=str(tmp_path), now=NOW)
+        assert view.granted is False
+        assert sr.authority_permits("merge", view=view) is False
+
+    def test_a_governed_campaign_WITH_state_is_unaffected(self, tmp_path):
+        _declare_governing(tmp_path, campaign_ids=["c1"], granted=True)
+        _write_driver_state(tmp_path, "c1", {"policy": {}})
+        view = sr.evaluate_campaign(workspace_root=str(tmp_path), campaign_id="c1",
+                                    project_root=str(tmp_path), now=NOW)
+        assert view.granted is True
+
+
+# ----------------------------------- authority-decision telemetry (#963 AC5)
+
+import supervision_telemetry as stel  # noqa: E402
+
+
+class TestConsultDecisionTelemetry:
+    """"Every authority decision appends one line." `consult_check` is the one
+    authority call site that exists outside the broker."""
+
+    def _authority_lines(self, root):
+        return [e for e in stel.read_events(str(root)) if e["kind"] == "authority"]
+
+    def test_a_permitted_consult_records_its_decision(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sr.review_runner, "backend_available", lambda name: True)
+        _declare_governing(tmp_path, campaign_ids=["c1"], granted=True)
+        _write_driver_state(tmp_path, "c1", {"policy": {}})
+        sr.consult_check(workspace_root=str(tmp_path), project_root=str(tmp_path),
+                         campaign_id="c1", backend="gpt", now=NOW)
+        line = self._authority_lines(tmp_path)[-1]
+        assert line["action"] == "consult"
+        assert line["decision"] == "permitted"
+        assert line["campaign"] == "c1"
+        assert line["supervision_state"] == "away"
+        assert line["load_status"] == "valid"
+
+    def test_a_denied_consult_records_the_reason(self, tmp_path):
+        _declare_governing(tmp_path, campaign_ids=[], granted=True)
+        os.unlink(sl.supervision_path(str(tmp_path)))          # the #963 defect
+        sr.consult_check(workspace_root=str(tmp_path), project_root=str(tmp_path),
+                         campaign_id="c1", backend="gpt", now=NOW)
+        line = self._authority_lines(tmp_path)[-1]
+        assert line["decision"] == "denied"
+        assert line["reason"]
+        assert line["load_status"] == "invalid"
+
+    def test_telemetry_failure_never_turns_a_permitted_consult_into_a_refusal(
+            self, tmp_path, monkeypatch):
+        """Best-effort here: the decision is already made, and no outward action is
+        being gated on the line landing."""
+        monkeypatch.setattr(sr.review_runner, "backend_available", lambda name: True)
+        _declare_governing(tmp_path, campaign_ids=["c1"], granted=True)
+        _write_driver_state(tmp_path, "c1", {"policy": {}})
+        Path(stel.telemetry_path(str(tmp_path))).mkdir(parents=True)
+        result = sr.consult_check(workspace_root=str(tmp_path),
+                                  project_root=str(tmp_path),
+                                  campaign_id="c1", backend="gpt", now=NOW)
+        assert result["permitted"] is True

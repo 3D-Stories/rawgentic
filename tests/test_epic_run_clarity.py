@@ -185,3 +185,42 @@ class TestBoundaryLearningsSweep:
 
     def test_the_skill_names_the_command_that_clears_the_gate(self):
         assert "sweep record" in self._step4()
+
+
+class TestCampaignMergesGoThroughTheBroker:
+    """#963 AC4, the epic-run half: the driver is what actually merges between children.
+
+    Two separate defects, one section. The BOUNDARY prose said "merge" abstractly and
+    delegated to WF2's raw command, so no campaign merge ever reached the authority gate.
+    And `supervision_route.evaluate_campaign` reads `policy.merge_policy` while NOTHING
+    in any prose wrote it — the two live campaigns carrying that key had it hand-edited,
+    so the gate read a field the workflow never produced.
+    """
+
+    def test_step2_records_the_grant_the_gate_actually_reads(self):
+        step2 = _section(_text(), "## Step 2:", "## Step 3:")
+        assert "policy.merge_policy" in step2
+        assert '"merge_policy": "auto-merge-scoped-to-run"' in step2
+
+    def test_step2_names_the_exact_string_and_that_anything_else_is_no_grant(self):
+        """An almost-right value must not read as a grant."""
+        step2 = _section(_text(), "## Step 2:", "## Step 3:")
+        assert "ONLY on the exact string" in step2
+        assert "is no grant" in step2
+
+    def test_step2_still_asks_exactly_two_questions(self):
+        """The #927 constraint: this step asks TWO questions, and recording the answer
+        is not a third."""
+        step2 = _section(_text(), "## Step 2:", "## Step 3:")
+        assert "this step asks exactly TWO questions" in step2
+
+    def test_the_boundary_merges_through_the_broker(self):
+        drive = _section(_text(), "## Step 4:", "## Step 5:")
+        assert "python3 hooks/launcher_lib.py broker-merge" in drive
+        assert "never a raw `gh pr merge`" in drive
+
+    def test_the_boundary_documents_the_refusal_branch(self):
+        """A driver that routes around a refusal turns the gate into decoration."""
+        drive = _section(_text(), "## Step 4:", "## Step 5:")
+        assert "refused, nothing merged" in drive
+        assert "never route around it" in drive

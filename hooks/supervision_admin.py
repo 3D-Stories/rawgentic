@@ -36,6 +36,10 @@ import supervision_preflight as spf
 
 SCHEMA_VERSION = 1
 
+#: The declaration marker carries its own schema (#963) — a small, separate file with a
+#: different shape, versioned independently of the state record.
+MARKER_SCHEMA_VERSION = 1
+
 #: #947 Part B §3 finding 8 — the consumed-token ledger lives INSIDE .supervision.json
 #: itself (an array field, carried forward like every other additive field), capped
 #: defensively at the most recent entries. Departures are per-session events, not
@@ -77,6 +81,11 @@ def _require_workspace(workspace_root):
             f"workspace root is not a directory: {workspace_root!r}")
 
 
+def _marker_revision(workspace_root) -> int:
+    marker, status = sl.read_marker(workspace_root)
+    return int(marker.get("revision", 0)) if status == "valid" else 0
+
+
 def _current(workspace_root):
     """(record, revision) for the state on disk, under the caller's lock.
 
@@ -85,22 +94,31 @@ def _current(workspace_root):
     stuck refusing installs with no way back. An unresolvable ROOT is a different thing
     and was already refused by `_require_workspace`.
 
-    **A recovery JUMPS the revision counter to wall-clock seconds.** Restarting it at 0
-    would make the next write revision 1 again, and a delayed event still carrying
-    `expected_revision=1` from the PREVIOUS lineage would then satisfy the fence and clear
-    a newer absence — the exact stale-event hole the fence exists to close (pre-PR review
-    finding). An unreadable record cannot tell us its own revision, so the counter is
-    advanced past any plausible prior value instead of reset.
+    The returned revision is the HIGH-WATER MARK across the state record and the
+    declaration marker (#963, owner decision 2026-08-06), so every write lands at
+    `max(state, marker) + 1` and no crash window can reuse or skip a number.
+
+    **A recovery jumps the counter to wall-clock seconds ONLY when the marker cannot
+    state the lineage either.** Restarting at 0 would make the next write revision 1
+    again, and a delayed event still carrying `expected_revision=1` from the PREVIOUS
+    lineage would then satisfy the fence and clear a newer absence — the exact
+    stale-event hole the fence exists to close (pre-PR review finding). A valid marker
+    carries the real revision forward, so that case needs no jump: the counter stays
+    monotonic through a deleted or torn state file, which is strictly better than
+    guessing past it.
     """
+    marker_revision = _marker_revision(workspace_root)
     loaded = sl.read_state(workspace_root)
     if loaded.load_status == "valid":
-        return loaded.record, int(loaded.record.get("revision", 0))
+        return loaded.record, max(int(loaded.record.get("revision", 0)), marker_revision)
     if loaded.load_status == "invalid":
+        if marker_revision:
+            return {}, marker_revision
         print("supervision: replacing an unreadable supervision state file; the revision "
               "counter jumps forward so no stale fence from the previous lineage can "
               "match", file=sys.stderr)
         return {}, int(time.time())
-    return {}, 0
+    return {}, marker_revision
 
 
 def _check_fence(expected_revision, found):
@@ -119,6 +137,71 @@ def _persist(workspace_root, record):
     atomic_write_text(path, json.dumps(record, indent=2, sort_keys=True) + "\n",
                       prefix=".supervision.", mkdir=True, fsync=True)
     return record
+
+
+def _persist_marker(workspace_root, *, declared, revision, state, stamp):
+    """Write the durable declaration marker (#963 AC2). Callers hold the state lock.
+
+    Written BEFORE the state record in both `declare` and `mark_attended`, so every
+    crash window fails restrictive: a live marker over a missing/attended/older record
+    reads `invalid` (deny), and a cleared marker over a stale absence leaves the
+    RESTRICTIVE old record governing until the write is retried.
+    """
+    marker = {
+        "schema_version": MARKER_SCHEMA_VERSION,
+        "declared": bool(declared),
+        "revision": int(revision),
+        "state": state,
+        "ts": _iso(stamp),
+    }
+    atomic_write_text(sl.declared_marker_path(workspace_root),
+                      json.dumps(marker, indent=2, sort_keys=True) + "\n",
+                      prefix=".supervision.declared.", mkdir=True, fsync=True)
+    return marker
+
+
+def _persist_pair(workspace_root, record, *, stamp):
+    """Write the marker, THEN the state record — the one way to land a revision (#963).
+
+    Every writer goes through here so the two files stay in LOCKSTEP at the same
+    revision. That invariant is what lets `_current` trust the marker's number after a
+    deleted or corrupt record instead of jumping the counter past it: a write that
+    bumped the record without the marker would leave a revision the marker has never
+    seen, and the next recovery would re-issue it.
+    """
+    _persist_marker(workspace_root, declared=(record["state"] != "attended"),
+                    revision=int(record["revision"]), state=record["state"],
+                    stamp=stamp)
+    return _persist(workspace_root, record)
+
+
+def bootstrap_marker(workspace_root, *, now=None):
+    """Create the declaration marker for a workspace that declared BEFORE #963 shipped.
+
+    The migration path, and the broker's self-heal (#963): a valid record with no marker
+    is a live lineage that predates the marker, so record it rather than waiting for the
+    next ordinary write. Absent state → nothing to mark (never declared). Invalid state
+    → report and write nothing: with no readable record there is nothing to attest, and
+    the operator's fix (delete a corrupt marker, or re-declare) is a decision, not a
+    guess. Idempotent: an already-consistent marker is left alone.
+    """
+    _require_workspace(workspace_root)
+    stamp = _now(now)
+    path = sl.supervision_path(workspace_root)
+    with plan_lib.file_lock(path):
+        loaded = sl.read_state(workspace_root)
+        if loaded.load_status != "valid":
+            return {"written": False, "load_status": loaded.load_status,
+                    "reason": "no valid supervision record to attest"}
+        _marker, status = sl.read_marker(workspace_root)
+        if status == "valid":
+            return {"written": False, "load_status": "valid",
+                    "reason": "marker already present"}
+        state = loaded.record.get("state")
+        marker = _persist_marker(workspace_root, declared=(state != "attended"),
+                                 revision=int(loaded.record.get("revision", 0)),
+                                 state=state, stamp=stamp)
+        return {"written": True, "load_status": "valid", "marker": marker}
 
 
 def _carry_forward_additive_fields(record: dict, current: dict) -> None:
@@ -231,7 +314,10 @@ def declare(workspace_root, *, state, until, session_id, campaign_ids,
             record["consumed_preflight_tokens"] = consumed
         _carry_forward_additive_fields(record, current)
 
-        persisted = _persist(workspace_root, record)
+        # Marker BEFORE state (#963): a crash between the two leaves a live marker over
+        # a stale/attended record, which reads `invalid` and DENIES. The reverse order
+        # would leave the old attended record governing while the owner is already away.
+        persisted = _persist_pair(workspace_root, record, stamp=stamp)
 
     if preflight_token is not None:
         try:
@@ -268,7 +354,10 @@ def mark_attended(workspace_root, *, session_id, reason, expected_revision, now=
             "attended_reason": reason,
         }
         _carry_forward_additive_fields(record, current)
-        return _persist(workspace_root, record)
+        # Marker BEFORE state (#963): a crash between the two leaves the RESTRICTIVE old
+        # absence governing (a cleared marker defers to the record), and re-running
+        # `mark_attended` completes the recovery.
+        return _persist_pair(workspace_root, record, stamp=stamp)
 
 
 def _read_json_file(path, *, what):
@@ -386,7 +475,10 @@ def mark_transport_verified(workspace_root, *, evidence_path, session_id,
             "verified_session_id": session_id,
             "evidence_token": token,
         }
-        return _persist(workspace_root, record)
+        # Through `_persist_pair` like every other writer (#963): this bumps the
+        # revision, and a bump the marker never saw would be re-issued by the next
+        # recovery. The record is attended here, so the marker stays cleared.
+        return _persist_pair(workspace_root, record, stamp=stamp)
 
 
 # --------------------------------------------------------------------------- CLI
@@ -438,6 +530,13 @@ def _cmd_mark_attended(args) -> int:
     )
     return _emit(record, f"attended again at revision {record['revision']} "
                          f"({args.reason})")
+
+
+def _cmd_bootstrap_marker(args) -> int:
+    result = bootstrap_marker(args.workspace)
+    human = ("declaration marker created" if result["written"]
+             else f"no marker written ({result.get('reason')})")
+    return _emit(result, human)
 
 
 def main(argv=None) -> int:
@@ -496,6 +595,12 @@ def main(argv=None) -> int:
     p_tv.add_argument("--expected-revision", type=int, default=None,
                       dest="expected_revision")
     p_tv.set_defaults(fn=_cmd_mark_transport_verified)
+
+    p_bm = sub.add_parser(
+        "bootstrap-marker",
+        help="create the declaration marker for a workspace that declared before #963")
+    p_bm.add_argument("--workspace", required=True)
+    p_bm.set_defaults(fn=_cmd_bootstrap_marker)
 
     args = parser.parse_args(argv)   # argparse usage errors exit 2
     try:

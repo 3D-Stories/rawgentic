@@ -5186,6 +5186,483 @@ def _cmd_rebuild_receipt(args) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- #
+# #963 — broker-merge: the supervised merge path
+#
+# Epic #871 shipped `supervision_route`'s authority core and `supervision_claims`'
+# execute-once lifecycle, and a 2026-08-06 trace found ZERO live callers in hook code —
+# the same unreachable-machinery signature that killed the executor (D174). This command
+# is that caller: it is the ONE place a campaign-scoped merge is decided, claimed,
+# executed and reconciled, and every step of it leaves a telemetry line.
+#
+# Fail modes, per path (repo convention: a security boundary that cannot evaluate fails
+# CLOSED): marker unreadable, supervision state invalid or deleted, driver state corrupt,
+# target binding unprovable, authorization stale at the last moment, or a decision that
+# cannot be RECORDED -> refuse before any side effect. An ambiguous outcome AFTER the
+# merge call parks for a human instead of blind-retrying, because GitHub's merge API
+# takes no idempotency key.
+# --------------------------------------------------------------------------- #
+
+#: Refused before any side effect: authority denial, target-binding failure, claim
+#: refusal, unrecordable decision, stale authorization, or a definitive merge refusal.
+#: The machine-readable cause rides `reason` in the stdout JSON and in telemetry.
+BROKER_REFUSED_RC = 12
+#: The outcome could not be established. The claim stays `executing` with parked
+#: metadata, and re-running the identical command reconciles it — never a second merge.
+BROKER_PARKED_RC = 13
+
+#: `Closes #N` / `Part of #N` at the start of a line. Anchored deliberately: an
+#: unanchored match would accept a quoted or historical mention as binding evidence.
+#: Horizontal whitespace and bold markers only — Step 11 finding 6: an earlier version
+#: put `>` in this class, so a QUOTED line (`> Part of #963`) in an unrelated PR passed
+#: target binding, which is exactly the evidence the anchor exists to reject.
+_BINDING_RE_TEMPLATE = r"(?im)^[ \t]*\**[ \t]*(closes|part of)\s+#%d\b"
+
+#: `owner/name`, the only shape that may reach `gh --repo`.
+_REPO_SHAPE_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+
+
+def _broker_emit(workspace_root, event, *, strict):
+    """Record one authority decision. `strict` aborts the caller when it cannot land."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import supervision_telemetry  # pylint: disable=import-outside-toplevel
+    return supervision_telemetry.emit(workspace_root, event, strict=strict)
+
+
+def _broker_result(status, reason, *, rc, claim_id=None, merge_sha=None,
+                   next_action=None):
+    """The one stdout contract: a single JSON object on every HANDLER exit.
+
+    Argparse usage errors (rc 2) keep the standard stderr message, like every other
+    subcommand here — a parser-level failure exits before this handler runs at all.
+    """
+    print(json.dumps({
+        "schema_version": 1, "status": status, "reason": reason,
+        "claim_id": claim_id, "merge_sha": merge_sha,
+        "next_action": next_action or ("none" if rc == 0 else "see reason"),
+    }, sort_keys=True))
+    return rc
+
+
+def _pr_json(runner, repo, pr, fields, timeout=60):
+    """`gh pr view <pr> --repo <repo> --json <fields>` -> parsed dict, or None.
+
+    Never raises: every failure — non-zero `gh`, a timeout, unparseable JSON — is None,
+    and each caller decides what that means. Verified live 2026-08-06 through this exact
+    mechanism (list argv, no shell) against PR #961.
+    """
+    argv = ["gh", "pr", "view", str(pr), "--repo", repo, "--json", fields]
+    try:
+        proc = runner(argv, timeout)
+    except (OSError, subprocess.SubprocessError, TypeError):
+        return None
+    if getattr(proc, "returncode", 1) != 0:
+        return None
+    try:
+        data = json.loads(getattr(proc, "stdout", "") or "")
+    except (ValueError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _pr_merge_state(runner, repo, pr):
+    """`("merged", sha)` | `("open", None)` | `("unknown", None)` — the evidence probe.
+
+    A merge SHA is only ever taken from here, never inferred from `gh pr merge`'s exit
+    code: a success the probe cannot corroborate is treated as ambiguous rather than
+    recorded as a merge that may not have happened.
+    """
+    data = _pr_json(runner, repo, pr, "state,mergeCommit")
+    if data is None:
+        return "unknown", None
+    state = str(data.get("state") or "").upper()
+    if state == "MERGED":
+        oid = ((data.get("mergeCommit") or {}) or {}).get("oid")
+        return ("merged", oid) if oid else ("unknown", None)
+    if state in ("OPEN", "CLOSED"):
+        return "open", None
+    return "unknown", None
+
+
+def broker_binding_ok(pr_data, issue: int, repo: "str | None" = None) -> bool:
+    """Does this PR belong to `issue` IN `repo`? PURE, so the rule needs no network.
+
+    Two accepted proofs, because a multi-PR child is normal here: GitHub's own
+    `closingIssuesReferences`, or a line-anchored `Closes|Part of #N` in the body/title
+    (repo convention — only the LAST PR of a child closes the issue, and the earlier
+    ones say "Part of", which does not populate the platform field).
+
+    A closing reference must match the REPOSITORY as well as the number (Step 11
+    finding 5): `closingIssuesReferences` can point across repositories, so comparing
+    only the number let a PR closing someone else's issue 963 satisfy this campaign's
+    binding.
+
+    This binds the AUTHORIZATION to the target so a grant scoped to one campaign cannot
+    authorize an unrelated merge. It defends against caller confusion, not a malicious
+    author: the PR's author is the campaign's own child run, the same trust domain as
+    the driver state this is checked against.
+    """
+    if not isinstance(pr_data, dict):
+        return False
+    for ref in (pr_data.get("closingIssuesReferences") or []):
+        if not isinstance(ref, dict) or ref.get("number") != issue:
+            continue
+        if repo is None:
+            return True
+        ref_repo = ref.get("repository") or {}
+        owner = (ref_repo.get("owner") or {}).get("login")
+        name = ref_repo.get("name")
+        if owner and name and f"{owner}/{name}" == repo:
+            return True
+    pattern = re.compile(_BINDING_RE_TEMPLATE % issue)
+    for field in ("body", "title"):
+        text = pr_data.get(field)
+        if isinstance(text, str) and pattern.search(text):
+            return True
+    return False
+
+
+def broker_campaign_names_issue(state: dict, issue: int) -> bool:
+    """Is `issue` a child of this campaign? PURE. Reads the queue the driver owns."""
+    if not isinstance(state, dict):
+        return False
+    for child in (state.get("children") or []):
+        if isinstance(child, dict) and child.get("issue") == issue:
+            return True
+        if child == issue:
+            return True
+    return False
+
+
+def _cmd_broker_merge(args) -> int:
+    """The supervised merge: authority -> claim -> `gh pr merge` -> probe -> record."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import supervision_admin  # pylint: disable=import-outside-toplevel
+    import supervision_claims  # pylint: disable=import-outside-toplevel
+    import supervision_route  # pylint: disable=import-outside-toplevel
+    sup = _supervision_lib()
+
+    runner = getattr(args, "runner", None) or _default_runner
+    workspace_root = args.workspace_root or _find_workspace_root(args.project_root)
+    if not workspace_root:
+        return _broker_result("refused", "no rawgentic workspace found above "
+                              f"{args.project_root!r}", rc=BROKER_REFUSED_RC)
+    issue, pr, campaign = int(args.issue), int(args.pr), args.campaign
+
+    # 0. Marker self-heal (#963): a workspace that declared BEFORE this shipped has a
+    # valid record and no marker. Attest it here rather than leaving the deletion hole
+    # open until some unrelated admin write happens to run.
+    try:
+        supervision_admin.bootstrap_marker(workspace_root)
+    except (OSError, supervision_admin.DeclarationRefused) as exc:
+        return _broker_result("refused", f"marker bootstrap failed: {exc}",
+                              rc=BROKER_REFUSED_RC)
+
+    # 1b. Target binding, BEFORE the authority read — a grant scoped to one campaign
+    # must never authorize a merge of something else.
+    # The canonical repo must RESOLVE before any target is accepted (Step 11 finding 4):
+    # an earlier version skipped the equality check whenever the config was missing or
+    # malformed, so an explicit --repo could point anywhere the ambient gh token reaches.
+    configured = _broker_configured_repo(args.project_root)
+    if not configured:
+        return _broker_result(
+            "refused", "binding: this project has no repo.fullName configured, so no "
+            "merge target can be authorized", rc=BROKER_REFUSED_RC)
+    if not _REPO_SHAPE_RE.match(configured):
+        return _broker_result(
+            "refused", f"binding: configured repo {configured!r} is not owner/name",
+            rc=BROKER_REFUSED_RC)
+    repo = args.repo or configured
+    if repo != configured:
+        return _broker_result(
+            "refused", f"binding: repo {repo!r} is not this project's repo "
+            f"{configured!r}", rc=BROKER_REFUSED_RC)
+
+    driver_state_path = os.path.join(args.project_root, DRIVER_STATE_DIRNAME,
+                                     f"{campaign}.json")
+    try:
+        driver_state = _locked_state_read(driver_state_path)
+    except (OSError, ValueError) as exc:
+        return _broker_result("refused", f"binding: campaign state unreadable ({exc})",
+                              rc=BROKER_REFUSED_RC)
+    if not broker_campaign_names_issue(driver_state, issue):
+        return _broker_result(
+            "refused", f"binding: campaign {campaign!r} does not name issue #{issue}",
+            rc=BROKER_REFUSED_RC)
+    # The hash the merge is authorized against: re-checked immediately before the call,
+    # so a child removed or a grant revoked mid-flight aborts instead of merging.
+    state_digest = hashlib.sha256(
+        json.dumps(driver_state, sort_keys=True).encode("utf-8")).hexdigest()
+
+    pr_data = _pr_json(runner, repo, pr, "closingIssuesReferences,body,title")
+    if not broker_binding_ok(pr_data, issue, repo):
+        return _broker_result(
+            "refused", f"binding: PR #{pr} does not reference issue #{issue}",
+            rc=BROKER_REFUSED_RC)
+
+    # 2. Authority.
+    now = datetime.now(timezone.utc)
+    view = supervision_route.evaluate_campaign(
+        workspace_root=workspace_root, campaign_id=campaign,
+        project_root=args.project_root, now=now)
+    permitted = supervision_route.authority_permits("merge", view=view)
+    reason = _broker_authority_reason(view, permitted)
+    decision_event = {
+        "kind": "authority", "action": "merge",
+        "decision": "permitted" if permitted else "denied", "reason": reason,
+        "campaign": campaign, "issue": issue, "pr": pr, "repo": repo,
+        "supervision_state": view.base.state, "load_status": view.base.load_status,
+        "revision": view.base.revision,
+    }
+    # Fail-CLOSED: an outward action nobody can measure is the exact failure this
+    # telemetry exists to prevent, so a decision that cannot be recorded is not acted on.
+    try:
+        _broker_emit(workspace_root, decision_event, strict=True)
+    except (OSError, ValueError, TypeError) as exc:
+        return _broker_result("refused", f"telemetry unavailable ({exc})",
+                              rc=BROKER_REFUSED_RC)
+    if not permitted:
+        return _broker_result("refused", reason, rc=BROKER_REFUSED_RC)
+
+    # 3. Claim. Identity is the canonical tuple, so a claim can never be replayed
+    # against a different target, and a re-run resumes its own rather than refusing.
+    # The canonical identity, and ONLY it (Step 11 finding 3): `action_params` IS the
+    # claim's digest, so anything volatile in here changes the identity. The
+    # driver-state digest used to ride along, which meant any ordinary campaign-state
+    # write between attempts made a re-run mint a FOREIGN claim instead of resuming its
+    # own — breaking the re-run guarantee the whole transition table rests on. The
+    # digest stays a local, checked by the stale-authorization fence below.
+    params = {"campaign": campaign, "issue": issue, "repo": repo, "pr": pr,
+              "squash": True, "delete_branch": True}
+    try:
+        claim = supervision_claims.claim_action(
+            project_root=args.project_root, workspace_root=workspace_root,
+            campaign_id=campaign, blocker_id=f"merge-{issue}",
+            action_kind="merge", action_target=f"pr:{repo}#{pr}",
+            action_params=params, bound_revision=view.base.revision,
+            session_id=os.environ.get("CLAUDE_CODE_SESSION_ID") or "unknown",
+            telemetry_mode="strict")
+    except supervision_claims.ClaimError as exc:
+        return _broker_result("refused", f"claim refused: {exc}", rc=BROKER_REFUSED_RC)
+    except (OSError, ValueError, TypeError) as exc:
+        return _broker_result("refused", f"telemetry unavailable ({exc})",
+                              rc=BROKER_REFUSED_RC)
+
+    claim_id = claim["claim_id"]
+    if claim["state"] == "executed":
+        # Terminal, forever. Re-running is safe and reports the recorded SHA.
+        sha = (claim.get("evidence") or {}).get("merge_sha")
+        return _broker_result("merged", "already executed (re-run)", rc=0,
+                              claim_id=claim_id, merge_sha=sha)
+    if claim["state"] == "executing":
+        # Parked, or interrupted mid-flight. Reconcile FIRST — never a blind re-merge.
+        return _broker_reconcile(supervision_claims, args, workspace_root, campaign,
+                                 claim_id, runner, repo, pr)
+
+    # 4. Begin execution (re-validates the revision under the same locks).
+    try:
+        began = supervision_claims.begin_execution(
+            project_root=args.project_root, workspace_root=workspace_root,
+            campaign_id=campaign, claim_id=claim_id, telemetry_mode="strict")
+    except (OSError, ValueError, TypeError) as exc:
+        return _broker_result("refused", f"telemetry unavailable ({exc})",
+                              rc=BROKER_REFUSED_RC, claim_id=claim_id)
+    if not began:
+        return _broker_result("refused", "authorization moved before execution",
+                              rc=BROKER_REFUSED_RC, claim_id=claim_id)
+
+    # 5. Stale-authorization recheck — the window between deciding and acting.
+    try:
+        fresh_state = _locked_state_read(driver_state_path)
+    except (OSError, ValueError):
+        fresh_state = None
+    fresh_digest = None if fresh_state is None else hashlib.sha256(
+        json.dumps(fresh_state, sort_keys=True).encode("utf-8")).hexdigest()
+    fresh_view = supervision_route.evaluate_campaign(
+        workspace_root=workspace_root, campaign_id=campaign,
+        project_root=args.project_root, now=datetime.now(timezone.utc))
+    if fresh_digest != state_digest or \
+            not supervision_route.authority_permits("merge", view=fresh_view):
+        return _broker_result("refused", "stale authorization: the campaign policy or "
+                              "supervision state changed before the merge",
+                              rc=BROKER_REFUSED_RC, claim_id=claim_id)
+
+    # 6. The merge itself.
+    argv = ["gh", "pr", "merge", str(pr), "--repo", repo, "--squash", "--delete-branch"]
+    ambiguous = False
+    try:
+        proc = runner(argv, 180)
+        merge_rc = getattr(proc, "returncode", 1)
+    except (OSError, subprocess.SubprocessError, TypeError):
+        # A timeout or transport error says nothing about whether GitHub applied it.
+        ambiguous, merge_rc = True, None
+
+    if not ambiguous and merge_rc == 0:
+        # rc 0 is not evidence: the SHA comes from the probe, and a success it cannot
+        # corroborate is treated as ambiguous rather than recorded as a merge.
+        state, sha = _pr_merge_state(runner, repo, pr)
+        if state == "merged":
+            return _broker_record_executed(supervision_claims, args, workspace_root,
+                                           campaign, claim_id, repo, pr, sha,
+                                           reason="ok")
+        ambiguous = True
+
+    return _broker_reconcile(supervision_claims, args, workspace_root, campaign,
+                             claim_id, runner, repo, pr,
+                             definitive_failure=(not ambiguous),
+                             retries_left=(1 if ambiguous else 0))
+
+
+def _broker_retry_merge(supervision_claims, args, workspace_root, campaign, claim_id,
+                        runner, repo, pr):
+    """The ONE internal retry, after a probe confirmed the PR is still open.
+
+    The claim went back to `pending` in reconcile, so this re-enters execution through
+    `begin_execution` — which re-validates the bound revision under the locks — rather
+    than merging out from under the claims fence. One attempt only: if it is still not
+    confirmed, park for a human instead of hammering an outward action.
+    """
+    try:
+        began = supervision_claims.begin_execution(
+            project_root=args.project_root, workspace_root=workspace_root,
+            campaign_id=campaign, claim_id=claim_id, telemetry_mode="strict")
+    except (OSError, ValueError, TypeError) as exc:
+        return _broker_result("refused", f"telemetry unavailable ({exc})",
+                              rc=BROKER_REFUSED_RC, claim_id=claim_id)
+    if not began:
+        return _broker_result("refused", "authorization moved before the retry",
+                              rc=BROKER_REFUSED_RC, claim_id=claim_id)
+
+    argv = ["gh", "pr", "merge", str(pr), "--repo", repo, "--squash", "--delete-branch"]
+    try:
+        proc = runner(argv, 180)
+        retry_rc = getattr(proc, "returncode", 1)
+    except (OSError, subprocess.SubprocessError, TypeError):
+        retry_rc = None
+    if retry_rc == 0:
+        state, sha = _pr_merge_state(runner, repo, pr)
+        if state == "merged" and sha:
+            return _broker_record_executed(supervision_claims, args, workspace_root,
+                                           campaign, claim_id, repo, pr, sha,
+                                           reason="merged on the retry")
+    # Retry spent. Reconcile once more with no budget left, so this cannot loop.
+    return _broker_reconcile(supervision_claims, args, workspace_root, campaign,
+                             claim_id, runner, repo, pr, retries_left=0)
+
+
+def _broker_record_executed(supervision_claims, args, workspace_root, campaign,
+                            claim_id, repo, pr, sha, *, reason):
+    """Record a CONFIRMED merge, and never lose the verdict if recording fails.
+
+    Step 11 finding 2: after an IRREVERSIBLE merge, an unguarded `mark_executed` raised
+    straight past the stdout contract — a traceback exactly where the caller most needs
+    a verdict. The merge is real either way, so this reports it and parks for
+    reconciliation rather than pretending nothing happened.
+    """
+    try:
+        supervision_claims.mark_executed(
+            project_root=args.project_root, workspace_root=workspace_root,
+            campaign_id=campaign, claim_id=claim_id,
+            evidence={"merge_sha": sha, "pr": pr, "repo": repo})
+    except (supervision_claims.ClaimError, OSError, ValueError, TypeError) as exc:
+        return _broker_result(
+            "parked", f"the merge landed ({sha}) but the claim could not be recorded: "
+            f"{exc}", rc=BROKER_PARKED_RC, claim_id=claim_id, merge_sha=sha,
+            next_action="the PR IS merged — re-run to reconcile the claim record")
+    return _broker_result("merged", reason, rc=0, claim_id=claim_id, merge_sha=sha)
+
+
+def _broker_reconcile(supervision_claims, args, workspace_root, campaign, claim_id,
+                      runner, repo, pr, *, definitive_failure=False, retries_left=0):
+    """Probe reality, then resolve / retry-once / park. Never a blind second merge."""
+    def probe(_claim):
+        state, _sha = _pr_merge_state(runner, repo, pr)
+        return {"merged": "resolved", "open": "retry"}.get(state, "unknown")
+
+    try:
+        outcome = supervision_claims.reconcile_claim(
+            project_root=args.project_root, workspace_root=workspace_root,
+            campaign_id=campaign, claim_id=claim_id, evidence_probe=probe)
+    except supervision_claims.ClaimError as exc:
+        # The claim moved under us — a concurrent process finishing the same claim is
+        # exactly the race claims exist for. `ClaimError` is not a `LauncherError`, so
+        # letting it escape would exit `main` as a traceback: rc 1, no JSON line, and a
+        # caller branching on this command's documented contract silently mis-reading a
+        # security gate's outcome. Park instead, which is what "we cannot establish the
+        # outcome" already means here.
+        return _broker_result("parked", f"claim state moved during reconcile: {exc}",
+                              rc=BROKER_PARKED_RC, claim_id=claim_id,
+                              next_action="inspect the PR and the claim, then re-run")
+
+    if outcome == "resolved":
+        # The claim is terminal now, so this last probe must actually re-confirm the
+        # SHA (Step 11 finding 1): the earlier version returned rc 0 whatever came
+        # back, which could report a "probe-confirmed" merge with merge_sha null.
+        state, sha = _pr_merge_state(runner, repo, pr)
+        if state != "merged" or not sha:
+            return _broker_result(
+                "parked", "reconcile resolved the claim but the merge SHA could not be "
+                "re-confirmed", rc=BROKER_PARKED_RC, claim_id=claim_id,
+                next_action="inspect the PR, then re-run this command")
+        return _broker_result("merged", "reconciled: the merge had landed", rc=0,
+                              claim_id=claim_id, merge_sha=sha)
+    if outcome == "retry":
+        # Confirmed OPEN after an ambiguous attempt: the contract promises exactly ONE
+        # internal retry (Step 11 finding 7 — it was documented but never implemented).
+        # Only for ambiguity; a DEFINITIVE refusal is not retried, because repeating a
+        # merge GitHub already rejected just fails again.
+        if retries_left > 0 and not definitive_failure:
+            return _broker_retry_merge(supervision_claims, args, workspace_root,
+                                       campaign, claim_id, runner, repo, pr)
+        reason = ("the merge was refused and the PR is still open"
+                  if definitive_failure else
+                  "the merge did not land; the claim is pending again")
+        return _broker_result("refused", reason, rc=BROKER_REFUSED_RC,
+                              claim_id=claim_id,
+                              next_action="fix the cause, then re-run this command")
+    return _broker_result("parked", "the outcome could not be established",
+                          rc=BROKER_PARKED_RC, claim_id=claim_id,
+                          next_action="inspect the PR, then re-run this command to "
+                                      "reconcile")
+
+
+def _broker_authority_reason(view, permitted: bool) -> str:
+    """A reason a human can act on — naming the marker when it is the cause."""
+    if view.base.load_status == "invalid":
+        return ("supervision state is unreadable or a declaration is live with no "
+                "matching record (declared-then-deleted); run /rawgentic:back or "
+                "re-declare")
+    if permitted:
+        return ("attended" if view.base.state == "attended"
+                else "auto-merge-scoped-to-run grant")
+    if view.merge_denied:
+        return "a tightening supervision override denies merge for this campaign"
+    return ("no auto-merge-scoped-to-run grant is recorded for this campaign while the "
+            "owner is away")
+
+
+def _broker_configured_repo(project_root: str):
+    """`repo.fullName` from the project's own `.rawgentic.json`, or None.
+
+    Read directly (the sanctioned narrow exception for a hook needing its own single
+    config value), capped, and fail-open to None — a missing config refuses the merge
+    at the binding step rather than merging against a guessed repo.
+    """
+    path = os.path.join(project_root, ".rawgentic.json")
+    try:
+        if os.path.getsize(path) > 512 * 1024:
+            return None
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    full = ((data.get("repo") or {}) if isinstance(data.get("repo"), dict) else {}
+            ).get("fullName")
+    return full if isinstance(full, str) and full.strip() else None
+
+
 def _cmd_record_child_outcome(args) -> int:
     """#695 — write a child's terminal status back to every campaign queue that names it.
 
@@ -6629,6 +7106,22 @@ def main(argv: list[str] | None = None) -> int:
     p_rco.add_argument("--project-root", default=".",
                        help="root to discover claude_docs/.driver-state/ beneath")
 
+    # #963 — the supervised merge. The ONE live caller of the #871 authority/claims core.
+    p_bm = sub.add_parser(
+        "broker-merge",
+        help="broker a campaign-scoped merge: authority -> claim -> gh pr merge -> record")
+    p_bm.add_argument("--pr", type=int, required=True, help="the PR number to merge")
+    p_bm.add_argument("--issue", type=int, required=True,
+                      help="the campaign child this PR belongs to; the merge is bound to it")
+    p_bm.add_argument("--campaign", required=True,
+                      help="campaign id, whose driver state carries the merge policy")
+    p_bm.add_argument("--project-root", default=".")
+    p_bm.add_argument("--workspace-root", default=None, dest="workspace_root",
+                      help="omit to walk up from --project-root for .rawgentic_workspace.json")
+    p_bm.add_argument("--repo", default=None,
+                      help="owner/name; omit to use the project's configured repo. A value "
+                           "that differs from it is refused, never merged")
+
     # The `pane_less` half of AC1/AC4. Exposed so the non-herdr launch has an in-repo entry
     # point too — a builder with no caller is the disconnected-module smell both reviews caught.
     p_fb = sub.add_parser("build-fallback", help="argv for the retained pane-less launch")
@@ -6700,6 +7193,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_rebuild_receipt(args)
         if args.cmd == "record-child-outcome":
             return _cmd_record_child_outcome(args)
+        if args.cmd == "broker-merge":
+            return _cmd_broker_merge(args)
         if args.cmd == "read-goal-condition":
             with open(args.transcript, encoding="utf-8") as fh:
                 condition = last_unmet_goal_condition(fh.read())

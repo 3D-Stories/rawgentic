@@ -40,10 +40,13 @@ came back. An explicit return is.
    succeeds, cancel every claim still `pending` — an unsupervised session may have
    minted one for an action it never got to execute:
    ```bash
-   python3 -c "import sys; sys.path.insert(0,'hooks'); from supervision_claims import cancel_claims; import json; print(json.dumps(cancel_claims(project_root='<project root>')))"
+   python3 -c "import sys; sys.path.insert(0,'hooks'); from supervision_claims import cancel_claims; import json; print(json.dumps(cancel_claims(project_root='<project root>', workspace_root='<workspace root>')))"
    ```
    No `campaign_id` given sweeps every campaign under the project root — the owner is
-   back, so nothing needs a claim-authorized decision anymore. This only ever touches
+   back, so nothing needs a claim-authorized decision anymore. `workspace_root` records
+   each cancellation in the supervision telemetry (#963); it is optional here alone, so
+   omitting it still cancels — getting the owner unstuck never depends on a writable
+   telemetry path. This only ever touches
    `pending` claims; one already `executing` is left alone (its executor already
    observed authorization under the lock and is mid-side-effect — cancelling it now
    would race the actual outward action, not prevent it).
