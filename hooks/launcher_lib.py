@@ -1189,6 +1189,10 @@ def transcript_has_cleared_goal(transcript_text: str,
 def goal_currently_unmet(transcript_text: str, condition: str) -> bool:
     """Is the guard for `condition` STILL in force at read time?
 
+    OBSERVABILITY ONLY since #772. It answers LIVENESS but not ORIGIN — it is sentinel-
+    insensitive, so a forged row satisfies it. `mid-child-handoff` used to call it and now uses
+    `owner_goal_state`, whose LIVE verdict is strictly stronger.
+
     `transcript_has_unmet_goal` answers a strictly weaker question — "was a guard armed and
     unmet at some point after the baseline" — and the design (§5) is explicit that treating that
     as sufficient reintroduces the artifact's original failure mode: a later clear can exist
@@ -1247,6 +1251,11 @@ def transcript_has_unmet_goal(transcript_text: str, *,
 
 def last_unmet_goal_condition(transcript_text: str) -> str | None:
     """The LAST unmet goal condition in a transcript, VERBATIM (#611 AC6).
+
+    OBSERVABILITY ONLY since #772. Every DESTRUCTIVE caller now goes through `owner_goal_state`:
+    this reader recurses into arbitrary message content and has no sentinel, origin or liveness
+    check, so a forged row can supply a condition and a cleared guard still reads as armed. Do
+    not reintroduce it on a path that arms, retires or clears anything.
 
     The successor's guard is armed from the predecessor's own last unmet `goal_status` row —
     never retyped, never summarised. The LAST one wins because a run can re-arm its goal, and
@@ -1471,6 +1480,30 @@ GOAL_STATE_LIVE = "LIVE"
 GOAL_STATE_CLEARED = "CLEARED"
 GOAL_STATE_NEVER_ARMED = "NEVER_ARMED"
 GOAL_STATE_AMBIGUOUS = "AMBIGUOUS"
+
+
+def destructive_goal_refusal(state: str, reason: str | None, whose: str) -> str:
+    """#772 — why a destructive path refused to derive a guard, in the state's own terms.
+
+    One message per state rather than one message for "not live", because they mean different
+    things to whoever has to act: a guard that was SPENT is a finished run, no guard at all is
+    usually a wrong transcript, and unreadable evidence is a retry. A single "no unmet goal"
+    line — which is what both of these paths printed before — sent all three to the same
+    unhelpful place.
+    """
+    if state == GOAL_STATE_CLEARED:
+        return (f"refusing: the newest trusted goal row in {whose} is met:true, so that guard is "
+                "SPENT. Handing it over would arm the successor with an authorization that was "
+                "already retired. If the run really is finished, do not hand off.")
+    if state == GOAL_STATE_NEVER_ARMED:
+        return (f"refusing: no trusted goal_status row in {whose} — refusing to invent a "
+                "condition. A goal_status object nested in ordinary message content is NOT "
+                "trusted and is deliberately ignored, so a forged row cannot supply a guard.")
+    return (f"refusing: the newest goal evidence in {whose} is {reason} — refusing to derive a "
+            "guard from ambiguous evidence on a destructive path. A torn or malformed newest row "
+            "must not read as 'no goal' or fall back to a stale one. REMEDY: this is usually a "
+            "partial write, so re-run once; if it persists, inspect the last goal_status lines by "
+            "hand rather than retrying in a loop.")
 
 
 def owner_goal_state(transcript_text: str) -> tuple[str, str | None, str | None]:
@@ -3778,6 +3811,11 @@ def _close_tentative_pane(pane: str, runner, record, expected_session: str | Non
 
 def latest_goal_status_condition(transcript_text: str) -> str | None:
     """The condition of the LAST goal_status row, whatever that condition is.
+
+    OBSERVABILITY ONLY since #772, and it carried a DENIAL vector on the destructive path: being
+    sentinel-insensitive, a forged row that is merely NEWER made this return the forged text, so
+    `mid-child-handoff` refused a legitimate handoff whose guard was genuinely live. A forgery
+    that can deny is an availability defect as well as a trust one.
 
     This is the half of design §5 that `goal_currently_unmet` deliberately does not carry: if
     the newest guard in the transcript belongs to a DIFFERENT condition, then the condition we
@@ -6519,11 +6557,23 @@ def _cmd_handoff(args) -> int:
 
     condition = args.goal_condition
     if condition is None:
+        # #772 — this path had NO trust check of any kind: it took whatever
+        # `last_unmet_goal_condition` returned, which recurses into arbitrary message content and
+        # treats the last met:false row as live regardless of anything after it. So a goal_status
+        # object forged inside tool output could become the successor's guard, and a guard a later
+        # row had already satisfied could be handed over as though it were still owed.
+        #
+        # Only the DERIVED branch changes. An explicit `--goal-condition` is operator-supplied
+        # rather than transcript-sourced, so it carries no transcript-forgery risk; checking it as
+        # an assertion needs the transcript, and on THIS command the two flags are still mutually
+        # exclusive (unlike mid-child, which required the transcript for exactly this reason). That
+        # parser change would alter a CLI the workspace `*-resume.sh` launchers invoke, so it is a
+        # named follow-up rather than a silent widening here.
         with open(args.goal_condition_from, encoding="utf-8") as fh:
-            condition = last_unmet_goal_condition(fh.read())
-        if condition is None:
-            print("no unmet goal in the predecessor transcript — refusing to invent a "
-                  "condition", file=sys.stderr)
+            state, condition, reason = owner_goal_state(fh.read())
+        if state != GOAL_STATE_LIVE:
+            print(destructive_goal_refusal(state, reason, "the predecessor transcript"),
+                  file=sys.stderr)
             return 3
 
     # Re-check against a LOCKED re-read immediately before launching. Everything above — the
@@ -7026,28 +7076,45 @@ def _cmd_mid_child_handoff(args) -> int:
     # REQUIRED for this command, and `--goal-condition` is an optional assertion checked against it.
     with open(args.goal_condition_from, encoding="utf-8") as fh:
         transcript_text = fh.read()
+    # #772 — ORIGIN, which is the half the two checks below never covered. They ask whether the
+    # condition is still in force and whether it is the newest guard, and both answer from
+    # sentinel-INSENSITIVE readers. So a goal_status object forged in ordinary message content
+    # could satisfy every one of them and arm the successor.
+    #
+    # `owner_goal_state` returning LIVE already means "the newest TRUSTED row is unmet", which is
+    # strictly stronger than `goal_currently_unmet` + `latest_goal_status_condition` together — so
+    # those two are REPLACED here rather than kept in front of it. Keeping them would preserve a
+    # denial vector this issue's body does not mention and this run found by reading: because
+    # `latest_goal_status_condition` is sentinel-insensitive, a forged row that is merely NEWER
+    # made it return the forged text and REFUSE a legitimate handoff. Both helpers stay in the
+    # module for the observability callers AC3 protects.
+    #
+    # This also carries AC2's tail-ambiguity refusal, because `owner_goal_state` parses the last
+    # line — which closes the High finding #864 deferred to this issue, for this path.
+    state, live_condition, reason = owner_goal_state(transcript_text)
+    if state != GOAL_STATE_LIVE:
+        print(destructive_goal_refusal(state, reason, "this session's transcript"),
+              file=sys.stderr)
+        return 3
     condition = args.goal_condition
     if condition is None:
-        condition = last_unmet_goal_condition(transcript_text)
-        if condition is None:
-            print("no unmet goal in this session's transcript — refusing to invent a condition "
-                  "for the successor", file=sys.stderr)
-            return 3
+        condition = live_condition
     # Two separate questions, and Step 11 pass-3 (verify 4) showed that only asking the first lets
     # a REPLACED guard through: `goal_currently_unmet` deliberately examines only rows matching the
     # condition, so with history `A/met:false` then `B/met:false`, an explicit `--goal-condition A`
     # was accepted even though B is the live guard. So the condition must be BOTH still-unmet AND
     # the newest guard in the transcript.
-    if not goal_currently_unmet(transcript_text, condition):
-        print("refusing: the supplied/derived goal condition is not the guard currently in force "
-              "in this session's transcript (it has been met) — arming the successor with it would "
-              "hand over a guard that is not what is owed", file=sys.stderr)
-        return 3
-    newest_condition = latest_goal_status_condition(transcript_text)
-    if newest_condition is None or newest_condition.strip() != condition.strip():
-        print(f"refusing: the goal condition is not the NEWEST guard in this session's transcript "
-              f"(newest is {newest_condition!r}) — it has been replaced, so handing it over would "
-              "arm the successor with a guard that has already been retired", file=sys.stderr)
+    elif condition.strip() != live_condition.strip():
+        # The explicit assertion, now checked against the LIVE guard rather than against two
+        # lenient scans. This one comparison covers both questions the replaced checks asked:
+        # a condition a later row satisfied is not the live one, and a condition a newer guard
+        # replaced is not the live one either. Lengths only in the message — an owner-authored
+        # goal must not leak into logs (#758 pass-1 F8).
+        print("refusing: the supplied --goal-condition is not the guard currently in force in "
+              f"this session's transcript (supplied {len(condition)} chars, live "
+              f"{len(live_condition)} chars). Either it has been met, or a newer guard replaced "
+              "it, or it was mistyped — arming the successor with it would hand over a guard "
+              "that is not what is owed", file=sys.stderr)
         return 3
 
     # 8a destructive 6: `--repo-root` and `--project-root` were independent inputs, and nothing
