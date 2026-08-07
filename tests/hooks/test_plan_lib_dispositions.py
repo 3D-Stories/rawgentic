@@ -1231,3 +1231,122 @@ class TestRationaleSubstance:
         ok, why = mod.severe_findings_are_disposed(
             [_disposed(disp="refuted", reason="\u3164x\ufe0f")])
         assert ok is True, why
+
+
+# --- #892: fuzzy candidate matching (non-exact, NEVER auto-dissolves) ---
+
+class TestFuzzyDispositionCandidates:
+    """Behavior tests for the #892 fuzzy candidate layer on the #393 join backstop.
+
+    Same location + same category against a DECLINED/DISSOLVED ledger entry surfaces
+    the entry as a candidate for orchestrator adjudication (`possible re-litigation of
+    <id>`) — advisory only. Only a byte-identical `finding_key` match keeps the power
+    to auto-dissolve (that stays the existing exact-match join, untouched by this
+    layer). ADOPTED entries are excluded entirely (AC iii — their exact-match-only
+    'possible failed remediation' surfacing is unchanged).
+    """
+
+    def _live(self, mod, **over):
+        f = {
+            "severity": "High",
+            "location": "hooks/x.py",
+            "category": "security",
+            "description": "a rephrased description of the same underlying issue",
+        }
+        f.update(over)
+        return f
+
+    def test_declined_entry_same_location_category_is_candidate(self):
+        mod = _reload_plan_lib()
+        entry = _valid_entry(mod, disposition="declined")
+        live = self._live(mod, description="totally different wording now")
+        assert mod.fuzzy_disposition_candidates(live, [entry]) == [entry]
+
+    def test_dissolved_entry_same_location_category_is_candidate(self):
+        mod = _reload_plan_lib()
+        entry = _valid_entry(mod, disposition="dissolved")
+        live = self._live(mod, description="yet another rewording")
+        assert mod.fuzzy_disposition_candidates(live, [entry]) == [entry]
+
+    def test_adopted_entry_never_a_fuzzy_candidate(self):
+        # AC(iii): ADOPTED matches keep their existing exact-match-only surfacing;
+        # the fuzzy layer must not touch them.
+        mod = _reload_plan_lib()
+        entry = _valid_entry(mod, disposition="adopted")
+        live = self._live(mod, description="rephrased")
+        assert mod.fuzzy_disposition_candidates(live, [entry]) == []
+
+    def test_different_location_excluded(self):
+        mod = _reload_plan_lib()
+        entry = _valid_entry(mod, disposition="declined")
+        live = self._live(mod, location="hooks/y.py", description="rephrased")
+        assert mod.fuzzy_disposition_candidates(live, [entry]) == []
+
+    def test_different_category_excluded(self):
+        mod = _reload_plan_lib()
+        entry = _valid_entry(mod, disposition="declined")  # category="security"
+        live = self._live(mod, category="correctness", description="rephrased")
+        assert mod.fuzzy_disposition_candidates(live, [entry]) == []
+
+    def test_missing_location_on_live_finding_excluded(self):
+        mod = _reload_plan_lib()
+        entry = _valid_entry(mod, disposition="declined")
+        live = self._live(mod, location=None, description="rephrased")
+        assert mod.fuzzy_disposition_candidates(live, [entry]) == []
+
+    def test_missing_location_on_ledger_entry_excluded(self):
+        mod = _reload_plan_lib()
+        finding_no_loc = {"severity": "High", "location": None, "category": "security",
+                           "description": "no location on this one"}
+        entry = _valid_entry(mod, finding=finding_no_loc, disposition="declined")
+        live = self._live(mod, description="rephrased")
+        assert mod.fuzzy_disposition_candidates(live, [entry]) == []
+
+    def test_exact_key_match_excluded_from_fuzzy(self):
+        # The byte-identical join already handles this case (dissolve-or-exempt); the
+        # fuzzy layer must not double-surface it.
+        mod = _reload_plan_lib()
+        entry = _valid_entry(mod, disposition="declined")
+        live = dict(entry["finding"])  # byte-identical to the ledgered finding
+        assert mod.fuzzy_disposition_candidates(live, [entry]) == []
+
+    def test_fresh_finding_no_ledger_entries_survives_empty(self):
+        # AC(ii) red-first: a genuinely-new finding must never be flagged.
+        mod = _reload_plan_lib()
+        live = self._live(mod, location="hooks/brand_new.py", category="architecture",
+                           description="a brand new problem nobody has seen")
+        assert mod.fuzzy_disposition_candidates(live, []) == []
+
+    def test_multiple_candidates_returned_in_folded_order(self):
+        # Step-4 self-review finding 1: ordering across multiple matches.
+        mod = _reload_plan_lib()
+        entry_a = _valid_entry(
+            mod, id="d-4-1-1-aaaa", disposition="declined",
+            finding={"severity": "High", "location": "hooks/x.py",
+                     "category": "security", "description": "first prior finding"})
+        entry_b = _valid_entry(
+            mod, id="d-4-1-2-bbbb", disposition="dissolved",
+            finding={"severity": "Medium", "location": "hooks/x.py",
+                     "category": "security", "description": "second prior finding"})
+        live = self._live(mod, description="a third, rephrased description")
+        result = mod.fuzzy_disposition_candidates(live, [entry_a, entry_b])
+        assert result == [entry_a, entry_b]
+
+    def test_exact_match_excludes_only_that_entry_not_others_at_same_spot(self):
+        # Step-4 self-review finding 2: exact-key exclusion is PER-ENTRY, not a
+        # blanket suppression of the whole location+category — a finding whose
+        # identity happens to match entry X exactly must still surface a DIFFERENT
+        # candidate Y at the same location+category.
+        mod = _reload_plan_lib()
+        shared_finding = {"severity": "High", "location": "hooks/x.py",
+                          "category": "security", "description": "original finding X text"}
+        entry_x = _valid_entry(mod, id="d-4-1-1-xxxx", disposition="declined",
+                                finding=shared_finding)
+        entry_y = _valid_entry(
+            mod, id="d-4-1-2-yyyy", disposition="declined",
+            finding={"severity": "High", "location": "hooks/x.py",
+                     "category": "security", "description": "a different finding Y text"})
+        live = dict(shared_finding)  # exact match against entry_x
+        result = mod.fuzzy_disposition_candidates(live, [entry_x, entry_y])
+        assert entry_x not in result
+        assert entry_y in result
