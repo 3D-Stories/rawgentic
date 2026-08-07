@@ -1937,26 +1937,78 @@ class TestInsertPromptAtTheActTier:
         assert "prompt insertion did not happen" not in err, (
             "the advisory tier must never reach the insert branch\n" + err)
 
-    def test_at_most_once_per_window_across_BOTH_paths(self, tmp_path) -> None:
-        """#729 AC2 — the property that makes enabling the mid-turn path safe. The insert reserves
-        on its OWN channel keyed (session, window, tier, INSERT_CHANNEL), so a mid-turn insert
-        followed by a Stop directive finds the reservation already taken. Asserted through the real
-        reservation rather than a mock, because a mock would prove nothing about the key."""
-        env = {"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:pZZ"}
-        assert self._try(tmp_path, env=env) == "inserted"
-        assert "already inserted" in self._try(tmp_path, env=env)
-        assert cm.has_marker(str(tmp_path), self.SID, 1000000, "directive",
-                             cm.INSERT_CHANNEL) is True
+    def test_an_event_outside_the_allowed_set_never_inserts(self, tmp_path) -> None:
+        """#729 — the event set must be a real restriction, not decoration.
 
-    def test_the_esc_comment_no_longer_claims_a_hazard_this_path_cannot_cause(self) -> None:
-        """#729 AC4, anchored BY TEXT — the line number has rotted twice (:1467 → :1498-1499 →
-        :1503-1504), so pinning one is how this guard goes stale again."""
-        src = pathlib.Path(cm.__file__).read_text(encoding="utf-8")
-        assert "Never mid-turn, and never ESC" not in src, (
-            "the comment still forbids mid-turn on an ESC rationale, but insert_prompt sends "
-            "send-text then a separate send-keys Enter and never an ESC")
-        assert "send-keys" in src or "no ESC" in src, (
-            "the replacement must state the real delivery mechanism, not merely delete the claim")
+        Added because the first version of this change gated on `tier == "directive"` alone, and
+        NO test failed when the event set was removed — verified by deleting it and re-running.
+        An unguarded restriction is one refactor away from handing the authoritative input channel
+        to every event that ever starts reaching this hook.
+        """
+        t = _transcript(tmp_path, SID, [_row(_usage(inp=1, cr=800_000))])
+        env = {"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:pZZ",
+               "RAWGENTIC_CONTEXT_EVERY_TURNS": "1", "RAWGENTIC_CONTEXT_EVERY_SECONDS": "0"}
+        err = _run({"session_id": SID, "cwd": str(tmp_path), "transcript_path": str(t),
+                    "hook_event_name": "PostToolUse"}, home=tmp_path, extra_env=env).stderr or ""
+        assert "prompt insertion did not happen" not in err, (
+            "PostToolUse is not in INSERT_EVENTS, so it must never reach the insert branch\n"
+            + err)
+        assert "PostToolUse" not in cm.INSERT_EVENTS
+
+    def test_at_most_once_is_keyed_independently_of_the_emit_path(self, tmp_path) -> None:
+        """#729 AC2 — the property that makes widening the gate safe, tested where it LIVES.
+
+        Two earlier versions of this test were vacuous and both are worth recording, because the
+        second looked like a fix for the first:
+
+        1. It called the same helper twice, which is ONE path, so it could not show path
+           independence despite its name (Step-11 review caught this).
+        2. Rewritten to drive the real hook `UserPromptSubmit` then `Stop` — but the second
+           invocation never emitted at all (verified by inspecting both results directly), so
+           "at most one attempt" held for the trivial reason that only one call ever reached the
+           branch. A black-box two-path assertion is not achievable in this harness.
+
+        So this asserts the mechanism itself: the insert reserves on
+        `(session, window, "directive", INSERT_CHANNEL)`, a key with no event or emit-channel
+        component. Whichever path arrives first takes it and the other finds it gone — which is
+        precisely why the gate could be widened without a new state machine.
+        """
+        home, win = str(tmp_path), 1000000
+        assert cm.reserve(home, SID, win, "directive", cm.INSERT_CHANNEL) is True
+        assert cm.reserve(home, SID, win, "directive", cm.INSERT_CHANNEL) is False, (
+            "the second arrival must find the reservation taken, whichever path it came from")
+        # And it must not have consumed either EMIT channel, or widening would silence the nag.
+        assert cm.has_marker(home, SID, win, "directive", "midturn") is False
+        assert cm.has_marker(home, SID, win, "directive", "stop") is False
+
+    def test_the_insert_transport_sends_no_ESC_only_send_text_then_Enter(self) -> None:
+        """#729 AC4, at the TRANSPORT layer.
+
+        The first version of this guard asserted on a comment in `context_meter.py` — a comment
+        this very change wrote, so it guaranteed its own pass and said nothing about the code that
+        could actually send an ESC. Step-11 review called that a tautology and was right. This
+        drives the real `launcher_lib.insert_prompt` with a capturing runner and asserts the exact
+        command sequence instead, so the guard now fails if that route ever gains an ESC.
+        """
+        sys.path.insert(0, str(Path(cm.__file__).parent))
+        import launcher_lib as ll  # noqa: PLC0415
+        seen = []
+
+        def capture(argv, timeout=None):
+            seen.append(list(argv))
+            return types.SimpleNamespace(returncode=0, stdout="ordinary pane scrollback", stderr="")
+
+        ll.insert_prompt(pane="w1:pZZ", text="hello", runner=capture, sleep=lambda _s: None)
+        kinds = [c[2] for c in seen if len(c) > 2]
+        assert "send-text" in kinds, seen
+        assert "send-keys" in kinds, seen
+        flat = " ".join(" ".join(map(str, c)) for c in seen)
+        assert "Escape" not in flat and "\x1b" not in flat, (
+            "the insert route must never send an ESC — that was the old gate's whole rationale\n"
+            + flat)
+        for c in seen:
+            if len(c) > 2 and c[2] == "send-keys":
+                assert c[-1] == "Enter", f"send-keys must send Enter only, got {c}"
 
     def test_an_unreadable_project_config_is_a_quiet_skip(self, tmp_path) -> None:
         env = {"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:pZZ"}

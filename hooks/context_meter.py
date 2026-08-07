@@ -954,6 +954,10 @@ def read_meter_config(project_path):
 # possible prompt injection. With its own channel the insert can be released and retried at the next
 # Stop while the nag stays delivered exactly once.
 INSERT_CHANNEL = "stop-insert"
+#: The events allowed to reach the authoritative prompt-insert channel (#729). Named as a set
+#: rather than left implicit: the branch below used to be `Stop`-only, and widening it to
+#: "any directive" would silently enrol every future event too.
+INSERT_EVENTS = frozenset({"Stop", "UserPromptSubmit"})
 
 # Whole-subprocess budget. `launcher_lib insert-prompt` sleeps INSERT_SUBMIT_DELAY_S (1.5 s, the
 # measured minimum that actually submits — #718 §5b) and makes three quick herdr calls, so 12 s is
@@ -1516,7 +1520,11 @@ def cmd_hook(argv) -> int:
     # reserves on its own (session, window, "directive", INSERT_CHANNEL) key, so a mid-turn insert
     # followed by a `Stop` directive finds that reservation already taken. The advisory tier still
     # never reaches this branch.
-    if tier == "directive":
+    # The event set is EXPLICIT, not "anything that is not Stop" (Step-11 review, converged Medium
+    # across both passes). `tier == "directive"` alone would hand the authoritative input channel to
+    # any event that ever starts reaching this hook, which is a wider grant than this issue asked
+    # for and one nobody would notice being made.
+    if event in INSERT_EVENTS and tier == "directive":
         outcome = try_insert_prompt(home=home, session_id=session_id, window=window, used=used,
                                     cfg=cfg, project_path=project_path, env=env)
         # NEVER SILENT about not having acted (Step-11 diff review, Medium). This module's contract
