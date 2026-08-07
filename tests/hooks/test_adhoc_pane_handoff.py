@@ -732,13 +732,51 @@ class TestTheSettleIsNotAGate:
         assert order[:2] == ["settle", "goal"], order
 
     def test_goal_armed_is_still_the_gate_and_still_fails_closed(self) -> None:
-        """The safety property the settle must not erode. A goal that never arms still aborts, and
-        the resume prompt still never reaches an unguarded successor."""
+        """The safety property the settle must not erode, asserted on all FOUR of its parts.
+
+        Step-11 F2: checking only the return value and the withheld prompt left the two teardown
+        properties unproven — and the settle makes them newly load-bearing, because the goal is now
+        deliberately sent without idle confirmation. A regression here would strand an orphan
+        successor, or retire the predecessor on incomplete evidence.
+        """
         r = Runner(_responses(pane_read="unrelated scrollback\n"))
         out = ll.perform_handoff(**_handoff(
-            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
+            r, teardown=True,
+            read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
+        # 1. it fails, and names the gate rather than the settle
         assert out["ok"] is False and out["failed_step"] == "goal_armed"
+        # 2. no work reaches an unguarded successor
         assert RESUME_PROMPT not in " ".join(r.sent_text())
+        # 3. the successor pane is cleaned up — no orphan
+        assert out["cleanup"] and "w1:pZZ" in str(out["cleanup"]), out["cleanup"]
+        assert any(c[:3] == ["herdr", "pane", "close"] and c[3] == "w1:pZZ" for c in r.calls)
+        # 4. the PREDECESSOR survives, even though teardown was requested
+        assert not any(c[:3] == ["herdr", "pane", "close"] and c[3] == "w1:p1"
+                       for c in r.calls), "the predecessor must never be retired on a failed gate"
+
+    def test_a_raising_settle_confirmation_is_also_non_fatal(self) -> None:
+        """Step-11 F1. Non-fatal has to mean every path, not just a non-zero exit. A runner that
+        RAISES — a subprocess timeout, a transport error — would otherwise abort the handoff, which
+        is the exact fatality this change removes."""
+        class WaitRaisesSecondTime(Runner):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self.waits = 0
+
+            def __call__(self, argv, timeout=180):
+                if Runner.key(argv) == "herdr agent wait":
+                    self.waits += 1
+                    if self.waits >= 2:
+                        raise subprocess.TimeoutExpired(cmd=argv, timeout=20)
+                return super().__call__(argv, timeout)
+
+        r = WaitRaisesSecondTime(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=0)))
+        assert out["ok"] is True, out["failed_step"]
+        settles = [s for s in out["steps"] if s["kind"] == "settle_before_goal"]
+        assert settles, "a raising confirmation must still appear in the receipt"
+        assert any("did not report idle" in str(s.get("note")) for s in settles), settles
 
 
 class TestTheThreeGoalDeliveryStates:

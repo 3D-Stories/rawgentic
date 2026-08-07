@@ -756,17 +756,20 @@ For major changes, please open an issue first to discuss the approach.
   was now the top failure: in the failing run the successor's registry row landed 20s after start
   and its transcript went quiet 36s after that — comfortably inside a 120s budget — yet the wait
   burned the whole budget and aborted a handoff whose successor was sitting there ready. The budget
-  was never short; the signal does not fire for an idle pane, which is the same unreliability #694
+  was never short. The signal does not fire for an idle pane, which is the same unreliability #694
   measured for `agent_status`. Lengthening it would have been strictly worse: a longer hang before
-  the identical failure. So the wait becomes a **settle** — sleep `SETTLE_BEFORE_GOAL_S` (30s,
-  owner-chosen from the measured ~20s bind), then ask for idle with a short budget and treat the
-  answer as advice. `agent_wait_goal` is retired as a failure step; `settle_before_goal` replaces
-  it and records the unconfirmed case so a lucky handoff stays distinguishable from a healthy one.
-  **This weakens no gate:** a settle verifies nothing, `goal_armed` still reads a durable artifact
-  and still fails closed, and the resume prompt still never reaches an unguarded successor. The
-  happy path also gets faster, 30s instead of up to 120s. One prior test is INVERTED rather than
-  deleted, since it pinned the abort that turned out to be the defect. No workflow-spine change →
-  no diagram REV. Suite 6387→6392.
+  the identical failure. So the wait becomes a **settle** — sleep `SETTLE_BEFORE_GOAL_S`, then ask
+  for idle with a short budget and treat the answer as advice. `agent_wait_goal` is retired as a
+  failure step. `settle_before_goal` replaces it and records the unconfirmed case, so a lucky
+  handoff stays distinguishable from a healthy one. **This weakens no gate:** a settle verifies
+  nothing, `goal_armed` still reads a durable artifact and still fails closed, and the resume
+  prompt still never reaches an unguarded successor. Cross-model review caught the settle's own
+  constant being derived from the wrong interval — it was set from start-to-registry-row (~20s),
+  but the sleep begins *after* that row is observed, so the governing interval is row-to-quiet
+  (36s measured); 30s would have re-created the failure in the very run it came from, and it is now
+  45s. Review also made the confirmation non-fatal on a RAISING runner, not just a non-zero exit.
+  One prior test is INVERTED rather than deleted, since it pinned the abort that turned out to be
+  the defect. No workflow-spine change → no diagram REV. Suite 6387→6393.
 
 ### v3.141.2 (2026-08-07)
 - **A goal ending in a newline landed in the successor's input box and never submitted (epic #906).**

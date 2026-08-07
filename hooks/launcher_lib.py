@@ -200,17 +200,43 @@ GOAL_NUDGE_ROUNDS = 4
 PROMPT_MARKER_MIN_LEN = 8
 GOAL_POLL_DELAY_S = 1.5
 # #989 follow-up — the settle before the goal send. NOT a gate: it decides when to attempt
-# delivery, never whether anything passed. Owner-chosen 2026-08-07 from live measurement: across
-# seven real handoffs the bind's session-registry row landed ~20 s after the successor started, so
-# 30 s clears it with margin. It replaces a 120 s blocking `agent wait --until idle` that was
-# FATAL and that hung on panes which were already idle, so the happy path is now FASTER as well as
-# more reliable.
-SETTLE_BEFORE_GOAL_S = 30
+# delivery, never whether anything passed. It replaces a 120 s blocking `agent wait --until idle`
+# that was FATAL and that hung on panes which were already idle.
+#
+# THE ORIGIN OF THIS NUMBER MATTERS, and the first revision got it wrong (Step-11 F3). The value
+# was set to 30 s on the reasoning that the bind's registry row landed ~20 s after the successor
+# started. But this sleep begins AFTER `project_switched` has already observed that row, so
+# start-to-row is the wrong interval entirely. The interval that governs is ROW-to-QUIET, and in
+# the run that failed it was 36 s (row 17:03:10, last transcript activity 17:03:46). A 30 s settle
+# would therefore have sent the goal 6 s before that pane went quiet — reproducing the queued-goal
+# failure in the very run the number was derived from.
+#
+# 45 s covers the measured 36 s with margin. It stays an ESTIMATE from n=7, not a guarantee, which
+# is precisely why the settle is advisory and `goal_armed` remains the gate: when this number is
+# too small the handoff fails closed and cleans up, it does not hand work to an unguarded pane.
+# The durable fix for a slow successor is a bounded retry of the ARM, tracked separately.
+SETTLE_BEFORE_GOAL_S = 45
 # The confirmation that rides after the sleep is best-effort and deliberately SHORT: its answer is
 # advisory, so a long budget would only reintroduce the hang it exists to escape. It must also stay
 # well under `_default_runner`'s 180 s subprocess bound, or a timeout would surface as a transport
 # failure instead of an unconfirmed settle.
 SETTLE_CONFIRM_TIMEOUT_MS = 20000
+
+
+class _FakeSettleProc:
+    """Stands in for a runner result when the settle confirmation RAISES rather than returns.
+
+    The settle is advisory, so a raising runner must not abort the handoff (Step-11 F1). Giving
+    `record` a normal-shaped object keeps the receipt complete — the operator still sees a
+    `settle_before_goal` entry naming the exception — instead of the step vanishing from the audit
+    trail exactly when something went wrong.
+    """
+
+    returncode = 1
+
+    def __init__(self, stderr: str = ""):
+        self.stdout = ""
+        self.stderr = stderr
 SWITCH_POLL_ATTEMPTS = 40
 SWITCH_POLL_DELAY_S = 3.0
 
@@ -2902,7 +2928,15 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         sleeper(SETTLE_BEFORE_GOAL_S)
         wait_goal_argv = build_agent_wait_argv(target=new_pane, until="idle",
                                                timeout_ms=SETTLE_CONFIRM_TIMEOUT_MS)
-        proc = runner(wait_goal_argv)
+        # The confirmation must be non-fatal on EVERY path, not merely on a non-zero exit
+        # (Step-11 F1). A runner that RAISES — a subprocess timeout, a transport error — would
+        # otherwise escape to the handler below and abort the handoff, which is exactly the
+        # fatality this change exists to remove. An advisory check that can still kill the run is
+        # not advisory.
+        try:
+            proc = runner(wait_goal_argv)
+        except (OSError, subprocess.SubprocessError) as exc:
+            proc = _FakeSettleProc(f"settle confirmation raised {type(exc).__name__}: {exc}")
         settled = getattr(proc, "returncode", 1) == 0
         # Non-fatal must not mean invisible: an operator has to be able to tell a healthy handoff
         # from a lucky one, so the unconfirmed case is named in the receipt either way.
