@@ -1339,6 +1339,17 @@ def live_owner_goal(transcript_text: str, *, strict: bool = False) -> str | None
     cleared → None; no trusted rows → None. (`last_unmet_goal_condition` is historical —
     it returns a met:false row even after a later clear — so it is deliberately not used.)
 
+    KNOWN OPEN GAP, tracked by #772 — do not read the omission as a settled design. This
+    reader does NOT pass `check_torn_tail`, so a transcript tear landing BEFORE the literal
+    `goal_status` is invisible to the scan's prefilter and this function returns the OLDER
+    trusted row as live, even under `strict=True`. Reproduced by execution during #864.
+    It was left as-is there for one reason only: enabling the check here would make strict
+    mode refuse on ANY torn final line, including one carrying no goal content, and a
+    transcript being written while it is read is the ordinary case — a regression across four
+    destructive callers that #864 could not validate. #864's Step-11 review re-raised it as
+    High and recommended a bounded reread, which this pure text-taking function cannot host;
+    the reread would live at the call sites. Those call sites are exactly #772's subject.
+
     Strict mode (#758 Step-11 wave): with `strict=True`, ABSENCE of trustworthy evidence
     is not the same verdict as a proven "no goal". A transcript is append-only, so only
     the TAIL can be torn — when the newest goal-bearing evidence is an unparseable
@@ -7608,8 +7619,20 @@ def main(argv: list[str] | None = None) -> int:
             # was declined: it adds a permanent flag to serve no existing caller, and it would
             # leave the DEFAULT invocation unable to distinguish a spent guard from an absent
             # one — which is the whole point of this issue.
-            with open(args.transcript, encoding="utf-8") as fh:
-                state, condition, reason = owner_goal_state(fh.read())
+            # A transcript this command cannot READ is a fifth outcome, and Step-11 review
+            # caught that it escaped as an uncaught traceback with rc 1 — contradicting the
+            # four-state contract this very command now advertises. Measured before fixing:
+            # a missing path exited 1 with a FileNotFoundError trace and no JSON at all.
+            # AMBIGUOUS is the honest state for it: something is there that cannot be read,
+            # which is exactly "I cannot tell you", not "there is no goal".
+            try:
+                with open(args.transcript, encoding="utf-8") as fh:
+                    state, condition, reason = owner_goal_state(fh.read())
+            except (OSError, UnicodeDecodeError) as exc:
+                state, condition = GOAL_STATE_AMBIGUOUS, None
+                # The TYPE only. The path is caller-supplied and the exception text adds
+                # nothing a caller does not already know.
+                reason = f"the transcript could not be read ({type(exc).__name__})"
             payload = {"state": state, "condition": condition}
             if reason:
                 payload["reason"] = reason

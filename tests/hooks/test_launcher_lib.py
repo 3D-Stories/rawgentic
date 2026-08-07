@@ -4108,14 +4108,50 @@ class TestATornTailBeforeTheTokenIsStillAmbiguous:
         assert proc.returncode == 0, proc.stderr
         assert json.loads(proc.stdout)["state"] == "LIVE"
 
-    def test_live_owner_goal_is_deliberately_unchanged_by_the_tail_check(self) -> None:
-        """The destructive-path reader keeps byte-identical behaviour.
+    def test_live_owner_goal_still_has_the_torn_tail_gap_tracked_by_772(self) -> None:
+        """CHARACTERIZATION of a KNOWN OPEN GAP — not an endorsement of it.
 
-        Turning the tail check on there would make strict mode refuse on ANY torn final line,
-        including one carrying no goal content — and a live transcript being written while it
-        is read is the ordinary case. Hardening those readers is #772's subject. This test
-        pins the deliberate asymmetry so it cannot be "tidied up" without a decision.
+        #864's Step-11 review objected that pinning this "makes the fail-open verdict
+        permanent", and that objection is fair enough to answer in the name: this asserts
+        what the code DOES today so the gap is visible and cannot close silently, and it is
+        expected to be REPLACED by a `pytest.raises` when #772 origin-binds the destructive
+        readers. Until then, deleting this test would hide the gap rather than fix it.
+
+        Why #864 did not just fix it: enabling `check_torn_tail` here would make strict mode
+        refuse on ANY torn final line, including one carrying no goal content, and a
+        transcript being written while it is read is the ordinary case. The review's own
+        remedy — a bounded reread — cannot live in this pure text-taking function; it belongs
+        at the four destructive call sites, which are #772's subject.
         """
         text = "\n".join([_goal_row("GOAL-A", met=False), _TORN_BEFORE_TOKEN])
         assert ll.owner_goal_state(text)[0] == "AMBIGUOUS"
         assert ll.live_owner_goal(text, strict=True) == "GOAL-A"
+
+
+class TestAnUnreadableTranscriptIsAmbiguousNotACrash:
+    """#864 Step-11 review, Medium (confidence 0.97), reproduced by execution.
+
+    The command advertises four states. A transcript it cannot open or decode was a fifth
+    outcome that escaped as an uncaught traceback with rc 1 — no JSON, no state, and not the
+    documented rc 3. AMBIGUOUS is the honest answer: something is there that cannot be read.
+    """
+
+    def test_a_missing_transcript_reports_ambiguous(self, tmp_path) -> None:
+        proc = _cli("read-goal-condition", "--transcript", str(tmp_path / "nope.jsonl"))
+        assert proc.returncode == 3, proc.stdout + proc.stderr
+        out = json.loads(proc.stdout)
+        assert out["state"] == "AMBIGUOUS"
+        assert out["condition"] is None
+        assert "FileNotFoundError" in out["reason"]
+
+    def test_an_undecodable_transcript_reports_ambiguous(self, tmp_path) -> None:
+        t = tmp_path / "bad.jsonl"
+        t.write_bytes(b'{"attachment": {"condition": "\xff\xfe not utf-8"}}\n')
+        proc = _cli("read-goal-condition", "--transcript", str(t))
+        assert proc.returncode == 3, proc.stdout + proc.stderr
+        assert json.loads(proc.stdout)["state"] == "AMBIGUOUS"
+
+    def test_a_directory_given_as_a_transcript_reports_ambiguous(self, tmp_path) -> None:
+        proc = _cli("read-goal-condition", "--transcript", str(tmp_path))
+        assert proc.returncode == 3, proc.stdout + proc.stderr
+        assert json.loads(proc.stdout)["state"] == "AMBIGUOUS"
