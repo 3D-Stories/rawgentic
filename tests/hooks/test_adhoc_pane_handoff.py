@@ -304,10 +304,17 @@ class TestGoalNudge:
         assert r.nudges()[0] == ["herdr", "pane", "send-keys", "w1:pZZ", "Enter"]
 
     def test_the_nudge_never_re_sends_the_goal_text(self) -> None:
-        """AC2 / #696: a re-paste risks double submission once the buffer flushes."""
+        """AC2 / #696: a re-paste risks double submission once the buffer flushes.
+
+        Asserts the recovery actually took TWO rounds and then succeeded, not just that the text
+        appears once: a one-round implementation would satisfy a bare send-count assertion while
+        still failing the longer buffered-turn case that four rounds exist for.
+        """
         r = Runner(_responses())
-        ll.perform_handoff(**_handoff(
+        out = ll.perform_handoff(**_handoff(
             r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=2)))
+        assert out["ok"] is True, out["failed_step"]
+        assert len(r.nudges()) == 2
         goal_sends = [t for t in r.sent_text() if t.startswith("/goal")]
         assert len(goal_sends) == 1, "the goal text was sent more than once"
         assert goal_sends[0].count(GOAL_CONDITION) == 1
@@ -318,7 +325,9 @@ class TestGoalNudge:
         out = ll.perform_handoff(**_handoff(
             r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
         assert out["ok"] is False and out["failed_step"] == "goal_armed"
-        assert len(r.nudges()) <= ll.GOAL_NUDGE_ROUNDS
+        # EXACTLY the bound, not merely `<=`: a `<=` assertion is satisfied by zero nudges, so it
+        # would pass against a build where the recovery never ran at all.
+        assert len(r.nudges()) == ll.GOAL_NUDGE_ROUNDS
         assert not any(c[:3] == ["herdr", "pane", "close"] and c[3] == "w1:p1"
                        for c in r.calls), "the predecessor must survive a failed handoff"
 
@@ -365,6 +374,9 @@ class TestGoalNudge:
         notes = [str(s.get("note")) for s in out["steps"] if s["kind"] == "send_goal_nudge"]
         assert notes, "the failed nudge was not recorded at all"
         assert any("pane_gone" in n for n in notes), notes
+        # The receipt must stay COMPLETE on this path — a consumer reading the result gets False,
+        # never a missing key.
+        assert out["results"]["goal_armed"] is False
 
     def test_a_successful_nudge_still_explains_itself(self) -> None:
         """The other half of the same rule: on success there is no error body to preserve, so the

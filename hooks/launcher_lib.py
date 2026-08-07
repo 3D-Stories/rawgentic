@@ -2868,27 +2868,27 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         # pass where the buffer was intact all along. Never a re-paste (#696): once the buffered
         # Enter flushes, a second copy of the text would submit twice.
         #
-        # TWO honest limits, both inherited from the prompt path and neither closable here
-        # (Step-8a cross-model review, two High findings — the observations are right, their
-        # recommended fixes are not implementable against this transport):
+        # Three properties of this recovery, stated so they are not mistaken for guarantees. Each
+        # is shared with the prompt path above, which has the same read-then-send shape.
         #
-        # 1. The guard is an AFFORDANCE check, NOT an identity check, and it cannot be made one:
-        #    a collapsed paste renders as `[Pasted text #N]`, so the pane never displays the
-        #    content to compare against `expected_condition`. `prompt_landed` proves the PROMPT
-        #    was submitted; it does NOT prove the paste on screen now is this goal's. So the
-        #    residual risk is real — an Enter submits whatever is staged. What bounds it: the pane
-        #    is one this call just created, the permission-dialog veto runs before every Enter, and
-        #    every unknown screen fails closed. `pane_shows_unsubmitted_paste`'s own docstring
-        #    states the same narrower claim; do not re-widen it here.
-        # 2. Enters can QUEUE. The very buffering this recovery exists for means an rc-0 send-keys
-        #    may sit unflushed while the re-poll still reads false, so a later round can enqueue a
-        #    second Enter; at flush the first submits the goal and the rest land on an empty input
-        #    box. Rate-bounded by the full re-poll between rounds, and an empty submit is inert.
-        #    NOT fixed by dropping to one nudge — #700 measured that one Enter still lands inside
-        #    the running turn (see PROMPT_NUDGE_ROUNDS), which is the failure this exists to end.
+        # 1. The guard checks an AFFORDANCE, not identity. A collapsed paste renders as
+        #    `[Pasted text #N]`, so the pane does not expose paste contents and this guard cannot
+        #    verify that the pending paste is this goal's. `prompt_landed` establishes that the
+        #    prompt was submitted; it does not establish what is staged now. What narrows the
+        #    exposure: the pane was created by this call, the permission-dialog veto runs before
+        #    every Enter, and any unrecognised screen fails closed.
+        # 2. Enters can QUEUE. The buffering this recovery exists for means an rc-0 send-keys may
+        #    sit unflushed while the re-poll still reads false, so a later round can enqueue
+        #    another; at flush the first submits the goal and the rest land on an empty input box.
+        #    The full re-poll between rounds bounds the rate. A single round would not close this
+        #    and would reintroduce the measured failure: #700 found one Enter still lands inside
+        #    the running turn (see PROMPT_NUDGE_ROUNDS).
+        # 3. The read and the Enter are separate herdr calls, so the pane can change between them
+        #    — a dialog appearing in that gap would be accepted. `herdr pane` exposes read,
+        #    send-text and send-keys only; there is no compare-and-send or state token to bind the
+        #    check to the act. Closing this needs a conditional-send primitive from the transport.
         #
-        # A future reordering of the sends would also invalidate limit 1's mitigation and must
-        # revisit this.
+        # Reordering the sends would change the basis of property 1.
         for _ in range(GOAL_NUDGE_ROUNDS):
             if armed:
                 break
@@ -2916,6 +2916,10 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                    note=("bare Enter — submit the intact goal paste, never re-send it (#835)"
                          if nudge_ok else None))
             if not nudge_ok:
+                # The receipt stays COMPLETE on this path: a consumer reading `goal_armed` gets
+                # False rather than a missing key. `armed` is False by construction here — the
+                # loop only reaches a nudge when the poll has not passed.
+                out["results"]["goal_armed"] = armed
                 # Named distinctly, for the reason `send_resume_nudge` is: reporting this as
                 # `goal_armed` would blame the successor's timing for a failed herdr call.
                 out["failed_step"] = "send_goal_nudge"
