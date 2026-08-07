@@ -762,8 +762,8 @@ For major changes, please open an issue first to discuss the approach.
   `try_insert_prompt`'s own `(session, window, directive, INSERT_CHANNEL)` reservation, not at the
   branch. Also corrected the epic's own note that F1 was stale — it counted NAG markers, not insert
   markers. 4 tests, the behavioural pair driven black-box through the hook subprocess and verified
-  red-before-green by reverting the gate. No workflow-spine change → no diagram REV. Suite
-  6352→6356.
+  red-before-green by reverting the gate, and the event-set guard likewise. No workflow-spine
+  change → no diagram REV. Suite 6352→6357.
 
 ### v3.140.0 (2026-08-07)
 - **Context-meter thresholds to 55/75, and older decisions get a rolling summary instead of
