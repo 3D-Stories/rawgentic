@@ -765,7 +765,11 @@ For major changes, please open an issue first to discuss the approach.
   premise corrected in `hooks/launcher_lib.py` and `docs/runbooks/herdr.md` §7.1/§7.1.1 plus its
   HTML pair, and seven order-pinning tests inverted rather than deleted. Adds
   `TestGoalGetsTheIdleWindow` and a three-state discrimination test (submitted /
-  sent-but-unsubmitted / queued). No workflow-spine change → no diagram REV. Suite 6357→6366.
+  sent-but-unsubmitted / queued). Cross-model review then caught a regression the reorder itself
+  introduced: the campaign `handoff` subcommand tore down while passing no `prompt_marker`, so with
+  the prompt moved last nothing verified the final send and the predecessor was retired on
+  `send-text` rc 0 alone — it now passes the boundary's `resolution_id`, which the prompt already
+  carries. No workflow-spine change → no diagram REV. Suite 6357→6370.
 
 ### v3.141.0 (2026-08-07)
 - **The directive tier can now insert mid-turn, not only at `Stop` (#729, epic #906).** The #718
