@@ -91,6 +91,19 @@ DEFAULT_ACT_PCT = 75              # AC3 — act now (gap 20, above MIN_TIER_GAP_
 MIN_TIER_GAP_PCT = 10
 DEFAULT_EVERY_TURNS = 5
 DEFAULT_EVERY_SECONDS = 300
+# #734 — how many CONSECUTIVE checks may take no reading before the meter says so a
+# second time. `_diagnose` is once-per-session, so without this a session that stays
+# blind emits one stderr line at minute 0 and nothing for the next 44 minutes, which is
+# the window the issue measured.
+#
+# Five NON-THROTTLED CHECKS, which is five cadence intervals and not one. Under the
+# defaults that is about 25 turns or about 25 minutes of continuous blindness. An earlier
+# comment here called it "one full cadence arm", which was simply wrong, and cross-model
+# review caught it. The delay is deliberate at this length: the measured blind window ran
+# 44 minutes, so a warning at roughly 25 sits well inside it, while a threshold of 1 or 2
+# would fire on the ordinary first-turn miss where the transcript does not exist yet —
+# which is the noise the once-per-session design was avoiding in the first place.
+BLIND_STREAK_WARN = 5
 
 _BLOCK = 65536
 DEFAULT_MAX_BYTES = 4 * 1024 * 1024   # the largest transcript here is 83 MB
@@ -1327,6 +1340,12 @@ def cmd_hook(argv) -> int:
     if event == "Stop" and payload.get("stop_hook_active") is not True:
         return 0
 
+    # `turns` counts PROMPTS, not tool calls, and that is deliberate — this is the only
+    # site that increments it. #734 was filed partly on the reading that a frozen `turns`
+    # over a long tool-driven run proves the meter is dead; it does not. An agentic run
+    # that submits one prompt and then makes two hundred tool calls correctly shows
+    # `turns: 1`. The field that tracks whether the meter is ALIVE is `last_check_ts`,
+    # which every non-throttled check advances below.
     if event == "UserPromptSubmit":
         state["turns"] = (_as_int(state.get("turns")) or 0) + 1
 
@@ -1353,10 +1372,20 @@ def cmd_hook(argv) -> int:
             save_state(home, session_id, state)
         return 0
 
+    # #734 — `diagnostics` is an append-only LEDGER. It records that a kind happened at
+    # least once; nothing anywhere removes an entry. So a state file carrying
+    # `transcript_unresolved` does NOT prove the meter is blind at read time, and reading
+    # it that way is the mistake this issue was originally filed on. `current` is rebuilt
+    # from scratch on every check and persisted as `diagnostics_current`, so there is one
+    # field that answers "what is wrong RIGHT NOW". The ledger keeps its meaning because
+    # the history is worth having — and because existing tests pin it.
+    current = []
+
     workspace = find_workspace(payload.get("cwd"))
     project, project_path = (bound_project(workspace, session_id)
                              if workspace else (None, None))
     if workspace and project is None:
+        current.append("session_unbound")
         # Visible degradation, not a silent one: without the bound project there is no
         # config, so the window falls back to the conservative default and the nag may
         # fire early. Say so once rather than letting it look like a real reading.
@@ -1377,18 +1406,64 @@ def cmd_hook(argv) -> int:
     state["last_check_turn"] = _as_int(state.get("turns")) or 0
     state["last_check_ts"] = now
 
+    # #734 — the two ways a check takes NO reading. They are handled together because
+    # they are the same thing from the operator's seat: no tier is evaluated, so no
+    # advisory and no directive can fire however large the session grows. The issue's own
+    # live reproduction (session 51f74d5b) was blind via `no_usage_row`, not
+    # `transcript_unresolved`, so covering only the latter would miss the case that
+    # prompted the report.
+    blind_kind, blind_message = None, None
     if transcript is None:
-        _diagnose(state, "transcript_unresolved",
-                  f"could not resolve a transcript for session {session_id} "
-                  "— the meter is inactive for this session")
+        blind_kind = "transcript_unresolved"
+        blind_message = (f"could not resolve a transcript for session {session_id} "
+                         "— the meter is inactive for this session")
+    elif used is None:
+        blind_kind = "no_usage_row"
+        blind_message = (f"no parseable message.usage row in {session_id}.jsonl "
+                         "— the meter is inactive for this session")
+
+    if blind_kind is not None:
+        current.append(blind_kind)
+        state["diagnostics_current"] = current
+        _diagnose(state, blind_kind, blind_message)
+        # `max(0, ...)` so a corrupt or hand-edited NEGATIVE counter cannot park the
+        # streak below zero and delay the warning by that many checks.
+        streak = max(0, _as_int(state.get("blind_streak")) or 0) + 1
+        state["blind_streak"] = streak
+        # ONE further warning once blindness PERSISTS. `_diagnose` above is
+        # once-per-session by design, which is correct for a transient first-turn miss
+        # and wrong for a meter that never recovers: the measured case went 44 minutes
+        # and 368,175 tokens with exactly one stderr line, emitted before any of it.
+        #
+        # `>=` PLUS an explicit once-flag, rather than an `== BLIND_STREAK_WARN` gate.
+        # The equality form was the first revision and cross-model review refused it: a
+        # state file arriving with a counter already past the threshold — corrupt, hand
+        # edited, or written by a future version — increments straight past equality and
+        # then never warns at all, for the whole session. That is a fail-OPEN on the one
+        # signal this issue exists to add. The flag makes "exactly one warning per blind
+        # episode" hold for ANY starting value, which is what the acceptance criterion
+        # actually asks for.
+        #
+        # The flag is cleared on a successful reading below, so a SECOND blind episode
+        # warns again. That is deliberate: a fresh episode is new information.
+        #
+        # Precedent for speaking up at all: the unwritable-state-dir warning below. A
+        # self-disabled meter is never invisible — that is this module's contract.
+        if streak >= BLIND_STREAK_WARN and not state.get("blind_warning_emitted"):
+            state["blind_warning_emitted"] = True
+            _warn(f"context_meter: blind for {streak} consecutive checks "
+                  f"({blind_kind}) — no context reading has been taken for this "
+                  "session, so no advisory or directive can fire however large it "
+                  "grows. This warning does not repeat until a reading succeeds.")
         save_state(home, session_id, state)
         return 0
-    if used is None:
-        _diagnose(state, "no_usage_row",
-                  f"no parseable message.usage row in {session_id}.jsonl "
-                  "— the meter is inactive for this session")
-        save_state(home, session_id, state)
-        return 0
+
+    # A reading succeeded, so the streak is spent and the current view is clean of both
+    # blind kinds. `session_unbound` may still be in `current` — that is a separate,
+    # still-true condition and it stays until a later bind clears it.
+    state["blind_streak"] = 0
+    state["blind_warning_emitted"] = False
+    state["diagnostics_current"] = current
 
     window, provenance = resolve_window(cfg.get("windowSize"),
                                         env.get("RAWGENTIC_CONTEXT_WINDOW"),

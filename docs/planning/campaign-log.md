@@ -14,6 +14,54 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #906 M2 — #734: the context meter says when it is blind · v3.141.5
+
+**Issue:** [#734](https://github.com/3D-Stories/rawgentic/issues/734) ·
+**Design:** brief note, small-standard lane (no separate design doc)
+
+**The issue's headline fix was falsified, and the run said so instead of building it.** #734 was
+filed on the reading that the meter latches an unresolved transcript and never recovers. It does
+not. `resolve_transcript` runs fresh on every non-throttled check, after the throttle, and the
+`transcript_unresolved` branch sets no suppression flag — verified against the code rather than
+taken from the issue's own later revalidation comment. Two of the six acceptance criteria therefore
+described behavior that already worked, so this slot pins them with regression tests rather than
+changing code, and says so in the PR body so a reviewer does not have to infer it.
+
+**What was actually broken was the reporting, in two ways.** First, `diagnostics` is append-only and
+nothing ever removed an entry, so it means "happened at least once", never "is true now" — which is
+why a state file frozen at turn 3 reads as permanently blind, and it is the misreading the issue was
+originally filed on. `diagnostics_current` is now rebuilt every check alongside it, which is what
+makes `session_unbound` stop being reported after a later bind. Second, `_diagnose` is
+once-per-session, so a genuinely blind session emitted one stderr line at minute 0 and nothing for
+the next 44 minutes while it consumed 368,175 tokens. A `blind_streak` counter now drives one
+further warning once blindness outlives five checks, and both blind kinds count toward it because
+the issue's own live reproduction was blind via `no_usage_row`, not `transcript_unresolved`.
+
+**A third acceptance criterion was aimed at the wrong field and was re-aimed, not quietly
+satisfied.** AC4 asks that `turns` advance over a session driven mainly by tool calls. `turns`
+increments at exactly one site, guarded by `event == "UserPromptSubmit"`, so a tool-driven session
+leaving it frozen is by design. The test drives the hook through `PostToolUse` payloads only, exactly
+as the criterion asks, and pins `last_check_ts` instead. The re-aim is posted as a comment on the
+issue.
+
+**What review caught.** The cross-model pass refused the first cut's `== BLIND_STREAK_WARN` gate: a
+counter arriving already past the threshold increments straight past equality and then never warns
+at all, which is a fail-open on the one signal the issue exists to add, in a state file the user can
+write. Now `>=` plus an explicit once-per-episode flag, so the guarantee holds for any starting
+value. It also caught a constant comment claiming 5 was "one full cadence arm" when it is five
+intervals. Declined with recorded reason: a High finding recommending the `/goal` send order be
+inverted — that is this diff's prose only, it did not create the window, and the same
+recommendation shipped as #989 and was reverted by owner decision D298 one day earlier on measured
+evidence.
+
+**Deviation, recorded.** `skills/pane-handoff/SKILL.md` carries an unrelated prose change in this PR
+— a `/goal` arms only when it leads the submitted text — folded in by owner decision after the
+mixed-scope concern was raised. Repo convention is one PR per issue.
+
+Suite 6393→6405, exit 0. Both lint lanes 10.00/10. Security scan clean. 12 tests added.
+
+---
+
 ## Epic #871 M4 — #944: claim-inventory coverage + the obsolete-child owner gate · v3.136.0
 
 **Two documented holes, closed.** The receipt used to attest only *that a look happened and left

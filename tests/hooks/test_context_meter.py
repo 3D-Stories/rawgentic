@@ -2067,3 +2067,201 @@ class TestInsertPromptAtTheActTier:
         assert "insert-prompt" in argv and "w1:pQQ" in argv
         assert seen["timeout"] == cm.INSERT_TIMEOUT_S
         assert not argv[-1].startswith("/"), "AC3 — the payload must be prose"
+
+
+# --------------------------------------------------------------------------
+# T12 — #734: prolonged blindness must be VISIBLE, and the state file must say
+# what is true NOW, not merely what happened once.
+#
+# Scope note, because this issue's body is partly falsified by its own later
+# revalidation (comment 2026-08-07T14:54Z, re-verified against the code here):
+#   * There is NO latch on resolution. `resolve_transcript` is called fresh on
+#     every non-throttled check and the unresolved branch sets no suppression
+#     flag. AC1/AC2 therefore already HOLD — these tests pin them so a future
+#     change cannot reintroduce the latch the issue body describes.
+#   * `turns` advancing only on `UserPromptSubmit` is BY DESIGN. AC4 is pinned
+#     against `last_check_ts`, the field that actually tracks liveness.
+# What is genuinely broken, and what the rest of this block covers: a session
+# that IS blind says nothing after its first stderr line, because `_diagnose`
+# is once-per-session.
+# --------------------------------------------------------------------------
+
+def _state(tmp_path, sid=None):
+    return json.loads((tmp_path / ".rawgentic" / "context-meter"
+                       / f"{sid or SID}.json").read_text())
+
+
+# Every invocation is "due" so a streak accumulates instead of being throttled away.
+EVERY_TURN = {"RAWGENTIC_CONTEXT_EVERY_TURNS": "1"}
+
+
+def _blind(tmp_path, event="UserPromptSubmit"):
+    """One check with NO transcript anywhere — the meter can take no reading."""
+    return _run({"session_id": SID, "cwd": str(tmp_path),
+                 "hook_event_name": event}, home=tmp_path, extra_env=EVERY_TURN)
+
+
+def test_blind_streak_counts_consecutive_checks_that_took_no_reading(tmp_path):
+    """AC3's counter. `diagnostics` cannot answer this: it only ever appends."""
+    for _ in range(3):
+        _blind(tmp_path)
+    assert _state(tmp_path)["blind_streak"] == 3
+
+
+def test_a_successful_reading_resets_the_blind_streak(tmp_path):
+    """AC1 — recovery without restarting the session, now observable in state."""
+    for _ in range(2):
+        _blind(tmp_path)
+    assert _state(tmp_path)["blind_streak"] == 2
+    _transcript(tmp_path, SID, [_row(_usage(inp=1, cr=10))])   # far below any tier
+    _run({"session_id": SID, "cwd": str(tmp_path),
+          "hook_event_name": "UserPromptSubmit"}, home=tmp_path, extra_env=EVERY_TURN)
+    assert _state(tmp_path)["blind_streak"] == 0
+
+
+def test_prolonged_blindness_warns_once_not_on_every_call(tmp_path):
+    """AC3 + AC6. The precedent is the unwritable-state-dir warning."""
+    stderr = ""
+    for _ in range(cm.BLIND_STREAK_WARN + 3):
+        stderr += _blind(tmp_path).stderr
+    assert stderr.count("blind for") == 1, (
+        "the prolonged-blindness warning must fire once per episode, not per call")
+
+
+def test_the_prolonged_blindness_warning_rearms_after_a_real_recovery(tmp_path):
+    """A SECOND blind episode is new information and deserves a second warning."""
+    first = ""
+    for _ in range(cm.BLIND_STREAK_WARN):
+        first += _blind(tmp_path).stderr
+    assert first.count("blind for") == 1
+    p = _transcript(tmp_path, SID, [_row(_usage(inp=1, cr=10))])
+    _run({"session_id": SID, "cwd": str(tmp_path),
+          "hook_event_name": "UserPromptSubmit"}, home=tmp_path, extra_env=EVERY_TURN)
+    p.unlink()
+    second = ""
+    for _ in range(cm.BLIND_STREAK_WARN):
+        second += _blind(tmp_path).stderr
+    assert second.count("blind for") == 1
+
+
+def test_a_session_that_resolves_immediately_is_unchanged(tmp_path):
+    """AC6's control arm — no streak, no warning, no new noise."""
+    p = _transcript(tmp_path, SID, [_row(_usage(inp=1, cr=10))])
+    r = _run({"session_id": SID, "cwd": str(tmp_path), "transcript_path": str(p),
+              "hook_event_name": "UserPromptSubmit"}, home=tmp_path)
+    assert r.returncode == 0
+    assert "blind for" not in r.stderr
+    assert _state(tmp_path)["blind_streak"] == 0
+
+
+def test_diagnostics_current_says_what_is_true_now_while_diagnostics_latches(tmp_path):
+    """AC2, and the root of F1's misreading: `diagnostics` means 'ever', not 'now'."""
+    _blind(tmp_path)
+    blind = _state(tmp_path)
+    assert "transcript_unresolved" in blind["diagnostics"]
+    assert "transcript_unresolved" in blind["diagnostics_current"]
+    _transcript(tmp_path, SID, [_row(_usage(inp=1, cr=10))])
+    _run({"session_id": SID, "cwd": str(tmp_path),
+          "hook_event_name": "UserPromptSubmit"}, home=tmp_path, extra_env=EVERY_TURN)
+    healed = _state(tmp_path)
+    assert "transcript_unresolved" in healed["diagnostics"], "the ledger still latches"
+    assert healed["diagnostics_current"] == [], "but the CURRENT view must have cleared"
+
+
+def test_session_unbound_clears_from_the_current_view_after_a_later_bind(tmp_path):
+    """AC2 — a bind that lands after the meter's first look must stop being reported."""
+    root, proj = _workspace(tmp_path)
+    reg = root / "claude_docs" / "session_registry.jsonl"
+    reg.write_text("", encoding="utf-8")                       # not yet bound
+    _transcript(tmp_path, SID, [_row(_usage(inp=1, cr=10))])
+    _run({"session_id": SID, "cwd": str(proj), "hook_event_name": "UserPromptSubmit"},
+         home=tmp_path, cwd=proj, extra_env=EVERY_TURN)
+    assert "session_unbound" in _state(tmp_path)["diagnostics_current"]
+    reg.write_text(json.dumps({"session_id": SID, "project": "p",
+                               "project_path": "./projects/p"}) + "\n", encoding="utf-8")
+    _run({"session_id": SID, "cwd": str(proj), "hook_event_name": "UserPromptSubmit"},
+         home=tmp_path, cwd=proj, extra_env=EVERY_TURN)
+    state = _state(tmp_path)
+    assert "session_unbound" in state["diagnostics"], "the ledger keeps the history"
+    assert "session_unbound" not in state["diagnostics_current"]
+
+
+def test_last_check_ts_advances_on_a_tool_driven_session_while_turns_does_not(tmp_path):
+    """AC4, RE-AIMED.
+
+    The criterion as filed asks that `turns` advance over a tool-driven session.
+    It cannot: `turns` increments at exactly one site, guarded by
+    `event == "UserPromptSubmit"`, so it counts PROMPTS, not tool calls. That is
+    by design, not the defect. `last_check_ts` is the liveness field, and this
+    drives the hook via `PostToolUse` payloads ONLY, exactly as AC4 asks.
+    """
+    p = _transcript(tmp_path, SID, [_row(_usage(inp=1, cr=10))])
+    payload = {"session_id": SID, "cwd": str(tmp_path), "transcript_path": str(p),
+               "hook_event_name": "PostToolUse", "tool_name": "Bash"}
+    _run(payload, home=tmp_path)
+    first = _state(tmp_path)
+    # Age the cached reading past the cadence rather than sleeping through it, so the
+    # test stays deterministic and costs no wall-clock.
+    sfile = tmp_path / ".rawgentic" / "context-meter" / f"{SID}.json"
+    aged = json.loads(sfile.read_text())
+    aged["last_check_ts"] = aged["last_check_ts"] - 10_000
+    sfile.write_text(json.dumps(aged), encoding="utf-8")
+    _run(payload, home=tmp_path)
+    second = _state(tmp_path)
+    assert second["last_check_ts"] > aged["last_check_ts"], (
+        "a tool-driven session must still show a live meter")
+    # Absent, not zero: the increment is the only writer, so a session that submitted no
+    # prompt never creates the key at all. Asserted via .get so the test states the real
+    # shape rather than a tidier one.
+    assert second.get("turns", 0) == first.get("turns", 0) == 0, (
+        "`turns` counts prompts, not tool calls — advancing it here would be the bug")
+
+
+def test_a_malformed_blind_streak_is_tolerated_and_never_raises(tmp_path):
+    """Fail-open (AC5): a corrupt state value must not break the hook."""
+    d = tmp_path / ".rawgentic" / "context-meter"
+    d.mkdir(parents=True)
+    (d / f"{SID}.json").write_text(json.dumps(
+        {"session_id": SID, "blind_streak": "not-a-number"}), encoding="utf-8")
+    r = _blind(tmp_path)
+    assert r.returncode == 0
+    assert _state(tmp_path)["blind_streak"] == 1
+
+
+def _seed_state(tmp_path, **fields):
+    d = tmp_path / ".rawgentic" / "context-meter"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{SID}.json").write_text(
+        json.dumps({"session_id": SID, **fields}), encoding="utf-8")
+
+
+def test_a_counter_already_past_the_threshold_still_warns(tmp_path):
+    """Step-11 F2. The first revision gated on `== BLIND_STREAK_WARN`.
+
+    A state file arriving with the counter already past the threshold incremented
+    straight past equality and then never warned for the rest of the session — a
+    fail-open on the one signal this issue exists to add.
+    """
+    _seed_state(tmp_path, blind_streak=cm.BLIND_STREAK_WARN + 40)
+    assert "blind for" in _blind(tmp_path).stderr
+
+
+def test_a_negative_counter_does_not_delay_the_warning(tmp_path):
+    """Step-11 F2. A negative value must not buy extra silent checks."""
+    _seed_state(tmp_path, blind_streak=-1)
+    stderr = ""
+    for _ in range(cm.BLIND_STREAK_WARN):
+        stderr += _blind(tmp_path).stderr
+    assert stderr.count("blind for") == 1
+    assert _state(tmp_path)["blind_streak"] == cm.BLIND_STREAK_WARN
+
+
+def test_the_once_flag_clears_only_on_a_real_reading(tmp_path):
+    """The flag is what makes 'exactly once per episode' hold for any start value."""
+    _seed_state(tmp_path, blind_streak=cm.BLIND_STREAK_WARN)
+    _blind(tmp_path)
+    assert _state(tmp_path)["blind_warning_emitted"] is True
+    _transcript(tmp_path, SID, [_row(_usage(inp=1, cr=10))])
+    _run({"session_id": SID, "cwd": str(tmp_path),
+          "hook_event_name": "UserPromptSubmit"}, home=tmp_path, extra_env=EVERY_TURN)
+    assert _state(tmp_path)["blind_warning_emitted"] is False
