@@ -3992,9 +3992,12 @@ def _forged_nested(condition: str) -> str:
             "attachment": {"type": "goal_status", "met": False, "condition": condition}}}]}})
 
 
-# A torn tail: it MUST still contain the literal "goal_status", or the reader's cheap
-# prefilter skips the line entirely and there is no ambiguity to report.
+# Two shapes of torn tail, and the difference is load-bearing. The first still contains the
+# literal "goal_status", so the scan's cheap prefilter lets it reach the JSON parse. The
+# second is torn BEFORE that token — Step-8a review found the prefilter skipped it
+# entirely, so a stale trusted row was handed back as LIVE.
 _TORN_GOAL_LINE = '{"attachment":{"type":"goal_status","met":fal'
+_TORN_BEFORE_TOKEN = '{"attachment":{"type":"goal_st'
 
 
 def _read_goal(tmp_path, lines) -> subprocess.CompletedProcess:
@@ -4078,3 +4081,41 @@ class TestOwnerGoalState:
         assert ll.owner_goal_state(text)[0] == "AMBIGUOUS"
         with pytest.raises(ll.LauncherError):
             ll.live_owner_goal(text, strict=True)
+
+
+class TestATornTailBeforeTheTokenIsStillAmbiguous:
+    """#864 Step-8a review, High (confidence 0.98), reproduced by execution before the fix.
+
+    The scan prefilters on the literal `goal_status` for speed. A tear landing BEFORE that
+    token was therefore invisible: the line was skipped, no suspicion was recorded, and the
+    older trusted row was returned as LIVE — the stale-fallback outcome the strict refusal
+    exists to prevent. A transcript is append-only, so one extra parse of the last non-blank
+    line closes it.
+    """
+
+    def test_owner_goal_state_reports_ambiguous(self, tmp_path) -> None:
+        proc = _read_goal(tmp_path, [_goal_row("GOAL-A", met=False), _TORN_BEFORE_TOKEN])
+        assert proc.returncode == 3, proc.stdout
+        out = json.loads(proc.stdout)
+        assert out["state"] == "AMBIGUOUS"
+        assert out["condition"] is None
+        assert "GOAL-A" not in proc.stdout
+
+    def test_a_complete_final_line_is_not_reported_as_torn(self, tmp_path) -> None:
+        """The tail check must not fire on an ordinary transcript."""
+        proc = _read_goal(tmp_path, [_goal_row("GOAL-A", met=False),
+                                     json.dumps({"type": "user", "message": "hello"})])
+        assert proc.returncode == 0, proc.stderr
+        assert json.loads(proc.stdout)["state"] == "LIVE"
+
+    def test_live_owner_goal_is_deliberately_unchanged_by_the_tail_check(self) -> None:
+        """The destructive-path reader keeps byte-identical behaviour.
+
+        Turning the tail check on there would make strict mode refuse on ANY torn final line,
+        including one carrying no goal content — and a live transcript being written while it
+        is read is the ordinary case. Hardening those readers is #772's subject. This test
+        pins the deliberate asymmetry so it cannot be "tidied up" without a decision.
+        """
+        text = "\n".join([_goal_row("GOAL-A", met=False), _TORN_BEFORE_TOKEN])
+        assert ll.owner_goal_state(text)[0] == "AMBIGUOUS"
+        assert ll.live_owner_goal(text, strict=True) == "GOAL-A"

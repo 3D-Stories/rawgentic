@@ -1370,7 +1370,8 @@ def live_owner_goal(transcript_text: str, *, strict: bool = False) -> str | None
     return last["condition"]
 
 
-def _owner_goal_scan(transcript_text: str) -> tuple[dict | None, str | None]:
+def _owner_goal_scan(transcript_text: str, *,
+                     check_torn_tail: bool = False) -> tuple[dict | None, str | None]:
     """The TRUST RULES, in one place: `(last_trusted_row, suspicion)`. Pure, never raises.
 
     Lifted out of `live_owner_goal` by #864 without changing a single predicate, so that the
@@ -1424,6 +1425,30 @@ def _owner_goal_scan(transcript_text: str) -> tuple[dict | None, str | None]:
             last = row
         else:
             suspicious = "a trusted-origin goal_status row that fails validation"
+
+    # #864 Step-8a review, High: the cheap `"goal_status" not in line` prefilter above cannot
+    # see a tear that lands BEFORE that literal. Reproduced by execution — a transcript whose
+    # last line is `{"attachment":{"type":"goal_st` was skipped entirely, and the scan handed
+    # back the older trusted row as LIVE. That is exactly the "fall back to a stale one"
+    # outcome the strict refusal exists to prevent, and my own first test had adapted to the
+    # hole by using a tear that happened to contain the token.
+    #
+    # A transcript is append-only, so only the TAIL can be torn — one extra parse of the last
+    # non-blank line closes it without parsing megabytes of transcript.
+    #
+    # OPT-IN, and the narrowness is the point. `live_owner_goal` does NOT pass this flag, so
+    # its four destructive-path callers keep byte-identical behaviour. Turning it on there
+    # would make strict mode refuse on ANY torn final line, including one carrying no goal
+    # content at all — a live transcript being written while it is read is the ordinary case,
+    # so that is a regression risk this child cannot validate. Hardening the destructive
+    # readers is #772's subject, and this is recorded as a follow-up rather than rushed here.
+    if check_torn_tail:
+        tail = [ln for ln in transcript_text.splitlines() if ln.strip()]
+        if tail:
+            try:
+                json.loads(tail[-1])
+            except ValueError:
+                suspicious = "an unparseable final transcript line (torn write?)"
     return last, suspicious
 
 
@@ -1458,7 +1483,7 @@ def owner_goal_state(transcript_text: str) -> tuple[str, str | None, str | None]
     `condition` is None in every state but LIVE, so a caller cannot accidentally use a
     condition it was not told to trust.
     """
-    last, suspicious = _owner_goal_scan(transcript_text)
+    last, suspicious = _owner_goal_scan(transcript_text, check_torn_tail=True)
     if suspicious is not None:
         return (GOAL_STATE_AMBIGUOUS, None, suspicious)
     if last is None:
@@ -7571,8 +7596,18 @@ def main(argv: list[str] | None = None) -> int:
             # returned verbatim. Both matter because a goal carries a run's scoped merge grant.
             #
             # The rc contract is PRESERVED rather than migrated — rc 0 for LIVE, rc 3 for anything
-            # else, with `condition` still on stdout in the LIVE case — so no existing consumer
-            # changes. The `state` field is purely additive: rc 3 printed nothing to stdout before.
+            # else, with `condition` still on stdout in the LIVE case.
+            #
+            # The STDOUT contract does change, and saying otherwise was an overstatement the
+            # Step-8a review caught: rc 3 printed nothing to stdout before and now prints the
+            # state payload. A consumer treating "empty stdout" as the failure signal would see
+            # JSON instead. Accepted here on evidence rather than assumption — every in-repo
+            # consumer is PROSE (the runbook and the pane-handoff skill) plus two tests, which
+            # are updated in this commit; nothing parses this command's stdout programmatically.
+            # The reviewer's alternative, keeping stdout empty and adding a `--state-json` flag,
+            # was declined: it adds a permanent flag to serve no existing caller, and it would
+            # leave the DEFAULT invocation unable to distinguish a spent guard from an absent
+            # one — which is the whole point of this issue.
             with open(args.transcript, encoding="utf-8") as fh:
                 state, condition, reason = owner_goal_state(fh.read())
             payload = {"state": state, "condition": condition}
