@@ -298,7 +298,26 @@ Fix plan with ordered tasks, file paths, and test expectations.
    git checkout -b fix/<issue-number>-<short-desc> origin/capabilities.default_branch
    ```
 3. Verify branch created successfully.
-4. **Pre-flight dependency check:** If the project's `config.techStack` includes npm/yarn/pnpm-based technologies (node, react, vue, angular, etc.) or a `package.json` exists in the project root, verify `node_modules` exists. If missing, run the appropriate install command (`npm install`, `yarn install`, or `pnpm install`) before proceeding to Step 7. Similarly, for Python projects with a `requirements.txt` or `pyproject.toml`, verify the virtual environment is active or dependencies are installed. This prevents test failures due to missing dependencies rather than actual bugs.
+4. **MANDATORY step-state bootstrap — run this before anything else on the branch.**
+   ```bash
+   python3 hooks/step_state.py write --project <project> --workflow wf3 --step 6 \
+     --step-title "Create Fix Branch" --issue <issue number> \
+     --session-id "$CLAUDE_CODE_SESSION_ID"
+   ```
+   **Why it is mandatory, and what breaks without it.** The PostToolUse hook stamps later
+   steps from signature commands (`git commit`, `gh pr create`, `broker-merge`,
+   `work_summary.py summarize`), but it stamps **only when the step-state pointer already
+   names this session** — `step_state_post.main` returns early otherwise, and that
+   foreign-session guard is deliberate, because panes share one pointer per project. The
+   pointer is created by exactly two things: a session-note `— DONE` marker, or this call.
+
+   So a run that skips this **can never stamp anything**. Every later signature command is
+   dropped silently and the run contributes **no timing at all**. That is not theoretical:
+   the #976 run produced `{"status": "absent", "steps": [], "skipped_lines": 0}`, because
+   it wrote no markers and the live pointer still belonged to the previous run's session.
+
+   Fail-open as always — a failure here is ignored and the step proceeds. Run it anyway.
+5. **Pre-flight dependency check:** If the project's `config.techStack` includes npm/yarn/pnpm-based technologies (node, react, vue, angular, etc.) or a `package.json` exists in the project root, verify `node_modules` exists. If missing, run the appropriate install command (`npm install`, `yarn install`, or `pnpm install`) before proceeding to Step 7. Similarly, for Python projects with a `requirements.txt` or `pyproject.toml`, verify the virtual environment is active or dependencies are installed. This prevents test failures due to missing dependencies rather than actual bugs.
 
 ### Output
 

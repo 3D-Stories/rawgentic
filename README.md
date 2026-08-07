@@ -749,6 +749,26 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.139.1 (2026-08-07)
+- **A WF2 or WF3 run can no longer finish having recorded no timing at all (#976
+  follow-up).** The #976 run produced `{"status": "absent", "steps": [],
+  "skipped_lines": 0}` — zero per-step timing, from a run whose whole purpose was a clean
+  efficiency measurement. Cause: `step_state_post.main` stamps a signature command
+  (`git commit`, `gh pr create`, `broker-merge`, `work_summary.py summarize`) **only when
+  the step-state pointer already names the current session**, and the pointer is created
+  by exactly two things — a session-note `— DONE` marker, or an explicit
+  `step_state.py write`. Every skill called that write "OPTIONAL belt-and-suspenders" and
+  claimed the hook needed "no per-step action", so a run that wrote no markers could stamp
+  nothing, forever. On #976 the live pointer additionally still belonged to the previous
+  run's session, so the deliberate foreign-session guard dropped every stamp. The write is
+  now **MANDATORY once per run at the branch cut** — WF2 Step 7 and WF3 Step 6 — where the
+  workflow and issue are both known unambiguously, and the false "no per-step action
+  required" sentence is gone from all four skills that carried it. The foreign-session
+  guard is unchanged: it is correct, and panes share one pointer per project. Three
+  behavioral tests pin the mechanism (a signature alone never bootstraps; one bootstrap
+  unblocks every later signature; timing goes from `absent` to real steps) plus three prose
+  guards. No workflow-spine change → no diagram REV. Suite 6317→6323.
+
 ### v3.139.0 (2026-08-07)
 - **A raw `gh pr merge` is now BLOCKED while the target PR belongs to an active campaign,
   and the broker it routes to actually works again (#976).** #963 shipped the supervised

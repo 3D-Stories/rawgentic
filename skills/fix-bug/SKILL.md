@@ -284,7 +284,7 @@ conform to its type's slot, and when a literal and this table diverge the table 
 Emitters: the key MUST land in the type's slot — a key anywhere else on the line is
 ignored by consumers. Deliberately un-keyed informational markers (trivial-work
 suggestion, unattended advisories) are declared deferrals, not misses.
-Step-entry state (#480, hook-emitted since #499): the PostToolUse hook (`hooks/step_state_post.py`) derives the now-pointer automatically from step DONE markers and signature commands — no per-step action required. The manual `python3 hooks/step_state.py write --project <project> --workflow wf3 --step <N> --step-title "<step name>" --issue <issue number> --session-id "$CLAUDE_CODE_SESSION_ID"` call is OPTIONAL belt-and-suspenders for entry-time precision on prose-only steps. Fail-open either way (never gates; any failure is ignored and the step proceeds).
+Step-entry state (#480, hook-emitted since #499): the PostToolUse hook (`hooks/step_state_post.py`) stamps later steps from step DONE markers and signature commands — but ONLY once the step-state pointer already names this session, which a DONE marker or an explicit write creates. It does NOT stamp unaided: a run that creates no pointer contributes no timing at all (#976 measured exactly that). The manual `python3 hooks/step_state.py write --project <project> --workflow wf3 --step <N> --step-title "<step name>" --issue <issue number> --session-id "$CLAUDE_CODE_SESSION_ID"` call is MANDATORY once per run at the branch cut (see that step) and useful belt-and-suspenders for entry-time precision on prose-only steps. Fail-open either way (never gates; any failure is ignored and the step proceeds).
 </step-tracking>
 
 <references>

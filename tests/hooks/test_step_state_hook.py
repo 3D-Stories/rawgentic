@@ -531,3 +531,79 @@ class TestSignaturesIgnoreQuotedAndHeredocText:
         state read on every grep — the cost the prefilter exists to avoid."""
         assert ssp._may_have_signature("grep -rn 'gh pr merge' skills/") is False
         assert ssp._may_have_signature("gh pr merge 973 --squash") is True
+
+
+class TestSignatureStampingNeedsABootstrap:
+    """Why the branch-cut `step_state.py write` is MANDATORY, not optional.
+
+    Measured on the #976 run, which produced ZERO timing: `step_state.py timing
+    --issue 976` returned `{"status": "absent", "steps": [], "skipped_lines": 0}`.
+
+    The signature path reads the pointer and returns early unless it already names
+    THIS session (`step_state_post.main`). Only a session-note DONE marker or an
+    explicit `step_state.py write` creates that pointer. So a run that writes neither
+    can never stamp anything: every later `git commit`, `gh pr create` and
+    `broker-merge` is silently dropped, and the whole run contributes no timing.
+
+    On #976 the live pointer additionally belonged to a DIFFERENT session (the #963
+    run), so the foreign-session guard — which is deliberate and pinned by
+    `test_branch_cut_never_stamps_foreign_session` — dropped every stamp for the
+    entire run.
+    """
+
+    SIGNATURE_CMD = "gh pr create --title x --body y"
+
+    def test_a_signature_alone_never_bootstraps_the_pointer(self, tmp_path):
+        """The deadlock, stated as a test: no pointer, so no stamp, forever."""
+        ws = _mk_workspace(tmp_path, session_id="sess-boot")
+        r = _run_hook(ws, {"session_id": "sess-boot", "tool_name": "Bash",
+                           "tool_input": {"command": self.SIGNATURE_CMD}})
+        assert r.returncode == 0
+        assert not (ws / "claude_docs" / "wal" / "rawgentic.state.json").exists(), \
+            "a signature command must not invent a run it cannot identify"
+
+    def test_an_explicit_bootstrap_unblocks_every_later_signature(self, tmp_path):
+        """And the fix, stated as a test: one write at the branch cut is enough."""
+        ws = _mk_workspace(tmp_path, session_id="sess-boot")
+        state_dir = ws / "claude_docs" / "wal"
+        subprocess.run(
+            [sys.executable, str(HOOKS / "step_state.py"), "write",
+             "--project", "rawgentic", "--workflow", "wf2", "--step", "7",
+             "--step-title", "Create Branch", "--issue", "976",
+             "--session-id", "sess-boot", "--state-dir", str(state_dir)],
+            capture_output=True, text=True, timeout=30, check=True)
+
+        r = _run_hook(ws, {"session_id": "sess-boot", "tool_name": "Bash",
+                           "tool_input": {"command": self.SIGNATURE_CMD}})
+        assert r.returncode == 0
+        rec = json.loads((state_dir / "rawgentic.state.json").read_text())
+        assert rec["step"] == "12", "the same command that wrote nothing now stamps"
+        assert rec["issue"] == 976
+
+    def test_the_bootstrap_turns_absent_timing_into_real_timing(self, tmp_path):
+        """The property the run actually needs — timing that is not `absent`."""
+        ws = _mk_workspace(tmp_path, session_id="sess-boot")
+        state_dir = ws / "claude_docs" / "wal"
+
+        def timing():
+            out = subprocess.run(
+                [sys.executable, str(HOOKS / "step_state.py"), "timing",
+                 "--project", "rawgentic", "--issue", "976",
+                 "--state-dir", str(state_dir)],
+                capture_output=True, text=True, timeout=30, check=False).stdout
+            return json.loads(out)
+
+        assert timing()["status"] == "absent"
+
+        subprocess.run(
+            [sys.executable, str(HOOKS / "step_state.py"), "write",
+             "--project", "rawgentic", "--workflow", "wf2", "--step", "7",
+             "--step-title", "Create Branch", "--issue", "976",
+             "--session-id", "sess-boot", "--state-dir", str(state_dir)],
+            capture_output=True, text=True, timeout=30, check=True)
+        _run_hook(ws, {"session_id": "sess-boot", "tool_name": "Bash",
+                       "tool_input": {"command": self.SIGNATURE_CMD}})
+
+        after = timing()
+        assert after["status"] != "absent"
+        assert [s["step"] for s in after["steps"]] == ["7", "12"]
