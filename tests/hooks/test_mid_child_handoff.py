@@ -71,16 +71,16 @@ def _goal_row(condition: str, met: bool) -> str:
 
 class TestMidChildLadder:
     def test_ladder_is_seven_causal_steps_naming_on_disk_artifacts(self):
-        """#694 reordered the predecessor-owned rungs to match the send order: the bind is its own
-        send, so its registry row comes first. #840 prepended `queue_revalidated` — the queue must
-        be revalidated BEFORE a successor is spawned to inherit it, so it cannot sit among the
-        post-launch rungs. #989 then swapped the last two: `/goal` moved AHEAD of the prompt (a bare
-        slash command is queued in a busy pane, #718), so `goal_armed` precedes `prompt_landed`.
-        The ladder must keep tracking the sends, because `evaluate_verifications` stops at the FIRST
-        failure and an out-of-order ladder blames the wrong send."""
+        """#694 reordered the four predecessor-owned rungs to match the send order: the bind is its
+        own send, so its registry row comes first, and `/goal` goes last so `goal_armed` does too.
+        #840 prepended `queue_revalidated` — the queue must be revalidated BEFORE a successor is
+        spawned to inherit it, so it cannot sit among the post-launch rungs. #989 briefly swapped
+        the last two and was REVERTED, so the order is the #694 one again. The ladder must keep
+        tracking the sends, because `evaluate_verifications` stops at the FIRST failure and an
+        out-of-order ladder blames the wrong send."""
         steps = ll.mid_child_verification_steps()
         assert [s["step"] for s in steps] == [
-            "queue_revalidated", "spawned", "project_switched", "goal_armed", "prompt_landed",
+            "queue_revalidated", "spawned", "project_switched", "prompt_landed", "goal_armed",
             "position_rebuilt", "state_claimed"]
         for s in steps:
             assert s["artifact"].strip()

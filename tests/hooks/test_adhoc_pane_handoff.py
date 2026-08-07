@@ -239,21 +239,20 @@ class TestPromptNudge:
         assert out["ok"] is True
         assert r.nudges() == []
 
-    def test_the_prompt_is_still_sent_last_and_recovery_does_not_reorder(self) -> None:
+    def test_the_goal_is_still_sent_last_and_recovery_does_not_reorder(self) -> None:
         """Recovery lives inside a send; it does not reorder sends.
 
-        #989 INVERTED this test rather than deleting it. It used to assert the goal came after the
-        prompt. That order was the defect: a bare slash command pasted into a busy pane is queued,
-        never executed (#718, launcher_lib.py:636-648). The invariant it really guards — "the nudge
-        recovery changes no order" — is preserved by pinning the NEW order.
+        #989 inverted this test to pin a goal-second order, and #989's reorder was then REVERTED.
+        The invariant it really guards — "the nudge recovery changes no order" — is unaffected
+        either way, so it is re-pinned at the restored order.
         """
         r = Runner(_responses())
         ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, marker_after_nudges=1)))
         texts = r.sent_text()
         assert len(texts) == 3
         assert texts[0].startswith(ll._driver_lib().BIND_DIRECTIVE)
-        assert texts[1].startswith("/goal")
-        assert texts[2] == RESUME_PROMPT
+        assert texts[1] == RESUME_PROMPT
+        assert texts[2].startswith("/goal")
 
     def test_a_failed_nudge_send_is_its_own_failure_not_poll_exhaustion(self) -> None:
         """Review finding: a broken `send-keys` must not be reported as `prompt_landed` timing out.
@@ -394,11 +393,11 @@ class TestGoalNudge:
         assert any("never re-send" in n for n in notes), notes
 
     def test_the_nudge_recovery_adds_no_send_and_keeps_the_order(self) -> None:
-        """AC5, re-pinned at the #989 order: recovery adds no send and moves none.
+        """AC5: recovery adds no send and moves none.
 
-        Renamed from `test_the_send_order_is_unchanged`, whose name asserted the very thing #989
-        had to change. Kept rather than deleted — it is the guard that stops a future recovery
-        from quietly inserting or reordering a send.
+        Renamed from `test_the_send_order_is_unchanged` by #989, whose reorder was then reverted.
+        The name stays — it is the guard that stops a future recovery from quietly inserting or
+        reordering a send, and it is true of whichever order ships.
         """
         r = Runner(_responses())
         ll.perform_handoff(**_handoff(
@@ -406,8 +405,8 @@ class TestGoalNudge:
         texts = r.sent_text()
         assert len(texts) == 3
         assert texts[0].startswith(ll._driver_lib().BIND_DIRECTIVE)
-        assert texts[1].startswith("/goal")
-        assert texts[2] == RESUME_PROMPT
+        assert texts[1] == RESUME_PROMPT
+        assert texts[2].startswith("/goal")
 
 
 class TestGoalNudgeSafety:
@@ -441,21 +440,22 @@ class TestGoalNudgeSafety:
         assert any("goal" in n.lower() for n in notes), notes
 
 
-class TestGoalGetsTheIdleWindow:
-    """#989 — the goal is a BARE SLASH COMMAND, so it needs an idle pane the way SEND 1 does.
+class TestTheGoalGoesLastAndTheWindowIsBounded:
+    """#989's reorder was REVERTED, and this class pins the restored order and its real bound.
 
-    The defect this class pins: a bare slash command pasted into a BUSY session is queued and
-    never executed. That is not a new discovery — `validate_inserted_prompt`
-    (launcher_lib.py:636-648) already records it from #718, and refuses to send one for exactly
-    this reason. The old order sent `/goal` last, DELIBERATELY into a mid-turn pane, so it was
-    queued every time; the live transcript showed enqueue, remove 2.3s later, and zero
-    `goal_status` rows.
+    #989 moved `/goal` ahead of the resume prompt, reasoning that a bare slash command pasted into
+    a busy pane is queued and never executed (#718). The owner then reported that the OLD order —
+    bind, prompt, goal — had run reliably for weeks with the goal deliberately going into a busy
+    pane. A queued command therefore does execute when the turn ends, so being queued is not by
+    itself fatal, and the four failures #989 was built on had a different cause: the goal file's
+    trailing newline, which PR 991 fixed at the goal choke point.
 
-    The natural experiment was already in the tree: SEND 1 is also a bare slash command
-    (`/rawgentic:switch`) and it works, because an `agent wait --until idle` sits immediately
-    before it. The fix gives `/goal` the same window and hands the busy window to the resume
-    prompt, which tolerates it — a prose paste's Enter is buffered during a turn and flushes at
-    turn end (#700, #835).
+    What survives from the #989 work: PR 991's newline strip, and PR 992's SETTLE, which is
+    advisory and gates nothing. What does not: the reorder.
+
+    The unguarded window the reorder wanted to close is back, and it is BOUNDED by the thing that
+    closes it — the predecessor is not retired until `goal_armed` passes, so a successor that
+    never arms its guard never costs the run its predecessor.
     """
 
     @staticmethod
@@ -469,12 +469,9 @@ class TestGoalGetsTheIdleWindow:
                     return i
         return -1
 
-    def test_an_idle_wait_precedes_the_goal_send(self) -> None:
-        """THE fix. Without this wait the pane is mid-turn on the bind and the goal is queued.
-
-        `project_switched` proves the bind's ROW landed, not that its TURN ended (that is #700's
-        whole finding), so passing that rung is NOT evidence the pane is free.
-        """
+    def test_the_settle_sits_between_the_prompt_send_and_the_goal_send(self) -> None:
+        """The settle keeps its position immediately before the goal, which is what its name and
+        its measured basis both say. The reverted reorder moved the prompt back above it."""
         r = Runner(_responses())
         out = ll.perform_handoff(**_handoff(
             r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=0)))
@@ -482,15 +479,15 @@ class TestGoalGetsTheIdleWindow:
 
         waits = [i for i, c in enumerate(r.calls) if Runner.key(c) == "herdr agent wait"]
         assert len(waits) == 2, \
-            f"expected the pre-launch wait AND a wait before the goal, got {len(waits)}"
+            f"expected the pre-launch wait AND the settle's confirmation, got {len(waits)}"
 
-        bind_text = self._index_of(r.calls, "herdr pane send-text", 1)
-        goal_text = self._index_of(r.calls, "herdr pane send-text", 2)
-        assert bind_text < waits[1] < goal_text, (
-            "the idle wait must sit between the bind send and the goal send — "
-            f"bind={bind_text} wait={waits[1]} goal={goal_text}")
+        prompt_text = self._index_of(r.calls, "herdr pane send-text", 2)
+        goal_text = self._index_of(r.calls, "herdr pane send-text", 3)
+        assert prompt_text < waits[1] < goal_text, (
+            "the settle must sit between the prompt send and the goal send — "
+            f"prompt={prompt_text} settle={waits[1]} goal={goal_text}")
 
-    def test_the_idle_wait_targets_the_successor_pane_and_waits_for_idle(self) -> None:
+    def test_the_settle_confirmation_targets_the_successor_pane_and_asks_for_idle(self) -> None:
         """A wait on the wrong pane, or for the wrong state, would pass this class vacuously."""
         r = Runner(_responses())
         ll.perform_handoff(**_handoff(
@@ -500,7 +497,7 @@ class TestGoalGetsTheIdleWindow:
         assert "--until" in waits[1] and waits[1][waits[1].index("--until") + 1] == "idle", waits[1]
 
     def test_an_unconfirmed_settle_no_longer_blocks_the_goal_send(self) -> None:
-        """INVERTED, deliberately, and the history is the point.
+        """INVERTED once already, deliberately, and the history is the point.
 
         This test used to assert that a failed wait aborted the handoff with its own
         `agent_wait_goal` step — the reasoning being that pasting a slash command into a pane not
@@ -508,10 +505,10 @@ class TestGoalGetsTheIdleWindow:
         showed the wait HANGS on panes that are already idle, so the abort fired on healthy
         successors. Seven runs, and in the failing one the pane went quiet 36s into a 120s budget.
 
-        The wait is therefore a settle, not a gate, and an unconfirmed settle proceeds. What is
-        NOT relaxed is the thing that actually protects the run: `goal_armed` still gates, still
-        reads a durable artifact, and still fails closed — pinned by
-        `test_goal_armed_is_still_the_gate_and_still_fails_closed`.
+        The wait is therefore a settle, not a gate, and an unconfirmed settle proceeds. That
+        outlives the #989 revert unchanged. What is NOT relaxed is the thing that actually
+        protects the run: `goal_armed` still gates, still reads a durable artifact, and still
+        fails closed — pinned by `test_goal_armed_is_still_the_gate_and_still_fails_closed`.
         """
         class WaitFailsSecondTime(Runner):
             def __init__(self, *a, **kw):
@@ -535,53 +532,63 @@ class TestGoalGetsTheIdleWindow:
         assert not any(s["kind"] == "agent_wait_goal" for s in out["steps"]), \
             "the fatal agent_wait_goal step is gone; it is `settle_before_goal` now"
 
-    def test_the_goal_fails_closed_before_the_prompt_is_ever_sent(self) -> None:
-        """The reorder's safety dividend, and it is the reason failure mode 1 is acceptable.
+    def test_a_failed_arm_leaves_a_working_successor_but_keeps_the_predecessor(self) -> None:
+        """INVERTED back by the #989 revert, and this is the cost the revert accepts.
 
-        Under the OLD order a failed goal left a successor already working the prompt with no
-        guard. Now the guard is proven first, so a failed arm costs a torn-down pane that was
-        never handed any work.
+        #989 asserted the opposite — that the prompt is never sent when the guard does not arm.
+        With the goal last again, the successor IS already working when the arm fails. The harm
+        that actually matters is bounded: the predecessor is not retired, so the run still has a
+        session that knows what was happening.
         """
         r = Runner(_responses())
         out = ll.perform_handoff(**_handoff(
-            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
+            r, teardown=True,
+            read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
         assert out["ok"] is False and out["failed_step"] == "goal_armed"
-        assert not any(t == RESUME_PROMPT for t in r.sent_text()), \
-            "the resume prompt must never be sent to a successor whose guard did not arm"
+        assert any(t == RESUME_PROMPT for t in r.sent_text()), \
+            "the goal goes last, so the prompt has already been sent when the arm fails"
+        assert not any(c[:3] == ["herdr", "pane", "close"] and c[3] == "w1:p1"
+                       for c in r.calls), "the predecessor must never be retired on a failed gate"
 
-    def test_no_unguarded_window_remains(self) -> None:
-        """The stronger property the new order buys: on the happy path the goal row is confirmed
-        before the prompt is transported, so work is never handed to an unguarded session."""
+    def test_the_unguarded_window_is_bounded_by_the_predecessor_surviving(self) -> None:
+        """The honest property of the restored order, stated as the bound rather than as absence.
+
+        Work reaches the successor before its guard is armed. The objection the pre-#694 ordering
+        existed for was never "work begins unguarded" alone — it was "work begins unguarded AND
+        the predecessor is already gone". Only the second half is prevented, and it is prevented
+        structurally.
+        """
         r = Runner(_responses())
         out = ll.perform_handoff(**_handoff(
             r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=0)))
         assert out["ok"] is True, out["failed_step"]
         texts = r.sent_text()
-        assert texts.index(RESUME_PROMPT) > next(
+        assert texts.index(RESUME_PROMPT) < next(
             i for i, t in enumerate(texts) if t.startswith("/goal"))
 
 
 class TestTeardownNeedsEvidenceThePromptArrived:
-    """#989 Step-11 High 1 — a regression the reorder introduced, caught in cross-model review.
+    """#989 Step-11 High 1 — the campaign call site tore down while verifying nothing.
 
-    Moving the prompt to LAST means nothing follows it. With no `prompt_marker` there is no
-    arrival check at all, and the launch ladder carries no `prompt_landed` rung — so teardown
-    would retire the predecessor on `send-text` rc 0 alone. rc 0 proves transport, not arrival,
-    and #989 is the standing proof that the gap is real: four handoffs returned rc 0 on a payload
-    that never executed.
+    With no `prompt_marker` there is no arrival check at all, and the launch ladder carries no
+    `prompt_landed` rung — so teardown would retire the predecessor without ever confirming the
+    prompt arrived. rc 0 on `send-text` proves transport, not arrival, and 2026-08-07 is the
+    standing proof that the gap is real: four handoffs returned rc 0 on a payload that never
+    executed.
 
-    Under the OLD order `goal_armed` came after the prompt, which was at least weak evidence the
-    pane had processed something since. The reorder removed that, so the guard ships alongside it.
+    #989's reorder was reverted and this guard was KEPT. It never depended on the order: under
+    either one, `goal_armed` is at best weak evidence that the PROMPT arrived, because it reads a
+    different artifact written by a different send.
     """
 
-    def test_without_a_marker_nothing_verifies_the_final_send(self) -> None:
+    def test_without_a_marker_nothing_verifies_the_prompt_arrived(self) -> None:
         """The shape of the gap, pinned so the campaign call site's fix cannot silently regress.
 
-        With no marker the prompt — now the LAST send — gets no arrival poll and no nudge, and the
-        launch ladder carries no `prompt_landed` rung, so a handoff reports ok on transport alone.
-        This is a CHARACTERIZATION of the library contract, which #989 deliberately did not change
-        (see the comment in `perform_handoff`); the fix is that the campaign call site now supplies
-        a marker. If this ever starts failing, the library contract moved and the call-site fix
+        With no marker the prompt gets no arrival poll and no nudge, and the launch ladder carries
+        no `prompt_landed` rung, so a handoff reports ok on transport alone. This is a
+        CHARACTERIZATION of the library contract, which neither #989 nor its revert changed (see
+        the comment in `perform_handoff`); the fix is that the campaign call site supplies a
+        marker. If this ever starts failing, the library contract moved and the call-site fix
         below needs rechecking.
         """
         r = Runner(_responses())
@@ -592,8 +599,8 @@ class TestTeardownNeedsEvidenceThePromptArrived:
         assert "prompt_landed" not in out["results"]
         assert r.nudges() == [], "no marker means no arrival signal to recover toward"
 
-    def test_a_marker_makes_the_final_send_gated_again(self) -> None:
-        """The other half: supply one and the last send is verified like every other."""
+    def test_a_marker_makes_the_prompt_send_gated_again(self) -> None:
+        """The other half: supply one and the prompt send is verified like every other."""
         r = Runner(_responses())
         out = ll.perform_handoff(**_handoff(
             r, read_text=Artifacts(r, marker_after_nudges=99, goal_row_after_nudges=0)))
@@ -698,8 +705,8 @@ class TestTheSettleIsNotAGate:
         assert any("did not report idle" in str(s.get("note")) for s in settles), settles
 
     def test_the_settle_actually_sleeps_before_the_goal_goes_out(self) -> None:
-        """The owner's 30s settle. Measured basis: the bind's registry row landed at 20s across
-        live runs, so 30s clears it with margin without the unbounded hang."""
+        """The settle sleeps, and it sleeps the module's own constant rather than a literal — the
+        value has already moved once (30s → 45s, Step-11 F3), so pinning a number here would rot."""
         slept: list = []
         r = Runner(_responses())
         out = ll.perform_handoff(**_handoff(
@@ -734,10 +741,14 @@ class TestTheSettleIsNotAGate:
     def test_goal_armed_is_still_the_gate_and_still_fails_closed(self) -> None:
         """The safety property the settle must not erode, asserted on all FOUR of its parts.
 
-        Step-11 F2: checking only the return value and the withheld prompt left the two teardown
-        properties unproven — and the settle makes them newly load-bearing, because the goal is now
-        deliberately sent without idle confirmation. A regression here would strand an orphan
-        successor, or retire the predecessor on incomplete evidence.
+        Step-11 F2: checking only the return value left the two teardown properties unproven —
+        and the settle makes them newly load-bearing, because the goal is deliberately sent
+        without idle confirmation. A regression here would strand an orphan successor, or retire
+        the predecessor on incomplete evidence.
+
+        The #989 revert removed one of the four assertions this once made — "no work reaches an
+        unguarded successor" — because the goal goes last again and the prompt is already out.
+        The three that remain are the ones that were ever structural.
         """
         r = Runner(_responses(pane_read="unrelated scrollback\n"))
         out = ll.perform_handoff(**_handoff(
@@ -745,12 +756,10 @@ class TestTheSettleIsNotAGate:
             read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
         # 1. it fails, and names the gate rather than the settle
         assert out["ok"] is False and out["failed_step"] == "goal_armed"
-        # 2. no work reaches an unguarded successor
-        assert RESUME_PROMPT not in " ".join(r.sent_text())
-        # 3. the successor pane is cleaned up — no orphan
+        # 2. the successor pane is cleaned up — no orphan
         assert out["cleanup"] and "w1:pZZ" in str(out["cleanup"]), out["cleanup"]
         assert any(c[:3] == ["herdr", "pane", "close"] and c[3] == "w1:pZZ" for c in r.calls)
-        # 4. the PREDECESSOR survives, even though teardown was requested
+        # 3. the PREDECESSOR survives, even though teardown was requested
         assert not any(c[:3] == ["herdr", "pane", "close"] and c[3] == "w1:p1"
                        for c in r.calls), "the predecessor must never be retired on a failed gate"
 

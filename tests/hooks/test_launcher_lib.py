@@ -435,9 +435,9 @@ class TestPerformHandoff:
             "herdr pane list",                                  # pre-split inventory
             "herdr pane split", "herdr agent start", "herdr agent wait", "herdr pane get",
             "herdr pane send-text", "herdr pane send-keys",     # SEND 1 — the bind, alone
-            "herdr agent wait",                                 # #989 — idle BEFORE the goal
-            "herdr pane send-text", "herdr pane send-keys",     # SEND 2 — the goal, into idle
-            "herdr pane send-text", "herdr pane send-keys",     # SEND 3 — the prompt, LAST
+            "herdr pane send-text", "herdr pane send-keys",     # SEND 2 — the resume prompt
+            "herdr agent wait",                                 # the settle's advisory confirm
+            "herdr pane send-text", "herdr pane send-keys",     # SEND 3 — the goal, LAST
             "herdr pane close",                                 # the predecessor, LAST of all
         ]
         assert out["cleanup"] is None, "nothing to clean up when ownership transferred"
@@ -1027,20 +1027,21 @@ class TestResumePrompt:
     given work just sits at an empty prompt: the goal only re-prompts once the session tries to
     STOP, so the run would stall silently and the predecessor would already be retired."""
 
-    def test_resume_prompt_is_sent_after_the_bind_and_after_the_goal(self) -> None:
-        """This test has now been inverted TWICE, and the history is the point.
+    def test_resume_prompt_is_sent_after_the_bind_and_before_the_goal(self) -> None:
+        """This test has now been inverted THREE times, and the history is the point.
 
         Its original form asserted the prompt came after the goal. #694 inverted it: the bind
-        leads, the work follows, the guard is armed last. #989 inverted it BACK, for a reason
-        neither earlier revision had — both the bind and the goal are BARE SLASH COMMANDS, and a
-        bare slash command pasted into a busy pane is queued rather than executed (#718). So the
-        two slash commands take the idle windows and the prose prompt takes the busy one.
+        leads, the work follows, the guard is armed last. #989 inverted it BACK, reasoning that a
+        bare slash command pasted into a busy pane is queued rather than executed (#718). #989 was
+        REVERTED — the owner reported this order working reliably for weeks with the goal LAST, so
+        a queued command evidently does execute when the turn ends, and the four failures #989 was
+        built on were caused by the trailing newline PR 991 fixed instead.
         """
         r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
         out = ll.perform_handoff(runner=r, **_handoff())
         assert out["ok"] is True, out
-        assert _sent(r) == [f"/rawgentic:switch {PROJECT}", f"/goal {GOAL_CONDITION}",
-                            RESUME_PROMPT]
+        assert _sent(r) == [f"/rawgentic:switch {PROJECT}", RESUME_PROMPT,
+                            f"/goal {GOAL_CONDITION}"]
 
     def test_resume_prompt_waits_until_the_BIND_is_VERIFIED_landed(self) -> None:
         """Not merely 'sent after' — sent after the successor's own registry row was observed. A
@@ -1054,21 +1055,23 @@ class TestResumePrompt:
             "resume prompt sent despite no bind"
         assert not _predecessor_closed(r)
 
-    def test_the_PROMPT_waits_until_the_GOAL_is_verified_armed(self) -> None:
-        """#989 inverted this dependency, and the new direction is strictly safer.
+    def test_the_goal_waits_until_the_PROMPT_is_verified_landed(self) -> None:
+        """The guard goes last, but not blindly last: with a marker supplied it is armed only once
+        the prompt is proven to have arrived, so `goal_armed` can never be the only thing that
+        passed.
 
-        It used to read "the goal waits until the prompt is verified landed", so a failed arm left
-        a successor already working with no guard. Now the guard is proven FIRST, so a failure
-        costs a pane that was never handed any work — there is no unguarded window at all.
+        #989 inverted this dependency and was then reverted, so the direction is the #694 one
+        again. The unguarded window it was worried about is real but BOUNDED: the predecessor is
+        not retired until `goal_armed` passes, so a successor that never arms never costs the run
+        its predecessor.
         """
         marker = "[rawgentic-midchild:4:7]"
         r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
         out = ll.perform_handoff(runner=r, **_handoff(
             resume_prompt=f"{marker} {RESUME_PROMPT}", prompt_marker=marker,
             read_text=Artifacts(transcript="")))
-        assert out["ok"] is False and out["failed_step"] == "goal_armed"
-        assert RESUME_PROMPT not in " ".join(_sent(r)), \
-            "the prompt must never reach a successor whose guard did not arm"
+        assert out["ok"] is False and out["failed_step"] == "prompt_landed"
+        assert not any(t.startswith("/goal") for t in _sent(r))
         assert not _predecessor_closed(r)
 
     def test_a_handoff_with_no_resume_prompt_is_refused_before_anything_runs(self) -> None:
@@ -1782,13 +1785,13 @@ class TestTheThreeSendsAreOrderedAndGated:
         return [s["kind"] for s in out["steps"] if s["kind"] in
                 ("send_bind", "send_resume_prompt", "send_text")]
 
-    def test_the_bind_goes_first_the_goal_second_and_the_prompt_last(self) -> None:
-        """#989: the two BARE SLASH COMMANDS take the idle windows, the PROSE prompt takes the
-        busy one. A slash command pasted into a busy pane is queued, never executed (#718)."""
+    def test_the_bind_goes_first_the_prompt_second_and_the_goal_last(self) -> None:
+        """#989 briefly put the goal second and was reverted: the owner measured this order
+        working reliably for weeks, so a mid-turn `/goal` does execute once the turn ends."""
         r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
         out = ll.perform_handoff(runner=r, **_handoff())
         assert out["ok"] is True, out
-        assert self._send_texts(out) == ["send_bind", "send_text", "send_resume_prompt"]
+        assert self._send_texts(out) == ["send_bind", "send_resume_prompt", "send_text"]
 
     def test_the_bind_is_its_own_send_carrying_the_project(self) -> None:
         """A bare `/rawgentic:switch` enters the switch skill's LIST MODE and waits for a human
@@ -1808,22 +1811,21 @@ class TestTheThreeSendsAreOrderedAndGated:
             "the resume prompt was sent to a successor that never bound"
         assert not _predecessor_closed(r)
 
-    def test_the_prompt_is_not_sent_until_the_GOAL_has_armed(self) -> None:
-        """`goal_armed` reads the row out of the successor's own transcript — rc 0 on send-text
-        proves transport, not arrival, and #989 proved that distinction in production: four
-        handoffs returned rc 0 on the goal send and produced no row at all.
+    def test_the_goal_is_not_sent_until_the_PROMPT_has_landed(self) -> None:
+        """`prompt_landed` reads the marker out of the successor's own transcript — rc 0 on
+        send-text proves transport, not arrival.
 
-        Inverted from `test_the_goal_is_not_sent_until_the_PROMPT_has_landed`. The dependency now
-        runs the other way, which is what removes the unguarded window entirely.
+        #989 inverted this to `test_the_prompt_is_not_sent_until_the_GOAL_has_armed` and was
+        reverted, so the dependency runs the #694 way again.
         """
         marker = "[rawgentic-midchild:4:7]"
         r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
         out = ll.perform_handoff(runner=r, **_handoff(
             resume_prompt=f"{marker} {RESUME_PROMPT}", prompt_marker=marker,
             read_text=Artifacts(transcript="")))
-        assert out["ok"] is False and out["failed_step"] == "goal_armed", out
-        assert RESUME_PROMPT not in " ".join(_sent(r)), \
-            "work was handed to a successor whose guard never armed"
+        assert out["ok"] is False and out["failed_step"] == "prompt_landed", out
+        assert not any(t.startswith("/goal") for t in _sent(r)), \
+            "the goal was armed on a prompt that never arrived"
         assert not _predecessor_closed(r)
 
     def test_a_prompt_that_carries_its_own_bind_is_refused_before_anything_runs(self) -> None:
@@ -1855,7 +1857,7 @@ class TestTheLadderMatchesTheSendOrder:
         """#840 prepends `queue_revalidated`: the queue must be revalidated BEFORE a successor is
         spawned to inherit it, so it cannot sit among the post-launch rungs."""
         assert [s["step"] for s in ll.mid_child_verification_steps()] == [
-            "queue_revalidated", "spawned", "project_switched", "goal_armed", "prompt_landed",
+            "queue_revalidated", "spawned", "project_switched", "prompt_landed", "goal_armed",
             "position_rebuilt", "state_claimed"]
 
     def test_the_old_goal_first_ladder_is_no_longer_permitted(self) -> None:

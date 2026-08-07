@@ -749,6 +749,29 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.141.4 (2026-08-07)
+- **#989's send reorder is REVERTED — `/goal` goes last again (epic #906).** #989 moved the goal
+  ahead of the resume prompt on the reasoning that a bare slash command pasted into a busy pane is
+  queued and never executed (#718), and cited four failed handoffs on the morning of 2026-08-07.
+  The owner then reported the ORIGINAL order — bind, prompt, goal, with the goal deliberately going
+  into a mid-turn pane — running reliably for weeks, which is a far larger sample: a queued command
+  evidently does execute once the turn ends. The four failures had a different cause, and PR 991
+  had already found and fixed it separately (a goal condition ending in a newline lands in the
+  input box and never submits). So the send order returns to `bind -> prompt -> goal`,
+  `_MID_CHILD_VERIFICATION_STEPS` returns to `project_switched -> prompt_landed -> goal_armed`, and
+  the seven order-pinning tests #989 inverted are inverted BACK rather than deleted, each carrying
+  the history. **KEPT from the #989 work:** PR 991's trailing-line-ending strip in `goal_text`, PR
+  992's non-gating 45s settle before the goal send, and #989's own Step-11 fix passing
+  `resolution_id` as the campaign call site's `prompt_marker` — that one was never order-dependent,
+  because `goal_armed` reads a different artifact written by a different send. The unguarded window
+  between the prompt and the guard returns and is documented as BOUNDED rather than absent: the
+  predecessor is not retired until `goal_armed` passes. Verified by a real handoff, not only by
+  tests — a live ad-hoc handoff to `saystory` passed all four rungs with the goal supplied from a
+  FILE (the skill's own path), and the successor transcript carried a `goal_status met:false`
+  sentinel row, then a `met:true` row, and ZERO occurrences of `/goal` as a plain user message,
+  which is the failure signature this defect produces. No workflow-spine change → no diagram REV.
+  Suite 6393→6393.
+
 ### v3.141.3 (2026-08-07)
 - **The idle wait before the goal send hung on panes that were already idle, and it was fatal
   (epic #906).** #989 added `agent wait --until idle` before the goal so a bare slash command would
