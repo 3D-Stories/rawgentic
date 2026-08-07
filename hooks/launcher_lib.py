@@ -2451,6 +2451,15 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             raise LauncherError(
                 f"prompt_marker {prompt_marker!r} does not appear in the resume prompt — "
                 "prompt_landed could never pass")
+    # #989 Step-11 High 1 — why there is NO library-level "teardown requires a marker" refusal
+    # here, having considered one. `perform_handoff` is a library entry point whose marker has
+    # always been optional, and the launch ladder deliberately carries no `prompt_landed` rung
+    # because `prompt_marker` is optional there (gating on it would fail closed for every caller
+    # that supplies none). Refusing the combination at this level changes that contract for every
+    # direct caller. The REAL gap was one call site, not the contract: the campaign `handoff`
+    # subcommand tore down while passing no marker, so after #989 moved the prompt last, nothing
+    # verified the final send. That is fixed where it lives — the call site now passes the
+    # boundary's `resolution_id` as the marker. See `_cmd_handoff`.
     # Validated BEFORE the split: its first real use is after the pane exists, so a bad
     # directory would otherwise create a pane and then fail. An earlier revision took a
     # `transcript_path_for` CALLBACK and probed it with an invented session id, which both
@@ -6476,6 +6485,19 @@ def _cmd_handoff(args) -> int:
             kind="child_boundary", resolution_id=resolution_id),
         registry_path=args.registry, transcript_dir=args.transcript_dir,
         launch_mode=args.launch_mode, expected_project=getattr(args, "project", None),
+        # #989 Step-11 High 1. This call site tore down while passing NO marker, so
+        # `prompt_landed` was never checked and the predecessor was retired on `send-text` rc 0
+        # alone — and rc 0 proves transport, not arrival (#665), which is the exact distinction
+        # #989 was filed about. Tolerable-ish while the goal went last (its row was at least weak
+        # evidence the pane had processed something after the prompt); NOT tolerable once #989
+        # moved the prompt to the final send with nothing after it.
+        #
+        # `resolution_id` is the right marker rather than a new invented token: it is already
+        # inside this prompt (`with_boundary_clause` appends "resolution <id>"), it is generated
+        # from durable state rather than any probe or issue body, and it is unique per boundary —
+        # so it cannot match a PREVIOUS handoff's prompt still sitting in the same transcript,
+        # which is the failure `mid_child_marker` documents and binds its generation against.
+        prompt_marker=resolution_id,
         teardown=not args.no_teardown, inflight=declaration)
 
     outcome, downgrade = _classify_launch(out, panes_before=panes_before)

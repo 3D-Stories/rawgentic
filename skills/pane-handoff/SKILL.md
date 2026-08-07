@@ -276,8 +276,9 @@ hosts our session). Report what it says, not what you hoped — and read
 | `name_taken` | the requested `--name` is already bound to a pane (`failure_detail` names it) — refused BEFORE any split, so nothing was created | check `herdr agent list` and pick a fresh `--name`; a same-name retry cannot succeed while the name stays bound |
 | `agent_start` | herdr refused to start the agent for some other reason — `failure_detail` carries the error, `pane_capture` what the pane showed | read both before theorizing; the tentative pane was cleaned up |
 | `project_switched` | the successor never bound the project | most often a permission-blocked successor — it cannot be fixed from here |
-| `prompt_landed` | the work never reached it | the recovery already tried; do NOT re-send the text by hand |
-| `goal_armed` | the guard never armed | the successor is working but unguarded |
+| `agent_wait_goal` | the successor never went idle after the bind, so the guard was not sent (#989) | a slash command pasted into a busy pane is QUEUED, not executed, so the send is refused rather than wasted. Nothing was handed over; the successor pane was cleaned up. Usually a bind turn that ran long — retry |
+| `goal_armed` | the guard never armed | **nothing was handed over.** Since #989 the guard is armed BEFORE the work is sent, so the successor is idle and never received the prompt — it is not an unguarded working session. The pane was cleaned up |
+| `prompt_landed` | the work never reached it | the recovery already tried; do NOT re-send the text by hand. The successor IS guarded (`goal_armed` passed first), so it is idle under a live goal rather than running loose |
 | `send_resume_nudge` | a herdr call failed outright | herdr-side problem, not a timing one |
 | `predecessor_goal_clear` | the handoff worked; clearing YOUR goal did not | your pane is left **open** on purpose — run `/goal clear` in it yourself |
 | `predecessor_goal_binding` | the goal state changed between validation and teardown (#758) | the successor runs with the VALIDATED goal; your pane is left **open** and untouched — read its goal before clearing or closing anything |
