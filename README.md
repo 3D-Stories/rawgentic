@@ -749,6 +749,33 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.139.0 (2026-08-07)
+- **A raw `gh pr merge` is now BLOCKED while the target PR belongs to an active campaign,
+  and the broker it routes to actually works again (#976).** #963 shipped the supervised
+  merge broker, but what routed a campaign merge into it was prose pinned by guard tests,
+  so a prose-violating session still reached the raw command and skipped authority
+  evaluation, target binding, the execute-once claim and the decision telemetry in one
+  step. New `PreToolUse` hook on the `Bash` matcher —
+  `hooks/campaign-merge-guard.py` plus the pure `hooks/campaign_merge_guard_lib.py` —
+  reads durable state under `claude_docs/.driver-state/`, binds on `{repo, pr}`, and
+  refuses with a message naming the campaign, the issue, the PR and the exact
+  `broker-merge` command. **Its fail mode is split at the classification boundary
+  (D186):** fail-OPEN with a stderr diagnostic before a command is classified, because
+  this hook runs on every Bash call and a blanket fail-closed bug would deny `ls`
+  everywhere; fail-CLOSED once the command IS a raw `gh pr merge`, where the whole blast
+  radius is that one command. A missing state directory is absence, not failure, so every
+  project that never ran a campaign is untouched. **Scope was widened by one fix (D185,
+  owner decision):** `broker_campaign_names_issue` read `state["children"][].issue`, a
+  shape `driver_lib` never writes — real state is `issues[].number` — so target binding
+  refused EVERY real campaign with rc 12, invisible because the test fixture invented the
+  same wrong shape. Switching that fixture to the real shape turned 16 green broker tests
+  red, which is the measurement. **Stated plainly, and not overclaimed (D187):** the guard
+  stops an accidental raw merge, not a deliberate bypass — `PreToolUse` fires per tool
+  call, not per OS process, which is also exactly why the broker's own internal merge
+  passes untouched with no spoofable signal. `docs/supervision.md` replaces its "still
+  deliberately out of scope" paragraph. No workflow-spine change → no diagram REV.
+  Suite 6210→6274.
+
 ### v3.138.1 (2026-08-07)
 - **A command that MENTIONS a step's needle no longer stamps that step, and the review
   input cap doubles (#963 follow-up).** Measured on the #963 run: 18 of 38 recorded

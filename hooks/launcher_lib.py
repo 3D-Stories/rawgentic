@@ -5323,14 +5323,30 @@ def broker_binding_ok(pr_data, issue: int, repo: "str | None" = None) -> bool:
 
 
 def broker_campaign_names_issue(state: dict, issue: int) -> bool:
-    """Is `issue` a child of this campaign? PURE. Reads the queue the driver owns."""
+    """Is `issue` a child of this campaign? PURE. Reads the queue the driver owns.
+
+    #976 T0: this read ONLY `state["children"][].issue`, a shape `driver_lib` neither
+    writes nor reads. Real driver state carries top-level
+    `issues: [{"number": N, "status": …, "pr": M}]` (`driver_lib.py:844,1077,1348,1409,
+    1680`); the only `children` key in that module is the unrelated
+    `queue_revalidation.children` dict, keyed by issue-number string. So target binding
+    refused EVERY real campaign with rc 12 — invisible in CI because the test fixture
+    invented the same wrong shape. Both keys are accepted now, real one first, and the
+    fixture writes the real shape so the suite exercises production.
+    """
     if not isinstance(state, dict):
         return False
-    for child in (state.get("children") or []):
-        if isinstance(child, dict) and child.get("issue") == issue:
-            return True
-        if child == issue:
-            return True
+    for key, id_field in (("issues", "number"), ("children", "issue")):
+        entries = state.get(key)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict) and entry.get(id_field) == issue:
+                return True
+            # A bare int entry. `bool` is excluded deliberately: `True == 1` in Python,
+            # so a stray boolean would otherwise bind issue #1.
+            if isinstance(entry, int) and not isinstance(entry, bool) and entry == issue:
+                return True
     return False
 
 
