@@ -184,6 +184,20 @@ wal_append_phase() {
   local ts
   ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+  # Take the SAME lock session-start's rotation takes, so an append can never land in
+  # the window where rotation is rewriting the file (its `cat > "$WAL_FILE"` truncates).
+  # `>>` alone is atomic against other APPENDS, but not against a rewrite.
+  #
+  # FAIL-OPEN, deliberately, and opposite to rotation's fail-safe-skip: this runs on
+  # every tool call and only records observational data, so a busy lock must never cost
+  # a log line (the wal-bind-guard:7 convention for logging/convenience paths). Rotation
+  # is the rare, destructive side and skips instead; the append is the frequent, additive
+  # side and proceeds. Worst case is the pre-existing behavior, one lost line.
+  {
+    if command -v flock >/dev/null 2>&1; then
+      flock -w "${RAWGENTIC_WAL_APPEND_LOCK_WAIT_S:-2}" 9 2>/dev/null || true
+    fi
+
   if [ "$phase" = "INTENT" ]; then
     "$WAL_JQ" -nc \
       --arg ts "$ts" \
@@ -204,6 +218,7 @@ wal_append_phase() {
       '{ts:$ts, phase:$phase, session:$session, tool:$tool, tool_use_id:$tool_use_id}' \
       >> "$WAL_FILE"
   fi
+  } 9>>"$WAL_FILE.lock"
 }
 
 # --- Project name validation ---

@@ -2,6 +2,8 @@
 import hashlib
 import json
 import os
+import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -1125,3 +1127,166 @@ class TestSpawnConsolidation:
             "a newline in session_id shifted EVENT_TYPE in the jq-fallback "
             "transport"
         )
+
+
+class TestWalRotationDoesNotClobberConcurrentWrites:
+    """WAL rotation read the file, filtered it, then `cp`-ed the result back over it.
+
+    With no lock, every append another session made between the read and the `cp` was
+    destroyed. Measured on this host: 3034 INTENT entries across all projects carry no
+    outcome at all — 19% of 16037 operations — and one session lost a contiguous hour of
+    entries while a sibling pane ran. Losing a DONE while its INTENT survives orphans that
+    operation FOREVER, because rotation deliberately preserves incomplete entries
+    regardless of age (docs/wal-guide.md).
+
+    Appends themselves are safe: `wal_append_phase` uses `>>` (O_APPEND) with one short
+    write. It is the rotation rewrite that loses them.
+    """
+
+    PROJECT = "testproj"
+
+    def _ws(self, make_workspace):
+        """An EXPLICIT registry entry: without it `_registry_project` is empty,
+        session-start falls back to a legacy WAL that does not exist, and rotation never
+        runs — which is how the first draft of these tests passed vacuously."""
+        return make_workspace(registry_entries=[{
+            "session_id": "test-sess", "project": self.PROJECT,
+            "project_path": f"./projects/{self.PROJECT}",
+            "started": "2026-08-07T00:00:00Z"}])
+
+    def _wal(self, ws):
+        return ws.claude_docs / "wal" / f"{self.PROJECT}.jsonl"
+
+    def _big_wal(self, ws, pairs=2600):
+        """Over the 5000-line threshold, with BOTH prunable and surviving entries.
+
+        Both halves are needed. All-old would prune to nothing, `ROTATED` would be empty,
+        and the `cp` would never run — so a fixture without recent rows tests nothing.
+        """
+        import datetime as _dt
+        recent = (_dt.datetime.now(_dt.timezone.utc)
+                  - _dt.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows = []
+        for i in range(pairs):                      # old + complete -> pruned
+            rows.append(json.dumps({
+                "ts": "2026-01-01T00:00:00Z", "phase": "INTENT", "session": "old",
+                "tool": "Bash", "tool_use_id": f"old-{i}", "summary": "x", "cwd": "/tmp"}))
+            rows.append(json.dumps({
+                "ts": "2026-01-01T00:00:01Z", "phase": "DONE", "session": "old",
+                "tool": "Bash", "tool_use_id": f"old-{i}"}))
+        for i in range(pairs):                      # recent -> survives the rewrite
+            rows.append(json.dumps({
+                "ts": recent, "phase": "INTENT", "session": "new", "tool": "Bash",
+                "tool_use_id": f"new-{i}", "summary": "y", "cwd": "/tmp"}))
+            rows.append(json.dumps({
+                "ts": recent, "phase": "DONE", "session": "new", "tool": "Bash",
+                "tool_use_id": f"new-{i}"}))
+        wal = self._wal(ws)
+        wal.parent.mkdir(parents=True, exist_ok=True)
+        wal.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        return wal
+
+    def test_the_fixture_actually_triggers_a_rewrite(self, make_workspace):
+        """Guard the guard: without this, the test below passes vacuously."""
+        ws = self._ws(make_workspace)
+        wal = self._big_wal(ws)
+        before = wal.read_text(encoding="utf-8")
+        _stdout, _stderr, rc = _run_session_start(ws.root)
+        assert rc == 0
+        after = wal.read_text(encoding="utf-8")
+        assert after != before, "rotation did not rewrite — the fixture proves nothing"
+        assert "old-0" not in after and "new-0" in after
+
+    def test_rotation_is_skipped_when_the_lock_cannot_be_taken(self, make_workspace):
+        """No lock, no rewrite.
+
+        Deterministic and concurrency-free: a DIRECTORY at the lock path can never be
+        opened for writing, so `flock` cannot acquire and rotation must decline. (An
+        earlier draft held the lock from a child process and wedged pytest — the
+        property under test is the same, this way it is reliable.)
+
+        Skipping only grows the WAL, which is recoverable. Clobbering destroys audit
+        data permanently, so this is the fail-safe direction.
+        """
+        ws = self._ws(make_workspace)
+        wal = self._big_wal(ws)
+        before = wal.read_text(encoding="utf-8")
+        (Path(str(wal) + ".lock")).mkdir()
+
+        _stdout, _stderr, rc = _run_session_start(ws.root)
+        assert rc == 0, "session-start must never fail because rotation was skipped"
+        assert wal.read_text(encoding="utf-8") == before, (
+            "rotation rewrote the WAL without holding the lock — that is exactly the "
+            "window in which concurrent appends are destroyed")
+
+    def test_rotation_creates_the_lock_it_shares_with_appenders(self, make_workspace):
+        """The lock path must be the one `wal_append_phase` uses, or neither blocks."""
+        ws = self._ws(make_workspace)
+        wal = self._big_wal(ws)
+        _stdout, _stderr, rc = _run_session_start(ws.root)
+        assert rc == 0
+        assert Path(str(wal) + ".lock").exists(), "rotation took no lock at all"
+
+        lib = (Path(__file__).resolve().parents[2] / "hooks" / "wal-lib.sh") \
+            .read_text(encoding="utf-8")
+        assert '9>>"$WAL_FILE.lock"' in lib, \
+            "appends must lock the SAME path rotation locks"
+        assert "flock" in lib, "wal_append_phase does not take the lock"
+
+    def test_rotation_does_not_rewrite_while_another_writer_holds_the_lock(
+        self, make_workspace
+    ):
+        """The defect itself, as a test. Verified red against the pre-fix hook:
+        it rewrote 10400 lines down to 5200 while a child process held the lock.
+
+        The lock is held by a CHILD, never by this process — holding an `fcntl` lock
+        here across a subprocess call wedges pytest. The hook is spawned directly for
+        the same reason `TestScannerInstallLeakGuard` does it.
+        """
+        import subprocess as sp
+        from tests.hooks.conftest import HOOKS_DIR
+        ws = self._ws(make_workspace)
+        wal = self._big_wal(ws)
+        before = wal.read_text(encoding="utf-8")
+        lock_path = str(wal) + ".lock"
+
+        holder = sp.Popen(["flock", "-x", lock_path, "sleep", "30"],
+                          stdin=sp.DEVNULL, stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+        try:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                probe = sp.run(["flock", "-n", "-x", lock_path, "true"], check=False,
+                               stdin=sp.DEVNULL, stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+                if probe.returncode != 0:
+                    break
+                time.sleep(0.05)
+            else:
+                pytest.skip("could not get the child to hold the lock")
+
+            home = ws.root / ".test_home"
+            home.mkdir(exist_ok=True)
+            proc = sp.run(
+                ["bash", str(HOOKS_DIR / "session-start")],
+                input=json.dumps({"session_id": "test-sess", "cwd": str(ws.root),
+                                  "hook_event_name": "SessionStart", "source": "startup"}),
+                capture_output=True, text=True, timeout=90, cwd=str(ws.root),
+                env={**os.environ, "HOME": str(home),
+                     "RAWGENTIC_WAL_ROTATE_LOCK_WAIT_S": "1"})
+            assert proc.returncode == 0, \
+                "session-start must never fail because rotation was blocked"
+            assert wal.read_text(encoding="utf-8") == before, (
+                "rotation rewrote the WAL while another writer held the lock — that is "
+                "exactly the window in which concurrent appends are destroyed")
+        finally:
+            holder.kill()
+            holder.wait(timeout=10)
+
+    def test_rotation_still_runs_when_the_lock_is_free(self, make_workspace):
+        """And the lock must not disable rotation in the ordinary single-writer case."""
+        ws = self._ws(make_workspace)
+        wal = self._big_wal(ws)
+        _stdout, _stderr, rc = _run_session_start(ws.root)
+        assert rc == 0
+        after = wal.read_text(encoding="utf-8")
+        assert "old-0" not in after, "rotation stopped working"
+        assert "new-0" in after

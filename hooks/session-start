@@ -382,28 +382,50 @@ _do_wal_ops() {
     "$JQ" -c '.' "$WAL_FILE" 2>/dev/null > "$CLEAN_FILE" || true
     [ -s "$CLEAN_FILE" ] || { rm -f "$CLEAN_FILE"; return 0; }
 
-    # WAL Rotation (>5000 lines)
+    # WAL Rotation (>5000 lines) — UNDER AN EXCLUSIVE LOCK.
+    #
+    # This used to filter the pre-read snapshot and `cp` it over the live file with no
+    # lock at all. Every append another session made between the read and the `cp` was
+    # destroyed. Measured 2026-08-07: 3034 INTENT entries across all projects carry no
+    # outcome — 19% of 16037 operations — and one session lost a contiguous hour of
+    # entries while a sibling pane ran. Losing a DONE while its INTENT survives orphans
+    # that operation forever, because rotation deliberately KEEPS incomplete entries
+    # regardless of age, so the pile can only grow.
+    #
+    # Two properties matter, and the snapshot gives neither:
+    #   1. the filter must re-read the WAL *inside* the lock — a snapshot taken before
+    #      the lock is already stale, so filtering it would clobber exactly the appends
+    #      the lock exists to protect;
+    #   2. no lock means NO ROTATION. Skipping only grows the file, which is recoverable;
+    #      clobbering destroys audit data permanently (registry_prune.py's fail-safe-KEEP
+    #      convention: data you cannot safely handle is kept, never dropped).
     LINE_COUNT=$(wc -l < "$CLEAN_FILE")
     if [ "$LINE_COUNT" -gt 5000 ]; then
         CUTOFF=$(date -u -d '7 days ago' +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -v-7d +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || printf '')
-        if [ -n "$CUTOFF" ]; then
-            ROTATED=$("$JQ" -sc --arg cutoff "$CUTOFF" '
-                (group_by(.tool_use_id)
-                 | map(select(
-                     (map(.phase) | index("INTENT")) != null
-                     and (map(.phase) | index("DONE")) == null
-                     and (map(.phase) | index("FAIL")) == null
-                   ))
-                 | map(.[0].tool_use_id)
-                ) as $incomplete_ids
-                |
-                [.[] | select(.ts >= $cutoff or (.tool_use_id as $id | $incomplete_ids | index($id) != null))]
-                | .[]
-            ' "$CLEAN_FILE" 2>/dev/null) || true
-            if [ -n "$ROTATED" ]; then
-                printf '%s\n' "$ROTATED" > "$CLEAN_FILE"
-                cp "$CLEAN_FILE" "$WAL_FILE"
-            fi
+        if [ -n "$CUTOFF" ] && command -v flock >/dev/null 2>&1; then
+            ROT_TMP=$(mktemp)
+            (
+                # Non-blocking with a bounded wait: a session start must never hang on a
+                # busy WAL. Failing to acquire exits the subshell and skips rotation.
+                flock -w "${RAWGENTIC_WAL_ROTATE_LOCK_WAIT_S:-5}" 9 || exit 9
+                "$JQ" -sc --arg cutoff "$CUTOFF" '
+                    (group_by(.tool_use_id)
+                     | map(select(
+                         (map(.phase) | index("INTENT")) != null
+                         and (map(.phase) | index("DONE")) == null
+                         and (map(.phase) | index("FAIL")) == null
+                       ))
+                     | map(.[0].tool_use_id)
+                    ) as $incomplete_ids
+                    |
+                    [.[] | select(.ts >= $cutoff or (.tool_use_id as $id | $incomplete_ids | index($id) != null))]
+                    | .[]
+                ' "$WAL_FILE" > "$ROT_TMP" 2>/dev/null || exit 8
+                # An empty result is never written: it would blank the WAL outright.
+                [ -s "$ROT_TMP" ] || exit 7
+                cat "$ROT_TMP" > "$WAL_FILE"
+            ) 9>"$WAL_FILE.lock" || true
+            rm -f "$ROT_TMP"
         fi
     fi
 
