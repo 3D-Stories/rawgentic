@@ -243,3 +243,79 @@ class TestRoundTwoReviewGuards:
             f.write('{"broken"')
         _append(tmp_path, "proj", "D2")
         assert path.read_bytes().endswith(b"\n")
+
+
+class TestRollingSummary:
+    """#797 AC3 — a rolling compacted summary of the entries `--last` cuts away.
+
+    The decision store is never trimmed (see the comment at `hooks/session-start:588-591`), and
+    the session-start injection bounds itself by taking only the newest N. So today the older
+    entries are not summarized, they are silently DROPPED from the successor's view. These tests
+    pin the summary that replaces that silence — and pin just as hard that it stays out of the way
+    when there is nothing to elide.
+    """
+
+    def test_nothing_elided_returns_none(self):
+        """The default path. Anything but None here would change every existing caller."""
+        assert decision_log.summarize_elided([]) is None
+
+    def test_a_real_elision_reports_the_count_and_the_id_span(self):
+        elided = [{"id": f"D{n}", "run": "epic-1", "ts": "2026-08-01T00:00:00Z"}
+                  for n in range(10, 40)]
+        block = decision_log.summarize_elided(elided)
+        assert block is not None
+        assert "30" in block, block
+        assert "D10" in block and "D39" in block, block
+
+    def test_the_summary_never_prints_record_bodies(self):
+        """The point is to SHRINK the successor's read. A body can carry quoted material, so
+        relocating it into the summary would defeat the whole change."""
+        secret = "BODY-TEXT-THAT-MUST-NOT-APPEAR"
+        elided = [{"id": "D1", "run": "r", "ts": "2026-08-01T00:00:00Z",
+                   "title": "t", "body": secret, "overturnable": secret}]
+        block = decision_log.summarize_elided(elided)
+        assert secret not in block, block
+
+    def test_the_block_is_bounded_however_large_the_store(self):
+        """Bounded by construction, not by luck: 5000 records must not produce a longer block
+        than 50 does, or the summary reintroduces the growth it exists to remove."""
+        small = decision_log.summarize_elided(
+            [{"id": f"D{n}", "run": f"run-{n % 3}"} for n in range(50)])
+        huge = decision_log.summarize_elided(
+            [{"id": f"D{n}", "run": f"run-{n % 97}"} for n in range(5000)])
+        assert len(huge.splitlines()) <= len(small.splitlines()) + 1
+        assert len(huge) < 1200, len(huge)
+
+    def test_missing_fields_degrade_rather_than_raise(self):
+        """This runs on a FAIL-OPEN injection path, so a malformed record must never take the
+        whole session-start block down with it."""
+        assert decision_log.summarize_elided([{}, {"id": "D2"}, {"run": "r"}]) is not None
+
+    def test_cli_prepends_the_summary_only_when_records_were_cut(self, tmp_path):
+        for n in range(1, 6):
+            _append(tmp_path, "proj", f"D{n}")
+        cut = subprocess.run(
+            [sys.executable, str(CLI), "read", "--project", "proj", "--last", "2",
+             "--summarize-elided", "--state-dir", str(tmp_path)],
+            capture_output=True, text=True)
+        assert cut.returncode == 0, cut.stderr
+        assert "rolling summary" in cut.stdout.lower(), cut.stdout
+        assert "D4" in cut.stdout and "D5" in cut.stdout
+
+        nothing_cut = subprocess.run(
+            [sys.executable, str(CLI), "read", "--project", "proj", "--last", "99",
+             "--summarize-elided", "--state-dir", str(tmp_path)],
+            capture_output=True, text=True)
+        assert nothing_cut.returncode == 0, nothing_cut.stderr
+        assert "rolling summary" not in nothing_cut.stdout.lower(), nothing_cut.stdout
+
+    def test_without_the_flag_the_output_is_byte_identical(self, tmp_path):
+        """The flag is opt-in. Every existing caller must see exactly what it sees today."""
+        for n in range(1, 6):
+            _append(tmp_path, "proj", f"D{n}")
+        args = [sys.executable, str(CLI), "read", "--project", "proj", "--last", "2",
+                "--state-dir", str(tmp_path)]
+        before = subprocess.run(args, capture_output=True, text=True)
+        assert before.returncode == 0
+        assert "rolling summary" not in before.stdout.lower()
+        assert len(before.stdout.strip().splitlines()) == 2
