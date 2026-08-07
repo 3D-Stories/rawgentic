@@ -495,14 +495,34 @@ def goal_text(condition: str) -> tuple[str, bool]:
     """Build `/goal <condition>`. Returns (text, truncated) — callers MUST propagate the flag.
 
     The condition is read VERBATIM from the predecessor's last unmet `goal_status` row, so a
-    condition that fits passes through byte-identical. The cap applies to the whole command
-    including the `/goal ` prefix and the note, which is stated because a 4000-char condition
-    therefore does NOT itself fit.
+    condition that fits passes through byte-identical apart from TRAILING whitespace. The cap
+    applies to the whole command including the `/goal ` prefix and the note, which is stated
+    because a 4000-char condition therefore does NOT itself fit.
+
+    **Why the trailing strip, and why HERE (2026-08-07, live).** A trailing newline makes the
+    paste land in the successor's input box and never submit: the buffer ends on a blank line and
+    the Enter does not send it. Measured by controlled experiment across three real handoffs — the
+    same 557-character condition failed TWICE via `--goal-condition-file`, which keeps the file's
+    trailing newline, and armed FIRST TIME via `--goal-condition` inline, which has none. The
+    failing successors carried no `goal_status` row, no `queue-operation` row, and not one byte of
+    the goal text.
+
+    `build_send_text_argv` already states the same hazard from the other side: the Enter is "a
+    distinct call rather than a trailing newline". `_read_text_arg` reads a file verbatim ON
+    PURPOSE, so a caller's end-of-prompt marker survives — correct for the resume prompt, fatal
+    for the goal. So the strip lives at this choke point, which both `armed_condition` and
+    `build_send_text_goal_argv` route through, and NOT in the shared file reader.
+
+    Only TRAILING whitespace goes. Interior newlines are load-bearing structure and #654 proved a
+    41-newline condition arrives fine as one collapsed paste.
     """
     if not isinstance(condition, str):
         raise LauncherError(f"goal condition must be a string, got {type(condition).__name__}")
     if not condition.strip():
         raise LauncherError("goal condition is empty — refusing to arm an empty guard")
+    # After the empty check, so a whitespace-only condition still refuses rather than becoming a
+    # silently-armed empty guard.
+    condition = condition.rstrip()
     text = f"{_GOAL_PREFIX}{condition}"
     if len(text) <= GOAL_MAX_CHARS:
         return (text, False)
@@ -1384,6 +1404,16 @@ def validate_goal_carry(successor_goal: str, predecessor_live_goal: str | None, 
     if predecessor_live_goal is None:
         return (True, "no live predecessor goal — nothing to validate", False)
     succ = successor_goal[:-1] if successor_goal.endswith("\n") else successor_goal
+    # #989 — armed_condition now RSTRIPS, because the send route cannot carry trailing whitespace
+    # (a trailing newline makes the paste land and never submit). That would silently widen this
+    # comparison into the `strip()` equality pass-1 F4 REFUSED at the design gate, so the residual
+    # trailing shape is judged here, explicitly, instead of being inherited from the armed form.
+    # ONE trailing newline is already gone above; anything left is a real difference.
+    if succ != predecessor_live_goal and succ.rstrip() == predecessor_live_goal.rstrip():
+        return (False,
+                "goal texts differ only in trailing whitespace beyond the one documented newline "
+                f"— refused: carry must be byte-identical (successor {len(successor_goal)} chars, "
+                f"predecessor {len(predecessor_live_goal)} chars)", False)
     armed_succ, succ_trunc = armed_condition(succ)
     armed_pred, pred_trunc = armed_condition(predecessor_live_goal)
     if armed_succ == armed_pred and not (

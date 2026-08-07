@@ -612,6 +612,79 @@ def test_cli_goal_text_reports_truncation() -> None:
     assert json.loads(proc.stdout)["truncated"] is True
 
 
+class TestTheGoalPayloadNeverEndsWithANewline:
+    """A trailing newline on the goal makes the paste land and NEVER submit.
+
+    Found live on 2026-08-07 by controlled experiment, three real handoffs to real panes:
+    the SAME 557-character condition failed twice via `--goal-condition-file` (which keeps the
+    file's trailing newline) and armed first time via `--goal-condition` inline (which has none).
+    The successor transcript carried NO `goal_status` row, NO `queue-operation` row, and not one
+    byte of the goal text — the paste sat in the input box and the Enter did not submit it.
+
+    This module already knew the hazard from the other direction. `build_send_text_argv` says a
+    multiline payload arrives as one collapsed bracketed paste "which is why the Enter is a
+    distinct call rather than a trailing newline". `_read_text_arg` then reads a file VERBATIM,
+    deliberately, so a caller's end-of-prompt marker survives — and that is right for the resume
+    prompt. For the GOAL it reintroduces exactly the trailing newline the send route excludes.
+
+    So the strip belongs at the goal choke point, never in the shared file reader.
+    """
+
+    def test_a_trailing_newline_is_stripped_from_the_sent_payload(self) -> None:
+        text_argv, _keys, _trunc = ll.build_send_text_goal_argv(
+            pane="w1:p1", goal_condition="ship it when CI is green\n")
+        assert not text_argv[4].endswith("\n"), repr(text_argv[4][-40:])
+        assert text_argv[4] == "/goal ship it when CI is green"
+
+    def test_trailing_blank_lines_and_spaces_go_too(self) -> None:
+        """A file written by a heredoc routinely ends `...\\n`, and an edited one `...\\n\\n  `."""
+        text_argv, _keys, _trunc = ll.build_send_text_goal_argv(
+            pane="w1:p1", goal_condition="ship it\n\n   \n")
+        assert text_argv[4] == "/goal ship it"
+
+    def test_armed_condition_matches_what_was_actually_sent(self) -> None:
+        """The binding check compares against this. If the strip happened in only one of the two,
+        every capped or file-sourced goal would fail to verify for ever."""
+        cond, _trunc = ll.armed_condition("ship it when CI is green\n")
+        text_argv, _keys, _trunc2 = ll.build_send_text_goal_argv(
+            pane="w1:p1", goal_condition="ship it when CI is green\n")
+        assert cond == "ship it when CI is green"
+        assert text_argv[4] == "/goal " + cond
+
+    def test_interior_newlines_are_untouched(self) -> None:
+        """#654 proved a 41-newline condition arrives fine as a collapsed paste. Only the TRAILING
+        newline breaks submission, so stripping interior structure would be a regression."""
+        cond = "line one\nline two\n\nline four"
+        text_argv, _keys, _trunc = ll.build_send_text_goal_argv(
+            pane="w1:p1", goal_condition=cond + "\n")
+        assert text_argv[4] == "/goal " + cond
+        assert text_argv[4].count("\n") == 3
+
+    def test_a_condition_that_is_only_whitespace_is_still_refused(self) -> None:
+        """Stripping must not turn an empty guard into a silently-armed one."""
+        with pytest.raises(ll.LauncherError, match="empty"):
+            ll.build_send_text_goal_argv(pane="w1:p1", goal_condition="\n\n   \n")
+
+    def test_the_carry_guard_keeps_its_byte_identical_rule(self) -> None:
+        """The interaction this fix nearly broke, pinned from BOTH sides.
+
+        `armed_condition` now rstrips, which would have widened `validate_goal_carry` into the
+        `strip()` equality that pass-1 F4 refused at the #758 design gate — two trailing newlines
+        would have compared equal to none. `test_two_trailing_newlines_are_not_over_normalized`
+        caught it. This pins the other direction too, so a future "simplification" that deletes
+        the explicit trailing-shape check fails here rather than silently loosening the carry.
+        """
+        # ONE trailing newline is the documented file artifact and still carries.
+        ok, _reason, _override = ll.validate_goal_carry("goal A\n", "goal A")
+        assert ok, "a single trailing file newline must still be a verbatim carry"
+        # TWO is a real difference and must still be refused.
+        ok2, reason2, _ = ll.validate_goal_carry("goal A\n\n", "goal A")
+        assert not ok2
+        assert "trailing whitespace" in reason2, reason2
+        # And the refusal reason must not leak goal CONTENT (pass-1 F8) — lengths only.
+        assert "goal A" not in reason2, reason2
+
+
 # ---------------------------------------------------------------------------
 # #611 Step-11 High 1 — the production caller
 # ---------------------------------------------------------------------------
