@@ -749,6 +749,22 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.141.0 (2026-08-07)
+- **The directive tier can now insert mid-turn, not only at `Stop` (#729, epic #906).** The #718
+  prompt-insert is the one channel that arrives as authoritative USER input rather than injected
+  text a model may decline, and it was gated on `event == "Stop"` — so a session reaching the
+  directive tier mid-turn never got it, which is precisely when it is deepest in a long turn and
+  least able to act on refusable text. The gate cited an ESC hazard the route cannot produce:
+  `insert_prompt` sends `send-text`, waits, then a separate `send-keys Enter`, and paste-plus-Enter
+  does not interrupt a turn. Measured basis: session `643af1d9` declined the injected directive at
+  50.7% and handed off only on human intervention; this host carried 89 midturn markers against 3
+  insert markers, all stop-channel. Safe to widen because at-most-once lives in
+  `try_insert_prompt`'s own `(session, window, directive, INSERT_CHANNEL)` reservation, not at the
+  branch. Also corrected the epic's own note that F1 was stale — it counted NAG markers, not insert
+  markers. 4 tests, the behavioural pair driven black-box through the hook subprocess and verified
+  red-before-green by reverting the gate, and the event-set guard likewise. No workflow-spine
+  change → no diagram REV. Suite 6352→6357.
+
 ### v3.140.0 (2026-08-07)
 - **Context-meter thresholds to 55/75, and older decisions get a rolling summary instead of
   silence (#797, epic #906).** Owner-directed on 2026-08-01 — *"if 60-80 is the degredation point
