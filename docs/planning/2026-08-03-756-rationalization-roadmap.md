@@ -5,11 +5,11 @@
 **Decisions:** D174–D179 in `claude_docs/decisions/rawgentic.jsonl` (workspace root). Each carries its undo.
 
 ```stats
-48 | issues rationalized
-28 | issues closed | accent
-~33k | code lines to delete
-6 | owner rulings (D174–D179)
-34→15 | WF2 refusal gates
+68 | issues open today
+0 | untracked by a milestone | accent
+10 | closed since 2026-08-06
+3 | corrections this pass
+D187 | decision log tail
 ```
 
 ```callout
@@ -30,6 +30,13 @@ owner decision — two ACs unsatisfiable, noted on the issue itself), #586, #944
 3.137.0, full suite 6087/6087. Epic #871 closed 2026-08-06 with a summary comment listing every
 child, PR, version and merge SHA. M2 (epic #906, PAUSED above) is the next milestone to resume —
 that resume is a separate, later, owner-started run, not automatic.
+Updated 2026-08-07 — REASSESSED against main at `714fdeb7`. All **68** open issues checked; every
+one is tracked by a milestone, and none was left unabsorbed. **Three roadmap claims were wrong and
+are corrected below** (§12): the receipt machinery D176 said would retire is still live, #792's
+issue still names the deleted executor, and the supervision line kept shipping past M4 (#963, #976)
+without appearing here at all. M2 (epic #906) remains PAUSED at 3/16 and is still the next
+milestone to resume. Two defects found during builds are NOT filed, per the D179 throttle — they
+are listed in §12.4 for your call.
 ```
 
 ## The roadmap
@@ -49,14 +56,15 @@ M2 — THE PANE-HANDOFF CHAIN | epic #906 · PAUSED at 3/16 (D185) — resumes a
   1 | Launcher robustness: #731 SHIPPED (PR #942, v3.129.1) · #835 remains — #800 already shipped (PR #912) | note
   2 | Meter rework (D177): #797 55/75 + rolling summary · #729 residual (ack-tracking) · #734 blind-start | note
   3 | #726 → MOVED to M4 (D185) | ok
-  4 | Epic-run rework (D176): #927 + #769 → MOVED to M4 (D185); the #845/#846/#848/#849/#850/#851 dispositions ride with #927 (#848→#944, #845→#927 already settled) | ok
+  4 | Epic-run rework (D176): #927 + #769 SHIPPED in M4; #845 + #848 settled — but #846/#849/#850/#851 are LIVE WORK, not retired (§12.1 C1: rebuild_receipt/pending_disposition/jam_matrix still exist) | warn
   5 | Trusted goal reader: #864 + #772 + #878 | note
   6 | #806 goal cap from the constant + exact-text display; no auto-arm | note
   SP | M1 spillover: #923 WF2-lite lane · #899 word budget | note
 M2.5 — MINIMUM TELEMETRY TRUTH | epic #935 · after the M4 wave | warn
   #888 | → MOVED up into the M4 wave (D185, records-first minimum) | ok
-  #363 | Per-run usage attribution (absorbs #660) | note
+  #363 | Per-run usage attribution — the #976 record proves it: wall_clock_s null, usage session-cumulative | note
   #356 | Dispatch entries that survive session seams | note
+  #361 | PROPOSED move from M6 (§12.2): Step-16 has zero session-note cross-checks, and #976 shipped a record with timing absent | warn
 M3 — TRUST THE NEW MACHINERY | epic #936 · runner · review loop · config | warn
   RH | Runner hardening (siblings, not merged): #876 trusted --brief · #894 death/OOM evidence · #365 contaminated returns · #893 engagement evidence | note
   RL | Review loop: #889 clean-round token refund · #892 re-litigation flag · #891 retire fail-open riskLevel default · #895 blindness guard | note
@@ -69,20 +77,25 @@ M4 — SESSION CONTINUITY & UNSUPERVISED MODES | epic #871 · SHIPPED 2026-08-06
   #726 | In-flight-work gate + durable-path check — SHIPPED PR #954; issue stays open, two ACs unsatisfiable (noted on the issue) | ok
   #586 | Resume rewrite — SHIPPED PRs #955–#958 | ok
   #944 | Revalidate hardening — SHIPPED PR #959 | ok
+M4+ — SUPERVISION, CONTINUED | shipped AFTER M4 closed · was missing from this roadmap (§12.1 C3) | ok
+  #963 | Supervised-merge broker: the first live caller of the #871 authority core — SHIPPED PR #973, v3.138.0 | ok
+  #976 | PreToolUse enforcement of the broker + the broker's own campaign-binding bug — SHIPPED PR #978, v3.139.0 | ok
+  FX | Follow-ups the same day: #981 step-state bootstrap (v3.139.1) · #982 WAL rotation lock (v3.139.2) | ok
 M5 — IDENTITY & CONCURRENCY + WF HYGIENE | epic #937 · grouped pairs | note
   P1 | #345 + #346 one keying design, two migrations · #593 + #594 concurrent same-project sessions | note
   P2 | #372 WF14-vs-guard · #364 doc-only resume state · #370 + #379 ambiguity-breaker pair | note
   P3 | #395 authored-blind checklist · #658 call-site inventory · #890 consumer-project hook invocation | note
 M6 — TAIL | epic #938 · small, independent | note
-  #361 | Step-16 assembly cross-checks | note
-  #380 | wal-context internal deadline | note
+  #361 | Step-16 assembly cross-checks — PROPOSED move up to M2.5 (§12.2); no longer a tail item | warn
+  #380 | wal-context internal deadline — confirmed absent from hooks/wal-context, not started | note
 M7 — SKILLS & TOOLING | epic #939 · convenience tier | note
   T1 | #400 usage auditor · #390 workspace-doctor · #391 session-index v2 | note
   T2 | #534 retire epic-run-analysis (unblocked, #508 shipped) · #536 deploy-verify · #537 security-vet · #399 group inference · #350 CodeGuard | note
 LATER — with reopen triggers, not vibes | watch list §6 refreshed | note
-  #792 | Quota preflight — still statusline-based; no usage API exists (verified 2026-08-05) | note
+  #792 | Quota preflight — RE-TITLE OR CLOSE (§12.1 C2): the issue still says "executor" and "Claude-lane dispatches", both deleted in M0d | crit
   WF | #358 + #359 (#360) WF15/16 codex design workflows | note
-  DT | Decision tickets from fired triggers: #931 native sandboxing · #932 LLM-judged hooks · #933 sandbox-runtime | note
+  DT | #931 native sandboxing · #933 sandbox-runtime — still bare decision tickets | note
+  #932 | NO LONGER just a decision ticket: design SHIPPED 2026-08-06 (PR #980) — promote to an M3 build candidate | warn
   PK | #738 parked (trigger: project reactivates) · #568 Hermes substrate (trigger: a consumer beyond ask/notify-owner) | note
 ```
 
@@ -385,3 +398,79 @@ runner's own `consult` verb — the M0a machinery reviewing its own backlog):
 
 Full evidence, per-issue: `2026-08-05-backlog-rationalization-post-m1.md`
 (hosted: https://rawgentic-analysis-backlog-post-m1.vercel.app).
+
+## 12. The 2026-08-07 reassessment (written 2026-08-07, against main `714fdeb7`)
+
+Every open issue was re-checked against the tree, not against this document's memory of it.
+**68 open, all tracked by a milestone, none orphaned.** The distribution is unchanged in shape:
+M1 1 · M2 16 · M2.5 3 · M3 15 · M5 12 · M6 3 · M7 9 · LATER 9.
+
+That is the good news. The rest of this section is what the check got wrong.
+
+### 12.1 Three corrections — claims this roadmap made that are not true
+
+**C1 — "the claim/lease/receipt machinery retires" (D176, M2 item 4, M4) did not happen.**
+`generation_fence` and `claim_lease` are gone, but `rebuild_receipt`, `pending_disposition` and
+`jam_matrix` are all still live in `hooks/driver_lib.py` and `hooks/launcher_lib.py` — 71 and 54
+`receipt` references respectively. **Consequence, and it is the useful half:** #846, #849, #850 and
+#851 are **still valid**, not dead. This document has read them as retired-by-D176 since 2026-08-03;
+they describe live code. Either D176's retirement gets finished, or those four get built. What is
+not defensible is leaving them classified as already-handled.
+
+**C2 — #792's issue never got the rescope this roadmap gave it.** §3 rescoped it to "a small
+fail-open quota preflight" on 2026-08-03. The issue is still titled *"feat(**executor**): 5-hour-window
+dispatch guard — refuse **Claude-lane dispatches** at 90% utilization"*, and the executor was deleted
+in M0d. Anyone reading the issue reads a subject that no longer exists. The rescope lives only here.
+
+**C3 — the supervision line kept shipping past M4, and this roadmap does not mention it.** M4 closed
+2026-08-06 at v3.137.0. Since then **#963** (the supervised-merge broker — the first live caller of
+the #871 authority core) and **#976** (PreToolUse enforcement of it) both shipped and closed. Neither
+appears anywhere above. A reader of this document would conclude supervision work stopped at M4.
+
+### 12.2 Verified still-valid, with today's evidence
+
+| Issue | Checked | Verdict |
+|---|---|---|
+| #797 | no 55/75 threshold constants in `hooks/context_meter.py` | **valid** — not started |
+| #380 | no `timeout`/`deadline` in `hooks/wal-context` | **valid** — not started |
+| #361 | `hooks/work_summary.py` has **zero** references to `session_notes` | **valid**, and newly urgent — see below |
+| #363 | the #976 run-record carries `wall_clock_s: null` and `input_tokens: 30301664` (session-cumulative) | **valid**, with fresh proof |
+| #899 | `skills/implement-feature/SKILL.md` is **6442 words** against the 5,000 guideline | **valid** — 29% over |
+
+**#361 deserves promotion.** It asks for Step-16 cross-checks against session-note ground truth. The
+#976 run shipped a run-record whose `timing` was `absent` because no session-note step markers were
+written — and nothing in Step 16 noticed except an advisory line. That is precisely the defect #361
+describes, observed in production, one day after M2.5 was written to make records trustworthy. It is
+currently in **M6 (TAIL)**. On this evidence it belongs in **M2.5**, next to #363.
+
+### 12.3 Two issues that moved
+
+- **#534** (retire `epic-run-analysis`) is **unblocked and actionable now**: `skills/epic-post-mortem`
+  exists, so #508 shipped, and the superseded workspace skill is still installed at
+  `.claude/skills/epic-run-analysis`. It is a deletion — the cheapest item on the board.
+- **#932** (LLM-judged hooks) is **no longer a bare decision ticket**. Its design landed 2026-08-06 as
+  `docs/planning/2026-08-06-932-mechanical-step-gates.md` (PR #980, commit `a81ee211`). That design
+  independently reached the same conclusion as the #976 work — `step_state.py` is a fail-open
+  now-pointer and can never be a gate, so the missing primitive is an append-only completion ledger
+  gated on an evidence artifact. It should be reclassified from LATER to a buildable M3 candidate.
+
+### 12.4 Found during builds, deliberately NOT filed (D179 throttle — your call)
+
+1. **~3034 orphaned WAL `INTENT` entries**, 19% of all 16037 operations. Cause fixed 2026-08-07 in
+   PR #982 (rotation rewrote the live file with no lock, destroying concurrent sessions' appends).
+   The **existing** orphans are untouched and stay on disk by design, so the session-start notice
+   keeps announcing them. A cleanup pass is a separate decision.
+2. **Per-step timing is only as good as the bootstrap.** PR #981 made the branch-cut
+   `step_state.py write` mandatory so a run can record timing at all. It does not make the WF2
+   `— DONE` markers happen; those are still prose, and #976 skipped them. #361 is the durable fix.
+
+### 12.5 What this changes about what runs next
+
+Nothing about M2's position — epic #906 is still PAUSED at 3/16 and still the next milestone to
+resume, on your start. The recommendations this pass produces are:
+
+1. **Move #361 from M6 to M2.5.** Records-trustworthiness now has a production failure behind it.
+2. **Re-title #792 or close it.** Its stated subject was deleted nine days ago.
+3. **Reclassify #846/#849/#850/#851** — either finish D176's retirement or accept them as live work.
+   They are currently mis-filed as handled.
+4. **Take #534 whenever a session wants a five-minute win.** It is a pure deletion, unblocked.
