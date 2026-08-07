@@ -97,6 +97,15 @@ def _reval(validated_head=HEAD, children=None):
 # AC3b — the in-session gate
 # --------------------------------------------------------------------------- #
 
+def _trusted_goal_file(tmp_path, condition: str) -> str:
+    """A transcript whose newest TRUSTED row arms `condition` (#772)."""
+    t = tmp_path / "handoff-goal.jsonl"
+    t.write_text(json.dumps({"attachment": {"type": "goal_status", "sentinel": True,
+                                            "met": False, "condition": condition}}) + "\n",
+                 encoding="utf-8")
+    return str(t)
+
+
 class TestPerChildProvenanceClause:
     """A child with no provenance must never be handed out, even at an unmoved head.
 
@@ -364,7 +373,10 @@ def _handoff_argv(state_path, tmp_path, project_root):
     return ["handoff", "--driver-state", str(state_path), "--anchor-pane", "w1:p1",
             "--name", "child4", "--project-root", str(project_root), "--project", "rawgentic",
             "--cwd", str(project_root), "--registry", "/reg.jsonl",
-            "--transcript-dir", str(tmp_path), "--goal-condition", "keep going",
+            "--transcript-dir", str(tmp_path),
+            # #772 — `handoff` now REQUIRES the transcript, because while the two flags were
+            # mutually exclusive an explicit condition was checked against nothing at all.
+            "--goal-condition-from", _trusted_goal_file(tmp_path, "keep going"),
             "--launch-mode", "fresh", "--herdr-mode", "herdr"]
 
 

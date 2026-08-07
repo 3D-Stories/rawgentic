@@ -6555,26 +6555,37 @@ def _cmd_handoff(args) -> int:
         print(f"no handoff: {reason} (launch mode {args.herdr_mode!r})")
         return 3
 
-    condition = args.goal_condition
-    if condition is None:
-        # #772 — this path had NO trust check of any kind: it took whatever
-        # `last_unmet_goal_condition` returned, which recurses into arbitrary message content and
-        # treats the last met:false row as live regardless of anything after it. So a goal_status
-        # object forged inside tool output could become the successor's guard, and a guard a later
-        # row had already satisfied could be handed over as though it were still owed.
-        #
-        # Only the DERIVED branch changes. An explicit `--goal-condition` is operator-supplied
-        # rather than transcript-sourced, so it carries no transcript-forgery risk; checking it as
-        # an assertion needs the transcript, and on THIS command the two flags are still mutually
-        # exclusive (unlike mid-child, which required the transcript for exactly this reason). That
-        # parser change would alter a CLI the workspace `*-resume.sh` launchers invoke, so it is a
-        # named follow-up rather than a silent widening here.
-        with open(args.goal_condition_from, encoding="utf-8") as fh:
-            state, condition, reason = owner_goal_state(fh.read())
-        if state != GOAL_STATE_LIVE:
-            print(destructive_goal_refusal(state, reason, "the predecessor transcript"),
-                  file=sys.stderr)
-            return 3
+    # #772 — this path had NO trust check of any kind. It took whatever
+    # `last_unmet_goal_condition` returned, which recurses into arbitrary message content and
+    # treats the last met:false row as live regardless of anything after it. So a goal_status
+    # object forged inside tool output could become the successor's guard, and a guard a later
+    # row had already satisfied could be handed over as though it were still owed.
+    #
+    # The guard is now ALWAYS derived from the transcript's trusted rows, and an explicit
+    # `--goal-condition` is only an assertion checked against it. Step-8a review refused the
+    # earlier revision, which changed only the derived branch and left the explicit one
+    # unchecked: an operator flag is not transcript-forgery, but it can still carry a RETIRED
+    # authorization, and calling that a follow-up does not close the path.
+    #
+    # `goal_state` and `goal_reason` are named apart from the driver `state` and the
+    # `fresh_session_available` `reason` deliberately — the first draft of this block shadowed
+    # `state` and would have handed the goal verdict to every later use of the campaign state.
+    with open(args.goal_condition_from, encoding="utf-8") as fh:
+        goal_state, live_condition, goal_reason = owner_goal_state(fh.read())
+    if goal_state != GOAL_STATE_LIVE:
+        print(destructive_goal_refusal(goal_state, goal_reason, "the predecessor transcript"),
+              file=sys.stderr)
+        return 3
+    # The TRUSTED text is what travels, always. An assertion that passes still hands over
+    # `live_condition`, never the operator's copy of it, so the successor's guard is byte-identical
+    # to the predecessor's (#758 verbatim carry).
+    if args.goal_condition is not None and args.goal_condition != live_condition:
+        print("refusing: --goal-condition does not match the live guard in the predecessor "
+              f"transcript (supplied {len(args.goal_condition)} chars, live "
+              f"{len(live_condition)} chars). It is an assertion, not a second source — if the "
+              "guard changed, re-read it rather than retyping it", file=sys.stderr)
+        return 3
+    condition = live_condition
 
     # Re-check against a LOCKED re-read immediately before launching. Everything above — the
     # disposition, the capability probes, the goal-condition read — takes time during which a
@@ -7083,39 +7094,46 @@ def _cmd_mid_child_handoff(args) -> int:
     #
     # `owner_goal_state` returning LIVE already means "the newest TRUSTED row is unmet", which is
     # strictly stronger than `goal_currently_unmet` + `latest_goal_status_condition` together — so
-    # those two are REPLACED here rather than kept in front of it. Keeping them would preserve a
-    # denial vector this issue's body does not mention and this run found by reading: because
-    # `latest_goal_status_condition` is sentinel-insensitive, a forged row that is merely NEWER
-    # made it return the forged text and REFUSE a legitimate handoff. Both helpers stay in the
-    # module for the observability callers AC3 protects.
+    # those two are REPLACED here rather than kept in front of it. Both helpers stay in the module
+    # for the observability callers AC3 protects.
+    #
+    # MEASURED, because the first version of this comment got it half wrong. On a transcript of
+    # `trusted A met:false` then a FORGED NESTED row, all three of the old readers agreed on the
+    # FORGED condition — `last_unmet_goal_condition` returned it, `goal_currently_unmet` passed it,
+    # and `latest_goal_status_condition` matched it — so the old derived path did not refuse, it
+    # ARMED THE SUCCESSOR WITH THE FORGED GUARD. The denial case is the sibling: with an explicit
+    # `--goal-condition`, the same forged row made `latest_goal_status_condition` mismatch and
+    # refused a handoff whose guard was genuinely live. One forged row, injection one way and
+    # denial the other, and the trusted verdict closes both.
     #
     # This also carries AC2's tail-ambiguity refusal, because `owner_goal_state` parses the last
     # line — which closes the High finding #864 deferred to this issue, for this path.
-    state, live_condition, reason = owner_goal_state(transcript_text)
-    if state != GOAL_STATE_LIVE:
-        print(destructive_goal_refusal(state, reason, "this session's transcript"),
+    goal_state, live_condition, goal_reason = owner_goal_state(transcript_text)
+    if goal_state != GOAL_STATE_LIVE:
+        print(destructive_goal_refusal(goal_state, goal_reason, "this session's transcript"),
               file=sys.stderr)
         return 3
-    condition = args.goal_condition
-    if condition is None:
-        condition = live_condition
-    # Two separate questions, and Step 11 pass-3 (verify 4) showed that only asking the first lets
-    # a REPLACED guard through: `goal_currently_unmet` deliberately examines only rows matching the
-    # condition, so with history `A/met:false` then `B/met:false`, an explicit `--goal-condition A`
-    # was accepted even though B is the live guard. So the condition must be BOTH still-unmet AND
-    # the newest guard in the transcript.
-    elif condition.strip() != live_condition.strip():
-        # The explicit assertion, now checked against the LIVE guard rather than against two
-        # lenient scans. This one comparison covers both questions the replaced checks asked:
-        # a condition a later row satisfied is not the live one, and a condition a newer guard
-        # replaced is not the live one either. Lengths only in the message — an owner-authored
-        # goal must not leak into logs (#758 pass-1 F8).
+    # The explicit assertion, checked against the LIVE guard rather than against the two lenient
+    # scans this replaced. One comparison covers both questions they asked: a condition a later
+    # row satisfied is not the live one, and a condition a newer guard replaced is not either —
+    # which is the `A/met:false` then `B/met:false` case Step 11 pass-3 found.
+    #
+    # BYTE comparison, not `.strip()`. Step-8a review caught the first revision normalizing both
+    # sides and then forwarding the OPERATOR's variant: two conditions differing only in trailing
+    # whitespace compared equal, and the successor was armed with text that was not the
+    # owner-authored guard verbatim — exactly what #758 exists to prevent, and it would then fail
+    # every later byte-exact carry check.
+    #
+    # Lengths only in the message: an owner-authored goal must not leak into logs (#758 F8).
+    if args.goal_condition is not None and args.goal_condition != live_condition:
         print("refusing: the supplied --goal-condition is not the guard currently in force in "
-              f"this session's transcript (supplied {len(condition)} chars, live "
+              f"this session's transcript (supplied {len(args.goal_condition)} chars, live "
               f"{len(live_condition)} chars). Either it has been met, or a newer guard replaced "
-              "it, or it was mistyped — arming the successor with it would hand over a guard "
-              "that is not what is owed", file=sys.stderr)
+              "it, or it differs by whitespace — arming the successor with it would hand over a "
+              "guard that is not what is owed", file=sys.stderr)
         return 3
+    # The TRUSTED text travels, always — never the operator's copy of it.
+    condition = live_condition
 
     # 8a destructive 6: `--repo-root` and `--project-root` were independent inputs, and nothing
     # bound the recorded repo to the project the successor proves it switched to. So
@@ -7339,10 +7357,22 @@ def main(argv: list[str] | None = None) -> int:
                       help="claude_docs/session_registry.jsonl")
     p_ho.add_argument("--transcript-dir", required=True,
                       help="~/.claude/projects/<slug>/ — <session-id>.jsonl lives here")
-    cond = p_ho.add_mutually_exclusive_group(required=True)
-    cond.add_argument("--goal-condition")
-    cond.add_argument("--goal-condition-from", metavar="PREDECESSOR_TRANSCRIPT",
-                      help="read the last unmet goal condition VERBATIM (AC6)")
+    # #772 — NO LONGER MUTUALLY EXCLUSIVE, and the transcript is REQUIRED. This is the same
+    # correction mid-child made for the same reason: while the two were exclusive, an invocation
+    # supplying an explicit condition could never supply the transcript, so that condition was
+    # checked against nothing at all. `--goal-condition` is now an ASSERTION verified against the
+    # live guard, never an alternative source of one.
+    #
+    # Verified safe before changing rather than assumed: `grep -rn goal-condition --include='*.sh'`
+    # across this workspace finds no launcher passing either flag, so no caller breaks. An earlier
+    # revision of this change deferred the fix on the belief that the `*-resume.sh` launchers
+    # passed `--goal-condition`; that came from a docstring, not from looking.
+    p_ho.add_argument("--goal-condition",
+                      help="OPTIONAL assertion: must equal the live guard byte-for-byte")
+    p_ho.add_argument("--goal-condition-from", required=True,
+                      metavar="PREDECESSOR_TRANSCRIPT",
+                      help="the predecessor transcript; the guard is derived from its trusted "
+                           "goal_status rows VERBATIM (AC6)")
     p_ho.add_argument("--launch-mode", default="fresh", choices=sorted(LAUNCH_MODES))
     # Only `herdr` is accepted. `pane_less` is a real verdict but it means "use the retained
     # claude --print path" (see `build-fallback`) — running the herdr split for it would split

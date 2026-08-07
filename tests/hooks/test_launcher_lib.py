@@ -791,12 +791,27 @@ def _state(tmp_path, **over):
     return p
 
 
+def _trusted_transcript(tmp_path, condition: str) -> str:
+    """A transcript whose newest TRUSTED row arms `condition` — the shape production has."""
+    t = tmp_path / "pred-goal.jsonl"
+    t.write_text(json.dumps({"attachment": {"type": "goal_status", "sentinel": True,
+                                            "met": False, "condition": condition}}) + "\n",
+                 encoding="utf-8")
+    return str(t)
+
+
 def _handoff_argv(state, tmp_path, **over):
     work, _head = _local_repo_with_origin(tmp_path)
     kw = {"--driver-state": str(state), "--anchor-pane": "w1:p1", "--name": "child4",
           "--project-root": work, "--project": PROJECT, "--cwd": str(REPO_ROOT),
           "--registry": "/reg.jsonl", "--transcript-dir": str(tmp_path),
-          "--goal-condition": "keep going", "--launch-mode": "fresh",
+          # #772 — `--goal-condition-from` is now REQUIRED and `--goal-condition` is only an
+          # assertion against it, so every campaign-handoff case needs a real trusted transcript.
+          # While the two were mutually exclusive an explicit condition was checked against
+          # nothing at all, which is the hole that change closes.
+          "--goal-condition": "keep going",
+          "--goal-condition-from": _trusted_transcript(tmp_path, "keep going"),
+          "--launch-mode": "fresh",
           "--herdr-mode": "herdr",
           # #726 — the boundary CLI now declares the predecessor's in-flight work. These cases
           # are about the fence and the launch ladder, so they attest to none.
@@ -4209,3 +4224,31 @@ class TestCampaignHandoffDerivesOnlyFromTrustedRows:
         msgs = {ll.destructive_goal_refusal(s, "a torn line", "T")
                 for s in ("CLEARED", "NEVER_ARMED", "AMBIGUOUS")}
         assert len(msgs) == 3
+
+
+class TestTheGuardTravelsByteIdentical:
+    """#772 Step-8a review, High (0.96): the first revision compared `.strip()`ed forms and then
+    forwarded the OPERATOR's variant. Two conditions differing only in trailing whitespace
+    compared equal, so the successor was armed with text that was not the owner-authored guard
+    verbatim — which is what #758 exists to prevent, and it breaks every later byte-exact check.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_live_issue_probe(self, monkeypatch):
+        monkeypatch.setenv(ll.ISSUE_PROBE_ENV, "0")
+
+    def test_a_condition_differing_only_by_trailing_space_is_refused(self, tmp_path) -> None:
+        proc = _cli(*_handoff_argv(_state(tmp_path), tmp_path,
+                                   **{"--goal-condition": "keep going ",
+                                      "--launcher-armed": None,
+                                      "--fresh-launch-supported": None}))
+        assert proc.returncode == 3, proc.stdout
+        assert "an assertion, not a second source" in proc.stderr
+
+    def test_the_transcript_is_required_so_an_assertion_can_be_checked(self, tmp_path) -> None:
+        """While the two flags were mutually exclusive, an explicit condition was checked against
+        nothing at all. argparse now refuses the invocation that made that possible."""
+        proc = _cli(*_handoff_argv(_state(tmp_path), tmp_path,
+                                   **{"--goal-condition-from": False}))
+        assert proc.returncode != 0
+        assert "--goal-condition-from" in proc.stderr
