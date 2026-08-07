@@ -239,15 +239,21 @@ class TestPromptNudge:
         assert out["ok"] is True
         assert r.nudges() == []
 
-    def test_the_goal_is_still_sent_only_after_the_prompt_lands(self) -> None:
-        """The send ORDER is untouched: recovery lives inside send 2, it does not reorder sends."""
+    def test_the_prompt_is_still_sent_last_and_recovery_does_not_reorder(self) -> None:
+        """Recovery lives inside a send; it does not reorder sends.
+
+        #989 INVERTED this test rather than deleting it. It used to assert the goal came after the
+        prompt. That order was the defect: a bare slash command pasted into a busy pane is queued,
+        never executed (#718, launcher_lib.py:636-648). The invariant it really guards — "the nudge
+        recovery changes no order" — is preserved by pinning the NEW order.
+        """
         r = Runner(_responses())
         ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, marker_after_nudges=1)))
         texts = r.sent_text()
         assert len(texts) == 3
         assert texts[0].startswith(ll._driver_lib().BIND_DIRECTIVE)
-        assert texts[1] == RESUME_PROMPT
-        assert texts[2].startswith("/goal")
+        assert texts[1].startswith("/goal")
+        assert texts[2] == RESUME_PROMPT
 
     def test_a_failed_nudge_send_is_its_own_failure_not_poll_exhaustion(self) -> None:
         """Review finding: a broken `send-keys` must not be reported as `prompt_landed` timing out.
@@ -387,16 +393,21 @@ class TestGoalNudge:
         notes = [str(s.get("note")) for s in out["steps"] if s["kind"] == "send_goal_nudge"]
         assert any("never re-send" in n for n in notes), notes
 
-    def test_the_send_order_is_unchanged(self) -> None:
-        """AC5: recovery lives INSIDE send 3 — it does not reorder or add a send."""
+    def test_the_nudge_recovery_adds_no_send_and_keeps_the_order(self) -> None:
+        """AC5, re-pinned at the #989 order: recovery adds no send and moves none.
+
+        Renamed from `test_the_send_order_is_unchanged`, whose name asserted the very thing #989
+        had to change. Kept rather than deleted — it is the guard that stops a future recovery
+        from quietly inserting or reordering a send.
+        """
         r = Runner(_responses())
         ll.perform_handoff(**_handoff(
             r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=1)))
         texts = r.sent_text()
         assert len(texts) == 3
         assert texts[0].startswith(ll._driver_lib().BIND_DIRECTIVE)
-        assert texts[1] == RESUME_PROMPT
-        assert texts[2].startswith("/goal")
+        assert texts[1].startswith("/goal")
+        assert texts[2] == RESUME_PROMPT
 
 
 class TestGoalNudgeSafety:
@@ -428,6 +439,237 @@ class TestGoalNudgeSafety:
             r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
         notes = [str(s.get("note")) for s in out["steps"] if s["kind"] == "pane_read"]
         assert any("goal" in n.lower() for n in notes), notes
+
+
+class TestGoalGetsTheIdleWindow:
+    """#989 — the goal is a BARE SLASH COMMAND, so it needs an idle pane the way SEND 1 does.
+
+    The defect this class pins: a bare slash command pasted into a BUSY session is queued and
+    never executed. That is not a new discovery — `validate_inserted_prompt`
+    (launcher_lib.py:636-648) already records it from #718, and refuses to send one for exactly
+    this reason. The old order sent `/goal` last, DELIBERATELY into a mid-turn pane, so it was
+    queued every time; the live transcript showed enqueue, remove 2.3s later, and zero
+    `goal_status` rows.
+
+    The natural experiment was already in the tree: SEND 1 is also a bare slash command
+    (`/rawgentic:switch`) and it works, because an `agent wait --until idle` sits immediately
+    before it. The fix gives `/goal` the same window and hands the busy window to the resume
+    prompt, which tolerates it — a prose paste's Enter is buffered during a turn and flushes at
+    turn end (#700, #835).
+    """
+
+    @staticmethod
+    def _index_of(calls, key, occurrence=1):
+        """Index of the Nth call whose first three argv items join to `key`."""
+        seen = 0
+        for i, c in enumerate(calls):
+            if Runner.key(c) == key:
+                seen += 1
+                if seen == occurrence:
+                    return i
+        return -1
+
+    def test_an_idle_wait_precedes_the_goal_send(self) -> None:
+        """THE fix. Without this wait the pane is mid-turn on the bind and the goal is queued.
+
+        `project_switched` proves the bind's ROW landed, not that its TURN ended (that is #700's
+        whole finding), so passing that rung is NOT evidence the pane is free.
+        """
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=0)))
+        assert out["ok"] is True, out["failed_step"]
+
+        waits = [i for i, c in enumerate(r.calls) if Runner.key(c) == "herdr agent wait"]
+        assert len(waits) == 2, \
+            f"expected the pre-launch wait AND a wait before the goal, got {len(waits)}"
+
+        bind_text = self._index_of(r.calls, "herdr pane send-text", 1)
+        goal_text = self._index_of(r.calls, "herdr pane send-text", 2)
+        assert bind_text < waits[1] < goal_text, (
+            "the idle wait must sit between the bind send and the goal send — "
+            f"bind={bind_text} wait={waits[1]} goal={goal_text}")
+
+    def test_the_idle_wait_targets_the_successor_pane_and_waits_for_idle(self) -> None:
+        """A wait on the wrong pane, or for the wrong state, would pass this class vacuously."""
+        r = Runner(_responses())
+        ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=0)))
+        waits = [c for c in r.calls if Runner.key(c) == "herdr agent wait"]
+        assert waits[1][3] == "w1:pZZ", waits[1]
+        assert "--until" in waits[1] and waits[1][waits[1].index("--until") + 1] == "idle", waits[1]
+
+    def test_a_failed_idle_wait_is_its_own_failure_not_goal_armed(self) -> None:
+        """A timed-out wait must name the wait. Reporting it as `goal_armed` would blame the
+        successor's transcript for a herdr call that never returned — the same rule
+        `send_goal_nudge` and `send_resume_nudge` already follow."""
+        class WaitFailsSecondTime(Runner):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self.waits = 0
+
+            def __call__(self, argv, timeout=180):
+                if Runner.key(argv) == "herdr agent wait":
+                    self.waits += 1
+                    if self.waits == 2:
+                        self.calls.append(list(argv))
+                        return FakeProc(returncode=1)
+                return super().__call__(argv, timeout)
+
+        r = WaitFailsSecondTime(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=0)))
+        assert out["ok"] is False
+        assert out["failed_step"] == "agent_wait_goal", out["failed_step"]
+        assert not any(t.startswith("/goal") for t in r.sent_text()), \
+            "the goal must not be pasted after the wait failed — that is the queued case again"
+
+    def test_the_goal_fails_closed_before_the_prompt_is_ever_sent(self) -> None:
+        """The reorder's safety dividend, and it is the reason failure mode 1 is acceptable.
+
+        Under the OLD order a failed goal left a successor already working the prompt with no
+        guard. Now the guard is proven first, so a failed arm costs a torn-down pane that was
+        never handed any work.
+        """
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
+        assert out["ok"] is False and out["failed_step"] == "goal_armed"
+        assert not any(t == RESUME_PROMPT for t in r.sent_text()), \
+            "the resume prompt must never be sent to a successor whose guard did not arm"
+
+    def test_no_unguarded_window_remains(self) -> None:
+        """The stronger property the new order buys: on the happy path the goal row is confirmed
+        before the prompt is transported, so work is never handed to an unguarded session."""
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=0)))
+        assert out["ok"] is True, out["failed_step"]
+        texts = r.sent_text()
+        assert texts.index(RESUME_PROMPT) > next(
+            i for i, t in enumerate(texts) if t.startswith("/goal"))
+
+
+class TestTeardownNeedsEvidenceThePromptArrived:
+    """#989 Step-11 High 1 — a regression the reorder introduced, caught in cross-model review.
+
+    Moving the prompt to LAST means nothing follows it. With no `prompt_marker` there is no
+    arrival check at all, and the launch ladder carries no `prompt_landed` rung — so teardown
+    would retire the predecessor on `send-text` rc 0 alone. rc 0 proves transport, not arrival,
+    and #989 is the standing proof that the gap is real: four handoffs returned rc 0 on a payload
+    that never executed.
+
+    Under the OLD order `goal_armed` came after the prompt, which was at least weak evidence the
+    pane had processed something since. The reorder removed that, so the guard ships alongside it.
+    """
+
+    def test_without_a_marker_nothing_verifies_the_final_send(self) -> None:
+        """The shape of the gap, pinned so the campaign call site's fix cannot silently regress.
+
+        With no marker the prompt — now the LAST send — gets no arrival poll and no nudge, and the
+        launch ladder carries no `prompt_landed` rung, so a handoff reports ok on transport alone.
+        This is a CHARACTERIZATION of the library contract, which #989 deliberately did not change
+        (see the comment in `perform_handoff`); the fix is that the campaign call site now supplies
+        a marker. If this ever starts failing, the library contract moved and the call-site fix
+        below needs rechecking.
+        """
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, prompt_marker=None, teardown=False,
+            read_text=Artifacts(r, marker_after_nudges=99, goal_row_after_nudges=0)))
+        assert out["ok"] is True, out["failed_step"]
+        assert "prompt_landed" not in out["results"]
+        assert r.nudges() == [], "no marker means no arrival signal to recover toward"
+
+    def test_a_marker_makes_the_final_send_gated_again(self) -> None:
+        """The other half: supply one and the last send is verified like every other."""
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=99, goal_row_after_nudges=0)))
+        assert out["ok"] is False and out["failed_step"] == "prompt_landed"
+        assert out["results"]["prompt_landed"] is False
+
+    def test_the_boundary_clause_still_carries_the_resolution_id(self) -> None:
+        """The campaign call site passes `resolution_id` as its `prompt_marker`, and
+        `perform_handoff` REFUSES a marker that is not a substring of the prompt.
+
+        So if `with_boundary_clause`'s wording ever stops embedding the id, every campaign handoff
+        raises before creating anything. That coupling is invisible at both ends — one is in
+        `driver_lib`, the other in `_cmd_handoff` — which is exactly why it gets a guard.
+        """
+        driver = ll._driver_lib()
+        rid = "b:epic-906-pane-handoff-chain:1#1"
+        prompt = driver.with_boundary_clause(
+            "do the work", generation=1, claimant="sess-abc", kind="child_boundary",
+            resolution_id=rid)
+        assert rid in prompt, (
+            "with_boundary_clause no longer embeds resolution_id — _cmd_handoff passes it as "
+            "prompt_marker, so perform_handoff would refuse every campaign handoff")
+
+    def test_a_marker_absent_from_the_prompt_is_refused_before_the_split(self) -> None:
+        """The refusal the guard above protects against, shown to be real and to be fail-closed."""
+        r = Runner(_responses())
+        with pytest.raises(ll.LauncherError, match="does not appear in the resume prompt"):
+            ll.perform_handoff(**_handoff(r, prompt_marker="[not-in-the-prompt]"))
+        assert r.calls == [], "refused before anything was created"
+
+
+class TestTheThreeGoalDeliveryStates:
+    """#989 AC4 — the QUEUED state is a THIRD state, and it must not be confused with the other two.
+
+    #700 fixed "sent but unsubmitted". #835 extended that recovery to the goal. Neither reaches
+    QUEUED, and #835 correctly declines to fire there: a queued command shows no collapsed-paste
+    affordance, so `pane_shows_unsubmitted_paste` returns not-safe and the loop breaks fail-closed.
+    Distinguishing the three is what stopped four handoffs being misdiagnosed for a whole night.
+    """
+
+    def test_submitted_arms_with_no_recovery_at_all(self) -> None:
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=0)))
+        assert out["ok"] is True, out["failed_step"]
+        assert out["results"]["goal_armed"] is True
+        assert r.nudges() == []
+        assert not any(Runner.key(c) == "herdr pane read" for c in r.calls), \
+            "a goal that armed must not trigger the recovery path"
+
+    def test_sent_but_unsubmitted_is_recovered_by_a_bare_enter(self) -> None:
+        """State 2: the paste IS in the input box, so the affordance is on screen and an Enter
+        frees it."""
+        r = Runner(_responses(pane_read=PANE_PASTE_WAITING))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=1)))
+        assert out["ok"] is True, out["failed_step"]
+        assert len(r.nudges()) == 1
+        assert len([t for t in r.sent_text() if t.startswith("/goal")]) == 1, \
+            "#696: the text is never re-sent"
+
+    def test_queued_shows_no_affordance_so_the_enter_recovery_declines(self) -> None:
+        """State 3, the #989 defect. A queued command is NOT sitting in the input box, so there is
+        no affordance, no nudge, and no amount of Enters would help — which is why the fix had to
+        be the idle window and not another recovery round."""
+        r = Runner(_responses(pane_read="some unrelated scrollback\n"))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
+        assert out["ok"] is False and out["failed_step"] == "goal_armed"
+        assert r.nudges() == [], "a queued command offers nothing for a bare Enter to submit"
+        notes = [str(s.get("note")) for s in out["steps"] if s["kind"] == "pane_read"]
+        assert any("unknown" in n for n in notes), notes
+
+    def test_the_three_states_reach_three_distinct_outcomes(self) -> None:
+        """The discrimination itself, asserted as one table so the states cannot silently merge."""
+        results = {}
+        for label, pane_read, after in (
+                ("submitted", PANE_PASTE_WAITING, 0),
+                ("unsubmitted", PANE_PASTE_WAITING, 1),
+                ("queued", "some unrelated scrollback\n", 99)):
+            r = Runner(_responses(pane_read=pane_read))
+            out = ll.perform_handoff(**_handoff(
+                r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=after)))
+            results[label] = (out["results"].get("goal_armed"), len(r.nudges()))
+        assert results["submitted"] == (True, 0), results
+        assert results["unsubmitted"] == (True, 1), results
+        assert results["queued"] == (False, 0), results
 
 
 class TestNudgeSafety:
