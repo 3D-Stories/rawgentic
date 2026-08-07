@@ -1348,6 +1348,42 @@ def live_owner_goal(transcript_text: str, *, strict: bool = False) -> str | None
     Lenient mode (the default) keeps the historical skip-and-continue behavior for
     non-destructive readers.
     """
+    last, suspicious = _owner_goal_scan(transcript_text)
+    if strict and suspicious is not None:
+        raise LauncherError(
+            f"the newest goal evidence in the transcript is {suspicious} — refusing to "
+            "derive a live-goal verdict from ambiguous evidence on a destructive path "
+            "(#758): a torn or malformed newest row must not read as 'no goal' or fall "
+            "back to a stale one. REMEDY: since #782 the ORDINARY case — an armed goal "
+            "whose newest row is a sentinel-less Stop-hook evaluation agreeing with it — "
+            "no longer reaches here, so this refusal now means the tail is genuinely "
+            "unreadable: a torn write, a malformed 'met', or a row proposing a DIFFERENT "
+            "condition. Inspect the last few goal_status lines of this transcript before "
+            "assuming otherwise. REMEDY, conditional (#880): if a goal is still armed in this "
+            "pane, running '/goal clear' and retrying appends a trusted row and lets teardown "
+            "proceed — but if '/goal clear' reports no goal is set, it writes NOTHING this "
+            "validator reads, so do not retry in a loop; inspect the transcript tail by hand "
+            "or hand off WITHOUT retiring this pane by re-running with '--no-teardown' and "
+            "relaying the manual retirement steps yourself")
+    if last is None or last.get("met") is not False:
+        return None
+    return last["condition"]
+
+
+def _owner_goal_scan(transcript_text: str) -> tuple[dict | None, str | None]:
+    """The TRUST RULES, in one place: `(last_trusted_row, suspicion)`. Pure, never raises.
+
+    Lifted out of `live_owner_goal` by #864 without changing a single predicate, so that the
+    reader and the four-state `owner_goal_state` cannot drift apart. Two functions applying
+    "trusted origin" separately is exactly how one of them ends up laxer than the other, which
+    is the defect #864 is about — `read-goal-condition` was running an entirely different
+    reader from the one the destructive paths use.
+
+    `last` is the newest row that passed validation (or that `_retires` accepted); `suspicion`
+    is non-None when the newest goal-bearing evidence could not be trusted and nothing valid
+    superseded it. Callers decide what to DO about suspicion: `live_owner_goal` raises on it
+    only in strict mode, `owner_goal_state` reports it as AMBIGUOUS.
+    """
     last: dict | None = None
     suspicious: str | None = None
     for line in transcript_text.splitlines():
@@ -1388,25 +1424,48 @@ def live_owner_goal(transcript_text: str, *, strict: bool = False) -> str | None
             last = row
         else:
             suspicious = "a trusted-origin goal_status row that fails validation"
-    if strict and suspicious is not None:
-        raise LauncherError(
-            f"the newest goal evidence in the transcript is {suspicious} — refusing to "
-            "derive a live-goal verdict from ambiguous evidence on a destructive path "
-            "(#758): a torn or malformed newest row must not read as 'no goal' or fall "
-            "back to a stale one. REMEDY: since #782 the ORDINARY case — an armed goal "
-            "whose newest row is a sentinel-less Stop-hook evaluation agreeing with it — "
-            "no longer reaches here, so this refusal now means the tail is genuinely "
-            "unreadable: a torn write, a malformed 'met', or a row proposing a DIFFERENT "
-            "condition. Inspect the last few goal_status lines of this transcript before "
-            "assuming otherwise. REMEDY, conditional (#880): if a goal is still armed in this "
-            "pane, running '/goal clear' and retrying appends a trusted row and lets teardown "
-            "proceed — but if '/goal clear' reports no goal is set, it writes NOTHING this "
-            "validator reads, so do not retry in a loop; inspect the transcript tail by hand "
-            "or hand off WITHOUT retiring this pane by re-running with '--no-teardown' and "
-            "relaying the manual retirement steps yourself")
-    if last is None or last.get("met") is not False:
-        return None
-    return last["condition"]
+    return last, suspicious
+
+
+# The four states a caller can actually be in. `live_owner_goal` cannot express them: it
+# returns None for CLEARED and for NEVER_ARMED alike, and in lenient mode it says nothing at
+# all about AMBIGUOUS. That collapse is why `read-goal-condition` could not tell a spent merge
+# grant from a guard that never existed (#864).
+GOAL_STATE_LIVE = "LIVE"
+GOAL_STATE_CLEARED = "CLEARED"
+GOAL_STATE_NEVER_ARMED = "NEVER_ARMED"
+GOAL_STATE_AMBIGUOUS = "AMBIGUOUS"
+
+
+def owner_goal_state(transcript_text: str) -> tuple[str, str | None, str | None]:
+    """`(state, condition, reason)` over the SAME trust rules as `live_owner_goal` (#864).
+
+    The non-raising sibling. It reports ambiguity rather than refusing on it, because its
+    caller is a read-only CLI rather than a destructive path — a reader that raises cannot
+    tell an operator what it found.
+
+    - `LIVE` — the newest trusted row is `met: false`; `condition` is that row's text VERBATIM.
+    - `CLEARED` — the newest trusted row is `met: true`. The guard is spent. This is the state
+      the historical reader reported as armed, which is how a spent merge authorization gets
+      revived.
+    - `NEVER_ARMED` — no trusted row at all. A `goal_status` object nested in ordinary message
+      content is NOT a trusted row, so the #758 forgery direction lands here rather than
+      returning the forged condition.
+    - `AMBIGUOUS` — the newest goal-bearing evidence could not be trusted and nothing valid
+      superseded it. `condition` is None and `reason` says what was wrong. Absence of readable
+      evidence is deliberately not reported as a proven "no goal".
+
+    `condition` is None in every state but LIVE, so a caller cannot accidentally use a
+    condition it was not told to trust.
+    """
+    last, suspicious = _owner_goal_scan(transcript_text)
+    if suspicious is not None:
+        return (GOAL_STATE_AMBIGUOUS, None, suspicious)
+    if last is None:
+        return (GOAL_STATE_NEVER_ARMED, None, None)
+    if last.get("met") is False:
+        return (GOAL_STATE_LIVE, last["condition"], None)
+    return (GOAL_STATE_CLEARED, None, None)
 
 
 def validate_goal_carry(successor_goal: str, predecessor_live_goal: str | None, *,
@@ -7362,8 +7421,13 @@ def main(argv: list[str] | None = None) -> int:
     p_rp.add_argument("--transcript-dir", required=True)
     p_rp.add_argument("--registry", required=True)
 
-    p_read = sub.add_parser("read-goal-condition",
-                            help="the predecessor's last unmet goal condition, verbatim (AC6)")
+    p_read = sub.add_parser(
+        "read-goal-condition",
+        help="the predecessor's LIVE goal condition, verbatim, from trusted rows only. Prints "
+             "{state, condition} with state LIVE|CLEARED|NEVER_ARMED|AMBIGUOUS; rc 0 only for "
+             "LIVE, rc 3 otherwise. Since #864 it reads the same origin-bound rows the "
+             "destructive paths use: a cleared guard reports CLEARED rather than its old "
+             "condition, and a goal_status object nested in message content is ignored")
     p_read.add_argument("--transcript", required=True)
 
     # #695 — the ONE owner of a child's terminal status write-back. Invoked at each authoritative
@@ -7500,13 +7564,38 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "broker-merge":
             return _cmd_broker_merge(args)
         if args.cmd == "read-goal-condition":
+            # #864 — this dispatched `last_unmet_goal_condition`, the HISTORICAL reader, which
+            # recurses into message content and has no sentinel, origin or liveness check. Two
+            # behaviours were reproduced by execution: a goal cleared by a later trusted row was
+            # still reported as armed, and a goal_status object forged inside ordinary content was
+            # returned verbatim. Both matter because a goal carries a run's scoped merge grant.
+            #
+            # The rc contract is PRESERVED rather than migrated — rc 0 for LIVE, rc 3 for anything
+            # else, with `condition` still on stdout in the LIVE case — so no existing consumer
+            # changes. The `state` field is purely additive: rc 3 printed nothing to stdout before.
             with open(args.transcript, encoding="utf-8") as fh:
-                condition = last_unmet_goal_condition(fh.read())
-            if condition is None:
-                print("no unmet goal_status row in that transcript", file=sys.stderr)
-                return 3
-            print(json.dumps({"condition": condition}))
-            return 0
+                state, condition, reason = owner_goal_state(fh.read())
+            payload = {"state": state, "condition": condition}
+            if reason:
+                payload["reason"] = reason
+            print(json.dumps(payload))
+            if state == GOAL_STATE_LIVE:
+                return 0
+            # Each state gets its OWN message. "No unmet goal" was true of the historical
+            # reader's world and is false here: a CLEARED transcript DID carry an unmet goal, and
+            # the whole point is that it is spent.
+            print({
+                GOAL_STATE_CLEARED:
+                    "the last trusted goal_status row is met:true — this guard was CLEARED and "
+                    "any authorization it carried is spent",
+                GOAL_STATE_NEVER_ARMED:
+                    "no trusted goal_status row in that transcript — a goal_status object nested "
+                    "in message content is not trusted and is deliberately ignored",
+            }.get(state,
+                  f"the newest goal evidence is {reason} — refusing to report a verdict from "
+                  "ambiguous evidence; inspect the last goal_status lines by hand"),
+                file=sys.stderr)
+            return 3
         if args.cmd == "select-mode":
             mode, reason = select_launch_mode(
                 terminal_backend=args.terminal_backend,
