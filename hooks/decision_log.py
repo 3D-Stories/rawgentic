@@ -180,6 +180,29 @@ def read_records(
 #: bounded by CONSTRUCTION, not by how big the store happens to be — an unbounded breakdown would
 #: reintroduce exactly the growth the summary exists to remove.
 _SUMMARY_MAX_RUNS = 5
+#: Per-VALUE and whole-BLOCK ceilings (#797 Step-11 review, converged High). Capping the number of
+#: runs bounds how MANY values are emitted, not how LONG each one is — so a single record carrying
+#: a multi-megabyte or newline-laden `run` defeated the bound entirely. These two constants are
+#: what make "bounded by construction" true rather than merely intended.
+_SUMMARY_MAX_VALUE_CHARS = 48
+_SUMMARY_MAX_BLOCK_CHARS = 1000
+#: Everything outside this set is dropped from an emitted value. An allowlist, not an escape list:
+#: this text is injected into a successor's session-start context, so record-controlled bytes must
+#: never be able to introduce a newline or a control character and read as instructions.
+_SUMMARY_SAFE_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._:-#/+")
+
+
+def _safe_value(raw: str) -> str:
+    """One record-controlled value, made safe to interpolate into injected context (#797).
+
+    Allowlist-filtered then length-capped, in that order — filtering after truncation would let a
+    long run of dropped characters buy back budget it never spent.
+    """
+    kept = "".join(ch for ch in raw if ch in _SUMMARY_SAFE_CHARS).strip()
+    if len(kept) > _SUMMARY_MAX_VALUE_CHARS:
+        kept = kept[:_SUMMARY_MAX_VALUE_CHARS - 1] + "…"
+    return kept
 
 
 def summarize_elided(elided: list[dict]) -> str | None:
@@ -205,7 +228,9 @@ def summarize_elided(elided: list[dict]) -> str | None:
 
     def _text(rec, key):
         value = rec.get(key) if isinstance(rec, dict) else None
-        return value if isinstance(value, str) and value.strip() else None
+        if not isinstance(value, str) or not value.strip():
+            return None
+        return _safe_value(value) or None
 
     ids = [i for i in (_text(r, "id") for r in elided) if i]
     stamps = sorted(s for s in (_text(r, "ts") for r in elided) if s)
@@ -229,7 +254,12 @@ def summarize_elided(elided: list[dict]) -> str | None:
         if len(runs) > len(top):
             named += f", +{len(runs) - len(top)} more run(s)"
         line += f" Busiest runs: {named}."
-    return line + " Nothing is hidden — read the full store with `decision_log.py read`."
+    line += " Nothing is hidden — read the full store with `decision_log.py read`."
+    # Whole-block backstop. Per-value caps bound each field; this bounds their SUM, so no
+    # combination of fields can exceed the budget even if a future edit adds another one.
+    if len(line) > _SUMMARY_MAX_BLOCK_CHARS:
+        line = line[:_SUMMARY_MAX_BLOCK_CHARS - 12] + "… [truncated]"
+    return line
 
 
 def main(argv=None) -> int:
@@ -273,19 +303,27 @@ def main(argv=None) -> int:
             print(json.dumps({"appended": True, "id": rec["id"], "path": str(path)}))
             return 0
 
-        records = read_records(
-            args.state_dir, args.project, last=args.last, run=args.run, warn=warn,
-        )
         if getattr(args, "summarize_elided", False):
-            # Recompute the UNSLICED set to learn what `--last` actually removed. Reading twice is
-            # deliberate: `read_records` owns the parse, the run filter and the slice, and
-            # reproducing that ordering here is exactly the drift this avoids.
-            everything = read_records(args.state_dir, args.project, run=args.run)
-            cut = len(everything) - len(records)
-            if cut > 0:
-                block = summarize_elided(everything[:cut])
-                if block:
-                    print(block)
+            # ONE snapshot for both halves (#797 Step-11 review, converged Medium). Reading twice
+            # let a concurrent append — and this store IS appended by other sessions — compute
+            # `cut` against a different collection than the records printed, so an already-printed
+            # entry could also be counted as elided. A second read failing would also have
+            # discarded an already-successful first result.
+            everything = read_records(args.state_dir, args.project, run=args.run, warn=warn)
+            if args.last is None:
+                records, elided = everything, []
+            elif args.last <= 0:
+                records, elided = [], []
+            else:
+                records = everything[-args.last:]
+                elided = everything[:len(everything) - len(records)]
+            block = summarize_elided(elided)
+            if block:
+                print(block)
+        else:
+            records = read_records(
+                args.state_dir, args.project, last=args.last, run=args.run, warn=warn,
+            )
         for rec in records:
             print(json.dumps(rec, ensure_ascii=False, sort_keys=True))
         return 0

@@ -363,15 +363,23 @@ def test_window_does_not_escalate_below_the_boundary():
 # T2 — thresholds, tiers, cadence (AC3, AC6, AC9)
 # --------------------------------------------------------------------------
 
-def test_threshold_defaults_are_35_and_50():
-    """Owner decision 2026-07-29 (#716): 60/70 -> 35/50.
+def test_threshold_defaults_are_55_and_75():
+    """The RELEASE CONTRACT, pinned to literals on purpose.
 
-    The old pair was safe against measured auto-compaction and still too late to be
-    useful — a real run rode a 1M window to ~98% because the directive arrived with no
-    room left to act well on it. Margin against compaction was never the binding
-    constraint; room to write a good handoff is.
+    History: 60/70 → 35/50 (owner decision 2026-07-29, #716), then 35/50 → 55/75 (owner decision
+    2026-08-01, #797: "if 60-80 is the degredation point lets change to 55 and 75"). The 35/50
+    pair was safe against measured auto-compaction and still too late to be useful; 55/75 buys
+    back working room on runs nowhere near trouble.
+
+    LITERALS, not `cm.DEFAULT_*`. Step-11 review caught that asserting the constants against
+    themselves is a tautology — an accidental edit to both constants would pass while silently
+    moving when handoff guidance fires. The constant-relative form belongs in the FALLBACK tests
+    below, whose subject is the wiring rather than the values.
     """
-    assert cm.thresholds({}, {}) == (cm.DEFAULT_CHECK_IN_PCT, cm.DEFAULT_ACT_PCT)
+    assert cm.DEFAULT_CHECK_IN_PCT == 55
+    assert cm.DEFAULT_ACT_PCT == 75
+    assert cm.thresholds({}, {}) == (55, 75)
+    assert cm.DEFAULT_ACT_PCT - cm.DEFAULT_CHECK_IN_PCT >= cm.MIN_TIER_GAP_PCT
 
 
 def test_thresholds_from_config_and_env():
