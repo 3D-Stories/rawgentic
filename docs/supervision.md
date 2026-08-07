@@ -203,8 +203,44 @@ executor (D174) and that #871 could not answer for its own core.
 marker. Run `python3 hooks/supervision_admin.py bootstrap-marker --workspace <root>` once
 after upgrading; `broker-merge` and every `declare`/`mark_attended` also self-heal it.
 
-Still deliberately out of scope: executable PreToolUse enforcement that BLOCKS a raw
-`gh pr merge` during an active campaign. What routes campaign merges into the broker is
-prose pinned by guard tests — the same enforcement layer every gate in this plugin uses —
-so a prose-violating session can still reach the raw command. That hardening is the named
-follow-up.
+## The merge guard (#976)
+
+`hooks/campaign-merge-guard.py` is the executable half of the sentence above. It is a
+`PreToolUse` hook on the `Bash` matcher: when a command is a raw `gh pr merge` whose PR is
+a child of an **active** campaign, the hook refuses it and names the `broker-merge` command
+to run instead. Before #976, what routed a campaign merge into the broker was prose pinned
+by guard tests, so a prose-violating session reached the raw command and skipped authority
+evaluation, target binding, the execute-once claim and the decision telemetry in one step.
+
+**"Active" is read from durable state, never session context.** A campaign file under
+`claude_docs/.driver-state/` is active when at least one entry in its top-level `issues[]`
+has a status outside `{merged, deferred, abandoned}`. Binding is on `{repo, pr}`: an
+explicit `--repo` that is not this project's own repo is allowed through, because PR
+numbers are repository-scoped.
+
+**The fail mode is split at the classification boundary**, and the split is the whole
+design (decision D186):
+
+| Path | Mode | Why |
+|---|---|---|
+| stdin unparseable, no command field, startup exception | **ALLOW**, with a stderr diagnostic | this hook runs on every Bash call; a bug here would otherwise deny `ls` and `pytest` in every project |
+| no `.rawgentic.json` above cwd, or no `.driver-state/` | **ALLOW** | absence, not failure — the same rule this document states for supervision state, that `ENOENT` under a valid root is the only file failure treated as absence |
+| classified as a raw `gh pr merge`, but campaign state is corrupt, oversized or unreadable | **DENY** | the blast radius is exactly one refused raw command, and `broker-merge` is not a `gh pr merge` command line, so the sanctioned path stays open |
+
+The two existing `PreToolUse` siblings are deliberately opposite — `wal-guard` fails closed
+(`wal-guard:14-17`), `security-guard.py` fails open (`security-guard.py:6`). This hook is
+both, because the two are right about different paths.
+
+**What it does not do, stated plainly (decision D187).** It stops an *accidental* raw
+merge — a session that drifted from the prose. It does **not** stop a deliberate bypass:
+`PreToolUse` fires per Claude Code tool call, not per OS process, so
+`python3 -c "subprocess.run(['gh','pr','merge',…])"` is invisible to it. That same property
+is what makes the broker's own internal merge pass untouched with no spoofable signal —
+the distinction is a process boundary, not a token nobody may forge. Closing the deliberate
+bypass would need the merge credential to live somewhere a session cannot reach, or
+GitHub-side merge-queue permissions; both are larger changes than this guard, and neither
+is shipped. The threat model here is caller confusion and prose drift, which is the same
+one the broker states for its own target binding (`launcher_lib.py:5300-5303`).
+
+The guard-tested prose in WF2 Step 14 and the epic-run boundary stays exactly as it was:
+the hook hardens that route, it does not replace it.

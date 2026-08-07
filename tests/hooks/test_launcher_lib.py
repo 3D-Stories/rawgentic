@@ -3260,7 +3260,7 @@ class BrokerRunner(Runner):
 
 
 def _broker_workspace(tmp_path, *, campaign="epic-963", issue=963,
-                      merge_policy=None, declared=None):
+                      merge_policy=None, declared=None, pr_number=970):
     """A workspace + project root with a campaign whose queue names `issue`."""
     Path(tmp_path, ".rawgentic_workspace.json").write_text("{}", encoding="utf-8")
     Path(tmp_path, ".rawgentic.json").write_text(json.dumps({
@@ -3269,7 +3269,14 @@ def _broker_workspace(tmp_path, *, campaign="epic-963", issue=963,
     }), encoding="utf-8")
     state_dir = Path(tmp_path, "claude_docs", ".driver-state")
     state_dir.mkdir(parents=True, exist_ok=True)
-    state = {"campaign": campaign, "children": [{"issue": issue, "status": "in_progress"}]}
+    # The REAL driver-state shape (#976 T0). This fixture used to write
+    # {"children": [{"issue": N}]}, a shape `driver_lib` never produces and never reads —
+    # so every broker test below passed against a schema that does not exist, while
+    # `broker_campaign_names_issue` refused every real campaign in production. Real state
+    # is top-level `issues: [{"number": N, "status": …, "pr": M}]` (verified against
+    # claude_docs/.driver-state/epic-875-stay-small.json and driver_lib.py:844,1077,1348).
+    state = {"campaign": campaign, "project": "p",
+             "issues": [{"number": issue, "status": "in_progress", "pr": pr_number}]}
     if merge_policy:
         state["policy"] = {"merge_policy": merge_policy}
     (state_dir / f"{campaign}.json").write_text(json.dumps(state), encoding="utf-8")
@@ -3605,7 +3612,7 @@ class TestBrokerMergeStep11Findings:
 
         path = Path(root, "claude_docs", ".driver-state", "epic-963.json")
         state = json.loads(path.read_text())
-        state["children"][0]["status"] = "pr_open"          # an ordinary driver write
+        state["issues"][0]["status"] = "pr_open"            # an ordinary driver write
         path.write_text(json.dumps(state))
 
         resumed = BrokerRunner()
@@ -3707,3 +3714,94 @@ class TestBrokerMergeCLI:
                             "broker-merge", "--pr", "1"],
                            capture_output=True, text=True, check=False)
         assert r.returncode == 2
+
+
+class TestBrokerCampaignBindingReadsRealDriverState:
+    """#976 T0 — the broker refused every real campaign, and its fixture hid it.
+
+    `broker_campaign_names_issue` read `state["children"][].issue`. `driver_lib` writes
+    and reads top-level `issues[].number`; its only `children` key is the unrelated
+    `queue_revalidation.children` dict. So target binding failed for every real campaign
+    with rc 12 while the suite stayed green against an invented fixture.
+    """
+
+    #: One real record, copied field-for-field from
+    #: claude_docs/.driver-state/epic-875-stay-small.json.
+    REAL = {
+        "schema_version": 2,
+        "campaign": "epic-875-stay-small",
+        "project": "rawgentic",
+        "epic": 875,
+        "epic_status": "open",
+        "issues": [
+            {"number": 856, "status": "merged", "pr": 877, "depends_on": [],
+             "merge_sha": "33f31b5d65032121e750953e6b46f38421d6d921"},
+            {"number": 880, "status": "pr_open", "pr": 887, "depends_on": []},
+        ],
+    }
+
+    def test_a_real_campaign_names_its_children(self):
+        assert ll.broker_campaign_names_issue(self.REAL, 880) is True
+        assert ll.broker_campaign_names_issue(self.REAL, 856) is True
+
+    def test_a_real_campaign_does_not_name_a_foreign_issue(self):
+        assert ll.broker_campaign_names_issue(self.REAL, 999) is False
+
+    def test_the_legacy_children_shape_is_still_accepted(self):
+        """Kept working so no hand-written fixture elsewhere silently flips meaning."""
+        legacy = {"campaign": "c", "children": [{"issue": 963, "status": "in_progress"}]}
+        assert ll.broker_campaign_names_issue(legacy, 963) is True
+        assert ll.broker_campaign_names_issue(legacy, 964) is False
+
+    def test_a_bare_int_entry_is_still_accepted(self):
+        assert ll.broker_campaign_names_issue({"issues": [880]}, 880) is True
+        assert ll.broker_campaign_names_issue({"children": [880]}, 880) is True
+
+    def test_junk_is_refused_rather_than_raising(self):
+        assert ll.broker_campaign_names_issue(None, 1) is False
+        assert ll.broker_campaign_names_issue({}, 1) is False
+        assert ll.broker_campaign_names_issue({"issues": "nope"}, 1) is False
+        assert ll.broker_campaign_names_issue({"issues": [None, "x", 3.5]}, 1) is False
+
+    def test_the_production_writer_and_the_broker_agree_on_the_schema(self):
+        """The bug was a fixture that lied, so assert BEHAVIOR, not a source substring.
+
+        Step 11 finding: an earlier version of this test only checked that the string
+        `state.get("issues", [])` appeared somewhere in driver_lib.py, which proves
+        nothing about what the writer emits. This drives a real production writer and
+        feeds its output straight to the broker's reader, so a future schema change
+        breaks it for the right reason.
+        """
+        sys.path.insert(0, str(HOOKS))
+        import driver_lib  # noqa: PLC0415
+
+        state = {"schema_version": 2, "campaign": "epic-test", "project": "p",
+                 "issues": [{"number": 880, "status": "queued", "pr": 887},
+                            {"number": 881, "status": "queued", "pr": 888}]}
+
+        # The writer the epic driver actually uses when a child ships.
+        updated = driver_lib.record_child_outcome(state, 880, "merged")
+        assert updated is not None
+        assert updated["issues"][0]["status"] == "merged"
+
+        # The broker's reader must find both children in the writer's own output.
+        assert ll.broker_campaign_names_issue(updated, 880) is True
+        assert ll.broker_campaign_names_issue(updated, 881) is True
+        assert ll.broker_campaign_names_issue(updated, 999) is False
+
+    def test_the_fixture_writes_state_the_validator_accepts(self, tmp_path):
+        """And the fixture's own shape must survive driver_lib's validator."""
+        sys.path.insert(0, str(HOOKS))
+        import driver_lib  # noqa: PLC0415
+
+        root = _broker_workspace(tmp_path, campaign="c", issue=880, pr_number=887)
+        written = json.loads(
+            Path(root, "claude_docs", ".driver-state", "c.json").read_text())
+        assert "issues" in written and "children" not in written
+        assert written["issues"][0]["number"] == 880
+        assert written["issues"][0]["pr"] == 887
+        assert ll.broker_campaign_names_issue(written, 880) is True
+
+        # record_child_outcome runs `_numbers()`, which fails closed on a missing or
+        # non-int number -- so accepting this fixture proves its entries are well formed.
+        assert driver_lib.record_child_outcome(written, 880, "merged") is not None
