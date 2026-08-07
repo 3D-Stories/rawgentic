@@ -749,6 +749,21 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.139.4 (2026-08-07)
+- **The `/goal` send now recovers an unsubmitted paste, so a handoff stops dying at `goal_armed`
+  (#835, epic #906).** SEND 3 of `perform_handoff` pasted the goal and polled, with no recovery
+  between: rc 0 on a send proves transport, not arrival — the lesson #700 already learned for the
+  prompt and never extended to the goal. It is not a race but the normal case, because the goal is
+  sent last while the successor is mid-turn on the prompt that just landed, and Claude Code buffers
+  input during a turn and flushes at turn end. `hooks/launcher_lib.py` gains `GOAL_NUDGE_ROUNDS`
+  and a bounded loop mirroring the prompt path — pane read, `pane_shows_unsubmitted_paste`, bare
+  Enter, re-poll — that never re-sends the goal text (#696), reports a failed nudge as its own
+  `send_goal_nudge` step, and still fails closed with the predecessor intact. 12 tests added
+  (`TestGoalNudge`, `TestGoalNudgeSafety`) mirroring the prompt-path pair, plus a
+  `goal_row_after_nudges` fixture knob, and 2 more pinning that a failed nudge keeps herdr's error
+  body (#731's choke point attaches it only when the note is absent). No workflow-spine change →
+  no diagram REV. Suite 6328→6342.
+
 ### v3.139.3 (2026-08-07)
 - **Retired the superseded `epic-run-analysis` workspace skill (#534).** Its plugin-native
   successor `/rawgentic:epic-post-mortem` (WF19, #508, epic #509) shipped in v3.71.0, and the

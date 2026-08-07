@@ -132,13 +132,18 @@ class Artifacts:
     `marker_after_nudges` is the point of this fake: the marker appears only once the runner has
     issued that many bare Enters, which is exactly the live failure — the paste is intact and
     unsubmitted until something submits it.
+
+    `goal_row_after_nudges` is the same idea for the GOAL paste (#835). It defaults to 0, so the
+    predicate is always true and every test written before it behaves identically; a goal-nudge
+    test raises it to express the state the goal recovery exists for.
     """
 
     def __init__(self, runner, *, marker_after_nudges=0, goal_row=GOAL_ROW,
-                 registry_row=None):
+                 goal_row_after_nudges=0, registry_row=None):
         self.runner = runner
         self.marker_after_nudges = marker_after_nudges
         self.goal_row = goal_row
+        self.goal_row_after_nudges = goal_row_after_nudges
         # #800 — which REPRESENTATION the successor writes for `project_path`. Defaults to the
         # workspace-relative row every other test in this file assumes, so their behaviour is
         # unchanged; the absolute variant is the live failure the gate used to refuse.
@@ -155,7 +160,9 @@ class Artifacts:
         text = ""
         if len(self.runner.nudges()) >= self.marker_after_nudges:
             text += RESUME_PROMPT + "\n"
-        return text + self.goal_row + "\n"
+        if len(self.runner.nudges()) >= self.goal_row_after_nudges:
+            text += self.goal_row + "\n"
+        return text
 
 
 def _handoff(runner, **over):
@@ -260,6 +267,167 @@ class TestPromptNudge:
         out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, marker_after_nudges=99)))
         assert out["ok"] is False
         assert out["failed_step"] == "send_resume_nudge", out["failed_step"]
+
+
+class TestGoalNudge:
+    """#835 — the same recovery on SEND 3.
+
+    Every test here sets `marker_after_nudges=0`, so the prompt lands on its first poll and the
+    only Enters `nudges()` can report are GOAL nudges. That is what lets the existing positional
+    helper serve both paths without learning to tell them apart.
+
+    Why the goal needs this at all, and why it is not a flake: the goal is sent LAST, deliberately,
+    while the successor is already working the prompt that just landed. Claude Code buffers input
+    during a turn and flushes at turn end, so the goal's Enter is DEFERRED, not lost — which is
+    also why re-sending the text would double-submit once the buffer flushes.
+    """
+
+    def test_a_goal_that_arms_first_time_is_never_nudged(self) -> None:
+        """The happy path must be byte-identical to before this change — including no pane read,
+        so a healthy handoff gains no extra herdr round trip."""
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=0)))
+        assert out["ok"] is True, out["failed_step"]
+        assert r.nudges() == [], "an armed goal must not be nudged"
+        assert not any(Runner.key(c) == "herdr pane read" for c in r.calls), \
+            "no pane read either — the recovery path must not run at all"
+
+    def test_one_nudge_recovers_the_unsubmitted_goal(self) -> None:
+        """The observed 2026-08-01 failure: the paste sat unsubmitted and a bare Enter freed it."""
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=1)))
+        assert out["ok"] is True, out["failed_step"]
+        assert out["results"]["goal_armed"] is True
+        assert len(r.nudges()) == 1
+        assert r.nudges()[0] == ["herdr", "pane", "send-keys", "w1:pZZ", "Enter"]
+
+    def test_the_nudge_never_re_sends_the_goal_text(self) -> None:
+        """AC2 / #696: a re-paste risks double submission once the buffer flushes.
+
+        Asserts the recovery actually took TWO rounds and then succeeded, not just that the text
+        appears once: a one-round implementation would satisfy a bare send-count assertion while
+        still failing the longer buffered-turn case that four rounds exist for.
+        """
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=2)))
+        assert out["ok"] is True, out["failed_step"]
+        assert len(r.nudges()) == 2
+        goal_sends = [t for t in r.sent_text() if t.startswith("/goal")]
+        assert len(goal_sends) == 1, "the goal text was sent more than once"
+        assert goal_sends[0].count(GOAL_CONDITION) == 1
+
+    def test_nudging_is_bounded_and_then_fails_closed(self) -> None:
+        """AC6: exhausting the rounds still fails the gate, and the predecessor still survives."""
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
+        assert out["ok"] is False and out["failed_step"] == "goal_armed"
+        # EXACTLY the bound, not merely `<=`: a `<=` assertion is satisfied by zero nudges, so it
+        # would pass against a build where the recovery never ran at all.
+        assert len(r.nudges()) == ll.GOAL_NUDGE_ROUNDS
+        assert not any(c[:3] == ["herdr", "pane", "close"] and c[3] == "w1:p1"
+                       for c in r.calls), "the predecessor must survive a failed handoff"
+
+    def test_each_nudge_is_recorded_as_its_own_step(self) -> None:
+        """AC3: the recovery attempt is verifiable from the returned record."""
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=1)))
+        assert [s for s in out["steps"] if s["kind"] == "send_goal_nudge"]
+
+    def test_a_failed_nudge_send_is_its_own_failure_not_poll_exhaustion(self) -> None:
+        """AC3: a broken `send-keys` must not be reported as `goal_armed` timing out."""
+        class NudgeFails(Runner):
+            def __call__(self, argv, timeout=180):
+                proc = super().__call__(argv, timeout)
+                if argv[:3] == ["herdr", "pane", "send-keys"] \
+                        and self.calls[-2][:3] != ["herdr", "pane", "send-text"]:
+                    return FakeProc(returncode=1)
+                return proc
+
+        r = NudgeFails(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
+        assert out["ok"] is False
+        assert out["failed_step"] == "send_goal_nudge", out["failed_step"]
+
+    def test_a_failed_nudge_keeps_the_herdr_error_body(self) -> None:
+        """#731's choke point attaches the error body only when the note is absent, so the goal
+        nudge must not hand `record` an explanatory string on the failure path — that would
+        silence the one record that most needs the real cause."""
+        class NudgeFailsLoudly(Runner):
+            def __call__(self, argv, timeout=180):
+                proc = super().__call__(argv, timeout)
+                if argv[:3] == ["herdr", "pane", "send-keys"] \
+                        and self.calls[-2][:3] != ["herdr", "pane", "send-text"]:
+                    return FakeProc(returncode=1,
+                                    stdout='{"error": {"code": "pane_gone", "message": "no pane"}}')
+                return proc
+
+        r = NudgeFailsLoudly(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
+        assert out["failed_step"] == "send_goal_nudge"
+        notes = [str(s.get("note")) for s in out["steps"] if s["kind"] == "send_goal_nudge"]
+        assert notes, "the failed nudge was not recorded at all"
+        assert any("pane_gone" in n for n in notes), notes
+        # The receipt must stay COMPLETE on this path — a consumer reading the result gets False,
+        # never a missing key.
+        assert out["results"]["goal_armed"] is False
+
+    def test_a_successful_nudge_still_explains_itself(self) -> None:
+        """The other half of the same rule: on success there is no error body to preserve, so the
+        record carries the explanatory note instead of nothing."""
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=1)))
+        notes = [str(s.get("note")) for s in out["steps"] if s["kind"] == "send_goal_nudge"]
+        assert any("never re-send" in n for n in notes), notes
+
+    def test_the_send_order_is_unchanged(self) -> None:
+        """AC5: recovery lives INSIDE send 3 — it does not reorder or add a send."""
+        r = Runner(_responses())
+        ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=1)))
+        texts = r.sent_text()
+        assert len(texts) == 3
+        assert texts[0].startswith(ll._driver_lib().BIND_DIRECTIVE)
+        assert texts[1] == RESUME_PROMPT
+        assert texts[2].startswith("/goal")
+
+
+class TestGoalNudgeSafety:
+    """AC4 — an Enter accepts whatever is on screen, so every unknown resolves to "do not nudge"."""
+
+    @pytest.mark.parametrize("pane_read,why", [
+        (PANE_PERMISSION_DIALOG, "a permission dialog would be accepted"),
+        ("", "an empty read proves nothing"),
+        ("some unrelated scrollback\n", "no paste affordance means no known buffer"),
+    ])
+    def test_an_unsafe_or_unknown_pane_is_not_nudged(self, pane_read, why) -> None:
+        r = Runner(_responses(pane_read=pane_read))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
+        assert out["ok"] is False and out["failed_step"] == "goal_armed"
+        assert r.nudges() == [], why
+
+    def test_a_failed_pane_read_is_not_a_licence_to_nudge(self) -> None:
+        r = Runner(_responses(), fail_on="herdr pane read")
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
+        assert out["ok"] is False and r.nudges() == []
+
+    def test_the_goal_read_is_recorded_distinguishably(self) -> None:
+        """Step-4 Finding #3: one receipt can carry two `pane_read` entries, so the goal path's
+        note must say which send it belongs to."""
+        r = Runner(_responses(pane_read=PANE_PERMISSION_DIALOG))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
+        notes = [str(s.get("note")) for s in out["steps"] if s["kind"] == "pane_read"]
+        assert any("goal" in n.lower() for n in notes), notes
 
 
 class TestNudgeSafety:

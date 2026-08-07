@@ -167,6 +167,17 @@ GOAL_POLL_ATTEMPTS = 12
 # have landed inside that turn. Four rounds of {bare Enter, re-poll} is ~90 s worst case, past a
 # first turn of the observed length, and costs nothing on a handoff that submits normally.
 PROMPT_NUDGE_ROUNDS = 4
+# #835 — the SAME unsubmitted-Enter recovery on SEND 3, and the goal needs it MORE than the prompt
+# did. The goal is sent last, deliberately, while the successor is already working the prompt that
+# just landed, so its Enter is always delivered into a pane that is certainly mid-turn — where #700
+# only had to survive a bind turn that MIGHT still be running. The mechanism is a deferral, not a
+# loss: Claude Code buffers input during a turn and flushes at turn end (measured 2026-07-28), so a
+# bounded retry that outlives the turn is the right shape — and re-sending the TEXT would
+# double-submit at that flush, which is why the recovery is a bare Enter only (#696).
+# Its own constant rather than sharing the prompt's, for the reason the block above already gives
+# for GOAL_POLL_ATTEMPTS vs SWITCH_POLL_ATTEMPTS: the two waits are different in kind, and one
+# name would have to be re-tuned for both at once. Same value as the prompt's, same measured basis.
+GOAL_NUDGE_ROUNDS = 4
 # A marker must be distinctive, not merely present in the prompt (#700 design review, High 1):
 # `transcript_has_marker` is a plain substring scan, so a short common word would match unrelated
 # tail content and pass `prompt_landed` before the prompt ever submitted. A length floor is a
@@ -2842,9 +2853,81 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             return tail is not None and transcript_has_unmet_goal(
                 tail, expected_condition=expected)
 
-        out["results"]["goal_armed"] = _poll_for(
+        armed = _poll_for(
             _goal_is_armed,
             attempts=GOAL_POLL_ATTEMPTS, delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
+
+        # #835 — the goal paste may be INTACT BUT UNSUBMITTED, the same third state #700 found for
+        # the prompt, and here it is the NORMAL case rather than a race: this send is deliberately
+        # last, while the successor is already mid-turn on the prompt, so its Enter is buffered
+        # until that turn ends. Observed live 2026-08-01 (pane w1:pGG, session a02dcfc0): the
+        # successor's transcript held three copies of the prompt marker and ZERO `/goal`.
+        #
+        # Recovery inside send 3 — NOT a change to the send order and NOT a weakened gate:
+        # `goal_armed` still has to pass on the same artifact below, and a nudge can only let it
+        # pass where the buffer was intact all along. Never a re-paste (#696): once the buffered
+        # Enter flushes, a second copy of the text would submit twice.
+        #
+        # Three properties of this recovery, stated so they are not mistaken for guarantees. Each
+        # is shared with the prompt path above, which has the same read-then-send shape.
+        #
+        # 1. The guard checks an AFFORDANCE, not identity. A collapsed paste renders as
+        #    `[Pasted text #N]`, so the pane does not expose paste contents and this guard cannot
+        #    verify that the pending paste is this goal's. `prompt_landed` establishes that the
+        #    prompt was submitted; it does not establish what is staged now. What narrows the
+        #    exposure: the pane was created by this call, the permission-dialog veto runs before
+        #    every Enter, and any unrecognised screen fails closed.
+        # 2. Enters can QUEUE. The buffering this recovery exists for means an rc-0 send-keys may
+        #    sit unflushed while the re-poll still reads false, so a later round can enqueue
+        #    another; at flush the first submits the goal and the rest land on an empty input box.
+        #    The full re-poll between rounds bounds the rate. A single round would not close this
+        #    and would reintroduce the measured failure: #700 found one Enter still lands inside
+        #    the running turn (see PROMPT_NUDGE_ROUNDS).
+        # 3. The read and the Enter are separate herdr calls, so the pane can change between them
+        #    — a dialog appearing in that gap would be accepted. `herdr pane` exposes read,
+        #    send-text and send-keys only; there is no compare-and-send or state token to bind the
+        #    check to the act. Closing this needs a conditional-send primitive from the transport.
+        #
+        # Reordering the sends would change the basis of property 1.
+        for _ in range(GOAL_NUDGE_ROUNDS):
+            if armed:
+                break
+            # An Enter accepts whatever is on screen, so read the pane FIRST and let anything
+            # other than a clear "safe" abandon the recovery — which leaves exactly today's
+            # behaviour.
+            read_argv = build_pane_read_argv(new_pane)
+            proc = runner(read_argv)
+            if getattr(proc, "returncode", 1) != 0:
+                record("pane_read", read_argv, proc,
+                       note="goal nudge SKIPPED: pane read failed, so the pane's state is unknown")
+                break
+            safe, why = pane_shows_unsubmitted_paste(getattr(proc, "stdout", "") or "")
+            record("pane_read", read_argv, proc,
+                   note=f"goal nudge {'PERMITTED' if safe else 'SKIPPED'}: {why}")
+            if not safe:
+                break
+            nudge_argv = build_send_enter_argv(new_pane)
+            proc = runner(nudge_argv)
+            # note=None on failure DELIBERATELY: #731 made `record` attach the herdr error body
+            # whenever the note is absent, so passing an explanatory string here would silence the
+            # one record that most needs the real cause. Explain on success, diagnose on failure.
+            nudge_ok = getattr(proc, "returncode", 1) == 0
+            record("send_goal_nudge", nudge_argv, proc,
+                   note=("bare Enter — submit the intact goal paste, never re-send it (#835)"
+                         if nudge_ok else None))
+            if not nudge_ok:
+                # The receipt stays COMPLETE on this path: a consumer reading `goal_armed` gets
+                # False rather than a missing key. `armed` is False by construction here — the
+                # loop only reaches a nudge when the poll has not passed.
+                out["results"]["goal_armed"] = armed
+                # Named distinctly, for the reason `send_resume_nudge` is: reporting this as
+                # `goal_armed` would blame the successor's timing for a failed herdr call.
+                out["failed_step"] = "send_goal_nudge"
+                return out
+            armed = _poll_for(_goal_is_armed, attempts=GOAL_POLL_ATTEMPTS,
+                              delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
+
+        out["results"]["goal_armed"] = armed
         if not out["results"]["goal_armed"]:
             out["failed_step"] = "goal_armed"
             out["failure_detail"] = (
