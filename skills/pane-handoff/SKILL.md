@@ -173,6 +173,27 @@ owner is away, never a change embedded inside a >500-character paste — and onl
 `--goal-rewrite-approved '<the owner's verbatim answer>'`, which rides the output JSON as the
 audit record. Multiline is fine — put it in a file and pass the path.
 
+**A `/goal` arms only when it STARTS the text that gets submitted (measured 2026-08-07).** The
+command already respects this: it sends `/goal <condition>` as its own paste with nothing in front
+of it, and it refuses to send the goal at all until `prompt_landed` has proven the resume prompt
+already submitted — which is why `--prompt-marker` is `required=True` rather than optional
+("a skipped check is not a gate", `hooks/launcher_lib.py`). So nothing here needs changing for the
+wired path.
+
+It is the **hand-carried** path that breaks, and it broke twice on 2026-08-07. The owner pasted ONE
+block holding the resume prompt and the goal together: no goal armed, nothing warned, and the
+successor ran unguarded while looking guarded. Typing `/goal` first and pasting the condition after
+it armed first time. So whenever you hand a HUMAN a goal to carry — a herdr-less fallback, a
+`/clear` resume, any block the owner pastes themselves — print the goal in its own block AND say how
+to send it:
+
+> Submit this on its own, AFTER the resume prompt. Type `/goal` first, then paste the condition.
+> A `/goal` that is not the first thing you send does not arm.
+
+This is the same defect as the bare-`/tasklist` finding above, seen from the other side: that one is
+a slash command inert at the END of a prompt, this one is a slash command inert in the MIDDLE of a
+paste. One rule covers both — a slash command runs only when it leads the submission.
+
 **Where it runs.** Read your own binding rather than guessing:
 
 ```bash
