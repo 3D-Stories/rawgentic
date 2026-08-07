@@ -16,8 +16,8 @@ window**.
 
 | Tier | Default | What the message says |
 |---|---|---|
-| advisory | **35%** | Write the resume prompt **now**, while there is room to write a good one, and verify the delivery gates. Do not stop mid-phase. |
-| directive | **50%** | Break **now**, at the next turn, seam or no seam — here is what to capture, and run `/rawgentic:pane-handoff` to actually hand over. |
+| advisory | **55%** | Write the resume prompt **now**, while there is room to write a good one, and verify the delivery gates. Do not stop mid-phase. |
+| directive | **75%** | Break **now**, at the next turn, seam or no seam — here is what to capture, and run `/rawgentic:pane-handoff` to actually hand over. |
 
 Both tiers also carry one standing fact (#713): **a handoff SATISFIES a loop goal.** The work
 continues in a fresh session with a full window, so handing off does not stop the work — it
@@ -135,12 +135,13 @@ If you run 1M-window sessions, set `windowSize` and skip all of that.
 
 `docs/planning/2026-07-28-687-probes/compaction_scan.py` scans every transcript on the host for the
 in-context ceiling. **On a 1M window, sampled sessions reach 99.5–100% before anything resets them**
-(highest observed: 999,803 tokens = 100.0%, across 266 transcripts). So the 50% directive has roughly
-50 points of margin there. This answers the 1M half of #654's Q4.
+(highest observed: 999,803 tokens = 100.0%, across 266 transcripts). So the 75% directive has roughly
+25 points of margin there. This answers the 1M half of #654's Q4.
 
 **The 200k window is NOT measured** — this corpus contains zero 200k-window sessions, so there is
 nothing to scan. Given the 1M result (Claude Code compacts when nearly full, not at three-quarters), a
-50% directive is very likely safe on 200k too, but "very likely" is the honest word. **If you run a
+75% directive is likely safe on 200k too, but "likely" is the honest word — and it is a weaker claim
+than it was at 50%, because raising the line spends margin. **If you run a
 200k-window model, take one reading:** run the scan on a session that has been compacted and set
 `actPercent` below the fraction at which its in-context total dropped.
 
@@ -152,12 +153,24 @@ late to be *useful* — which is a different test, and the one that matters.
 **Surviving until compaction was never the binding constraint. Having room to hand over well is.**
 A real run (#713) took the directive at 70% of a 1M window, meaning 300,000 tokens left, and rode to
 ~98% anyway; the quality of its work degraded in step with the pressure, and its final task was
-abandoned rather than done badly. At 35% of the same window a session has ~650,000 tokens in hand —
-enough to finish the phase it is in, write a resume prompt worth reading, and verify the handoff
+abandoned rather than done badly. At 55% of the same window a session has ~450,000 tokens in hand —
+still enough to finish the phase it is in, write a resume prompt worth reading, and verify the handoff
 landed.
 
-So the defaults are deliberately **early, not safe**: 35% to start writing, 50% to go. Compaction
+So the defaults are deliberately **early, not safe**: 55% to start writing, 75% to go. Compaction
 margin is a floor these must clear, never the number they are set to.
+
+**Raised from 35/50 to 55/75 in #797**, owner-directed on 2026-08-01: *"if 60-80 is the degredation
+point lets change to 55 and 75"*. The original pair was set early enough to cost real working room on
+runs that were nowhere near trouble.
+
+**One caveat, recorded rather than buried.** The meter has been observed firing the directive tier
+LATE — 69% against a 50% act line. Raising the act line to 75% on a meter that overshoots could push a
+real handoff past the degradation point. That overshoot is **deferred to #729 and #734**, the two
+meter-reliability children that own its two root causes (#734 the blind-start latch, #729 the
+delivery/acknowledgement half). Fixing it inside #797 would have duplicated a queued child and split
+its tests across two PRs. Both land before epic #906 closes, and this pair is a two-constant edit that
+is trivially reverted if the overshoot proves worse than expected.
 
 ## Choosing when to break — the seam
 

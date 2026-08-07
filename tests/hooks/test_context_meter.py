@@ -371,7 +371,7 @@ def test_threshold_defaults_are_35_and_50():
     room left to act well on it. Margin against compaction was never the binding
     constraint; room to write a good handoff is.
     """
-    assert cm.thresholds({}, {}) == (35, 50)
+    assert cm.thresholds({}, {}) == (cm.DEFAULT_CHECK_IN_PCT, cm.DEFAULT_ACT_PCT)
 
 
 def test_thresholds_from_config_and_env():
@@ -387,7 +387,7 @@ def test_thresholds_from_config_and_env():
 ])
 def test_bad_thresholds_fall_back_to_defaults_with_a_warning(cfg):
     warnings = []
-    assert cm.thresholds(cfg, {}, warn=warnings.append) == (35, 50)
+    assert cm.thresholds(cfg, {}, warn=warnings.append) == (cm.DEFAULT_CHECK_IN_PCT, cm.DEFAULT_ACT_PCT)
     assert warnings, f"{cfg!r} must warn on stderr"
 
 
@@ -858,9 +858,14 @@ def test_setting_the_retired_env_var_changes_nothing(tmp_path):
 
 
 def test_attended_advisory_names_pane_handoff_as_the_route(tmp_path):
-    """#732 — the whole-pipeline (subprocess) form of the T8b advisory pins:
-    40% of a 200k window is the advisory tier (defaults 35/50)."""
-    text = _nag(tmp_path, used=80_000)
+    """#732 — the whole-pipeline (subprocess) form of the T8b advisory.
+
+    The fill is DERIVED from the threshold constants rather than hard-coded (#797): this test
+    previously pinned 80_000 as "40% of a 200k window, the advisory tier", which silently stopped
+    being the advisory tier the moment the defaults moved.
+    """
+    advisory_pct = (cm.DEFAULT_CHECK_IN_PCT + cm.DEFAULT_ACT_PCT) // 2
+    text = _nag(tmp_path, used=200_000 * advisory_pct // 100)
     assert "pane-handoff" in text
     assert "`clear-prep` ALONE leaves no successor" in text, (
         "the OLD advisory text also contained 'pane-handoff' (as an optional "

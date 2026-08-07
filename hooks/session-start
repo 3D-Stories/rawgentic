@@ -612,12 +612,15 @@ _do_decision_injection() {
     if [ "$n" -lt 1 ] || [ "$n" -gt 100 ]; then n=15; fi
 
     local decisions
+    # --summarize-elided (#797): the older entries used to be silently DROPPED here, not
+    # summarized. The flag prepends one bounded block naming what was cut, so the read stays
+    # bounded while nothing is hidden. It is a no-op when nothing was elided.
     decisions=$(python3 "$SCRIPT_DIR/decision_log.py" read \
-        --project "$_registry_project" --last "$n" \
+        --project "$_registry_project" --last "$n" --summarize-elided \
         --state-dir "$CLAUDE_DOCS" 2>/dev/null) || return 0
     [ -n "$decisions" ] || return 0
 
-    CONTEXT_PARTS+=("RAWGENTIC DECISIONS — ${_registry_project} (newest ${n}, from an append-only store that is never trimmed; full history: \`python3 hooks/decision_log.py read --project ${_registry_project}\`):
+    CONTEXT_PARTS+=("RAWGENTIC DECISIONS — ${_registry_project} (newest ${n}, preceded by a rolling summary of any older entries, from an append-only store that is never trimmed; full history: \`python3 hooks/decision_log.py read --project ${_registry_project}\`):
 
 ${decisions}")
 }
