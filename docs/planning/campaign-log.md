@@ -14,6 +14,52 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #906 M2 — #864: read-goal-condition reads trusted rows · v3.141.6
+
+**Issue:** [#864](https://github.com/3D-Stories/rawgentic/issues/864) ·
+**Design:** brief note, small-standard lane (no separate design doc)
+
+**The suite was pinning the defect, and the fixture was the reproduction.** `read-goal-condition`
+dispatched `last_unmet_goal_condition`: it recurses into arbitrary message content, keys only on
+`type == "goal_status"`, and treats the last `met: false` row as live regardless of anything after
+it. So a cleared goal read as armed, which revives a merge authorization the owner already retired,
+and a `goal_status` object forged inside message content came back verbatim. The repo's own
+`goal_status_transcript.jsonl` ends with a trusted `met: true` row — its guard is spent — and
+`test_the_condition_can_be_read_verbatim_from_a_transcript` asserted the stale answer anyway. That
+test now asserts CLEARED.
+
+**Why a reader swap was not enough.** `live_owner_goal` already closed both holes but returns
+`None` for CLEARED and for NEVER_ARMED alike. A caller could not tell a spent guard from one that
+never existed, which is the distinction that matters when the guard carries merge authority. So the
+trust rules were lifted into `_owner_goal_scan` with no predicate changed, and `owner_goal_state`
+was built on top returning LIVE, CLEARED, NEVER_ARMED or AMBIGUOUS with the condition present only
+in LIVE. The CLI's `rc 0` / `rc 3` contract is preserved.
+
+**Both review waves found real defects, and one of them found the test that should have.** Step 8a
+(High, 0.98): the scan's cheap `"goal_status" not in line` prefilter cannot see a tear landing
+before that literal, so a torn tail let a stale row pass as LIVE — and the first torn-tail fixture
+had used a tear that happened to contain the token, so the test had adapted to the hole instead of
+exposing it. Step 11 then found a fifth outcome the four-state contract did not cover: a transcript
+the command cannot open or decode escaped as an uncaught traceback with rc 1. Both reproduced by
+execution before fixing.
+
+**The circuit breaker fired and the run continued, deliberately.** One Step-11 finding carried
+`ambiguity_flag: true` while the owner was away. Its stated reason — that the diff could not show
+whether any programmatic consumer parses this command's stdout — was checkable, so it was checked
+rather than waived: a repo-wide search finds only five test call sites, all in this PR, plus prose.
+The finding was also already below its confidence band.
+
+**Scope held, and it is stated in the runbook rather than implied.** Only the CLI moved. Campaign
+handoff and mid-child handoff still call the historical reader, and Step-11 review caught that the
+new prose sat immediately above the mid-child paragraph and read as though it covered that path.
+Both runbook formats now say so explicitly. The torn-tail gap on the strict destructive readers is
+deferred to #772 with the gap named at `live_owner_goal` itself, because the review's own remedy —
+a bounded reread — cannot live in a pure text-taking function.
+
+Suite 6405→6421, exit 0. Both lint lanes 10.00/10. Security scan clean. 16 tests added.
+
+---
+
 ## Epic #906 M2 — #734: the context meter says when it is blind · v3.141.5
 
 **Issue:** [#734](https://github.com/3D-Stories/rawgentic/issues/734) ·
