@@ -2802,6 +2802,12 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         # is herdr's own blocking wait, already trusted at the pre-launch site above for SEND 1 —
         # which is also the natural experiment that proves the diagnosis: SEND 1 is a bare slash
         # command too (`/rawgentic:switch`) and it works, because that wait sits in front of it.
+        # The default 120 s bound is deliberate and it is what this wait needs to outlast: the
+        # bind turn was measured at ~50 s (#700), so this is ~2.4x headroom, and it still sits
+        # under the runner's own 180 s subprocess bound so herdr reports the timeout rather than
+        # being killed mid-call. Shared with the pre-launch site above ON PURPOSE — both wait for
+        # the same pane to become free — but note the coupling: retuning
+        # `build_agent_wait_argv`'s default moves both.
         wait_goal_argv = build_agent_wait_argv(target=new_pane, until="idle")
         proc = runner(wait_goal_argv)
         record("agent_wait_goal", wait_goal_argv, proc)

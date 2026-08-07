@@ -749,6 +749,24 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.141.1 (2026-08-07)
+- **Pane handoff: `/goal` now goes into an IDLE pane instead of a busy one (#989, epic #906).**
+  Every handoff was failing at `goal_armed`. A bare slash command pasted into a busy session is
+  QUEUED, not executed — already measured by #718 and enforced by `validate_inserted_prompt`, which
+  refuses to send one — yet `perform_handoff` pasted a bare `/goal` into a pane it kept mid-turn
+  deliberately, producing `queue-operation enqueue`, a `remove` 2.3s later, and zero `goal_status`
+  rows across four live handoffs. The natural experiment was already in the sequence: SEND 1 is
+  also a bare slash command and never failed, because an `agent wait --until idle` sat in front of
+  it. The send order becomes bind → wait idle → goal → prompt, giving each payload the window it
+  needs — prose tolerates a busy pane because its Enter buffers and flushes at turn end (#700,
+  #835). Removes the unguarded window entirely: the guard is confirmed before any work is
+  transported. `_MID_CHILD_VERIFICATION_STEPS` reordered to match (`evaluate_verifications` stops
+  at the first failure, so an out-of-order ladder blames the wrong send), the falsified 2026-07-29
+  premise corrected in `hooks/launcher_lib.py` and `docs/runbooks/herdr.md` §7.1/§7.1.1 plus its
+  HTML pair, and seven order-pinning tests inverted rather than deleted. Adds
+  `TestGoalGetsTheIdleWindow` and a three-state discrimination test (submitted /
+  sent-but-unsubmitted / queued). No workflow-spine change → no diagram REV. Suite 6357→6366.
+
 ### v3.141.0 (2026-08-07)
 - **The directive tier can now insert mid-turn, not only at `Stop` (#729, epic #906).** The #718
   prompt-insert is the one channel that arrives as authoritative USER input rather than injected
