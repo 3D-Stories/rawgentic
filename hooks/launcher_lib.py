@@ -513,8 +513,11 @@ def goal_text(condition: str) -> tuple[str, bool]:
     for the goal. So the strip lives at this choke point, which both `armed_condition` and
     `build_send_text_goal_argv` route through, and NOT in the shared file reader.
 
-    Only TRAILING whitespace goes. Interior newlines are load-bearing structure and #654 proved a
-    41-newline condition arrives fine as one collapsed paste.
+    Interior newlines are load-bearing structure and #654 proved a 41-newline condition arrives
+    fine as one collapsed paste, so only the TRAILING run goes — and only when it actually
+    contains a line ending (Step-11 F3). Terminal spaces or tabs with no newline never blocked
+    submission, and the carry contract treats them as bytes, so they are left alone rather than
+    silently deleted from an owner-authored condition.
     """
     if not isinstance(condition, str):
         raise LauncherError(f"goal condition must be a string, got {type(condition).__name__}")
@@ -522,7 +525,9 @@ def goal_text(condition: str) -> tuple[str, bool]:
         raise LauncherError("goal condition is empty — refusing to arm an empty guard")
     # After the empty check, so a whitespace-only condition still refuses rather than becoming a
     # silently-armed empty guard.
-    condition = condition.rstrip()
+    trailing = condition[len(condition.rstrip()):]
+    if "\n" in trailing or "\r" in trailing:
+        condition = condition.rstrip()
     text = f"{_GOAL_PREFIX}{condition}"
     if len(text) <= GOAL_MAX_CHARS:
         return (text, False)
@@ -1403,7 +1408,16 @@ def validate_goal_carry(successor_goal: str, predecessor_live_goal: str | None, 
     """
     if predecessor_live_goal is None:
         return (True, "no live predecessor goal — nothing to validate", False)
-    succ = successor_goal[:-1] if successor_goal.endswith("\n") else successor_goal
+    # ONE logical line ending, not one LF (Step-11 F2). A CRLF file is an ordinary single line
+    # ending; matching only "\n" left a bare CR behind and refused the carry as a substantive
+    # difference. `goal_text` accepts all three forms, so this must recognize the same set or the
+    # two disagree about what "one trailing newline" means. Order matters: "\r\n" is tested first
+    # so it is removed as ONE ending rather than leaving a CR.
+    succ = successor_goal
+    for _ending in ("\r\n", "\n", "\r"):
+        if successor_goal.endswith(_ending):
+            succ = successor_goal[:-len(_ending)]
+            break
     # #989 — armed_condition now RSTRIPS, because the send route cannot carry trailing whitespace
     # (a trailing newline makes the paste land and never submit). That would silently widen this
     # comparison into the `strip()` equality pass-1 F4 REFUSED at the design gate, so the residual

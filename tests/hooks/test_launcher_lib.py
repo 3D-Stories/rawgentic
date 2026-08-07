@@ -665,6 +665,42 @@ class TestTheGoalPayloadNeverEndsWithANewline:
         with pytest.raises(ll.LauncherError, match="empty"):
             ll.build_send_text_goal_argv(pane="w1:p1", goal_condition="\n\n   \n")
 
+    @pytest.mark.parametrize("ending", ["\n", "\r\n", "\r"])
+    def test_one_logical_line_ending_still_carries(self, ending) -> None:
+        """Step-11 F2. The one-newline tolerance recognized only LF, so a CRLF file — one
+        perfectly ordinary line ending — left a bare CR behind and the carry was refused as a
+        substantive difference. `goal_text` accepts and removes all three, so the carry validator
+        must recognize the same set or the two disagree about what one line ending is."""
+        ok, reason, _ = ll.validate_goal_carry("goal A" + ending, "goal A")
+        assert ok, f"{ending!r} is ONE line ending and must carry: {reason}"
+
+    @pytest.mark.parametrize("ending", ["\n\n", "\r\n\r\n", "\r\r"])
+    def test_two_logical_line_endings_are_still_refused(self, ending) -> None:
+        """The other half — widening to CRLF must not widen to DOUBLED endings."""
+        ok, _reason, _ = ll.validate_goal_carry("goal A" + ending, "goal A")
+        assert not ok, f"{ending!r} is two line endings and must be refused"
+
+    def test_trailing_spaces_survive_when_there_is_no_line_ending(self) -> None:
+        """Step-11 F3. The measured defect is a LINE-ENDING suffix. An unconditional rstrip also
+        silently deleted terminal spaces and tabs, which never blocked submission and which the
+        carry contract treats as bytes. So the strip fires only on a whitespace run that actually
+        contains a line ending."""
+        text_argv, _keys, _trunc = ll.build_send_text_goal_argv(
+            pane="w1:p1", goal_condition="ship it   ")
+        assert text_argv[4] == "/goal ship it   ", repr(text_argv[4])
+
+    def test_spaces_before_a_trailing_newline_go_with_it(self) -> None:
+        """A real file routinely ends `...   \\n`. The whole run goes, because it contains one."""
+        text_argv, _keys, _trunc = ll.build_send_text_goal_argv(
+            pane="w1:p1", goal_condition="ship it   \n")
+        assert text_argv[4] == "/goal ship it"
+
+    @pytest.mark.parametrize("ending", ["\n", "\r\n", "\r"])
+    def test_every_line_ending_form_is_stripped_from_the_payload(self, ending) -> None:
+        text_argv, _keys, _trunc = ll.build_send_text_goal_argv(
+            pane="w1:p1", goal_condition="ship it" + ending)
+        assert text_argv[4] == "/goal ship it", repr(text_argv[4])
+
     def test_the_carry_guard_keeps_its_byte_identical_rule(self) -> None:
         """The interaction this fix nearly broke, pinned from BOTH sides.
 
