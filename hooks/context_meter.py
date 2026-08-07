@@ -81,8 +81,13 @@ KNOWN_WINDOWS = (200_000, 1_000_000)
 # binding constraint; room to write a good handoff is. At 35% of a 1M window a session has
 # ~650k tokens in hand to finish its phase and hand over properly; at 70% it has 300k and
 # is already choosing what to drop.
-DEFAULT_CHECK_IN_PCT = 35         # AC6 — start LOOKING for a break
-DEFAULT_ACT_PCT = 50              # AC3 — act now (gap 15, above MIN_TIER_GAP_PCT)
+# #797, owner-directed 2026-08-01 ("if 60-80 is the degredation point lets change to 55 and 75").
+# Raised from 35/50. The overshoot caveat the issue raises with them is DEFERRED to #729 and #734
+# — the two meter-reliability children that own its two root causes — because fixing it here would
+# duplicate a queued child. That deferral is permitted by the issue's own acceptance criterion,
+# and both children run before epic #906 closes.
+DEFAULT_CHECK_IN_PCT = 55         # AC6 — start LOOKING for a break
+DEFAULT_ACT_PCT = 75              # AC3 — act now (gap 20, above MIN_TIER_GAP_PCT)
 MIN_TIER_GAP_PCT = 10
 DEFAULT_EVERY_TURNS = 5
 DEFAULT_EVERY_SECONDS = 300
