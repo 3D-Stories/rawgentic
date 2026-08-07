@@ -499,10 +499,20 @@ class TestGoalGetsTheIdleWindow:
         assert waits[1][3] == "w1:pZZ", waits[1]
         assert "--until" in waits[1] and waits[1][waits[1].index("--until") + 1] == "idle", waits[1]
 
-    def test_a_failed_idle_wait_is_its_own_failure_not_goal_armed(self) -> None:
-        """A timed-out wait must name the wait. Reporting it as `goal_armed` would blame the
-        successor's transcript for a herdr call that never returned — the same rule
-        `send_goal_nudge` and `send_resume_nudge` already follow."""
+    def test_an_unconfirmed_settle_no_longer_blocks_the_goal_send(self) -> None:
+        """INVERTED, deliberately, and the history is the point.
+
+        This test used to assert that a failed wait aborted the handoff with its own
+        `agent_wait_goal` step — the reasoning being that pasting a slash command into a pane not
+        proven idle is the #989 queued case. Sound reasoning, wrong premise: live measurement then
+        showed the wait HANGS on panes that are already idle, so the abort fired on healthy
+        successors. Seven runs, and in the failing one the pane went quiet 36s into a 120s budget.
+
+        The wait is therefore a settle, not a gate, and an unconfirmed settle proceeds. What is
+        NOT relaxed is the thing that actually protects the run: `goal_armed` still gates, still
+        reads a durable artifact, and still fails closed — pinned by
+        `test_goal_armed_is_still_the_gate_and_still_fails_closed`.
+        """
         class WaitFailsSecondTime(Runner):
             def __init__(self, *a, **kw):
                 super().__init__(*a, **kw)
@@ -519,10 +529,11 @@ class TestGoalGetsTheIdleWindow:
         r = WaitFailsSecondTime(_responses())
         out = ll.perform_handoff(**_handoff(
             r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=0)))
-        assert out["ok"] is False
-        assert out["failed_step"] == "agent_wait_goal", out["failed_step"]
-        assert not any(t.startswith("/goal") for t in r.sent_text()), \
-            "the goal must not be pasted after the wait failed — that is the queued case again"
+        assert out["ok"] is True, out["failed_step"]
+        assert any(t.startswith("/goal") for t in r.sent_text()), \
+            "an unconfirmed settle must not withhold the goal — that abort was the defect"
+        assert not any(s["kind"] == "agent_wait_goal" for s in out["steps"]), \
+            "the fatal agent_wait_goal step is gone; it is `settle_before_goal` now"
 
     def test_the_goal_fails_closed_before_the_prompt_is_ever_sent(self) -> None:
         """The reorder's safety dividend, and it is the reason failure mode 1 is acceptable.
@@ -612,6 +623,160 @@ class TestTeardownNeedsEvidenceThePromptArrived:
         with pytest.raises(ll.LauncherError, match="does not appear in the resume prompt"):
             ll.perform_handoff(**_handoff(r, prompt_marker="[not-in-the-prompt]"))
         assert r.calls == [], "refused before anything was created"
+
+
+class TestTheSettleIsNotAGate:
+    """#989 follow-up — the idle wait HUNG on a pane that was already idle, and that was fatal.
+
+    Measured live 2026-08-07, seven real handoffs. In the failing run the successor's registry row
+    landed 20s after it started and its transcript went quiet 36s later — comfortably inside a 120s
+    budget — and `herdr agent wait --until idle` still burned the whole budget and aborted the
+    handoff. So the budget was never short. The signal simply does not fire for an idle pane, which
+    is the same unreliability #694 measured for `agent_status` ("`working` for a session sitting at
+    an empty input line"); the blocking wait inherits it.
+
+    Lengthening the wait would have been strictly worse: a longer hang before the identical
+    failure. So the wait stops being a GATE and becomes a best-effort settle.
+
+    The distinction that makes this safe: a settle VERIFIES nothing. The gate is still
+    `goal_armed`, a durable artifact the successor itself writes, and it is untouched. This module
+    forbids gating on a fixed timer, and that rule is intact — nothing here decides pass or fail.
+    """
+
+    def test_a_hung_or_failing_wait_no_longer_aborts_the_handoff(self) -> None:
+        """THE fix. Before this, a wait that did not return killed a handoff whose successor was
+        sitting there idle and ready."""
+        class WaitAlwaysFails(Runner):
+            """Fails only the SECOND `agent wait` — the settle's confirmation. The pre-launch
+            wait is a different call with a different contract and is legitimately fatal, so
+            failing it too would abort before the settle is ever reached."""
+
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self.waits = 0
+
+            def __call__(self, argv, timeout=180):
+                if Runner.key(argv) == "herdr agent wait":
+                    self.waits += 1
+                    if self.waits >= 2:
+                        self.calls.append(list(argv))
+                        return FakeProc(returncode=1)
+                return super().__call__(argv, timeout)
+
+        r = WaitAlwaysFails(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=0)))
+        assert out["ok"] is True, out["failed_step"]
+        assert out["results"]["goal_armed"] is True
+        assert out["failed_step"] is None
+
+    def test_the_settle_is_still_recorded_so_a_hang_stays_visible(self) -> None:
+        """Non-fatal must not mean invisible. An operator has to be able to see that the pane never
+        reported idle, because that is the difference between a healthy handoff and a lucky one."""
+        class WaitAlwaysFails(Runner):
+            """Fails only the SECOND `agent wait` — the settle's confirmation. The pre-launch
+            wait is a different call with a different contract and is legitimately fatal, so
+            failing it too would abort before the settle is ever reached."""
+
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self.waits = 0
+
+            def __call__(self, argv, timeout=180):
+                if Runner.key(argv) == "herdr agent wait":
+                    self.waits += 1
+                    if self.waits >= 2:
+                        self.calls.append(list(argv))
+                        return FakeProc(returncode=1)
+                return super().__call__(argv, timeout)
+
+        r = WaitAlwaysFails(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=0)))
+        settles = [s for s in out["steps"] if s["kind"] == "settle_before_goal"]
+        assert settles, "the settle must appear in the receipt even when it does not confirm idle"
+        assert any("did not report idle" in str(s.get("note")) for s in settles), settles
+
+    def test_the_settle_actually_sleeps_before_the_goal_goes_out(self) -> None:
+        """The owner's 30s settle. Measured basis: the bind's registry row landed at 20s across
+        live runs, so 30s clears it with margin without the unbounded hang."""
+        slept: list = []
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, sleeper=slept.append,
+            read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=0)))
+        assert out["ok"] is True, out["failed_step"]
+        assert ll.SETTLE_BEFORE_GOAL_S in slept, (ll.SETTLE_BEFORE_GOAL_S, slept)
+
+    def test_the_settle_precedes_the_goal_send(self) -> None:
+        """Order still matters: settling AFTER the paste would buy nothing."""
+        order: list = []
+        r = Runner(_responses())
+
+        def sleeper(s):
+            if s == ll.SETTLE_BEFORE_GOAL_S:
+                order.append("settle")
+
+        real_call = r.__call__
+
+        class Tracking(Runner):
+            def __call__(self, argv, timeout=180):
+                if argv[:3] == ["herdr", "pane", "send-text"] and argv[4].startswith("/goal"):
+                    order.append("goal")
+                return super().__call__(argv, timeout)
+
+        r2 = Tracking(_responses())
+        ll.perform_handoff(**_handoff(
+            r2, sleeper=sleeper,
+            read_text=Artifacts(r2, marker_after_nudges=0, goal_row_after_nudges=0)))
+        assert order[:2] == ["settle", "goal"], order
+
+    def test_goal_armed_is_still_the_gate_and_still_fails_closed(self) -> None:
+        """The safety property the settle must not erode, asserted on all FOUR of its parts.
+
+        Step-11 F2: checking only the return value and the withheld prompt left the two teardown
+        properties unproven — and the settle makes them newly load-bearing, because the goal is now
+        deliberately sent without idle confirmation. A regression here would strand an orphan
+        successor, or retire the predecessor on incomplete evidence.
+        """
+        r = Runner(_responses(pane_read="unrelated scrollback\n"))
+        out = ll.perform_handoff(**_handoff(
+            r, teardown=True,
+            read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
+        # 1. it fails, and names the gate rather than the settle
+        assert out["ok"] is False and out["failed_step"] == "goal_armed"
+        # 2. no work reaches an unguarded successor
+        assert RESUME_PROMPT not in " ".join(r.sent_text())
+        # 3. the successor pane is cleaned up — no orphan
+        assert out["cleanup"] and "w1:pZZ" in str(out["cleanup"]), out["cleanup"]
+        assert any(c[:3] == ["herdr", "pane", "close"] and c[3] == "w1:pZZ" for c in r.calls)
+        # 4. the PREDECESSOR survives, even though teardown was requested
+        assert not any(c[:3] == ["herdr", "pane", "close"] and c[3] == "w1:p1"
+                       for c in r.calls), "the predecessor must never be retired on a failed gate"
+
+    def test_a_raising_settle_confirmation_is_also_non_fatal(self) -> None:
+        """Step-11 F1. Non-fatal has to mean every path, not just a non-zero exit. A runner that
+        RAISES — a subprocess timeout, a transport error — would otherwise abort the handoff, which
+        is the exact fatality this change removes."""
+        class WaitRaisesSecondTime(Runner):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self.waits = 0
+
+            def __call__(self, argv, timeout=180):
+                if Runner.key(argv) == "herdr agent wait":
+                    self.waits += 1
+                    if self.waits >= 2:
+                        raise subprocess.TimeoutExpired(cmd=argv, timeout=20)
+                return super().__call__(argv, timeout)
+
+        r = WaitRaisesSecondTime(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=0)))
+        assert out["ok"] is True, out["failed_step"]
+        settles = [s for s in out["steps"] if s["kind"] == "settle_before_goal"]
+        assert settles, "a raising confirmation must still appear in the receipt"
+        assert any("did not report idle" in str(s.get("note")) for s in settles), settles
 
 
 class TestTheThreeGoalDeliveryStates:
