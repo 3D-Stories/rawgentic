@@ -1937,6 +1937,16 @@ def fuzzy_disposition_candidates(finding: dict, folded_entries: list[dict]) -> l
     self-reference. The exclusion is PER-ENTRY: a different ledger entry at the same
     location+category still surfaces even when one exact match is excluded.
 
+    The exact key is computed AFTER stripping any valid `REOPENS <id>:` prefix from
+    `finding`'s description, via `strip_reopens` — mirroring the existing exact-match
+    join's own key computation (#892 Step-11 review, gpt-5.6-sol, confidence 0.96: a
+    finding that VALIDLY reopens ledger entry X has the same stripped key as X under
+    the exact join; without this mirroring, this function would hash the un-stripped
+    text, compute a different key, and incorrectly re-flag X as a fuzzy candidate of
+    itself). The caller may pass either the raw, un-stripped finding or an
+    already-stripped one — stripping a description with no `REOPENS` prefix is a
+    no-op passthrough (`strip_reopens`'s own contract).
+
     Requires a non-empty `location` on BOTH sides and an exact `category` match
     (case-sensitive — the schema's category vocabulary is a fixed, consistently-cased
     enum, so no normalization is needed). An empty/missing `location` on either side
@@ -1954,7 +1964,8 @@ def fuzzy_disposition_candidates(finding: dict, folded_entries: list[dict]) -> l
     category = finding.get("category")
     if not location or not category:
         return []
-    exact_key = compute_finding_key(finding)
+    _, stripped_description = strip_reopens(finding.get("description", ""))
+    exact_key = compute_finding_key({**finding, "description": stripped_description})
     return [
         entry for entry in folded_entries
         if entry["disposition"] in ("declined", "dissolved")

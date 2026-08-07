@@ -1350,3 +1350,27 @@ class TestFuzzyDispositionCandidates:
         result = mod.fuzzy_disposition_candidates(live, [entry_x, entry_y])
         assert entry_x not in result
         assert entry_y in result
+
+    def test_reopens_prefixed_finding_excludes_its_own_stripped_exact_match(self):
+        # Step-11 review finding (gpt-5.6-sol, confidence 0.96): the existing exact
+        # join computes identity AFTER stripping a valid `REOPENS <id>:` prefix
+        # (plan_lib.strip_reopens), so a finding that validly reopens entry X has the
+        # SAME stripped key as X. This function must mirror that stripping — a raw,
+        # un-stripped finding must not treat X as merely "similar" and re-flag it as
+        # a fuzzy candidate of itself. A DIFFERENT entry Y at the same location+
+        # category must still surface.
+        mod = _reload_plan_lib()
+        original_description = "original finding X text"
+        shared_finding = {"severity": "High", "location": "hooks/x.py",
+                          "category": "security", "description": original_description}
+        entry_x = _valid_entry(mod, id="d-4-1-1-xxxx", disposition="declined",
+                                finding=shared_finding)
+        entry_y = _valid_entry(
+            mod, id="d-4-1-2-yyyy", disposition="declined",
+            finding={"severity": "High", "location": "hooks/x.py",
+                     "category": "security", "description": "a different finding Y text"})
+        live = {"severity": "High", "location": "hooks/x.py", "category": "security",
+                "description": f"REOPENS d-4-1-1-xxxx: {original_description}"}
+        result = mod.fuzzy_disposition_candidates(live, [entry_x, entry_y])
+        assert entry_x not in result
+        assert entry_y in result
