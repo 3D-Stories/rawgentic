@@ -132,13 +132,18 @@ class Artifacts:
     `marker_after_nudges` is the point of this fake: the marker appears only once the runner has
     issued that many bare Enters, which is exactly the live failure — the paste is intact and
     unsubmitted until something submits it.
+
+    `goal_row_after_nudges` is the same idea for the GOAL paste (#835). It defaults to 0, so the
+    predicate is always true and every test written before it behaves identically; a goal-nudge
+    test raises it to express the state the goal recovery exists for.
     """
 
     def __init__(self, runner, *, marker_after_nudges=0, goal_row=GOAL_ROW,
-                 registry_row=None):
+                 goal_row_after_nudges=0, registry_row=None):
         self.runner = runner
         self.marker_after_nudges = marker_after_nudges
         self.goal_row = goal_row
+        self.goal_row_after_nudges = goal_row_after_nudges
         # #800 — which REPRESENTATION the successor writes for `project_path`. Defaults to the
         # workspace-relative row every other test in this file assumes, so their behaviour is
         # unchanged; the absolute variant is the live failure the gate used to refuse.
@@ -155,7 +160,9 @@ class Artifacts:
         text = ""
         if len(self.runner.nudges()) >= self.marker_after_nudges:
             text += RESUME_PROMPT + "\n"
-        return text + self.goal_row + "\n"
+        if len(self.runner.nudges()) >= self.goal_row_after_nudges:
+            text += self.goal_row + "\n"
+        return text
 
 
 def _handoff(runner, **over):
