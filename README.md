@@ -749,6 +749,24 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.141.2 (2026-08-07)
+- **A goal ending in a newline landed in the successor's input box and never submitted (epic #906).**
+  The buffer ends on a blank line and the Enter does not send it, so `goal_armed` failed with no
+  `goal_status` row, no `queue-operation` row, and not one byte of the goal text in the transcript.
+  This is the defect that kept `/rawgentic:pane-handoff` broken after #989, because the skill's own
+  documented command uses `--goal-condition-file` — and `_read_text_arg` reads a file VERBATIM by
+  design, so the file's trailing newline reached the paste. Found by controlled experiment across
+  three live handoffs: the SAME 557-character condition failed twice from a file and armed first
+  time inline. `goal_text` now strips a trailing whitespace run, but only one that actually
+  contains a line ending — terminal spaces never blocked submission and the carry contract treats
+  them as bytes. The #758 carry guard is PRESERVED rather than widened: making `armed_condition`
+  strip would have quietly turned `validate_goal_carry` into the `strip()` equality pass-1 F4
+  refused at its design gate, which `test_two_trailing_newlines_are_not_over_normalized` caught, so
+  the trailing shape is now judged explicitly there. Cross-model review then found the tolerance
+  matched only LF, so a CRLF file was refused as a substantive difference; it now removes one
+  LOGICAL line ending in all three forms while still refusing doubled ones. 17 tests, red before
+  green. No workflow-spine change → no diagram REV. Suite 6370→6387.
+
 ### v3.141.1 (2026-08-07)
 - **Pane handoff: `/goal` now goes into an IDLE pane instead of a busy one (#989, epic #906).**
   Every handoff was failing at `goal_armed`. A bare slash command pasted into a busy session is
