@@ -749,6 +749,31 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.138.0 (2026-08-06)
+- **Supervised-merge broker — the #947 authority core gets its live caller, with decision
+  telemetry (#963, epic #871).** New `launcher_lib.py broker-merge` runs a campaign-scoped
+  merge through `evaluate_campaign` → `authority_permits` → `claim_action` →
+  `begin_execution` → `gh pr merge` → probe-confirmed `mark_executed`, with
+  `reconcile_claim` on anything ambiguous (rc 0 merged / 12 refused / 13 parked;
+  re-running is always safe). Authorization binds to `{campaign, issue, repo, pr}` before
+  authority is read, and the merge SHA only ever comes from `gh pr view`, never from the
+  merge command's exit code. The deletion hole #947 deferred closes first: a new
+  `.supervision.declared.json` marker, maintained in lockstep with the state record by
+  every writer, makes a deleted or crash-stale declaration read `invalid` instead of
+  `attended` — so `authority_permits`, `consult_check`, `installs_forbidden` and the
+  claims revision fence all deny, and `supervision_admin.py bootstrap-marker` migrates a
+  workspace that declared before this. New `hooks/supervision_telemetry.py` appends every
+  authority decision and claim transition to `claude_docs/supervision-telemetry.jsonl`
+  (flock + O_APPEND, strict before an outward action, best-effort after). WF2 Step 14 and
+  the epic-run boundary invoke the broker when a campaign is active (guard tests pin the
+  prose, the raw path stays for non-campaign runs), and epic-run Step 2 now records the
+  `policy.merge_policy` grant the gate had been reading with nothing writing it. #947's
+  finding 7 consult residual stays deferred, now refuted by measurement rather than
+  budget: the proposed hardening denied a governed campaign that had not started yet.
+  Tests added across `test_supervision_lib/admin/route/claims/telemetry`,
+  `test_launcher_lib`, `test_step_state_hook`, `test_wf2_clarity`, `test_epic_run_clarity`.
+  WF2 diagram REV 3.138.0 (station 14 delta). Suite 6087→6192.
+
 ### v3.137.0 (2026-08-06)
 - **Supervision behaviour Part B: preflight, routing, claims, authority (#947, epic
   #871).** New `hooks/supervision_route.py` (`CampaignView`/`evaluate_campaign` — the

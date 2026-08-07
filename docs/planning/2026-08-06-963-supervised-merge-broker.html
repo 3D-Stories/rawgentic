@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>#963 — Supervised-merge broker</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-design{background:radial-gradient(1200px 600px at 50% -10%,rgba(124,156,255,.10),transparent 60%),var(--bg)}
+.tpl-design .wrap{max-width:1080px;padding:0 clamp(16px,4vw,32px) 64px}
+.tpl-design header{padding:clamp(24px,4vw,56px) 0 12px;border-bottom:none;margin-bottom:18px}
+.tpl-design h1{font-size:clamp(26px,3.4vw,40px)}
+.tpl-design h2{font-size:20.8px;margin:1.9em 0 .6em}
+
+/* #76 — the frame's companions only. Two rules, deliberately few.
+   An earlier draft of this PR also added a two-column `.dz-options` grid "so the wide measure
+   pays for itself". Both wrong: the grid was DEAD (the `.dz-options` rule further down sets
+   `display:block` at equal specificity and later source order), and it contradicted a decision
+   this file already records — cards stack FULL WIDTH because "a trade-off you have to READ is
+   not a 220px tile". The width pays for itself inside each card, where the for/against grid is
+   two columns and needs the room. Deleted rather than reconciled. */
+.tpl-design h1{line-height:1.2;max-width:22ch}
+.tpl-design header .eyebrow{font-size:11px;letter-spacing:.14em}
+.tpl-design .dz-lead{background:var(--surface);border:1px solid var(--line);
+border-left:4px solid var(--accent);border-radius:12px;padding:4px 20px 14px;margin:6px 0 26px}
+.tpl-design .dz-lead>p:first-child{font-size:17.5px;line-height:1.55;color:var(--ink);font-weight:550}
+/* Option cards. Stacked full-width, because a trade-off you have to READ is not a 220px tile;
+   the shared layer's flex row is overridden here at higher specificity. */
+.tpl-design .dz-options{margin:22px 0;display:block;counter-reset:dz-opt}
+.tpl-design .dz-options .blk-opt{counter-increment:dz-opt;display:grid;gap:10px 14px;
+grid-template-columns:1fr 1fr;grid-template-areas:"head head" "pro con";
+background:var(--surface);border:1px solid var(--line);border-radius:14px;
+padding:16px 18px;margin:0 0 16px;flex:none}
+.tpl-design .dz-options .blk-opt>.blk-title{grid-area:head;display:flex;gap:12px;
+align-items:baseline;font-size:19px;letter-spacing:-.01em;margin:0}
+.tpl-design .dz-options .blk-opt>.blk-title::before{content:counter(dz-opt,decimal-leading-zero);
+font:700 22px/1.1 ui-monospace,Menlo,Consolas,monospace;color:var(--accent);flex:none}
+.tpl-design .dz-options .blk-for{grid-area:pro;background:var(--req-c-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+.tpl-design .dz-options .blk-against{grid-area:con;background:var(--sev-high-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+/* #134 SETTLED THE FOLLOW-UP THIS COMMENT USED TO NAME. It said these labels were CSS-generated
+   content, so not dependable semantic markup, that the reference uses real DOM text
+   (`<h4>Pros</h4>`), and that making it semantic "means changing the renderer, which moves every
+   style's bytes and so cannot ride in a per-template PR". That is exactly what #134 did: `_options`
+   now emits a real `.blk-lbl` element, every rich style's bytes moved, and `plain` did not.
+   So this is no longer a `::before` at all — it RESTYLES the markup label the renderer emits.
+   Only the typography is set here; the colours come from the shared layer, which reaches this
+   template because the wrapper carries both `blk-options` and `dz-options`. `text-transform`
+   keeps the visible form FOR/AGAINST while the accessible name stays the emitted "For"/"Against".
+   The space the renderer emits after the label collapses harmlessly against a block. */
+.tpl-design .dz-options .blk-lbl{display:block;font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;text-transform:uppercase}
+/* Restated at (0,4,0): the card rule above is (0,3,0) and was silently beating the shared
+   `.blk-options .is-chosen` (0,2,0), so the chosen card lost its accent border. Measured. */
+.tpl-design .dz-options .blk-opt.is-chosen{border-color:var(--accent);border-width:2px}
+.tpl-design .dz-options .blk-opt.is-rejected{opacity:.72}
+.tpl-design .dz-options .is-chosen>.blk-title::after{content:"CHOSEN";font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent);
+border:1px solid var(--accent);border-radius:999px;padding:1px 8px;margin-left:auto;flex:none}
+@media(max-width:640px){.tpl-design .dz-options .blk-opt{grid-template-columns:1fr;
+grid-template-areas:"head" "pro" "con"}}
+/* A today/proposed pair is TWO ROOTS in one `nodes compare` block, so the
+   grid goes on the top-level list. Two separate fences cannot pair — each is
+   its own wrapper with a single child. */
+@media(min-width:720px){.tpl-design .dz-compare>ul{grid-template-columns:1fr 1fr}}
+.tpl-design .dz-compare{background:var(--code);border-radius:12px;padding:10px 14px}
+/* The verdict band — `.recommend` in the reference. A gradient wash rather than a flat fill, so
+   the decision reads as the page's conclusion and not as one more callout. */
+.tpl-design .dz-decision{margin:24px 0 8px}
+.tpl-design .dz-decision>.blk-callout{border:1px solid var(--accent);border-left-width:1px;
+border-radius:14px;padding:16px 18px;
+background:linear-gradient(180deg,var(--accent-soft),transparent)}
+.tpl-design .dz-decision>.blk-callout>.blk-title::before{content:"DECISION";display:block;
+font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent)}
+/* Trade-off table. Styled, deliberately NOT markered: a markdown table emits a bare <table> with
+   no hook, and `section_class` is not a table marker — using it would flip `design` into
+   sectioned rendering and demote its h2s. */
+.tpl-design table{border-collapse:collapse;width:100%;margin:14px 0}
+.tpl-design thead th{font:700 11px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);
+border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
+.tpl-design tbody td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.tpl-design tbody tr:nth-child(even){background:var(--code)}
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+
+:root{--accent:#f2a65e;}
+:root[data-theme=dark]{--accent:#f2a65e;}
+:root[data-theme=light]{--accent:#a26211;}
+@media print{:root,:root[data-theme=dark]{--accent:#a26211;}}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-06 18:01 MDT</div>
+<h1>#963 — Supervised-merge broker</h1>
+
+</header>
+<main>
+<div class="dz-lead"><p>Date: 2026-08-06. Issue: <a href="https://github.com/3D-Stories/rawgentic/issues/963">#963</a>. Epic lineage: #871 → #947 §1a (deferred integration, discharged here). Author: claude-fable-5 (WF2 Step 3). Status: draft for Step 4 gate.</p></div>
+<h2>0. Problem in one paragraph</h2>
+<p>Epic #871 shipped a full authority-and-claims core with zero live callers: <code>authority_permits</code>, <code>route_for</code>, and all five <code>supervision_claims</code> functions have no production caller (verified by trace, 2026-08-06); <code>evaluate_campaign</code>/<code>consult_permitted</code> have exactly one (<code>consult_check</code>). Merges are executed by skill prose running raw <code>gh pr merge</code> (<code>skills/implement-feature/references/step-14.md:35</code>); <code>hooks/</code> contains no merge execution. Meanwhile the #947 Step 11 review found (dispositions gate 11, findings 1/4/7, all deferred) that a DELETED <code>.supervision.json</code> reads as <code>absent</code> → attended → <code>authority_permits</code> returns True for every action kind. This design (a) closes the deletion hole first, (b) builds the one broker command, (c) cuts the prose call sites over, (d) adds decision telemetry.</p>
+<h2>1. Approaches considered</h2>
+<p><strong>A. launcher_lib subcommand + read_state-level marker mapping (CHOSEN).</strong> Broker as <code>python3 hooks/launcher_lib.py broker-merge …</code>; the durable marker is consulted inside <code>supervision_lib.read_state</code>, mapping declared-then-deleted to the existing <code>&quot;invalid&quot;</code> load status so every consumer fail-closes with no per-consumer edits.</p>
+<ul>
+<li>Pros: one-helper-one-home (campaign machinery, injectable runner, and the <code>classify_issue_state</code> evidence probe already live in launcher_lib); the <code>&quot;invalid&quot;</code> mapping makes the existing docstring at <code>supervision_route.py:287-289</code> (&quot;invalid (corrupt/deleted-mid-session)&quot;) true instead of aspirational; zero changes to <code>authority_permits</code>, <code>consult_check</code>, or claims sentinels — they already deny on invalid (<code>supervision_route.py:298-304</code>; <code>supervision_claims.py:125,131</code>).</li>
+<li>Cons: launcher_lib grows past 6800 lines; <code>&quot;invalid&quot;</code> loses the deleted-vs-corrupt distinction in the view (mitigated: stderr warning at read time + telemetry reason string name the marker).</li>
+</ul>
+<p><strong>B. New <code>hooks/supervision_broker.py</code> module + a fourth load_status <code>&quot;deleted&quot;</code>.</strong></p>
+<ul>
+<li>Pros: launcher_lib stays smaller; <code>&quot;deleted&quot;</code> is self-describing in every downstream surface.</li>
+<li>Cons: the broker needs launcher_lib anyway (issue probe, runner idiom, locked driver-state read) — a new module either imports 6756 lines lazily or duplicates them; a fourth status value forces an audit of every <code>load_status</code> consumer (8 call sites) and any missed one silently treats <code>&quot;deleted&quot;</code> as not-&quot;valid&quot;-but-also-not-&quot;invalid&quot; with undefined semantics; new hook modules auto-enroll in the smoke suite (fine, but one more surface).</li>
+</ul>
+<p><strong>C. Marker checked only at <code>evaluate_workspace</code>/<code>authority_permits</code> (narrow blast radius).</strong></p>
+<ul>
+<li>Cons (disqualifying): <code>supervision_claims._current_supervision_revision</code> calls <code>read_state</code> directly (<code>supervision_claims.py:129-134</code>), so a view-level check leaves claim minting open under a deleted file (<code>absent → 0</code> = a legitimate never-declared revision); <code>installs_forbidden</code>/<code>scanner_bootstrap</code> would likewise stay open. Exactly the class of missed-consumer hole this issue exists to close.</li>
+</ul>
+<p>Choice: <strong>A</strong>. Effort M-L. Risk: fail-closed regressions on attended workspaces — bounded by the back-compat rule (no marker file → behavior byte-identical) and the test plan (§8).</p>
+<p><strong>Cross-model provenance (peer consult, gpt-5.6-sol via review_runner, 2026-08-06; own draft written first, blind).</strong> The peer proposed a new <code>hooks/supervision_merge.py</code> module with an immutable never-cleared marker at <code>&lt;workspace&gt;/.rawgentic/supervision/</code>. Adopted from the peer: (1) <strong>idempotent broker re-runs</strong> — an existing claim with the same execute-once identity resumes (pending → continue; executing → reconcile first; executed → rc 0), so crash recovery and the parked→human→re-run path never refuse or double-merge; (2) <strong>PR-state evidence probe recording the merge SHA</strong> (<code>gh pr view --json state,mergeCommit</code> shape) rather than the issue-state probe alone; (3) <strong>one structured JSON result line on stdout</strong> (<code>status</code>, <code>reason</code>, <code>claim_id</code>, <code>merge_sha</code>, <code>next_action</code>) for prose and telemetry symmetry; (4) the <strong>legacy-migration note</strong> in §2. Declined with reason: the separate module (the broker needs launcher_lib&#x27;s probe + runner either way — a new &quot;GitHub adapter&quot; abstraction is an unrequested layer); the immutable marker (deleting an ATTENDED record would then read invalid and brick installs+merges workspace-wide — a fail-closed outage for zero security gain, since deletion during attendance widens nothing); the audit-outbox/event-drain machinery (its own risk list concedes the lock-order complexity — the simple fail-closed pre-execution append achieves the same security property); the rich exit-code vocabulary 20/21/30/31/40/41/42 (house idiom is small ints; reasons ride stdout JSON + telemetry). The inline brainstorm pass (deep-reasoner) independently converged on Approach A and contributed the marker-specific denial diagnostics (§3, rc 12 reason text).</p>
+<h2>2. Component 1 — the durable declaration marker (AC2, lands first)</h2>
+<p><strong>Marker file:</strong> <code>&lt;workspace&gt;/claude_docs/.supervision.declared.json</code> — a sibling of <code>.supervision.json</code>, same directory, written atomically. Content:</p>
+<pre><code>{&quot;schema_version&quot;: 1, &quot;declared&quot;: true, &quot;revision&quot;: 4, &quot;state&quot;: &quot;away&quot;, &quot;ts&quot;: &quot;2026-08-06T22:00:00Z&quot;}</code></pre>
+<p><strong>Lifecycle (all writes inside the already-held supervision-file lock — <code>supervision_admin.py</code> is the sole writer):</strong></p>
+<ul>
+<li><code>declare()</code> writes the marker (<code>declared: true</code>, the new revision, the declared state) <strong>before</strong> persisting the state record, both under the lock taken at <code>supervision_admin.py:189-190</code>. Crash between the two writes → marker live + state absent → reads as invalid → deny. Fail-closed, recoverable by re-declaring or <code>mark_attended</code>.</li>
+<li><code>mark_attended()</code> writes <code>declared: false</code> (keeps the file — a present-but-false marker is a positive &quot;attended&quot; record) in the same lock hold that persists the attended record. Deleting an attended record afterwards reads as never-declared → attended, which widens nothing (attended already permits everything).</li>
+<li><code>mark_transport_verified()</code> does not touch the marker (it edits an attended record).</li>
+</ul>
+<p><strong>Read side (<code>supervision_lib.read_state</code>) — the marker is consulted on EVERY read, not only when the state file is absent (Step-4 pass-1 Critical: the absent-only variant left a crash between declare&#x27;s two writes reading as a stale VALID attended record, permitting everything while the owner is away).</strong> The consistency rule, applied after the state file loads (or fails to load):</p>
+<ul>
+<li>no marker file → today&#x27;s semantics exactly (state governs; absent → never-declared → attended) — back-compat, all existing workspaces unchanged;</li>
+<li>marker present but unreadable/corrupt/oversize → <code>&quot;invalid&quot;</code> + stderr, regardless of the state file — fail-closed on a security boundary;</li>
+<li>marker parses with <code>declared: false</code> → state governs (a deleted ATTENDED record reads absent → attended, which widens nothing);</li>
+<li>marker parses with <code>declared: true</code> → <code>Loaded({}, &quot;invalid&quot;)</code> + one stderr line naming the marker, whenever ANY of: the state file is absent (declared-then-deleted); the state record says <code>attended</code> (declare crashed between marker and state writes — the pass-1 Critical); or <code>state.revision &lt; marker.revision</code> (stale pre-declare record). A valid away/sleeping record at <code>revision &gt;= marker.revision</code> passes through unchanged.</li>
+</ul>
+<p>Hot-path cost: one additional small capped file read per <code>read_state</code> call (the same discipline as the state read). The no-workspace-root branch (<code>supervision_lib.py:165-167</code>) is unchanged — no workspace context means no marker to consult.</p>
+<p><strong>Write ordering (revised for the cross-check):</strong> <code>declare</code> writes the marker (<code>declared: true</code>, revision N+1) FIRST, then the state — a crash between now reads invalid (marker true + attended-or-stale state), never attended. <code>mark_attended</code> clears the marker (<code>declared: false</code>, revision N+1) FIRST, then writes the attended state — a crash between leaves the old away/sleeping record governing (restrictive, no widening), and re-running <code>mark_attended</code> completes recovery.</p>
+<p><strong>Recovery revision rule (owner decision 2026-08-06, AskUserQuestion at the Step-4 breaker):</strong> when the state file is absent and a live marker exists, the next <code>declare</code>/<code>mark_attended</code> derives its revision as <code>marker.revision + 1</code> — never the absent-state default of 0 — so the revision fence and any claims bound to pre-deletion revisions stay coherent. The full-reset alternative (cancel all claims on recovery) was declined by the owner.</p>
+<p><strong>Ship-time migration (<code>supervision_admin.py bootstrap-marker</code>, Step-4 pass-1 High; self-healing added pass 2):</strong> a live declaration made BEFORE this ships has no marker, and waiting for the next admin write leaves the deletion hole open in production. Two layers:</p>
+<ol>
+<li><strong>Broker self-heal (load-bearing):</strong> on every <code>broker-merge</code> invocation, when the state record is VALID and no marker exists, the broker writes the matching marker under the supervision lock BEFORE evaluating — so the first broker use migrates the workspace unprompted, and a skipped manual step cannot silently preserve the legacy fail-open behavior. <code>declare</code>/<code>mark_attended</code> writes migrate it likewise.</li>
+<li><strong><code>bootstrap-marker</code> admin subcommand (belt and suspenders):</strong> under the supervision lock, read the state; a valid record → write the matching marker (<code>declared = (state != &quot;attended&quot;)</code>, the record&#x27;s revision); absent or invalid → report and write nothing. Operational step recorded in docs/supervision.md and this PR: run once on this workspace immediately after merge + plugin reinstall.</li>
+</ol>
+<p>The reviewer&#x27;s stronger machinery (per-workspace migration registry + broker activation fence) was declined: this is a one-workspace deployment, the self-heal closes every future window mechanically, and a plugin has no install-time execution hook to anchor a registry to.</p>
+<p><strong>Why clear-on-attend rather than an immutable ever-declared marker (peer disagreement, resolved):</strong> the marker means &quot;a declaration is live NOW&quot;, not &quot;ever declared&quot;. Deleting an ATTENDED record widens nothing (attended already permits everything), so denying there is a pure fail-closed outage. The crash windows are analyzed under &quot;Write ordering&quot; above — both directions fail restrictive, never permissive.</p>
+<p><strong>Why this closes findings 1 and 4 at every consumer at once:</strong> <code>authority_permits</code> denies invalid (<code>supervision_route.py:298-299</code>); claims revision becomes the <code>-1</code> refuse-sentinel (<code>supervision_claims.py:125,131</code>); <code>consult_check</code> denies via the invalid view; <code>installs_forbidden</code> returns True on invalid (<code>supervision_lib.py:364</code>); <code>evaluate_campaign</code>&#x27;s governed-ids narrowing no longer silently disables (invalid view denies everything anyway).</p>
+<p><strong>Finding 7 (deleted campaign driver-state) — the governed-campaign hardening:</strong> for MERGE, a missing driver-state already denies (policy <code>{}</code> → no grant). The residual widening is consult-only: a deleted restriction-bearing driver-state file falls back to the workspace consult grant. Close: in <code>evaluate_campaign</code>, when the supervision record is valid AND <code>campaign_id ∈ governed_campaign_ids</code> AND the driver-state file is missing, treat it as corrupt (deny merge + zero the consult grant), because a governed campaign is a positive registration that state is expected to exist. Non-governed campaigns keep today&#x27;s pass-through.</p>
+<h2>3. Component 2 — the broker command (AC1)</h2>
+<p><strong>Home:</strong> <code>hooks/launcher_lib.py</code>, subcommand <code>broker-merge</code>, following the three-part registration pattern (handler <code>_cmd_broker_merge</code>, parser block, dispatch chain entry — exemplar: <code>record-child-outcome</code> at <code>:5189-5237</code>, <code>:6621-6632</code>, <code>:6701-6702</code>).</p>
+<p><strong>CLI:</strong></p>
+<pre><code>python3 hooks/launcher_lib.py broker-merge \
+  --pr &lt;n&gt; --issue &lt;n&gt; --campaign &lt;campaign-id&gt; --project-root . [--repo &lt;owner/name&gt;]</code></pre>
+<p><code>--repo</code> defaults via the existing <code>repo_from_git</code>. All <code>gh</code> calls go through the injectable <code>runner</code> (<code>_default_runner</code>, <code>launcher_lib.py:1588-1590</code>) — the established testability idiom. The broker never constructs a <code>CampaignView</code> (AST guard) — it calls <code>evaluate_campaign</code>.</p>
+<p><strong>Sequence (telemetry points marked &quot;T&quot;):</strong></p>
+<ol start="0">
+<li><strong>Marker self-heal:</strong> state record VALID + no marker → write the matching marker under the supervision lock (<code>bootstrap_marker</code>, §2) before anything else.</li>
+<li><code>evaluate_campaign(workspace_root, campaign_id, project_root, now)</code> — workspace root by the existing walk-up (<code>_supervision_view_for</code> idiom, <code>:4576-4591</code>).</li>
+</ol>
+<p>1b. <strong>Target binding (Step-4 pass-1 High): the authorization must bind to THIS pr/issue/repo, or a grant scoped to one campaign authorizes any merge.</strong> Before the authority check:</p>
+<ul>
+<li><strong>Repo binding (pass-3 High, adopted):</strong> the effective repo must equal the project&#x27;s configured canonical <code>repo.fullName</code> (<code>.rawgentic.json</code>, already loaded by every WF2 run) — an explicit <code>--repo</code> that differs is rc 12, and cross-repository references can never pass.</li>
+<li>Read the campaign&#x27;s driver state (<code>_locked_state_read</code>) and record its content hash; require <code>--issue</code> to be one of the campaign&#x27;s children (the exact driver-state field named at T5 RED from <code>driver_lib</code>&#x27;s schema).</li>
+<li>Verify the PR↔issue linkage live — <code>gh pr view &lt;pr&gt; --repo &lt;repo&gt; --json closingIssuesReferences,body,title</code>: <code>--issue</code> in <code>closingIssuesReferences</code>, OR a <strong>line-anchored</strong> <code>(Closes|Part of) #&lt;issue&gt;</code> match in the body/title (the deliberate PR-body convention slot — an anchored match rejects quoted or mid-sentence historical mentions). <strong>Multi-PR children are legitimate: repo convention says only the LAST PR closes, earlier ones say &quot;Part of&quot;, which does not populate <code>closingIssuesReferences</code> — verified live on PRs #956/#958.</strong> The binding defends against caller confusion, not a malicious author — the PR author is the campaign&#x27;s own child run, the same trust domain as driver state. The reviewer&#x27;s stronger alternative (persist an exact <code>{repo, issue, pr}</code> tuple per child in driver state and authorize only that) needs a new pre-merge PR-registration surface in the driver — deferred to the PreToolUse hardening follow-up the issue names, where it belongs with the other enforcement work. Any mismatch or missing evidence → rc 12 (binding failure), nothing executed.</li>
+</ul>
+<p><strong>Canonical claim identity (pass-2 High, internal consistency):</strong> ONE tuple everywhere — <code>{campaign, issue, repo, pr, squash, delete_branch}</code> — used for minting, conflict detection, resumption, and telemetry, persisted as immutable claim metadata. §3 step 3 and this step share this definition; no second identity exists.</p>
+<p><strong>Stale-authorization recheck (pass-2 High, TOCTOU):</strong> the driver-state content hash from this step is stored on the claim; immediately before the <code>gh pr merge</code> call (after <code>begin_execution</code>), the broker re-reads driver state, re-runs <code>evaluate_campaign</code> + <code>authority_permits</code> — a changed hash or a now-denying authority aborts with rc 12 and a <code>stale-authorization</code> reason. The reviewer&#x27;s hold-the-lock-through-merge alternative was declined: holding a file lock across a network call that can take minutes blocks every other supervision operation; the recheck shrinks the window to milliseconds without that cost. <strong>Revocation semantics (pass-3 Medium, stated):</strong> authorization is evaluated at decision points — binding, minting, and the final recheck — never mid-flight; a revocation landing after the final recheck takes effect at the NEXT decision point (the GitHub merge API has no cancellation), and the executed claim + telemetry record which authorization the merge ran under. This is a named, accepted bound, not an oversight.</p>
+<ol start="2">
+<li><code>authority_permits(&quot;merge&quot;, view=view)</code> → T-authority line (permitted/denied + reason: state, grant, override, load_status). <strong>Denied → rc 12, nothing executed.</strong></li>
+<li><code>claim_action(action_kind=&quot;merge&quot;, action_target=&lt;repo&gt;#&lt;pr&gt;, params digest of the canonical identity </code>{campaign, issue, repo, pr, squash, delete_branch}<code>)</code> → T-claim minted. <strong>Re-run transition table (owner decision 2026-08-06, pass-2 breaker):</strong>
+<ul>
+<li><code>pending</code> → continue from step 4;</li>
+<li><code>executing</code> (incl. durably-parked: a parked claim STAYS <code>executing</code> with parked metadata) → reconcile (step 6 ambiguous path — probe first, never a blind second merge) before any new <code>gh</code> call;</li>
+<li><code>executed</code> → terminal forever → rc 0 with the stored merge SHA;</li>
+<li><code>cancelled</code> → never blocks: the re-run performs FRESH target binding and a FRESH authority evaluation, then mints a new claim, with a <code>reopened</code> note in telemetry;</li>
+<li>only a genuine refusal (revision fence, ClaimError) → rc 12 with the reason.</li>
+</ul></li>
+<li><code>begin_execution(claim)</code> → T-claim executing. <strong>The pre-execution telemetry appends (T-authority through T-executing) are fail-CLOSED: if a line cannot be recorded, the broker aborts before any side effect</strong> — an unmeasurable outward action is the exact failure this issue exists to prevent.</li>
+<li><code>gh pr merge &lt;pr&gt; --repo &lt;repo&gt; --squash --delete-branch</code> via the runner, bounded timeout.</li>
+<li>Outcome:
+<ul>
+<li>rc 0 from <code>gh pr merge</code> → <strong>confirm before recording (Step-4 pass-1 Medium):</strong> run the PR-state probe (<code>gh pr view &lt;pr&gt; --json state,mergeCommit</code>); require <code>MERGED</code> plus a merge-commit oid; <code>mark_executed</code> stores that <code>merge_sha</code> in the claim → T-claim executed → <strong>broker rc 0</strong> with the SHA in the stdout JSON. A success the probe cannot confirm is treated as the ambiguous path below — never recorded unconfirmed.</li>
+<li>Unambiguous failure (non-zero rc with a definite error, e.g. review-required refusal) → <code>reconcile_claim</code> with the evidence probe → probe says <code>confirmed_open</code> → claim cancelled → T-reconciled(cancelled) → rc 12 with gh&#x27;s stderr as the reason.</li>
+<li><strong>Ambiguous outcome</strong> (timeout, transport error, unknown state — the GitHub merge API has no idempotency key): <code>reconcile_claim</code> with a <strong>PR-state evidence probe</strong> (peer-adopted; <code>gh pr view &lt;n&gt; --repo &lt;r&gt; --json state,mergeCommit</code> via the runner — PR <code>MERGED</code> + mergeCommit oid, not the issue-state proxy) — <code>MERGED</code> → resolve → <code>mark_executed</code> with the merge SHA → rc 0; <code>OPEN</code> → ONE internal retry of step 5, then re-probe; still ambiguous or <code>unknown</code> → <strong>park</strong> → T-parked → rc 13, claim left for a human, safely re-runnable (idempotent resume above).</li>
+<li><strong>Result surface (contract narrowed, owner decision 2026-08-06):</strong> one JSON line on stdout on every HANDLER exit — <code>{&quot;status&quot;, &quot;reason&quot;, &quot;claim_id&quot;, &quot;merge_sha&quot;, &quot;next_action&quot;}</code> — so prose branches on rc and humans read the reason (denial reasons are marker-specific when the marker caused the invalid state: &quot;declared-then-deleted; run /rawgentic:back or re-declare&quot;). Argparse usage errors (rc 2 before the handler runs) keep the standard stderr message, matching all 17 existing launcher_lib subcommands.</li>
+<li>Post-execution telemetry failures (T-executed, T-reconciled) are fail-LOUD-continue (stderr): the merge is already real and the claims file carries the authoritative state — aborting would only desynchronize.</li>
+</ul></li>
+</ol>
+<p><strong>Exit codes</strong> (next free in launcher_lib is 12): <code>0</code> merged-and-recorded · <code>2</code> caller/usage error (LauncherError convention) · <code>12</code> denied or refused pre-execution (authority denial, target-binding failure, claim refusal, strict-telemetry append failure, confirmed-open merge refusal — the distinct machine-readable reason rides the stdout JSON + telemetry) · <code>13</code> parked-ambiguous (human inspection required; claim parked; the command is idempotently re-runnable). <code>--repo</code>, when passed explicitly, is validated against the <code>owner/name</code> shape before entering runner argv (list-form argv already prevents shell injection).</p>
+<p><strong>AC3 (attended pass-through):</strong> <code>authority_permits</code> returns True for a valid attended record (<code>supervision_route.py:300-301</code>) — an attended campaign merge flows straight through, now with execute-once claim protection. Non-campaign merges never reach the broker (AC4 conditions the cutover on an active campaign) — byte-identical raw path.</p>
+<h2>4. Component 3 — decision telemetry (AC5)</h2>
+<p><strong>Store:</strong> <code>&lt;workspace&gt;/claude_docs/supervision-telemetry.jsonl</code> — beside the supervision state, outside the session-notes trimmer glob (the <code>decision_log.py:11-16</code> durability argument), uncommitted, survives session boundaries on disk. A committed store was rejected: run-records ride the PR pre-merge (#888), but broker decisions happen AT merge time, after PR content freezes — a committed store would always lag one PR.</p>
+<p><strong>Appender:</strong> <code>supervision_telemetry.append_event(workspace_root, event: dict) -&gt; None</code> in a NEW tiny module <code>hooks/supervision_telemetry.py</code>, byte-for-byte the <code>decision_log.append_record</code> pattern (<code>decision_log.py:97-137</code>): <code>O_CREAT|O_WRONLY|O_APPEND</code> 0600, <code>flock(LOCK_EX)</code>, torn-tail newline repair, single buffered write loop, <code>fsync</code> + dir-fsync. A new module rather than <code>supervision_lib</code> because <code>fcntl</code> is NOT on the supervision_lib import allowlist (<code>tests/hooks/test_supervision_lib.py:513-516</code> — allowed: argparse, collections, dataclasses, datetime, json, os, re, stat, sys, typing) and that allowlist protects the per-tool-call context_meter read path. Emitters (supervision_claims, consult_check, the broker) import it lazily. The module is stdlib-only (os, fcntl, json), no argparse (smoke suite auto-enrolls it for clean-env import only). Raises on failure; each CALLER decides the fail mode (§3 step 4 vs 6).</p>
+<p><strong>Emission points</strong> (&quot;every authority decision and every claim transition&quot; = every live decision path):</p>
+<ul>
+<li>claims transitions: inside <code>supervision_claims</code> at each state write — minted / executing / executed / cancelled / reconciled(resolve|retry|park). <strong>The functions gain <code>telemetry_mode=&quot;strict&quot;|&quot;best_effort&quot;</code> (default <code>best_effort</code>) — Step-4 pass-1 High: without it, a swallowed append failure inside claims would let the broker merge without the transition record it believes is fail-closed.</strong> <code>strict</code> re-raises the append failure to the caller; <code>best_effort</code> prints one stderr line and continues. The broker passes <code>strict</code> for <code>claim_action</code> and <code>begin_execution</code> (abort before any side effect, rc 12, reason <code>telemetry-unavailable</code>); the <code>back</code> skill&#x27;s <code>cancel_claims</code> and all post-execution transitions stay <code>best_effort</code> (the merge is already real; the claims file carries the authoritative state).</li>
+<li>authority decisions: at the two call sites with workspace context — the broker (merge; the T-authority append is strict, same abort semantics) and <code>consult_check</code> (consult, best_effort).</li>
+<li><strong>Crash-gap self-repair (pass-3 High, adopted-modified):</strong> claim state and telemetry are two files with no atomic commit; a strict-mode abort can leave a claim transition without its line. The claims file is the AUTHORITATIVE lifecycle record — a telemetry gap loses one measurement line, never authority. Mitigation: every broker resume emits a <code>resumed</code> line carrying the claim&#x27;s current state, so any crash-window gap self-heals at the next touch. The reviewer&#x27;s <code>telemetry_pending</code> outbox inside the claims file (atomic commit + drain + delivered-mark + failure-injection matrix) was declined a second time: the pass-2 peer proposal already carried it, and its own risk list conceded the lock-order and schema complexity — disproportionate to a measurement surface with an authoritative store beside it.</li>
+</ul>
+<p><strong>Lock order (stated for the new lock):</strong> supervision file → claims file → telemetry file, telemetry innermost; the telemetry flock is never held while acquiring any other lock. Asserted in the T4/T5 tests.</p>
+<p><strong>Line schema:</strong></p>
+<pre><code>{&quot;schema_version&quot;: 1, &quot;kind&quot;: &quot;authority|claim&quot;, &quot;action&quot;: &quot;merge|consult&quot;,
+ &quot;decision&quot;: &quot;permitted|denied&quot;, &quot;transition&quot;: &quot;minted|executing|executed|cancelled|reconciled|parked&quot;,
+ &quot;reason&quot;: &quot;&lt;str&gt;&quot;, &quot;campaign&quot;: &quot;&lt;id&gt;&quot;, &quot;project_root&quot;: &quot;&lt;path&gt;&quot;, &quot;issue&quot;: 963, &quot;pr&quot;: 970,
+ &quot;claim_id&quot;: &quot;&lt;id&gt;&quot;, &quot;revision&quot;: 4, &quot;supervision_state&quot;: &quot;away&quot;, &quot;load_status&quot;: &quot;valid&quot;,
+ &quot;session&quot;: &quot;&lt;CLAUDE_CODE_SESSION_ID or null&gt;&quot;, &quot;ts&quot;: &quot;&lt;iso Z&gt;&quot;}</code></pre>
+<p><code>kind</code> discriminates which of <code>decision</code>/<code>transition</code> is present. Reader: none shipped here (measurement is ad-hoc jq/python, like the 2026-08-06 zero-callers analysis) — a reader CLI is a named non-goal.</p>
+<h2>5. Component 4 — prose cutover + guard tests (AC4)</h2>
+<ol>
+<li><strong><code>skills/implement-feature/references/step-14.md</code></strong> item 1 becomes conditional: campaign active (the same condition item 2b&#x27;s <code>record-child-outcome</code> already keys on) → run <code>broker-merge</code> and branch on rc 0/12/13; no campaign → today&#x27;s raw <code>gh pr merge</code> unchanged. Budget: the file has ~256 bytes of slack (<code>tests/test_wf2_prose_budget.py</code> ceiling 5231, actual 4975) — the ceiling and <code>TOTAL_CEILING_BYTES</code> rise with the required trim-first justification comment.</li>
+<li><strong><code>skills/epic-run/SKILL.md</code></strong>: boundary prose (<code>:132-135</code>) names the broker command verbatim for the between-children merge; Step 2&#x27;s auto-merge answer gains the persistence instruction — write <code>&quot;merge_policy&quot;: &quot;auto-merge-scoped-to-run&quot;</code> into the campaign driver-state <code>policy</code> object at creation (closing the live plumbing gap: <code>supervision_route.py:175-176</code> reads a key no prose writes today; two state files carry it hand-edited). Step 2 stays TWO questions (<code>tests/test_epic_run_clarity.py:96</code>). <strong><code>policy.merge_policy</code> schema (pass-2 Medium):</strong> a string; the EXACT value <code>&quot;auto-merge-scoped-to-run&quot;</code> grants (strict equality at <code>supervision_route.py:176</code>); <code>&quot;pr-only&quot;</code> is the recorded decline; absent, unknown, or any other type = NO grant (the existing evaluation already behaves this way — <code>policy.get(&quot;merge_policy&quot;) ==</code> comparison — and the docs now say so). An end-to-end fixture creates driver state exactly as the prose prescribes and proves <code>evaluate_campaign</code> yields the scoped merge grant (§8).</li>
+<li><strong><code>docs/multi-issue-driver.md</code></strong>: <code>merge_policy</code> joins the documented <code>policy</code> vocabulary (<code>:113-125</code>).</li>
+<li><strong><code>docs/supervision.md:177-183</code></strong>: the &quot;parks for a human on that one call site&quot; paragraph becomes the broker paragraph (that sentence turns false the moment this ships).</li>
+<li><strong><code>hooks/step_state_post.py</code></strong>: add needle <code>&quot;broker-merge&quot;</code> → wf2 <code>(&quot;14&quot;, &quot;Merge&quot;)</code> and wf3 <code>(&quot;12&quot;, &quot;Merge and Deploy&quot;)</code>, adjacent to the RETAINED <code>gh pr merge</code> rows (non-campaign runs still emit the raw command; removing the row would regress step detection for them).</li>
+<li><strong>Guard tests</strong>: location pins in the <code>TestRunRecordLandsExactlyOnce</code> idiom (<code>tests/test_wf2_clarity.py:1913-1922</code> — file-scoped, whitespace-normalized): (a) step-14.md&#x27;s campaign branch contains the literal broker command and the campaign-active conditional sentence; (b) epic-run&#x27;s boundary section contains the broker command; (c) epic-run&#x27;s Step 2 section contains the <code>merge_policy</code> persistence sentence. The pin asserts the broker command&#x27;s presence in the campaign branch — the raw command legitimately remains for the non-campaign branch, so the guard pins the CONDITIONAL structure, not mere absence of <code>gh pr merge</code>.</li>
+</ol>
+<p><strong>Prose-model note (not a code change):</strong> WF2 SKILL.md:90 (&quot;an unattended child never merges&quot;) and the driver&#x27;s between-children merge are consistent — the CHILD stops at its PR; the DRIVER merges at the campaign boundary under a scoped grant. Step-14/epic-run wording will state this split explicitly so the two surfaces stop reading as contradictory.</p>
+<p><strong>Declined Step-4 finding, recorded (High: &quot;broker ALL merges, campaign or not&quot;):</strong> the reviewer wants <code>--campaign</code> optional so even non-campaign merges go through the broker. Declined for this issue, with the issue&#x27;s own words as the reason: AC4 scopes the cutover to &quot;whenever a campaign is active&quot;, the out-of-scope block names PreToolUse hard enforcement of raw <code>gh pr merge</code> as the named follow-up, and &quot;any behavior change for attended sessions&quot; is explicitly out of scope (a non-campaign merge is an attended, user-requested act — Step 14 only runs on user request, and unattended runs stop at the PR). The residual raw path is therefore reachable only by prose violation, which the named follow-up hardening exists to close. Owner saw this disposition at the Step-4 breaker (2026-08-06) and did not overturn it. Carried into the PR body per the issue-throttle discipline.</p>
+<h2>6. Security implications</h2>
+<ul>
+<li>The broker is the sanctioned executable merge path, and it enforces fail-closed WITHIN its own invocation. <strong>Enforcement-boundary honesty (pass-2 High, adopted as wording):</strong> what routes campaign merges INTO the broker is prose pinned by guard tests — the same enforcement layer every WF gate in this plugin uses — not an executable block on raw <code>gh pr merge</code>. That hard block (PreToolUse) is the issue&#x27;s own named follow-up. Until it lands, a prose-violating session can still run the raw command; the guard tests make silent prose regression impossible, and the follow-up closes the rest.</li>
+<li>Fail modes, per path (repo convention: a boundary that cannot evaluate fails closed): marker unreadable → deny; supervision state invalid/deleted → deny; driver-state corrupt or governed-but-missing → deny; target binding unprovable → deny; stale-authorization recheck fails → deny; pre-execution telemetry unwritable → abort before side effect; ambiguous merge outcome → park, never blind-retry past one probe-confirmed attempt.</li>
+<li>No new trust boundary: the marker and telemetry live in the same filesystem trust domain as <code>.supervision.json</code> itself (the #947 finding-5 refutation applies — an actor who can forge these files already has code-execution in hooks/).</li>
+<li>No secrets touched. <code>gh</code> auth is ambient (existing convention). Telemetry lines carry no secret material.</li>
+<li>Injection surface: <code>--campaign</code>/<code>--pr</code>/<code>--repo</code> values reach <code>gh</code> argv via the runner (list-form argv, <code>shell=False</code> — <code>launcher_lib.py:1588-1590</code>); campaign ids are already validated by <code>validate_campaign_id</code> (<code>supervision_lib.py:388</code>); pr is int-validated by argparse.</li>
+</ul>
+<h2>7. Platform / external dependencies</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: <code>gh pr view &lt;n&gt; --repo &lt;owner/name&gt; --json state,mergeCommit</code> via subprocess, list argv</li>
+</ul>
+<p>  feasibility: verified via spike — executed live 2026-08-06 through the exact shipped mechanism (<code>subprocess.run</code> list argv, no shell): <code>gh pr view 961 --repo 3D-Stories/rawgentic --json state,mergeCommit</code> → rc 0, <code>{&quot;state&quot;:&quot;MERGED&quot;,&quot;mergeCommit&quot;:{&quot;oid&quot;:&quot;d5f1683e9fa9bb7ce7b5bab93ad5a32e8686e17f&quot;}}</code>   failure: fail-loud (probe returns <code>unknown</code> on error → broker parks, never assumes)</p>
+<ul>
+<li>api: <code>gh pr view &lt;n&gt; --repo &lt;owner/name&gt; --json closingIssuesReferences,body,title</code> via subprocess, list argv (the target-binding read)</li>
+</ul>
+<p>  feasibility: verified via spike — executed live 2026-08-06, same mechanism: <code>gh pr view 961 --repo 3D-Stories/rawgentic --json closingIssuesReferences,title</code> → rc 0, <code>closingIssuesReferences</code> = issues #943 and #947 with numbers and repository identity; the &quot;Part of&quot; fallback necessity verified against merged PRs #956/#958 (bodies reference #586 without closing it)   failure: fail-loud (missing/empty field with no body match → rc 12 binding failure, never a silent pass)</p>
+<ul>
+<li>api: <code>gh pr merge &lt;n&gt; --repo &lt;owner/name&gt; --squash --delete-branch</code> via subprocess (list argv, injectable runner)</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — the exact command every WF2 merge to date executes from step-14.md:35 (most recently PR #961, merged 2026-08-06 as d5f1683e). A live spike is impossible without performing a real merge; the residual delta (prose shell vs hooks subprocess) is exercised by the probed <code>gh pr view</code> spike above — same binary, same ambient auth, same subprocess mechanism — and named here honestly rather than over-claimed   failure: fail-loud (non-zero rc + stderr captured by the runner; broker maps to rc 12/13 + telemetry; success additionally probe-confirmed before <code>mark_executed</code>, §3.6)</p>
+<ul>
+<li>api: <code>gh api graphql</code> issue-state probe</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — <code>launcher_lib.py:3645-3670</code> (<code>classify_issue_state</code> probe factory, in production use by <code>record-child-outcome</code>)   failure: fail-loud (probe returns <code>unknown</code> on error → broker parks, never assumes)</p>
+<ul>
+<li>api: <code>fcntl.flock</code> + <code>O_APPEND</code> single-write JSONL append</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — <code>decision_log.py:97-137</code>, in production use   failure: fail-loud (OSError propagates to the caller-decided fail mode, §4)</p>
+<h2>8. Test design (sketch — Step 5 decomposes)</h2>
+<ul>
+<li><strong>Marker (first, TDD red on the live defect):</strong> declare → <code>os.unlink(.supervision.json)</code> → <code>read_state</code> returns invalid; <code>authority_permits(&quot;merge&quot;)</code> False; claim mint refused (−1 fence); <code>consult_check</code> rc 1; <code>installs_forbidden</code> True. Never-declared (no marker) stays attended — <code>test_absent_state_is_attended_and_permits_everything</code> gets qualified to the no-marker case, not deleted. Corrupt marker → invalid even with a valid state file. <code>mark_attended</code> clears; post-attended deletion → attended. Crash windows, all four: declare-from-attended crash (marker true + valid ATTENDED state → invalid — the pass-1 Critical); declare re-declare crash (marker revision &gt; state revision → invalid); mark_attended crash (marker cleared first → old away record governs, restrictive); marker-live + state-absent → invalid. Recovery revision rule: declare after deletion mints <code>marker.revision + 1</code> with pre-existing claims at the old revision still coherent. bootstrap-marker: valid away state → marker true; valid attended → marker false; absent/invalid → no-op.</li>
+<li><strong>Broker:</strong> fake-runner in-process tests per launcher_lib idiom — target-binding mismatch rc 12 before any authority read; denied (no grant); permitted-attended; permitted-by-grant; foreign-identity claim refusal vs same-identity idempotent resume (pending/executing/executed); clean merge (runner asserts exact argv) followed by the mandatory probe-confirm before mark_executed; probe-unconfirmable success → ambiguous path, never recorded; ambiguous timeout → probe MERGED → resolve rc 0; probe OPEN → one retry → rc 0/12; probe unknown → park rc 13; strict-telemetry failure aborts before the runner sees a merge call (rc 12, reason telemetry-unavailable). One real-subprocess CLI test (--help + a refusal path).</li>
+<li><strong>Telemetry:</strong> every broker path leaves the expected line sequence; torn-tail repair; concurrent append integrity (two processes, no lost line); claims-transition lines from the claims unit suite.</li>
+<li><strong>Prose guards:</strong> the three location pins of §5.6 + step_state signature tests extended (<code>tests/hooks/test_step_state_hook.py:73-91</code>).</li>
+<li><strong>Pass-2 additions:</strong> the full re-run transition table (pending/executing/parked/executed/cancelled — cancelled re-mints only after fresh binding + authority, <code>reopened</code> telemetry line; executed terminal); driver-state hash recheck aborts on mutation between binding and merge; broker self-heals a missing marker for a valid state; the <code>merge_policy</code> end-to-end fixture (driver state created exactly as the epic-run prose prescribes → <code>evaluate_campaign</code> yields the scoped grant); binding accepts a &quot;Part of #N&quot;-body PR and rejects an unrelated PR; argparse rc-2 exits keep the standard stderr contract.</li>
+<li><strong>Freshness checks named by the gather:</strong> <code>TestConsultCheck</code> reason-string assertions reviewed before the deleted→invalid reason changes; <code>evaluate_campaign</code> governed-missing-state denial (new).</li>
+</ul>
+<h2>9. Scope + multi-PR assessment</h2>
+<p>In scope: exactly the issue&#x27;s five ACs (§2-§5 above) + their tests. Out of scope (issue-named): route_for consumers beyond merge, PreToolUse hard enforcement, attended behavior changes. Estimated diff: ~1200-1500 lines incl. tests — above the 500-line multi-PR flag. <strong>Recommendation: ONE PR</strong>, tasks strictly ordered marker-first (AC2&#x27;s &quot;FIRST&quot; is satisfied by commit order inside the PR); a split into marker-PR + broker-PR doubles CI cycles during an active GitHub Actions outage and the marker alone is unobservable without the broker&#x27;s telemetry. Swap-point: if Step 11 review balks at diff size, the marker commits stand alone and can be cherry-picked into a Part-1 PR.</p>
+<h2>10. Failure modes of this design (what is likeliest wrong)</h2>
+<ol>
+<li>The fail-closed pre-execution telemetry gate could brick campaign merges on a full disk — accepted deliberately (rc 12 with a legible reason beats an unrecorded merge), named for the gate to probe.</li>
+<li>The <code>&quot;invalid&quot;</code> mapping might surprise a consumer that treats invalid as &quot;corrupt file present&quot; (e.g. a future repair tool reading the file) — mitigated by the stderr marker-naming warning and telemetry <code>load_status</code> field.</li>
+<li><code>mark_attended</code> semantics under an absent-but-marker-live state: it must clear the marker even though the state file is gone (recovery path, revision <code>marker.revision + 1</code>) — verified by a dedicated test.</li>
+<li>The marker↔state consistency rule (<code>state.revision &lt; marker.revision</code> → invalid) is the subtlest new logic — an off-by-one there fail-closes a healthy workspace or fail-opens a crashed declare. All four crash windows carry dedicated tests (§8).</li>
+<li>Target binding depends on the campaign driver-state recording the child&#x27;s membership — a campaign whose state predates the queue conventions may deny legitimately-scoped merges (fail-closed direction; the operator re-runs after <code>record-child-outcome</code> fixes the state).</li>
+<li>A marker in the same directory as the state file does not survive a directory-level wipe (<code>rm -rf claude_docs</code>) — named residual, out of threat model (an actor with that access can edit hooks/ directly; #947 finding-5 refutation reasoning).</li>
+</ol>
+
+</main>
+<footer>Last updated: 2026-08-06 18:01 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

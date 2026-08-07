@@ -173,10 +173,38 @@ workspace state):
 - `tests/test_askuserquestion_registration.py` — a repo-wide guard that a new
   `AskUserQuestion` site in `skills/**/*.md` names its own routing.
 
-Deliberately still NOT here, per the design's own scope boundary (§1a): wiring
-`authority_permits`/the claims lifecycle into the epic-run driver's OWN merge step
-(`hooks/launcher_lib.py`, WF2 Step 14) — that executable broker belongs to a future
-issue, so this shipped the gate, not a retrofit of every action call site in the repo.
-Until that broker exists, a run that hits a blocker still **parks for a human** on that
-one call site rather than deciding, even though the decision layer above can now answer
-the question correctly if asked.
+## The supervised merge (#963)
+
+`python3 hooks/launcher_lib.py broker-merge --pr <n> --issue <n> --campaign <id>` is the
+executable broker the section above was waiting for — the ONE live caller of the
+authority core, and what makes a declared absence actually gate a merge instead of
+merely describing one. WF2 Step 14 and the epic-run boundary invoke it whenever a
+campaign is active (guard-tested prose); a non-campaign merge still runs the raw command.
+
+It binds authorization to the target before reading authority (the repo must be the
+project's own, the issue a child of the campaign, the PR must reference the issue), mints
+an execute-once claim, re-checks that nothing moved, merges, and confirms the SHA by
+probing the PR — `gh pr merge` exiting 0 is never treated as evidence on its own. rc `0`
+merged, `12` refused with nothing merged, `13` parked for a human. Re-running the
+identical command is always safe: executed is terminal, executing or parked reconciles
+from real evidence, pending continues.
+
+**The grant it reads must be written.** During an absence a merge is permitted only when
+the campaign's driver state carries `policy.merge_policy = "auto-merge-scoped-to-run"`
+and no tightening override denies it. The epic-run Step-2 answer records that key —
+before #963 the gate read a field no prose produced.
+
+**Decision telemetry.** Every authority decision and claim transition appends one line to
+`<workspace>/claude_docs/supervision-telemetry.jsonl`, so whether this machinery is
+reached is answered by data rather than by reading code — the question that killed the
+executor (D174) and that #871 could not answer for its own core.
+
+**One-time migration.** A workspace that declared BEFORE #963 shipped has no declaration
+marker. Run `python3 hooks/supervision_admin.py bootstrap-marker --workspace <root>` once
+after upgrading; `broker-merge` and every `declare`/`mark_attended` also self-heal it.
+
+Still deliberately out of scope: executable PreToolUse enforcement that BLOCKS a raw
+`gh pr merge` during an active campaign. What routes campaign merges into the broker is
+prose pinned by guard tests — the same enforcement layer every gate in this plugin uses —
+so a prose-violating session can still reach the raw command. That hardening is the named
+follow-up.
