@@ -761,7 +761,7 @@ For major changes, please open an issue first to discuss the approach.
   record body), and `session-start` passes it. The meter-overshoot caveat is deferred to #729/#734
   with its reason recorded in `docs/context-meter.md`, which the issue's own acceptance criterion
   permits. Two tests that hard-coded the old thresholds now derive them from the constants. No
-  workflow-spine change → no diagram REV. Suite 6342→6349.
+  workflow-spine change → no diagram REV. Suite 6342→6352.
 
 ### v3.139.4 (2026-08-07)
 - **The `/goal` send now recovers an unsubmitted paste, so a handoff stops dying at `goal_armed`
