@@ -3505,6 +3505,142 @@ class TestBrokerMergeContractHoldsUnderRaces:
         assert out["claim_id"]
 
 
+class TestBrokerMergeStep11Findings:
+    """Step 11 cross-model review — every finding, as a test that fails without its fix."""
+
+    def test_a_quoted_reference_does_not_bind(self, tmp_path, capsys):
+        """F6: the prefix class explicitly permitted `>`, so a quoted line in an
+        unrelated PR passed target binding. The earlier test gave false confidence by
+        putting text between the quote marker and the phrase."""
+        root = _broker_workspace(tmp_path)
+        for body in ("> Part of #963", "> Closes #963", ">> Part of #963"):
+            runner = BrokerRunner(binding=json.dumps({
+                "closingIssuesReferences": [], "body": body, "title": "unrelated"}))
+            rc, _out = _broker(root, runner=runner, capsys=capsys)
+            assert rc == BROKER_REFUSED_RC, body
+            assert runner.merge_calls == 0, body
+
+    def test_an_explicit_repo_is_refused_when_no_canonical_repo_is_configured(
+            self, tmp_path, capsys):
+        """F4: with `.rawgentic.json` missing or malformed the equality check was
+        skipped entirely, so `--repo` could point anywhere the ambient gh token reaches."""
+        root = _broker_workspace(tmp_path)
+        Path(root, ".rawgentic.json").write_text("{not json", encoding="utf-8")
+        runner = BrokerRunner()
+        rc, out = _broker_with_repo(root, runner=runner, repo="someone/else",
+                                    capsys=capsys)
+        assert rc == BROKER_REFUSED_RC
+        assert runner.merge_calls == 0
+        assert "repo" in out["reason"]
+
+    def test_a_closing_reference_in_another_repository_does_not_bind(self, tmp_path,
+                                                                    capsys):
+        """F5: only the issue NUMBER was compared, so a cross-repo closing reference to
+        someone else's issue 963 satisfied this campaign's binding."""
+        root = _broker_workspace(tmp_path)
+        runner = BrokerRunner(binding=json.dumps({
+            "closingIssuesReferences": [
+                {"number": 963,
+                 "repository": {"name": "other", "owner": {"login": "someone"}}}],
+            "body": "no linkage here", "title": "unrelated"}))
+        rc, _out = _broker(root, runner=runner, capsys=capsys)
+        assert rc == BROKER_REFUSED_RC
+        assert runner.merge_calls == 0
+
+    def test_a_matching_repository_closing_reference_still_binds(self, tmp_path, capsys):
+        root = _broker_workspace(tmp_path)
+        runner = BrokerRunner(binding=json.dumps({
+            "closingIssuesReferences": [
+                {"number": 963,
+                 "repository": {"name": "r", "owner": {"login": "o"}}}],
+            "body": "", "title": ""}))
+        rc, _out = _broker(root, runner=runner, capsys=capsys)
+        assert rc == 0
+
+    def test_a_reconcile_that_cannot_reconfirm_the_sha_parks(self, tmp_path, capsys):
+        """F1: the resolved branch re-probed and returned rc 0 regardless, so the broker
+        could report a probe-confirmed merge with merge_sha null."""
+        root = _broker_workspace(tmp_path)
+
+        class Flaky(BrokerRunner):
+            def __init__(self):
+                super().__init__(merge_raises=subprocess.TimeoutExpired("gh", 180))
+                self.state_calls = 0
+
+            def __call__(self, argv, timeout=180):
+                joined = " ".join(argv)
+                if "mergeCommit" in joined:
+                    self.state_calls += 1
+                    # First probe (inside reconcile) says MERGED; the confirmation
+                    # probe then fails — a transient GitHub error.
+                    self.pr_state = _MERGED_JSON if self.state_calls == 1 else "{not json"
+                return super().__call__(argv, timeout)
+
+        rc, out = _broker(root, runner=Flaky(), capsys=capsys)
+        assert not (rc == 0 and out.get("merge_sha") is None), \
+            "reported merged with no confirmed SHA"
+
+    def test_a_failing_mark_executed_still_returns_the_contract(self, tmp_path, capsys,
+                                                               monkeypatch):
+        """F2: after an IRREVERSIBLE merge, an unguarded mark_executed raised past the
+        JSON contract — a traceback exactly where the caller most needs a verdict."""
+        root = _broker_workspace(tmp_path)
+        import supervision_claims as sc_mod
+        monkeypatch.setattr(sc_mod, "mark_executed",
+                            lambda **_kw: (_ for _ in ()).throw(OSError("disk full")))
+        rc, out = _broker(root, runner=BrokerRunner(), capsys=capsys)
+        assert out is not None, "handler exited without its JSON contract line"
+        assert rc == BROKER_PARKED_RC
+        assert out["merge_sha"] == "d5f1683e"      # the merge DID happen; say so
+
+    def test_a_driver_state_edit_does_not_change_the_claim_identity(self, tmp_path,
+                                                                   capsys):
+        """F3: the driver-state digest rode in action_params, which IS the identity, so
+        any campaign-state edit made a re-run mint a foreign claim instead of resuming —
+        breaking the re-run guarantee the whole transition table rests on."""
+        root = _broker_workspace(tmp_path)
+        first = BrokerRunner(merge_raises=subprocess.TimeoutExpired("gh", 180),
+                             pr_state="{not json")
+        assert _broker(root, runner=first, capsys=capsys)[0] == BROKER_PARKED_RC
+
+        path = Path(root, "claude_docs", ".driver-state", "epic-963.json")
+        state = json.loads(path.read_text())
+        state["children"][0]["status"] = "pr_open"          # an ordinary driver write
+        path.write_text(json.dumps(state))
+
+        resumed = BrokerRunner()
+        rc, _out = _broker(root, runner=resumed, capsys=capsys)
+        assert rc == 0
+        assert resumed.merge_calls == 0, "re-ran the merge instead of resuming the claim"
+
+    def test_an_ambiguous_confirmed_open_retries_exactly_once(self, tmp_path, capsys):
+        """F7: the contract promises ONE internal retry on a confirmed-open ambiguous
+        outcome; the implementation returned rc 12 without ever retrying."""
+        root = _broker_workspace(tmp_path)
+
+        class OpenThenMerged(BrokerRunner):
+            def __init__(self):
+                super().__init__()
+                self.state_calls = 0
+                self.first = True
+
+            def __call__(self, argv, timeout=180):
+                joined = " ".join(argv)
+                if "pr merge" in joined and self.first:
+                    self.first = False
+                    self.merge_calls += 1
+                    raise subprocess.TimeoutExpired("gh", 180)
+                if "mergeCommit" in joined:
+                    self.state_calls += 1
+                    self.pr_state = _OPEN_JSON if self.state_calls == 1 else _MERGED_JSON
+                return super().__call__(argv, timeout)
+
+        runner = OpenThenMerged()
+        rc, out = _broker(root, runner=runner, capsys=capsys)
+        assert rc == 0, out
+        assert runner.merge_calls == 2, "expected exactly one internal retry"
+
+
 class TestBrokerMergeTelemetry:
 
     def _events(self, root):
