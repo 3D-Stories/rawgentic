@@ -773,11 +773,10 @@ For major changes, please open an issue first to discuss the approach.
   function hashed a finding's raw description while the existing exact join hashes it
   AFTER stripping a valid `REOPENS <id>:` prefix, so a finding legitimately reopening
   ledger entry X got X re-flagged as a candidate of itself — fixed by mirroring the
-  exact join's own stripping before hashing. No workflow-spine change → no diagram REV. Suite 6210→6226.
-  *(Rebased onto `98975630` 2026-08-08: the original entry claimed v3.139.0, a version
-  main passed while this PR sat open. Re-headed to v3.142.0 — minor, because this is a
-  `feat`. The `Suite 6210→6226` figure above is this PR's OWN delta, measured at its
-  original base `ca529959`; the post-rebase count is stated in the PR body.)*
+  exact join's own stripping before hashing. *(Rebased onto `98975630` 2026-08-08: the
+  entry originally claimed v3.139.0, a version main passed while this PR sat open, so it
+  is re-headed to v3.142.0 — minor, because this is a `feat`.)* No workflow-spine change
+  → no diagram REV. Suite 6466→6482.
 
 ### v3.138.1 (2026-08-07)
 - **A command that MENTIONS a step's needle no longer stamps that step, and the review
