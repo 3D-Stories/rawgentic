@@ -749,6 +749,27 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.138.1 (2026-08-07)
+- **A command that MENTIONS a step's needle no longer stamps that step, and the review
+  input cap doubles (#963 follow-up).** Measured on the #963 run: 18 of 38 recorded
+  step-transitions were stamped `Step 14 Merge` with no merge in sight, putting 2,661s —
+  **30% of that run's wall clock** — under a step it never entered. The cause was raw
+  substring matching in `hooks/step_state_post.py`: `grep -rn 'gh pr merge' skills/`
+  stamped a merge, and so did writing a brief whose heredoc quoted the broker command.
+  Every phase number in `run_records.jsonl` inherits that error, which makes the
+  telemetry unusable for the optimization work it exists to serve. New pure
+  `executable_text()` strips quoted strings and any heredoc body before matching, in both
+  `detect_signature` and the `_may_have_signature` prefilter, so a grep no longer even
+  pays for the state read. It errs toward removing text: a missed stamp leaves the prior
+  position standing, while a wrong one corrupts the record. Separately,
+  `adversarial_review_lib._MAX_BYTES_DEFAULT` goes 200 KB → 400 KB (owner decision
+  2026-08-07): 200 KB refused a routine feature diff (#963's was 256,989 bytes, ~70% of
+  it tests) and cost a full review round trip to discover, and a reviewer who cannot see
+  the tests cannot judge coverage. The oversize REFUSAL is untouched (#834) — input is
+  never truncated-and-continued. Tests added in `test_step_state_hook.py`
+  (`TestSignaturesIgnoreQuotedAndHeredocText`) and `test_adversarial_review_config.py`
+  (`TestReviewInputCap`). No workflow-spine change → no diagram REV. Suite 6192→6210.
+
 ### v3.138.0 (2026-08-06)
 - **Supervised-merge broker — the #947 authority core gets its live caller, with decision
   telemetry (#963, epic #871).** New `launcher_lib.py broker-merge` runs a campaign-scoped

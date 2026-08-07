@@ -219,3 +219,29 @@ def test_effort_unknown_falls_back_with_warning(monkeypatch, capsys):
 def test_effort_empty_returns_default(monkeypatch):
     monkeypatch.setenv("RAWGENTIC_ADV_REVIEW_EFFORT", "   ")
     assert arl._coerce_effort_env("RAWGENTIC_ADV_REVIEW_EFFORT", "high") == "high"
+
+
+class TestReviewInputCap:
+    """The byte ceiling on one review's input (#963 follow-up, owner decision
+    2026-08-07).
+
+    200 KB refused a routine rawgentic feature diff: #963's was 256,989 bytes, about
+    70% of it tests, and the refusal cost a whole review round trip before anyone
+    learned the size. A reviewer who cannot see the tests cannot judge coverage, so the
+    fix is a bigger cap rather than a diff that excludes them.
+
+    The REFUSAL is deliberately untouched (#834): oversize input is never truncated and
+    continued, because a silently shortened diff yields a review that looks complete
+    and is not.
+    """
+
+    def test_the_default_cap_is_400kb(self):
+        assert arl._MAX_BYTES_DEFAULT == 400_000
+
+    def test_the_effective_cap_stays_inside_its_clamp(self):
+        assert arl._MAX_BYTES_MIN <= arl.MAX_BYTES <= arl._MAX_BYTES_MAX
+
+    def test_the_knob_and_its_clamp_are_unchanged(self):
+        """The default moved. The env override and its bounds did not."""
+        assert arl._MAX_BYTES_MIN == 1_000
+        assert arl._MAX_BYTES_MAX == 5_000_000
