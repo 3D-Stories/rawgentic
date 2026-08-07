@@ -34,18 +34,33 @@ submit early (#654).
 
 **There are THREE sends, each gated on a durable artifact the successor itself writes (#694).**
 In order: `/rawgentic:switch <project>` alone, gated on the session-registry row
-(`project_switched`); then the resume prompt, gated on its marker reaching the transcript
-(`prompt_landed`); then `/goal` LAST, gated on the `goal_status met:false` row (`goal_armed`).
-The predecessor is retired only after all of them pass.
+(`project_switched`); then — after an explicit `agent wait --until idle` — `/goal`, gated on the
+`goal_status met:false` row (`goal_armed`); then the resume prompt LAST, gated on its marker
+reaching the transcript (`prompt_landed`). The predecessor is retired only after all of them pass.
+
+**Why the two payloads sit in those windows, and it is the #989 correction.** A BARE SLASH COMMAND
+pasted into a BUSY session is QUEUED, not executed — measured by #718 and enforced by
+`validate_inserted_prompt`, which refuses to send one. PROSE does not share the defect: its Enter
+is buffered during a turn and flushes at turn end (#700, #835). Both slash commands (the bind and
+the goal) therefore get an idle window, and the prose prompt gets the busy one.
+
+**A premise recorded here was FALSE and #989 falsified it in production.** This docstring used to
+state, from a 2026-07-29 measurement, that a `/goal` pasted mid-turn still produced its row "which
+is what lets it go last". Four consecutive handoffs on 2026-08-07 failed at `goal_armed`, and the
+successor transcript showed `queue-operation enqueue`, a `remove` 2.3 s later, and ZERO
+`goal_status` rows. The natural experiment was already here: SEND 1 is also a bare slash command
+and never failed, because an idle wait always sat in front of it. Ordering that relies on a
+mid-turn slash command executing must not be reintroduced without re-measuring that premise.
 
 Nothing here gates on `agent_status`, and nothing may: measured live on 2026-07-29 it read `idle`
 immediately after a prompt was submitted, `done` while a turn was still producing output, and
 `working` for a session sitting at an empty input line. An earlier revision of this fix gated the
 resume-prompt paste on `agent_status == "idle"` and was falsified before it shipped — after a real
 UNMET goal was armed the pane reported `working` across consecutive reads while the `goal_status`
-row was ALREADY present, so that gate would have refused every real handoff. `/goal` needs no idle
-window at all: pasted into a session actively mid-turn it still produced its row while that turn
-ran, which is what lets it go last. `parse_pane_agent_status` survives for DIAGNOSTICS only.
+row was ALREADY present, so that gate would have refused every real handoff.
+`parse_pane_agent_status` survives for DIAGNOSTICS only. The idle wait above is NOT that gate: it
+is herdr's own blocking `agent wait`, the same call the pre-launch step already makes, and no
+control flow branches on a scraped status value.
 
 WHAT "no shell" DOES AND DOES NOT MEAN
 -------------------------------------
@@ -273,11 +288,12 @@ _VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
 # was rejected
 # for (design §2).
 #
-# #694 reordered the four predecessor-owned rungs to `project_switched -> prompt_landed ->
-# goal_armed`, so the ladder again lists its rungs in the order the sends produce them (the bind is
-# now its own send, and `/goal` goes last). Order here is not cosmetic: `evaluate_verifications`
-# walks it and stops at the FIRST failure, so a ladder listing rungs out of send order reports the
-# wrong step as the thing that broke.
+# #694 reordered the predecessor-owned rungs to match the order the sends produce them, and #989
+# reordered them AGAIN to `project_switched -> goal_armed -> prompt_landed` when it moved the goal
+# ahead of the prompt (a bare slash command must land in an idle pane or it is queued — see
+# `perform_handoff`). Order here is not cosmetic: `evaluate_verifications` walks it and stops at
+# the FIRST failure, so a ladder listing rungs out of send order reports the wrong step as the
+# thing that broke.
 #
 # #840 puts `queue_revalidated` FIRST. The queue must be revalidated BEFORE a successor is spawned
 # to inherit it — a successor handed a stale queue has already read the wrong issue bodies by the
@@ -306,13 +322,13 @@ _MID_CHILD_VERIFICATION_STEPS: tuple[dict[str, str], ...] = (
     {"step": "project_switched", "owner": "predecessor",
      "artifact": "claude_docs/session_registry.jsonl BELOW the offset -> ONE line carrying the "
                  "NEW session id AND the recorded project AND the recorded project_path"},
+    {"step": "goal_armed", "owner": "predecessor",
+     "artifact": "the successor transcript BELOW the pre-launch offset -> a goal_status "
+                 "attachment with met:false whose condition is the one actually armed"},
     {"step": "prompt_landed", "owner": "predecessor",
      "artifact": "the successor transcript BELOW the offset -> the generation-bound handoff "
                  "marker, matched as a plain SUBSTRING: a live probe found pasted prompts "
                  "persisted in queue-operation / attachment rows, not a type:user row"},
-    {"step": "goal_armed", "owner": "predecessor",
-     "artifact": "the successor transcript BELOW the pre-launch offset -> a goal_status "
-                 "attachment with met:false whose condition is the one actually armed"},
     {"step": "position_rebuilt", "owner": "successor",
      "artifact": ".driver-state -> a rebuild receipt the successor writes under the state lock "
                  "carrying {generation, claimant, branch_observed, repo_root_observed, step, "
@@ -2246,22 +2262,30 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     1. split from an explicit anchor pane, 2. `agent start` (no goal — see the module
     docstring), 3. `agent wait --until idle`, 4. `pane get` for the successor's session id,
     5. **capture the pre-launch artifact offsets**, 6. SEND 1 — `/rawgentic:switch <project>`
-    alone, 7. **verify the registry row appeared** (`project_switched`), 8. SEND 2 — the resume
-    prompt, 9. **verify it actually landed** (`prompt_landed`, when a marker was supplied),
-    10. SEND 3 — `/goal`, LAST, 11. **verify the guard armed** (`goal_armed`), 12. retire the
-    predecessor LAST.
+    alone, 7. **verify the registry row appeared** (`project_switched`), 8. `agent wait --until
+    idle` again (#989 — the bind's ROW is not its TURN), 9. SEND 2 — `/goal`, into the idle pane,
+    10. **verify the guard armed** (`goal_armed`), 11. SEND 3 — the resume prompt, LAST,
+    12. **verify it actually landed** (`prompt_landed`, when a marker was supplied), 13. retire
+    the predecessor LAST.
 
     Each verify sits immediately after the send whose artifact it reads, so a failure names the
     send that caused it. Sending the bind as its OWN turn (#694) is what makes "the bind happens
     first" structural rather than a property of prompt wording; the prompt must therefore NOT
     carry a bind, which is checked below.
 
-    `/goal` going last is measured, not assumed: pasted into a session actively mid-turn it still
-    produced its `goal_status` row while that turn was running, so it needs no idle window. The
-    older order armed the guard first to avoid handing work to an unguarded session; that concern
-    is met by step 12 instead — the predecessor is not retired until `goal_armed` passes, so an
-    unguarded successor never costs the run its predecessor. The residual unguarded window is
-    between send 2 and step 11, and it is bounded by exactly the thing that closes it.
+    **`/goal` goes SECOND, not last, and step 8 is why (#989).** A bare slash command pasted into a
+    busy pane is queued rather than executed (#718), and the old last-position send put it into a
+    pane that was mid-turn BY DESIGN — so it was queued every time. Prose tolerates a busy pane
+    because its Enter is buffered and flushes at turn end (#700, #835), so the resume prompt takes
+    that window instead. Step 8 is needed because step 7 proves the bind's ROW landed, not that its
+    TURN ended.
+
+    **There is now NO unguarded window.** The guard is armed and CONFIRMED before any work is
+    transported, so the concern the pre-#694 ordering existed for is answered outright rather than
+    bounded. A goal that fails to arm costs a torn-down pane that was never handed work — strictly
+    better than the old order, where the same failure left a successor already working unguarded.
+    Arming first does not strand the successor either: a goal only re-prompts a session that tries
+    to STOP (see below), so an armed goal in an idle pane simply waits for step 11.
 
     Step 11's own history is why it is not merely "send and hope" (#611 Step-11 High 1): a
     revision that armed a goal and stopped left the successor guarded but idle, because a goal
@@ -2760,81 +2784,47 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             out["failed_step"] = "project_switched"
             return out
 
-        # SEND 2 of 3 — the work. The prompt no longer has to carry the bind, because send 1 did.
-        prompt_argv, prompt_keys = build_send_text_argv(pane=new_pane, text=resume_prompt)
-        for kind, argv in (("send_resume_prompt", prompt_argv),
-                           ("send_resume_keys", prompt_keys)):
-            proc = runner(argv)
-            record(kind, argv, proc)
-            if getattr(proc, "returncode", 1) != 0:
-                out["failed_step"] = "send_resume_prompt"
-                return out
-
-        # `prompt_landed` (#665) — rc 0 on send-text proves TRANSPORT, not arrival.
-        if prompt_marker is not None:
-            def _prompt_landed() -> bool:
-                tail = _tail(read_text(transcript_path), transcript_baseline)
-                return tail is not None and transcript_has_marker(tail, prompt_marker)
-
-            landed = _poll_for(_prompt_landed, attempts=GOAL_POLL_ATTEMPTS,
-                               delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
-
-            # #700 — the paste may be INTACT BUT UNSUBMITTED, which is a third state distinct from
-            # both success and transport failure. `project_switched` proves the bind's row landed,
-            # not that its turn ended, so the prompt's own Enter can be consumed by that turn.
-            # Found live on 2026-07-29 driving this sequence by hand; a single bare Enter recovered
-            # it with exactly one occurrence of the marker in the transcript and no double
-            # submission.
-            #
-            # This is recovery inside send 2, NOT a change to the send order or to any gate:
-            # `prompt_landed` still has to pass on the same artifact, and a nudge can only let a
-            # gate pass where the buffer was intact all along. Never a re-paste and never a
-            # truncation (#696).
-            for _ in range(PROMPT_NUDGE_ROUNDS):
-                if landed:
-                    break
-                # An Enter accepts whatever is on screen, so the pane's state is checked FIRST and
-                # anything other than a clear "safe" abandons the recovery — which leaves exactly
-                # the pre-#700 behaviour.
-                read_argv = build_pane_read_argv(new_pane)
-                proc = runner(read_argv)
-                if getattr(proc, "returncode", 1) != 0:
-                    record("pane_read", read_argv, proc,
-                           note="nudge SKIPPED: pane read failed, so the pane's state is unknown")
-                    break
-                safe, why = pane_shows_unsubmitted_paste(getattr(proc, "stdout", "") or "")
-                record("pane_read", read_argv, proc,
-                       note=f"nudge {'PERMITTED' if safe else 'SKIPPED'}: {why}")
-                if not safe:
-                    break
-                nudge_argv = build_send_enter_argv(new_pane)
-                proc = runner(nudge_argv)
-                record("send_resume_nudge", nudge_argv, proc,
-                       note="bare Enter — submit the intact paste, never re-send it (#700)")
-                if getattr(proc, "returncode", 1) != 0:
-                    # Named distinctly (design review): reporting this as `prompt_landed` would
-                    # blame the successor's timing for what is a failed herdr call.
-                    out["failed_step"] = "send_resume_nudge"
-                    return out
-                landed = _poll_for(_prompt_landed, attempts=GOAL_POLL_ATTEMPTS,
-                                   delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
-
-            out["results"]["prompt_landed"] = landed
-            if not landed:
-                out["failed_step"] = "prompt_landed"
-                out["failure_detail"] = (
-                    "the resume prompt's marker never appeared in the successor transcript "
-                    "within the poll budget — transport rc 0 proves delivery, not arrival")
-                return out
-
-        # SEND 3 of 3 — the GUARD, LAST, deliberately while the successor is already working.
+        # #989 — the GOAL needs an IDLE pane, and this wait is the whole fix.
         #
-        # This is what the reordering rests on, and it is measured rather than assumed: on
-        # 2026-07-29 a `/goal` pasted into a session actively mid-turn (counting, `agent_status`
-        # `working`) produced its `goal_status met:false` row
-        # while that turn was still running. `/goal` therefore needs no idle window, which is why
-        # it can go last — and why the previous ordering's whole premise (arm first, because the
-        # guard must exist before work) bought nothing that mattered and cost the prompt.
+        # `/goal` is a BARE SLASH COMMAND, and a bare slash command pasted into a BUSY session is
+        # QUEUED rather than executed. That is not a new discovery: `validate_inserted_prompt`
+        # records it from #718's live measurement and REFUSES to send one for exactly this reason.
+        # The old order sent the goal LAST, deliberately into a mid-turn pane, so it was queued
+        # every time — the 2026-08-07 successor transcript shows `queue-operation enqueue`, a
+        # `remove` 2.3 s later, and ZERO `goal_status` rows across four consecutive handoffs.
+        #
+        # `project_switched` proves the bind's ROW landed, not that its TURN ended (#700's own
+        # finding), so passing that rung is NOT evidence that the pane is free. Hence an explicit
+        # wait rather than an assumption.
+        #
+        # This is NOT the `agent_status` gate #694 refuted. That was `parse_pane_agent_status`, a
+        # scraped FIELD this module still reads for diagnostics only and branches on nowhere. This
+        # is herdr's own blocking wait, already trusted at the pre-launch site above for SEND 1 —
+        # which is also the natural experiment that proves the diagnosis: SEND 1 is a bare slash
+        # command too (`/rawgentic:switch`) and it works, because that wait sits in front of it.
+        wait_goal_argv = build_agent_wait_argv(target=new_pane, until="idle")
+        proc = runner(wait_goal_argv)
+        record("agent_wait_goal", wait_goal_argv, proc)
+        if getattr(proc, "returncode", 1) != 0:
+            # Named distinctly, for the same reason `send_goal_nudge` is: reporting a herdr call
+            # that never returned as `goal_armed` would blame the successor's transcript for it.
+            out["failed_step"] = "agent_wait_goal"
+            out["failure_detail"] = (
+                "the successor never reported idle before the goal send — a slash command pasted "
+                "into a busy pane is queued instead of executed (#718, #989)")
+            return out
+
+        # SEND 2 of 3 — the GUARD, into the pane the wait above just proved idle.
+        #
+        # It used to go LAST, on a 2026-07-29 measurement claiming a mid-turn `/goal` still produced
+        # its row. #989 falsified that in production: four handoffs, four failures at `goal_armed`,
+        # and a successor transcript carrying `queue-operation enqueue` / `remove` and no
+        # `goal_status` row at all. A bare slash command needs an idle pane (#718) — so the guard
+        # takes the idle window and the prose prompt takes the busy one.
+        #
+        # Arming before the work is handed over is now a PROPERTY, not a cost: the pre-#694 ordering
+        # wanted exactly this and was only abandoned because the bind then had to ride inside the
+        # prompt as a prefix. #694 gave the bind its own send, which removed that objection.
         text_argv, keys_argv, truncated = build_send_text_goal_argv(
             pane=new_pane, goal_condition=goal_condition)
         out["truncated"] = truncated
@@ -2858,25 +2848,38 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
             attempts=GOAL_POLL_ATTEMPTS, delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
 
         # #835 — the goal paste may be INTACT BUT UNSUBMITTED, the same third state #700 found for
-        # the prompt, and here it is the NORMAL case rather than a race: this send is deliberately
-        # last, while the successor is already mid-turn on the prompt, so its Enter is buffered
-        # until that turn ends. Observed live 2026-08-01 (pane w1:pGG, session a02dcfc0): the
-        # successor's transcript held three copies of the prompt marker and ZERO `/goal`.
+        # the prompt. Observed live 2026-08-01 (pane w1:pGG, session a02dcfc0): the successor's
+        # transcript held three copies of the prompt marker and ZERO `/goal`.
         #
-        # Recovery inside send 3 — NOT a change to the send order and NOT a weakened gate:
+        # #989 RETAINED this recovery but its rationale changed, and the old one is left here
+        # corrected rather than silently dropped. It used to read "here it is the NORMAL case
+        # rather than a race: this send is deliberately last, while the successor is already
+        # mid-turn on the prompt". That is no longer true — the goal now goes SECOND, into a pane
+        # the wait above proved idle, so an unsubmitted paste is once again a RACE and should be
+        # rare. It is kept because the idle wait can return early (`agent_status` reads `idle`
+        # immediately after a submit, measured 2026-07-29), and this is the cheap recovery for
+        # exactly that. It cannot recover the QUEUED state and does not pretend to: a queued
+        # command shows no paste affordance, so the guard below declines and the gate fails closed.
+        #
+        # Recovery inside the send — NOT a change to the send order and NOT a weakened gate:
         # `goal_armed` still has to pass on the same artifact below, and a nudge can only let it
         # pass where the buffer was intact all along. Never a re-paste (#696): once the buffered
         # Enter flushes, a second copy of the text would submit twice.
         #
         # Three properties of this recovery, stated so they are not mistaken for guarantees. Each
-        # is shared with the prompt path above, which has the same read-then-send shape.
+        # is shared with the prompt path below, which has the same read-then-send shape.
         #
         # 1. The guard checks an AFFORDANCE, not identity. A collapsed paste renders as
         #    `[Pasted text #N]`, so the pane does not expose paste contents and this guard cannot
-        #    verify that the pending paste is this goal's. `prompt_landed` establishes that the
-        #    prompt was submitted; it does not establish what is staged now. What narrows the
-        #    exposure: the pane was created by this call, the permission-dialog veto runs before
-        #    every Enter, and any unrecognised screen fails closed.
+        #    verify that the pending paste is this goal's.
+        #    **#989 changed this property's basis, exactly as the old note warned a reorder would.**
+        #    It used to lean on `prompt_landed` having already established that the prompt was
+        #    submitted. The goal now goes FIRST of the two, so that evidence does not exist yet.
+        #    What narrows the exposure instead is STRONGER in one respect and weaker in none: the
+        #    pane was created by this call, `agent wait --until idle` has just reported it free, no
+        #    prompt has been transported to it yet, the permission-dialog veto runs before every
+        #    Enter, and any unrecognised screen fails closed. Fewer of this call's own payloads are
+        #    in flight here than were under the old order.
         # 2. Enters can QUEUE. The buffering this recovery exists for means an rc-0 send-keys may
         #    sit unflushed while the re-poll still reads false, so a later round can enqueue
         #    another; at flush the first submits the goal and the rest land on an empty input box.
@@ -2888,7 +2891,8 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         #    send-text and send-keys only; there is no compare-and-send or state token to bind the
         #    check to the act. Closing this needs a conditional-send primitive from the transport.
         #
-        # Reordering the sends would change the basis of property 1.
+        # Reordering the sends changes the basis of property 1 — #989 did reorder them, and
+        # property 1 above records the new basis rather than leaving the old one to rot.
         for _ in range(GOAL_NUDGE_ROUNDS):
             if armed:
                 break
@@ -2934,6 +2938,82 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                 "no unmet goal_status row for the armed condition appeared in the successor "
                 "transcript within the poll budget")
             return out
+
+        # SEND 3 of 3 — the WORK, last, into a pane that is now bound AND guarded.
+        #
+        # The prompt no longer has to carry the bind, because send 1 did (#694). It takes the LAST
+        # slot (#989) because it is PROSE: unlike a slash command, a prose paste whose Enter lands
+        # mid-turn is buffered and flushes at turn end (#700, #835), so the busy window costs it a
+        # nudge round at worst rather than silent non-delivery.
+        prompt_argv, prompt_keys = build_send_text_argv(pane=new_pane, text=resume_prompt)
+        for kind, argv in (("send_resume_prompt", prompt_argv),
+                           ("send_resume_keys", prompt_keys)):
+            proc = runner(argv)
+            record(kind, argv, proc)
+            if getattr(proc, "returncode", 1) != 0:
+                out["failed_step"] = "send_resume_prompt"
+                return out
+
+        # `prompt_landed` (#665) — rc 0 on send-text proves TRANSPORT, not arrival.
+        if prompt_marker is not None:
+            def _prompt_landed() -> bool:
+                tail = _tail(read_text(transcript_path), transcript_baseline)
+                return tail is not None and transcript_has_marker(tail, prompt_marker)
+
+            landed = _poll_for(_prompt_landed, attempts=GOAL_POLL_ATTEMPTS,
+                               delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
+
+            # #700 — the paste may be INTACT BUT UNSUBMITTED, which is a third state distinct from
+            # both success and transport failure. Found live on 2026-07-29 driving this sequence by
+            # hand; a single bare Enter recovered it with exactly one occurrence of the marker in
+            # the transcript and no double submission.
+            #
+            # #989 note on WHICH turn can now eat this Enter. #700's original answer was the bind's
+            # turn, because `project_switched` proves the bind's ROW landed and not that its TURN
+            # ended. That is still reachable, and the goal-arming turn ahead of this send is a
+            # second candidate — the prompt is deliberately LAST now. The recovery is unchanged
+            # either way: it does not care which turn buffered the Enter.
+            #
+            # This is recovery inside a send, NOT a change to the send order or to any gate:
+            # `prompt_landed` still has to pass on the same artifact, and a nudge can only let a
+            # gate pass where the buffer was intact all along. Never a re-paste and never a
+            # truncation (#696).
+            for _ in range(PROMPT_NUDGE_ROUNDS):
+                if landed:
+                    break
+                # An Enter accepts whatever is on screen, so the pane's state is checked FIRST and
+                # anything other than a clear "safe" abandons the recovery — which leaves exactly
+                # the pre-#700 behaviour.
+                read_argv = build_pane_read_argv(new_pane)
+                proc = runner(read_argv)
+                if getattr(proc, "returncode", 1) != 0:
+                    record("pane_read", read_argv, proc,
+                           note="nudge SKIPPED: pane read failed, so the pane's state is unknown")
+                    break
+                safe, why = pane_shows_unsubmitted_paste(getattr(proc, "stdout", "") or "")
+                record("pane_read", read_argv, proc,
+                       note=f"nudge {'PERMITTED' if safe else 'SKIPPED'}: {why}")
+                if not safe:
+                    break
+                nudge_argv = build_send_enter_argv(new_pane)
+                proc = runner(nudge_argv)
+                record("send_resume_nudge", nudge_argv, proc,
+                       note="bare Enter — submit the intact paste, never re-send it (#700)")
+                if getattr(proc, "returncode", 1) != 0:
+                    # Named distinctly (design review): reporting this as `prompt_landed` would
+                    # blame the successor's timing for what is a failed herdr call.
+                    out["failed_step"] = "send_resume_nudge"
+                    return out
+                landed = _poll_for(_prompt_landed, attempts=GOAL_POLL_ATTEMPTS,
+                                   delay_s=GOAL_POLL_DELAY_S, sleeper=sleeper)
+
+            out["results"]["prompt_landed"] = landed
+            if not landed:
+                out["failed_step"] = "prompt_landed"
+                out["failure_detail"] = (
+                    "the resume prompt's marker never appeared in the successor transcript "
+                    "within the poll budget — transport rc 0 proves delivery, not arrival")
+                return out
 
         # The unguarded window is now BETWEEN send 2 and this row, and it is bounded by exactly the
         # thing that closes it: the predecessor is not retired until `goal_armed` has passed below,

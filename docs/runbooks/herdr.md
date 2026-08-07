@@ -196,28 +196,39 @@ The implementation is `hooks/launcher_lib.py`. `perform_handoff` is the wired se
 6. `herdr pane get <new>` → the successor's session id. Record its transcript's pre-launch offset too.
 7. **SEND 1 — the bind, alone.** `herdr pane send-text <new> "/rawgentic:switch <project>"` then `herdr pane send-keys <new> Enter`. The project argument is mandatory: a bare `/rawgentic:switch` enters the switch skill's list mode and waits for a human (§7.1.1).
 8. **Poll the registry until the successor's own bind line appears** (`project_switched`). Failing here aborts before any work is handed over, leaving the predecessor alive and still guarded.
-9. **SEND 2 — the work.** `herdr pane send-text <new> "<resume prompt>"` then `send-keys Enter`. The prompt is `driver_lib`'s canonical resume wording for the next ready child, never a hand-written string, and it carries **no bind of its own** — send 1 did that.
-10. **Poll the transcript for the prompt's marker** (`prompt_landed`), when the caller supplied one. rc 0 on `send-text` proves transport, not arrival.
-11. **SEND 3 — the guard, last.** `herdr pane send-text <new> "/goal <condition>"` then `send-keys Enter`.
-12. **Poll the transcript until the guard is proven armed** — a `goal_status` row with `met: false` whose condition is the one just armed.
-13. `herdr pane close <anchor>` — the predecessor, **last**, and only once every check passed.
+9. `herdr agent wait <new> --until idle --timeout <ms>` **again** (#989). Step 8 proves the bind's *row* landed, not that its *turn* ended, and the next send is a bare slash command — which a busy pane queues instead of executing.
+10. **SEND 2 — the guard**, into the pane step 9 just proved idle. `herdr pane send-text <new> "/goal <condition>"` then `send-keys Enter`.
+11. **Poll the transcript until the guard is proven armed** — a `goal_status` row with `met: false` whose condition is the one just armed.
+12. **SEND 3 — the work, last.** `herdr pane send-text <new> "<resume prompt>"` then `send-keys Enter`. The prompt is `driver_lib`'s canonical resume wording for the next ready child, never a hand-written string, and it carries **no bind of its own** — send 1 did that.
+13. **Poll the transcript for the prompt's marker** (`prompt_landed`), when the caller supplied one. rc 0 on `send-text` proves transport, not arrival.
+14. `herdr pane close <anchor>` — the predecessor, **last**, and only once every check passed.
 
 Each poll sits immediately after the send whose artifact it reads, so a failure names the send that caused it. Every gate is a **durable artifact the successor itself writes**; none is a timer, and none is pane status (§7.1.1).
 
-#### 7.1.1 Why the bind is its own send and `/goal` goes last (#694)
+#### 7.1.1 Why the bind is its own send, and why `/goal` goes SECOND (#694, corrected by #989)
 
-Two things changed here, and the second one reverses an earlier revision of this page.
+Two things changed here, and the second one has now reversed twice.
 
 **The bind is its own verified turn.** #682 made the resume prompt *open* with `/rawgentic:switch <project>` and checked that as a prefix — which its own validator docstring is honest about being a *proxy* for "first" rather than a proof of it. Sending the bind separately and waiting for its registry row makes the ordering **structural**, so the proxy has nothing left to do. #682 named this design correct and deferred it only because it reorders a ladder. `perform_handoff` now **refuses** a resume prompt that carries a bind at all: send 1 already did it, and a second one makes the successor run the switch skill twice. `driver_lib`'s builders take `include_bind`, defaulting to **True** — the interactive hand-back and the `claude -p` fallback each deliver exactly one prompt and so still need the bind inside it.
 
-**`/goal` goes last, and this is measured.** A `/goal` pasted into a session *actively mid-turn* on 2026-07-29 produced its `goal_status met:false` row **while that turn was still running**, so it needs no idle window. The old ordering armed the guard first on the reasoning that work handed to an unguarded session is an unguarded run. That concern is **answered rather than discarded**: the predecessor is not retired until the last rung passes, so "work begins unguarded" never coincides with "the predecessor is already gone" — which was the actual harm. The residual unguarded window is between send 2 and step 12, bounded by exactly the thing that closes it.
+**`/goal` goes SECOND, and the measurement that put it last was FALSIFIED in production (#989).**
+
+This section used to read: "`/goal` goes last, and this is measured. A `/goal` pasted into a session *actively mid-turn* on 2026-07-29 produced its `goal_status met:false` row while that turn was still running, so it needs no idle window." That claim is **wrong on this host** and it is left quoted here so nobody re-derives it from a stale memory.
+
+**What actually happens.** A **bare slash command** pasted into a **busy** session is **QUEUED, not executed**. That was already measured by #718 and is enforced by `validate_inserted_prompt`, which refuses to send one. Because the old order put `/goal` last *deliberately* while the successor was mid-turn on the prompt, it was queued **every time**. On 2026-08-07 four consecutive handoffs failed at `goal_armed`; the successor transcript showed `queue-operation enqueue`, a `remove` 2.3 s later, and **zero** `goal_status` rows.
+
+**The natural experiment was already in the sequence.** SEND 1 is *also* a bare slash command (`/rawgentic:switch`) and it never failed this way — because step 5's `agent wait --until idle` always sat in front of it. Same payload class, different window, different outcome.
+
+**So each payload now gets the window it needs.** Both slash commands (the bind, the guard) are sent into an idle pane. The resume prompt is **prose**, and prose tolerates a busy pane: its Enter is buffered during a turn and flushes at turn end (#700, #835), with a bounded bare-Enter nudge as recovery. Hence bind → wait → goal → prompt.
+
+**There is now no unguarded window at all.** The old ordering armed the guard first on the reasoning that work handed to an unguarded session is an unguarded run; #694 answered that by not retiring the predecessor until the last rung passed, leaving a residual window between the prompt and the guard. The new order removes the window itself — the guard is armed *and confirmed* before any work is transported. A goal that fails to arm now costs a torn-down pane that was never handed work. Arming first does not strand the successor, because **a goal only re-prompts a session that tries to STOP**: an armed goal in an idle pane simply waits for the prompt.
 
 **`agent_status` is NOT a synchronisation signal, and nothing here may gate on it.** An earlier revision of this fix polled `herdr pane get` for `agent_status == "idle"` between the goal and the prompt. It was **falsified by measurement before it shipped**:
 
 | Measured, live, 2026-07-29 | Consequence |
 |---|---|
 | after a **real unmet** goal was armed, the pane read `working` on consecutive reads while the `goal_status met:false` row was **already present** | an idle gate placed after `goal_armed` refuses **every real handoff** — strictly worse than the bug |
-| `/goal` pasted mid-turn produced its row while the turn ran | the guard needs no idle window, so it can go last |
+| ~~`/goal` pasted mid-turn produced its row while the turn ran~~ | ~~the guard needs no idle window, so it can go last~~ — **FALSIFIED by #989**; a bare slash command in a busy pane is queued, never executed (#718). The guard now goes second, into an idle pane |
 | the value read `idle` right after a prompt was submitted, `done` mid-output, and `working` at an empty input line | the field does not describe input-readiness at all |
 
 `parse_pane_agent_status` is retained for **diagnostics only** — it is what lets a report say *why* a handoff stalled. No control flow branches on it. The 22 tests that went green on the falsified gate proved nothing, because the fake runner returned a canned `agent_status: idle`.
