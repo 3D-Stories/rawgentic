@@ -308,3 +308,20 @@ semantics. FINDINGS_SCHEMA untouched — no fixture churn.
 ## Multi-PR assessment
 
 Single PR (~40 lines engine, ~25 plan_lib, ~30 prose, ~150 tests).
+
+## Addendum (#892, 2026-08-07)
+
+The exact-key join backstop (§3) has near-zero recall in practice: reviewers rephrase
+findings every pass, and the byte-identical `finding_key` almost never re-matches a
+settled entry (observed on #880: the same settled `_retires` security claim was
+hand-adjudicated six times across gates because the mechanical path never fired once).
+Added a second, ADVISORY-ONLY layer — `plan_lib.fuzzy_disposition_candidates(finding,
+folded_entries)` — that widens recall to the two STABLE identity fields (`location` +
+`category`) against DECLINED/DISSOLVED entries only (ADOPTED matches keep their
+existing exact-match-only `possible failed remediation` surfacing, untouched). A fuzzy
+match surfaces as `possible re-litigation of <id>` for orchestrator adjudication and
+NEVER auto-dissolves — the honest bound (only byte-identical keeps that power) is
+preserved exactly as designed in §3; this is a pure widening of what gets *surfaced*,
+not a change to what gets *removed*. No schema, prompt, or brief change — briefs stay
+history-free per #840 (the whole point being that the ORCHESTRATOR, not the reviewer's
+own memory, now recognizes the candidate re-litigation).
