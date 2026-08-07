@@ -34,7 +34,7 @@ submit early (#654).
 
 **There are THREE sends, each gated on a durable artifact the successor itself writes (#694).**
 In order: `/rawgentic:switch <project>` alone, gated on the session-registry row
-(`project_switched`); then — after an explicit `agent wait --until idle` — `/goal`, gated on the
+(`project_switched`); then — after a bounded SETTLE, which gates nothing — `/goal`, gated on the
 `goal_status met:false` row (`goal_armed`); then the resume prompt LAST, gated on its marker
 reaching the transcript (`prompt_landed`). The predecessor is retired only after all of them pass.
 
@@ -199,6 +199,18 @@ GOAL_NUDGE_ROUNDS = 4
 # heuristic and nothing more — the skill's own rule is a token unique to the handoff.
 PROMPT_MARKER_MIN_LEN = 8
 GOAL_POLL_DELAY_S = 1.5
+# #989 follow-up — the settle before the goal send. NOT a gate: it decides when to attempt
+# delivery, never whether anything passed. Owner-chosen 2026-08-07 from live measurement: across
+# seven real handoffs the bind's session-registry row landed ~20 s after the successor started, so
+# 30 s clears it with margin. It replaces a 120 s blocking `agent wait --until idle` that was
+# FATAL and that hung on panes which were already idle, so the happy path is now FASTER as well as
+# more reliable.
+SETTLE_BEFORE_GOAL_S = 30
+# The confirmation that rides after the sleep is best-effort and deliberately SHORT: its answer is
+# advisory, so a long budget would only reintroduce the hang it exists to escape. It must also stay
+# well under `_default_runner`'s 180 s subprocess bound, or a timeout would surface as a transport
+# failure instead of an unconfirmed settle.
+SETTLE_CONFIRM_TIMEOUT_MS = 20000
 SWITCH_POLL_ATTEMPTS = 40
 SWITCH_POLL_DELAY_S = 3.0
 
@@ -2306,11 +2318,15 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
     1. split from an explicit anchor pane, 2. `agent start` (no goal — see the module
     docstring), 3. `agent wait --until idle`, 4. `pane get` for the successor's session id,
     5. **capture the pre-launch artifact offsets**, 6. SEND 1 — `/rawgentic:switch <project>`
-    alone, 7. **verify the registry row appeared** (`project_switched`), 8. `agent wait --until
-    idle` again (#989 — the bind's ROW is not its TURN), 9. SEND 2 — `/goal`, into the idle pane,
-    10. **verify the guard armed** (`goal_armed`), 11. SEND 3 — the resume prompt, LAST,
-    12. **verify it actually landed** (`prompt_landed`, when a marker was supplied), 13. retire
-    the predecessor LAST.
+    alone, 7. **verify the registry row appeared** (`project_switched`), 8. a bounded SETTLE which
+    GATES NOTHING (#989 follow-up — the bind's ROW is not its TURN, and the idle signal hangs on
+    panes that are already idle, so this sleeps and then asks, treating the answer as advice),
+    9. SEND 2 — `/goal`, 10. **verify the guard armed** (`goal_armed`), 11. SEND 3 — the resume
+    prompt, LAST, 12. **verify it actually landed** (`prompt_landed`, when a marker was supplied),
+    13. retire the predecessor LAST.
+
+    Step 8 is the ONLY non-verifying step in that list, and it is deliberately so. Everything
+    numbered "verify" reads a durable artifact the successor itself wrote and fails closed.
 
     Each verify sits immediately after the send whose artifact it reads, so a failure names the
     send that caused it. Sending the bind as its OWN turn (#694) is what makes "the bind happens
@@ -2861,17 +2877,40 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         # being killed mid-call. Shared with the pre-launch site above ON PURPOSE — both wait for
         # the same pane to become free — but note the coupling: retuning
         # `build_agent_wait_argv`'s default moves both.
-        wait_goal_argv = build_agent_wait_argv(target=new_pane, until="idle")
+        # THE SETTLE. Sleep first, then ASK for idle — and treat the answer as advice.
+        #
+        # This replaced a blocking `agent wait --until idle` that was FATAL, and the reason is
+        # measured rather than argued. Seven live handoffs, 2026-08-07: in the failing run the
+        # successor's registry row landed 20 s after it started and its transcript went quiet 36 s
+        # later, yet the 120 s wait burned its whole budget and aborted a handoff whose successor
+        # was sitting there idle and ready. The budget was never short — the signal does not fire
+        # for an idle pane. That is the same unreliability #694 measured for `agent_status`
+        # ("`working` for a session sitting at an empty input line"); the blocking wait inherits
+        # it. Lengthening the wait would have been strictly WORSE: a longer hang before the
+        # identical failure.
+        #
+        # Why a fixed sleep does not violate this module's own "never gate on a timer" rule: a
+        # settle GATES NOTHING. It decides only when to attempt delivery. The gate is still
+        # `goal_armed` below — a durable artifact the successor itself writes — and it is
+        # untouched and still fail-closed.
+        #
+        # SETTLE_BEFORE_GOAL_S is owner-chosen from that same measurement: the bind's row landed
+        # at ~20 s, so 30 s clears it with margin and the whole happy path gets FASTER than the
+        # wait it replaces. Sending a touch early is an accepted trade (owner, 2026-08-07): a
+        # working handoff beats a strictly-ordered one, and `goal_armed` still catches a goal that
+        # did not take.
+        sleeper(SETTLE_BEFORE_GOAL_S)
+        wait_goal_argv = build_agent_wait_argv(target=new_pane, until="idle",
+                                               timeout_ms=SETTLE_CONFIRM_TIMEOUT_MS)
         proc = runner(wait_goal_argv)
-        record("agent_wait_goal", wait_goal_argv, proc)
-        if getattr(proc, "returncode", 1) != 0:
-            # Named distinctly, for the same reason `send_goal_nudge` is: reporting a herdr call
-            # that never returned as `goal_armed` would blame the successor's transcript for it.
-            out["failed_step"] = "agent_wait_goal"
-            out["failure_detail"] = (
-                "the successor never reported idle before the goal send — a slash command pasted "
-                "into a busy pane is queued instead of executed (#718, #989)")
-            return out
+        settled = getattr(proc, "returncode", 1) == 0
+        # Non-fatal must not mean invisible: an operator has to be able to tell a healthy handoff
+        # from a lucky one, so the unconfirmed case is named in the receipt either way.
+        record("settle_before_goal", wait_goal_argv, proc,
+               note=(f"settled {SETTLE_BEFORE_GOAL_S}s then confirmed idle" if settled else
+                     f"settled {SETTLE_BEFORE_GOAL_S}s; the pane did not report idle within "
+                     f"{SETTLE_CONFIRM_TIMEOUT_MS}ms — proceeding anyway, because this signal is "
+                     "known to hang on a pane that IS idle (#694). goal_armed remains the gate"))
 
         # SEND 2 of 3 — the GUARD, into the pane the wait above just proved idle.
         #
