@@ -2868,9 +2868,27 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         # pass where the buffer was intact all along. Never a re-paste (#696): once the buffered
         # Enter flushes, a second copy of the text would submit twice.
         #
-        # The safety of nudging HERE rests on `prompt_landed` having already passed above — that
-        # proves the prompt was submitted, so a paste affordance on screen now can only be the
-        # goal's. A future reordering of the sends would invalidate that and must revisit this.
+        # TWO honest limits, both inherited from the prompt path and neither closable here
+        # (Step-8a cross-model review, two High findings — the observations are right, their
+        # recommended fixes are not implementable against this transport):
+        #
+        # 1. The guard is an AFFORDANCE check, NOT an identity check, and it cannot be made one:
+        #    a collapsed paste renders as `[Pasted text #N]`, so the pane never displays the
+        #    content to compare against `expected_condition`. `prompt_landed` proves the PROMPT
+        #    was submitted; it does NOT prove the paste on screen now is this goal's. So the
+        #    residual risk is real — an Enter submits whatever is staged. What bounds it: the pane
+        #    is one this call just created, the permission-dialog veto runs before every Enter, and
+        #    every unknown screen fails closed. `pane_shows_unsubmitted_paste`'s own docstring
+        #    states the same narrower claim; do not re-widen it here.
+        # 2. Enters can QUEUE. The very buffering this recovery exists for means an rc-0 send-keys
+        #    may sit unflushed while the re-poll still reads false, so a later round can enqueue a
+        #    second Enter; at flush the first submits the goal and the rest land on an empty input
+        #    box. Rate-bounded by the full re-poll between rounds, and an empty submit is inert.
+        #    NOT fixed by dropping to one nudge — #700 measured that one Enter still lands inside
+        #    the running turn (see PROMPT_NUDGE_ROUNDS), which is the failure this exists to end.
+        #
+        # A future reordering of the sends would also invalidate limit 1's mitigation and must
+        # revisit this.
         for _ in range(GOAL_NUDGE_ROUNDS):
             if armed:
                 break
@@ -2890,9 +2908,14 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                 break
             nudge_argv = build_send_enter_argv(new_pane)
             proc = runner(nudge_argv)
+            # note=None on failure DELIBERATELY: #731 made `record` attach the herdr error body
+            # whenever the note is absent, so passing an explanatory string here would silence the
+            # one record that most needs the real cause. Explain on success, diagnose on failure.
+            nudge_ok = getattr(proc, "returncode", 1) == 0
             record("send_goal_nudge", nudge_argv, proc,
-                   note="bare Enter — submit the intact goal paste, never re-send it (#835)")
-            if getattr(proc, "returncode", 1) != 0:
+                   note=("bare Enter — submit the intact goal paste, never re-send it (#835)"
+                         if nudge_ok else None))
+            if not nudge_ok:
                 # Named distinctly, for the reason `send_resume_nudge` is: reporting this as
                 # `goal_armed` would blame the successor's timing for a failed herdr call.
                 out["failed_step"] = "send_goal_nudge"

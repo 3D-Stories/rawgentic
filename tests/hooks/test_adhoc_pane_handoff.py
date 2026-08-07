@@ -345,6 +345,36 @@ class TestGoalNudge:
         assert out["ok"] is False
         assert out["failed_step"] == "send_goal_nudge", out["failed_step"]
 
+    def test_a_failed_nudge_keeps_the_herdr_error_body(self) -> None:
+        """#731's choke point attaches the error body only when the note is absent, so the goal
+        nudge must not hand `record` an explanatory string on the failure path — that would
+        silence the one record that most needs the real cause."""
+        class NudgeFailsLoudly(Runner):
+            def __call__(self, argv, timeout=180):
+                proc = super().__call__(argv, timeout)
+                if argv[:3] == ["herdr", "pane", "send-keys"] \
+                        and self.calls[-2][:3] != ["herdr", "pane", "send-text"]:
+                    return FakeProc(returncode=1,
+                                    stdout='{"error": {"code": "pane_gone", "message": "no pane"}}')
+                return proc
+
+        r = NudgeFailsLoudly(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
+        assert out["failed_step"] == "send_goal_nudge"
+        notes = [str(s.get("note")) for s in out["steps"] if s["kind"] == "send_goal_nudge"]
+        assert notes, "the failed nudge was not recorded at all"
+        assert any("pane_gone" in n for n in notes), notes
+
+    def test_a_successful_nudge_still_explains_itself(self) -> None:
+        """The other half of the same rule: on success there is no error body to preserve, so the
+        record carries the explanatory note instead of nothing."""
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=1)))
+        notes = [str(s.get("note")) for s in out["steps"] if s["kind"] == "send_goal_nudge"]
+        assert any("never re-send" in n for n in notes), notes
+
     def test_the_send_order_is_unchanged(self) -> None:
         """AC5: recovery lives INSIDE send 3 — it does not reorder or add a send."""
         r = Runner(_responses())
