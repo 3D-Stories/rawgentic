@@ -2226,3 +2226,42 @@ def test_a_malformed_blind_streak_is_tolerated_and_never_raises(tmp_path):
     r = _blind(tmp_path)
     assert r.returncode == 0
     assert _state(tmp_path)["blind_streak"] == 1
+
+
+def _seed_state(tmp_path, **fields):
+    d = tmp_path / ".rawgentic" / "context-meter"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{SID}.json").write_text(
+        json.dumps({"session_id": SID, **fields}), encoding="utf-8")
+
+
+def test_a_counter_already_past_the_threshold_still_warns(tmp_path):
+    """Step-11 F2. The first revision gated on `== BLIND_STREAK_WARN`.
+
+    A state file arriving with the counter already past the threshold incremented
+    straight past equality and then never warned for the rest of the session — a
+    fail-open on the one signal this issue exists to add.
+    """
+    _seed_state(tmp_path, blind_streak=cm.BLIND_STREAK_WARN + 40)
+    assert "blind for" in _blind(tmp_path).stderr
+
+
+def test_a_negative_counter_does_not_delay_the_warning(tmp_path):
+    """Step-11 F2. A negative value must not buy extra silent checks."""
+    _seed_state(tmp_path, blind_streak=-1)
+    stderr = ""
+    for _ in range(cm.BLIND_STREAK_WARN):
+        stderr += _blind(tmp_path).stderr
+    assert stderr.count("blind for") == 1
+    assert _state(tmp_path)["blind_streak"] == cm.BLIND_STREAK_WARN
+
+
+def test_the_once_flag_clears_only_on_a_real_reading(tmp_path):
+    """The flag is what makes 'exactly once per episode' hold for any start value."""
+    _seed_state(tmp_path, blind_streak=cm.BLIND_STREAK_WARN)
+    _blind(tmp_path)
+    assert _state(tmp_path)["blind_warning_emitted"] is True
+    _transcript(tmp_path, SID, [_row(_usage(inp=1, cr=10))])
+    _run({"session_id": SID, "cwd": str(tmp_path),
+          "hook_event_name": "UserPromptSubmit"}, home=tmp_path, extra_env=EVERY_TURN)
+    assert _state(tmp_path)["blind_warning_emitted"] is False

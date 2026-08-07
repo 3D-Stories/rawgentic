@@ -769,7 +769,12 @@ For major changes, please open an issue first to discuss the approach.
   one-issue convention: `skills/pane-handoff/SKILL.md` now records that a `/goal` arms only when it
   leads the submitted text, so a hand-carried handoff must print the goal in its own block and say
   how to send it — the wired path already did this and is unchanged.
-  No workflow-spine change, so no diagram REV. Suite 6393→6402.
+  Cross-model review then refused the first revision's `== BLIND_STREAK_WARN` gate: a counter
+  arriving already past the threshold would increment straight past equality and never warn at all,
+  which is a fail-open on the one signal this issue adds. It is now `>=` plus an explicit
+  once-per-episode flag cleared on a successful reading, so the guarantee holds for any starting
+  value. 12 tests added in total.
+  No workflow-spine change, so no diagram REV. Suite 6393→6405.
 
 ### v3.141.4 (2026-08-07)
 - **#989's send reorder is REVERTED — `/goal` goes last again (epic #906).** #989 moved the goal

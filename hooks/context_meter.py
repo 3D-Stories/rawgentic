@@ -94,9 +94,15 @@ DEFAULT_EVERY_SECONDS = 300
 # #734 — how many CONSECUTIVE checks may take no reading before the meter says so a
 # second time. `_diagnose` is once-per-session, so without this a session that stays
 # blind emits one stderr line at minute 0 and nothing for the next 44 minutes, which is
-# the window the issue measured. 5 is one full cadence arm (DEFAULT_EVERY_TURNS), so the
-# warning lands only after blindness has outlived a normal check interval rather than
-# firing on a single early miss — the transcript genuinely does not exist yet at turn 1.
+# the window the issue measured.
+#
+# Five NON-THROTTLED CHECKS, which is five cadence intervals and not one. Under the
+# defaults that is about 25 turns or about 25 minutes of continuous blindness. An earlier
+# comment here called it "one full cadence arm", which was simply wrong, and cross-model
+# review caught it. The delay is deliberate at this length: the measured blind window ran
+# 44 minutes, so a warning at roughly 25 sits well inside it, while a threshold of 1 or 2
+# would fire on the ordinary first-turn miss where the transcript does not exist yet —
+# which is the noise the once-per-session design was avoiding in the first place.
 BLIND_STREAK_WARN = 5
 
 _BLOCK = 65536
@@ -1420,20 +1426,31 @@ def cmd_hook(argv) -> int:
         current.append(blind_kind)
         state["diagnostics_current"] = current
         _diagnose(state, blind_kind, blind_message)
-        streak = (_as_int(state.get("blind_streak")) or 0) + 1
+        # `max(0, ...)` so a corrupt or hand-edited NEGATIVE counter cannot park the
+        # streak below zero and delay the warning by that many checks.
+        streak = max(0, _as_int(state.get("blind_streak")) or 0) + 1
         state["blind_streak"] = streak
         # ONE further warning once blindness PERSISTS. `_diagnose` above is
         # once-per-session by design, which is correct for a transient first-turn miss
         # and wrong for a meter that never recovers: the measured case went 44 minutes
         # and 368,175 tokens with exactly one stderr line, emitted before any of it.
         #
-        # `==`, not `>=`: that makes it exactly once per blind EPISODE rather than once
-        # per call, and it re-arms only after a real reading resets the streak to 0. A
-        # second episode is new information and deserves to be said again.
+        # `>=` PLUS an explicit once-flag, rather than an `== BLIND_STREAK_WARN` gate.
+        # The equality form was the first revision and cross-model review refused it: a
+        # state file arriving with a counter already past the threshold — corrupt, hand
+        # edited, or written by a future version — increments straight past equality and
+        # then never warns at all, for the whole session. That is a fail-OPEN on the one
+        # signal this issue exists to add. The flag makes "exactly one warning per blind
+        # episode" hold for ANY starting value, which is what the acceptance criterion
+        # actually asks for.
+        #
+        # The flag is cleared on a successful reading below, so a SECOND blind episode
+        # warns again. That is deliberate: a fresh episode is new information.
         #
         # Precedent for speaking up at all: the unwritable-state-dir warning below. A
         # self-disabled meter is never invisible — that is this module's contract.
-        if streak == BLIND_STREAK_WARN:
+        if streak >= BLIND_STREAK_WARN and not state.get("blind_warning_emitted"):
+            state["blind_warning_emitted"] = True
             _warn(f"context_meter: blind for {streak} consecutive checks "
                   f"({blind_kind}) — no context reading has been taken for this "
                   "session, so no advisory or directive can fire however large it "
@@ -1445,6 +1462,7 @@ def cmd_hook(argv) -> int:
     # blind kinds. `session_unbound` may still be in `current` — that is a separate,
     # still-true condition and it stays until a later bind clears it.
     state["blind_streak"] = 0
+    state["blind_warning_emitted"] = False
     state["diagnostics_current"] = current
 
     window, provenance = resolve_window(cfg.get("windowSize"),
