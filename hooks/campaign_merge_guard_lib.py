@@ -19,6 +19,7 @@ constraint `supervision_lib.py` documents for the same reason).
 import json
 import os
 import re
+import shlex
 import time
 
 #: Mirrored from `driver_lib._DISPOSED_STATUSES`. Copied rather than imported because
@@ -41,23 +42,18 @@ DRIVER_STATE_RELPATH = os.path.join("claude_docs", ".driver-state")
 #: nothing else. `gh`, then `pr`, then `merge`, as whole words in order.
 _PREFILTER_RE = re.compile(r"\bgh\b[^\n;|&]*?\bpr\b[^\n;|&]*?\bmerge\b")
 
-#: The classifier, applied to QUOTE-STRIPPED text (see `parse_merge_command`). `gh pr
-#: merge` as three consecutive tokens in COMMAND POSITION: the start of a segment,
-#: allowing leading whitespace and `VAR=value` prefixes.
+#: Shell operators that end a command segment. `shlex(punctuation_chars=True)` emits `&&`
+#: and `||` as single tokens, and a separator inside a quoted string never becomes one —
+#: which is why classification is done over TOKENS rather than raw text (Step 8a F6).
 #:
 #: Deliberately NOT matched: `sh -c "gh pr merge …"` and other wrappers. That is the right
 #: trade for this guard's threat model (D187): a false positive blocks unrelated work in
 #: every project on the host, while a false negative only misses a form nobody reaches by
 #: accident — and the guard never claimed to stop a deliberate bypass.
-_MERGE_RE = re.compile(
-    r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*gh\s+pr\s+merge\b")
+_OPERATORS = frozenset({";", "&&", "||", "|", "&", "\n"})
 
-#: Segment separators. Splitting quote-stripped text means a `;` inside a quoted string
-#: can no longer masquerade as one (Step 8a finding F6).
-_SEGMENT_RE = re.compile(r"(?:\|\||&&|[;|&\n])")
-
-#: `cd <literal>` as a whole segment.
-_CD_RE = re.compile(r"^\s*cd\s+(\S+)\s*$")
+#: `VAR=value` prefixes, which sit before the command word.
+_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 #: Shell text this module refuses to reason about inside a `cd` target.
 _UNSAFE_CHARS = ("$", "`", "*", "?", "~")
@@ -72,23 +68,77 @@ _VALUE_FLAGS = frozenset({
 _REPO_FLAGS = frozenset({"--repo", "-R"})
 
 
-def _executable_text(command):
-    """`command` with quoted strings and heredoc bodies removed.
+def _strip_heredocs(command):
+    """Everything from the first `<<` onward, removed.
 
-    Delegates to `step_state_post.executable_text` — the repo already owns this exact
-    problem ("a command that MENTIONS a needle is not a command that RUNS it", v3.138.1),
-    so this reuses it rather than growing a second copy. On import failure the raw text is
-    returned: this runs before classification, where the policy is fail-open.
+    A heredoc body is data being written, never a command being run — the reasoning
+    `step_state_post.executable_text` already states for this repo. Cutting can only
+    REMOVE text, so it can never manufacture a false denial.
     """
+    cut = command.find("<<")
+    return command if cut == -1 else command[:cut]
+
+
+def _lex(command):
+    """Shell tokens with operators kept, or ``None`` when the text will not lex.
+
+    `shlex` rather than a regex over raw text (Step 11 findings F1 and F6): it keeps a
+    quoted ARGUMENT VALUE intact — `--repo "3D-Stories/rawgentic"` stays one token — while
+    a quoted MENTION collapses into a single token, so `echo 'gh pr merge 887'` can never
+    look like three command tokens. An earlier version stripped quotes wholesale, which
+    turned `--repo "o/r" --squash` into `--repo --squash` and read `--squash` as the
+    repository, allowing the merge it was meant to block.
+    """
+    lexer = shlex.shlex(_strip_heredocs(command), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
     try:
-        import step_state_post  # pylint: disable=import-outside-toplevel
-        return step_state_post.executable_text(command)
-    except Exception:  # pylint: disable=broad-except
-        return command
+        return list(lexer)
+    except ValueError:
+        return None
 
 
-def _tokenize(segment):
-    return [t for t in segment.split() if t]
+def _segments(tokens):
+    """Split a token list on shell operators."""
+    out, current = [], []
+    for token in tokens:
+        if token in _OPERATORS:
+            out.append(current)
+            current = []
+        else:
+            current.append(token)
+    out.append(current)
+    return out
+
+
+def _parse_merge_args(args):
+    """The `gh pr merge` argument grammar → ``{"pr": int|None, "repo": str|None}``."""
+    pr, repo, index = None, None, 0
+    while index < len(args):
+        token = args[index]
+        if token.startswith("-") and token != "-":
+            name, sep, inline = token.partition("=")
+            if sep:
+                if name in _REPO_FLAGS:
+                    repo = inline
+                index += 1
+                continue
+            if name in _VALUE_FLAGS:
+                value = args[index + 1] if index + 1 < len(args) else None
+                # A value-taking flag whose value is missing or is itself a flag has no
+                # usable value; never adopt the next flag as one (Step 11 finding F1).
+                if value is not None and not value.startswith("-"):
+                    if name in _REPO_FLAGS:
+                        repo = value
+                    index += 2
+                    continue
+                index += 1
+                continue
+            index += 1
+            continue
+        if pr is None and token.isdigit():
+            pr = int(token)
+        index += 1
+    return {"pr": pr, "repo": repo}
 
 
 def parse_merge_command(command):
@@ -97,68 +147,53 @@ def parse_merge_command(command):
     ``None`` means "not a raw `gh pr merge`" and is the answer for essentially every
     command. Otherwise::
 
-        {"pr": int|None, "repo": str|None, "cd": str|None, "cd_unresolvable": bool}
+        {"pr": int|None, "repo": str|None,        # the FIRST target, for convenience
+         "targets": [{"pr": …, "repo": …}, …],    # EVERY target, in execution order
+         "cd": str|None, "cd_unresolvable": bool, "unlexable": bool}
 
-    ``pr is None`` means the invocation IS a raw merge but its target could not be read —
-    `gh pr merge` with no number merges the current branch's PR, which this hook cannot
-    resolve, so the caller must treat it as an unknown target rather than as "no PR".
+    Every merge target is returned, not just the first (Step 11 finding F2): one Bash call
+    may carry several, and `gh pr merge 999; gh pr merge 887` must not be waved through on
+    the strength of its harmless first half.
+
+    ``pr is None`` on a target means the invocation IS a raw merge but its target could not
+    be read — `gh pr merge` with no number merges the current branch's PR, which this hook
+    cannot resolve, so the caller treats it as an unknown target rather than as "no PR".
     """
     if not isinstance(command, str) or not command:
         return None
     if not _PREFILTER_RE.search(command):
         return None
 
-    text = _executable_text(command)
-    segments = _SEGMENT_RE.split(text)
+    tokens = _lex(command)
+    if tokens is None:
+        # It looks like a merge and will not lex. Refusing to guess is the point.
+        return {"pr": None, "repo": None, "targets": [{"pr": None, "repo": None}],
+                "cd": None, "cd_unresolvable": False, "unlexable": True}
 
-    cd_target, cd_unresolvable = None, False
-    merge_tokens = None
-    for segment in segments:
-        cd_match = _CD_RE.match(segment)
-        if cd_match:
-            candidate = cd_match.group(1)
+    cd_target, cd_unresolvable, targets = None, False, []
+    for segment in _segments(tokens):
+        # Drop `VAR=value` prefixes, which precede the command word.
+        index = 0
+        while index < len(segment) and _ASSIGNMENT_RE.match(segment[index]):
+            index += 1
+        words = segment[index:]
+        if not words:
+            continue
+        if words[0] == "cd" and len(words) >= 2:
+            candidate = words[1]
             if any(ch in candidate for ch in _UNSAFE_CHARS):
                 cd_unresolvable = True
             else:
-                cd_target = candidate.strip("\"'")
+                cd_target = candidate
             continue
-        if _MERGE_RE.match(segment):
-            merge_tokens = _tokenize(segment)
-            break
+        if words[:3] == ["gh", "pr", "merge"]:
+            targets.append(_parse_merge_args(words[3:]))
 
-    if merge_tokens is None:
+    if not targets:
         return None
-
-    # Drop everything up to and including the `merge` verb, plus any VAR=value prefixes.
-    try:
-        start = merge_tokens.index("merge") + 1
-    except ValueError:
-        start = len(merge_tokens)
-    args = merge_tokens[start:]
-
-    pr, repo, index = None, None, 0
-    while index < len(args):
-        token = args[index]
-        if token.startswith("-"):
-            name, _, inline = token.partition("=")
-            if inline:
-                if name in _REPO_FLAGS:
-                    repo = inline
-                index += 1
-                continue
-            if name in _VALUE_FLAGS:
-                if name in _REPO_FLAGS and index + 1 < len(args):
-                    repo = args[index + 1]
-                index += 2
-                continue
-            index += 1
-            continue
-        if pr is None and token.isdigit():
-            pr = int(token)
-        index += 1
-
-    return {"pr": pr, "repo": repo, "cd": cd_target,
-            "cd_unresolvable": cd_unresolvable}
+    first = targets[0]
+    return {"pr": first["pr"], "repo": first["repo"], "targets": targets,
+            "cd": cd_target, "cd_unresolvable": cd_unresolvable, "unlexable": False}
 
 
 def find_project_root(start_path):
@@ -218,15 +253,39 @@ def configured_repo(project_root):
         return None
 
 
+def valid_issue_entry(entry):
+    """Does this queue entry carry the fields the decision actually compares?
+
+    Step 11 finding F3: checking only `isinstance(entry, dict)` accepted
+    ``{"pr": "887"}`` as an ACTIVE child, and `_match_pr` then compared that string to the
+    integer 887, found nothing, and allowed the raw merge — a corrupt file producing the
+    exact outcome the fail-closed rule exists to prevent. `bool` is excluded from the
+    integer checks because `True == 1` in Python.
+    """
+    if not isinstance(entry, dict):
+        return False
+    number = entry.get("number")
+    if not isinstance(number, int) or isinstance(number, bool):
+        return False
+    status = entry.get("status")
+    if not isinstance(status, str) or not status:
+        return False
+    pr = entry.get("pr")
+    if pr is not None and (not isinstance(pr, int) or isinstance(pr, bool)):
+        return False
+    return True
+
+
 def campaign_activity(state):
     """``"active"`` | ``"settled"`` | ``"invalid"``.
 
     Three-valued deliberately (Step 8a finding F4). A syntactically valid JSON object whose
-    `issues` field is missing or is not a list is **invalid**, not settled: reading it as
-    "no active children" let a corrupt campaign file allow a raw merge, which is the exact
-    opposite of the fail-closed rule for state that cannot be evaluated. Every real
-    campaign file carries an `issues` list (verified across all five in
-    claude_docs/.driver-state/), so this cannot refuse legitimate state.
+    `issues` field is missing, is not a list, or holds an entry whose compared fields are
+    the wrong type is **invalid**, not settled: reading either as "no active children" let
+    a corrupt campaign file allow a raw merge, the exact opposite of the fail-closed rule
+    for state that cannot be evaluated. Verified against all five real campaign files in
+    claude_docs/.driver-state/ — every entry passes — so this cannot refuse legitimate
+    state.
     """
     if not isinstance(state, dict):
         return "invalid"
@@ -234,8 +293,9 @@ def campaign_activity(state):
     if not isinstance(issues, list):
         return "invalid"
     for entry in issues:
-        if not isinstance(entry, dict):
+        if not valid_issue_entry(entry):
             return "invalid"
+    for entry in issues:
         if entry.get("status") not in DISPOSED_STATUSES:
             return "active"
     return "settled"
@@ -325,10 +385,13 @@ def decide(target, active, unevaluable, project_repo):
 
     # A foreign repository is not this campaign's business (Step 4 finding F3: PR numbers
     # are repository-scoped, so binding on the number alone denies unrelated work).
-    target_repo = target.get("repo")
-    if target_repo and project_repo and target_repo != project_repo:
+    subjects = [t for t in target.get("targets") or [target]
+                if not (t.get("repo") and project_repo
+                        and t.get("repo") != project_repo)]
+    if not subjects:
         return {"action": "allow",
-                "reason": "targets %s, not this project's %s" % (target_repo, project_repo)}
+                "reason": "every merge target names a repository other than %s"
+                          % project_repo}
 
     reasons = list(unevaluable)
     if target.get("cd_unresolvable"):
@@ -344,22 +407,34 @@ def decide(target, active, unevaluable, project_repo):
     if not active:
         return {"action": "allow", "reason": "no active campaign"}
 
-    pr = target.get("pr")
-    if pr is None:
+    if target.get("unlexable"):
         return {
             "action": "deny", "kind": "unknown-target",
             "campaign": active[0]["campaign"],
-            "reason": "the target PR could not be read from the command while a campaign "
-                      "is active",
+            "reason": "the command contains a `gh pr merge` but will not parse as shell, "
+                      "so its target cannot be read while a campaign is active",
         }
 
-    campaign, issue = _match_pr(active, pr)
-    if campaign is None:
-        return {"action": "allow",
-                "reason": "no active campaign names PR #%d" % pr}
-    return {"action": "deny", "kind": "campaign", "campaign": campaign,
-            "issue": issue, "pr": pr,
-            "reason": "PR #%d is a child of active campaign %s" % (pr, campaign)}
+    # EVERY target is checked, not just the first (Step 11 finding F2): one Bash call can
+    # carry several, and a harmless first merge must not clear the whole call.
+    for subject in subjects:
+        pr = subject.get("pr")
+        if pr is None:
+            return {
+                "action": "deny", "kind": "unknown-target",
+                "campaign": active[0]["campaign"],
+                "reason": "a target PR could not be read from the command while a "
+                          "campaign is active",
+            }
+        campaign, issue = _match_pr(active, pr)
+        if campaign is not None:
+            return {"action": "deny", "kind": "campaign", "campaign": campaign,
+                    "issue": issue, "pr": pr,
+                    "reason": "PR #%d is a child of active campaign %s" % (pr, campaign)}
+
+    return {"action": "allow",
+            "reason": "no active campaign names %s"
+                      % ", ".join("PR #%s" % t.get("pr") for t in subjects)}
 
 
 def _root_arg(project_root):

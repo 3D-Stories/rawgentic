@@ -528,6 +528,92 @@ def test_f8_the_replacement_command_names_the_real_project_root(tmp_path):
     assert "--project-root .\n" not in reason
 
 
+# ── Step 11 review findings ───────────────────────────────────────────────
+
+@pytest.mark.parametrize("command", [
+    'gh pr merge 887 --repo "3D-Stories/rawgentic" --squash',
+    "gh pr merge 887 --repo '3D-Stories/rawgentic'",
+    'gh pr merge --subject "fix 2026 bug" 887',
+    'gh pr merge 887 --body "merging 2026 changes"',
+])
+def test_s11_f1_a_quoted_argument_value_survives(tmp_path, command):
+    """Stripping quotes wholesale turned `--repo "o/r" --squash` into `--repo --squash`,
+    read `--squash` as the repository, called it foreign, and allowed the merge."""
+    root = _project(tmp_path)
+    _campaign(root, "c1", [{"number": 880, "status": "pr_open", "pr": 887}])
+    assert _decision(command, root) == "deny"
+
+
+def test_s11_f1_a_value_flag_never_adopts_the_next_flag_as_its_value():
+    got = lib.parse_merge_command("gh pr merge 887 --repo --squash")
+    assert got["repo"] is None
+    assert got["pr"] == 887
+
+
+def test_s11_f2_every_merge_target_is_checked(tmp_path):
+    """A harmless first merge must not clear the whole Bash call."""
+    root = _project(tmp_path)
+    _campaign(root, "c1", [{"number": 880, "status": "pr_open", "pr": 887}])
+    assert _decision("gh pr merge 999; gh pr merge 887", root) == "deny"
+    assert _decision("gh pr merge 999 && gh pr merge 887", root) == "deny"
+
+
+def test_s11_f2_parse_returns_targets_in_execution_order():
+    got = lib.parse_merge_command("gh pr merge 999; gh pr merge 887")
+    assert [t["pr"] for t in got["targets"]] == [999, 887]
+
+
+def test_s11_f2_several_unrelated_merges_still_allow(tmp_path):
+    root = _project(tmp_path)
+    _campaign(root, "c1", [{"number": 880, "status": "pr_open", "pr": 887}])
+    assert _decision("gh pr merge 111; gh pr merge 222", root) == "allow"
+
+
+@pytest.mark.parametrize("entry", [
+    {"number": 880, "status": "pr_open", "pr": "887"},   # pr as a string
+    {"number": "880", "status": "pr_open", "pr": 887},   # number as a string
+    {"number": 880, "status": "pr_open", "pr": True},    # bool is not a PR
+    {"number": 880, "pr": 887},                          # no status
+    {"number": 880, "status": "", "pr": 887},            # empty status
+])
+def test_s11_f3_a_wrongly_typed_entry_is_unevaluable(tmp_path, entry):
+    """`{"pr": "887"}` was read as ACTIVE, never matched integer 887, and allowed."""
+    root = _project(tmp_path)
+    _campaign(root, "c1", [entry])
+    assert _decision("gh pr merge 887", root) == "deny"
+
+
+def test_s11_f3_a_queued_child_with_no_pr_yet_is_still_valid():
+    """A child that has not opened its PR carries no `pr` — that is normal, not corrupt."""
+    assert lib.valid_issue_entry({"number": 880, "status": "queued"}) is True
+    assert lib.campaign_activity({"issues": [{"number": 880, "status": "queued"}]}) \
+        == "active"
+
+
+def test_s11_f3_real_campaign_files_are_never_invalid():
+    """The guard must not refuse legitimate state that exists on this host right now."""
+    import glob  # noqa: PLC0415
+    files = sorted(glob.glob(str(REPO_ROOT / "claude_docs" / ".driver-state" / "*.json")))
+    if not files:
+        pytest.skip("no live campaign state on this host")
+    for path in files:
+        with open(path, encoding="utf-8") as fh:
+            state = json.load(fh)
+        assert lib.campaign_activity(state) != "invalid", path
+
+
+def test_an_unlexable_command_denies_while_a_campaign_is_active(tmp_path):
+    root = _project(tmp_path)
+    _campaign(root, "c1", [{"number": 880, "status": "pr_open", "pr": 887}])
+    assert _decision('gh pr merge 887 --subject "unbalanced', root) == "deny"
+
+
+def test_an_unlexable_command_allows_when_no_campaign_is_active(tmp_path):
+    """Unparseable is only a problem when there is something to protect."""
+    root = _project(tmp_path)
+    assert _decision('gh pr merge 887 --subject "unbalanced', root) == "allow"
+
+
 # ── registration ──────────────────────────────────────────────────────────
 
 def test_the_hook_is_registered_as_a_pretooluse_bash_hook():

@@ -773,8 +773,11 @@ For major changes, please open an issue first to discuss the approach.
   stops an accidental raw merge, not a deliberate bypass — `PreToolUse` fires per tool
   call, not per OS process, which is also exactly why the broker's own internal merge
   passes untouched with no spoofable signal. `docs/supervision.md` replaces its "still
-  deliberately out of scope" paragraph. No workflow-spine change → no diagram REV.
-  Suite 6210→6274.
+  deliberately out of scope" paragraph. Two cross-model review rounds (`gpt-5.6-sol`)
+  contributed 12 fixes, including three the guard's own first draft got wrong: quoted
+  argument values were being destroyed before parsing, only the first merge in a Bash call
+  was checked, and a wrongly-typed `pr` field read as active-but-unmatchable. No
+  workflow-spine change → no diagram REV. Suite 6210→6317.
 
 ### v3.138.1 (2026-08-07)
 - **A command that MENTIONS a step's needle no longer stamps that step, and the review

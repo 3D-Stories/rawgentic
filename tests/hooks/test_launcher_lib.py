@@ -3763,11 +3763,36 @@ class TestBrokerCampaignBindingReadsRealDriverState:
         assert ll.broker_campaign_names_issue({"issues": "nope"}, 1) is False
         assert ll.broker_campaign_names_issue({"issues": [None, "x", 3.5]}, 1) is False
 
-    def test_the_shape_this_fixture_writes_matches_what_driver_lib_reads(self, tmp_path):
-        """The bug was a fixture that lied. Pin the fixture against the real reader."""
-        source = (HOOKS / "driver_lib.py").read_text(encoding="utf-8")
-        assert 'state.get("issues", [])' in source, \
-            "driver_lib reads issues[]; the broker fixture must write that shape"
+    def test_the_production_writer_and_the_broker_agree_on_the_schema(self):
+        """The bug was a fixture that lied, so assert BEHAVIOR, not a source substring.
+
+        Step 11 finding: an earlier version of this test only checked that the string
+        `state.get("issues", [])` appeared somewhere in driver_lib.py, which proves
+        nothing about what the writer emits. This drives a real production writer and
+        feeds its output straight to the broker's reader, so a future schema change
+        breaks it for the right reason.
+        """
+        sys.path.insert(0, str(HOOKS))
+        import driver_lib  # noqa: PLC0415
+
+        state = {"schema_version": 2, "campaign": "epic-test", "project": "p",
+                 "issues": [{"number": 880, "status": "queued", "pr": 887},
+                            {"number": 881, "status": "queued", "pr": 888}]}
+
+        # The writer the epic driver actually uses when a child ships.
+        updated = driver_lib.record_child_outcome(state, 880, "merged")
+        assert updated is not None
+        assert updated["issues"][0]["status"] == "merged"
+
+        # The broker's reader must find both children in the writer's own output.
+        assert ll.broker_campaign_names_issue(updated, 880) is True
+        assert ll.broker_campaign_names_issue(updated, 881) is True
+        assert ll.broker_campaign_names_issue(updated, 999) is False
+
+    def test_the_fixture_writes_state_the_validator_accepts(self, tmp_path):
+        """And the fixture's own shape must survive driver_lib's validator."""
+        sys.path.insert(0, str(HOOKS))
+        import driver_lib  # noqa: PLC0415
 
         root = _broker_workspace(tmp_path, campaign="c", issue=880, pr_number=887)
         written = json.loads(
@@ -3776,3 +3801,7 @@ class TestBrokerCampaignBindingReadsRealDriverState:
         assert written["issues"][0]["number"] == 880
         assert written["issues"][0]["pr"] == 887
         assert ll.broker_campaign_names_issue(written, 880) is True
+
+        # record_child_outcome runs `_numbers()`, which fails closed on a missing or
+        # non-int number -- so accepting this fixture proves its entries are well formed.
+        assert driver_lib.record_child_outcome(written, 880, "merged") is not None
