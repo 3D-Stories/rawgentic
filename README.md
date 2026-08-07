@@ -749,6 +749,31 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.142.0 (2026-08-08)
+- **A fuzzy candidate layer widens the #393 join backstop's recall without ever gaining
+  its auto-dissolve power (#892, filed from the #880 friction assessment).** The
+  byte-identical join backstop rarely re-fires: reviewers rephrase findings every pass,
+  so an exact `finding_key` match against a settled ledger entry almost never recurs —
+  on #880 the same settled `_retires` security claim was hand-adjudicated six times
+  across gates because the mechanical path never fired once. New
+  `plan_lib.fuzzy_disposition_candidates(finding, folded_entries)` widens recall to the
+  two STABLE identity fields — `location` + `category` — against DECLINED/DISSOLVED
+  ledger entries only (ADOPTED matches keep their existing exact-match-only "possible
+  failed remediation" surfacing, untouched); a match surfaces as `possible
+  re-litigation of <id>` for orchestrator adjudication and NEVER auto-dissolves the
+  finding — only the byte-identical join keeps that power, so a genuinely-new finding
+  at the same location survives to triage untouched. Wired into the single canonical
+  join-backstop paragraph (Step 4 item 7 of `implement-feature`'s `step-04.md`), which
+  Steps 6 and 11 already reference by name, so all three gates pick it up from one
+  edit. Briefs stay history-free per #840 — no prompt, schema, or CLI change. 11 new
+  unit tests (`TestFuzzyDispositionCandidates`) plus 4 new drift guards pinning the
+  prose. Trimmed non-operative rationale elsewhere in `step-04.md` to stay under its
+  CI byte ceiling (trim-first per the #903/#963 precedent) rather than raising it. No
+  workflow-spine change → no diagram REV. Suite 6210→6224.
+  *(Rebased onto `98975630` 2026-08-08: the original entry claimed v3.139.0, a version
+  main passed while this PR sat open. Re-headed to v3.142.0 — minor, because this is a
+  `feat` — and re-verified against the current suite.)*
+
 ### v3.141.10 (2026-08-08)
 - **The WF2 prose corpus now measures WORDS, not only bytes (#899, epic #906).** `tests/test_wf2_prose_budget.py`
   gains `SKILL_WORD_CEILINGS` and a `word_violations()` helper mirroring the existing byte-budget
