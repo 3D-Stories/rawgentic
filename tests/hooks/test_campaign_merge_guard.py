@@ -274,12 +274,17 @@ def test_ac4_non_merge_commands_allow(tmp_path, command):
 @pytest.mark.parametrize("command", [
     "gh pr merge 887",
     "  gh pr merge 887",
-    "cd /repo && gh pr merge 887 --squash",
+    "cd . && gh pr merge 887 --squash",
     "git fetch origin; gh pr merge 887",
     "GH_TOKEN=x gh pr merge 887",
 ])
 def test_ac1_command_position_invocations_deny(tmp_path, command):
-    """Real invocations, including after a separator or an env-var prefix."""
+    """Real invocations, including after a separator or an env-var prefix.
+
+    A `cd` to somewhere OUTSIDE the project is deliberately NOT here: after the Step 8a
+    F3 fix that merge really would run elsewhere, so allowing it is correct. The
+    cd-into-a-campaign case has its own test below.
+    """
     root = _project(tmp_path)
     _campaign(root, "c1", [{"number": 880, "status": "pr_open", "pr": 887}])
     assert _decision(command, root) == "deny"
@@ -373,6 +378,154 @@ def test_internal_deadline_denies_a_classified_merge(tmp_path):
     target = lib.parse_merge_command("gh pr merge 887")
     decision = lib.decide(target, [], ["<deadline>"], CONFIGURED_REPO)
     assert decision["action"] == "deny"
+
+
+# ── Step 8a review findings, each pinned by the case that exposed it ──────
+
+def test_f1_a_json_file_past_the_read_cap_is_not_silently_dropped(tmp_path):
+    """Files beyond MAX_STATE_FILES used to vanish, allowing the merge they governed.
+
+    `.lock` siblings live in this directory too, and used to consume the budget before
+    the cap was applied to state files only.
+    """
+    root = _project(tmp_path)
+    state_dir = root / "claude_docs" / ".driver-state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(lib.MAX_STATE_FILES + 5):
+        _campaign(root, "campaign-%03d" % i,
+                  [{"number": 1, "status": "merged", "pr": 1}])
+    # The active campaign sorts last, past the cap.
+    _campaign(root, "zzz-active", [{"number": 880, "status": "pr_open", "pr": 887}])
+    assert _decision("gh pr merge 887", root) == "deny"
+
+
+def test_f1_lock_files_do_not_consume_the_read_budget(tmp_path):
+    root = _project(tmp_path)
+    _campaign(root, "c1", [{"number": 880, "status": "pr_open", "pr": 887}])
+    state_dir = root / "claude_docs" / ".driver-state"
+    for i in range(lib.MAX_STATE_FILES + 10):
+        (state_dir / ("c1-%03d.json.lock" % i)).write_text("", encoding="utf-8")
+    active, unevaluable = lib.read_campaigns(str(root))
+    assert unevaluable == []
+    assert [c["campaign"] for c in active] == ["c1"]
+
+
+def test_f2_an_error_after_classification_denies(tmp_path, monkeypatch):
+    """The outer handler must refuse once the command is a known raw merge."""
+    root = _project(tmp_path)
+    _campaign(root, "c1", [{"number": 880, "status": "pr_open", "pr": 887}])
+    hook = REPO_ROOT / "hooks" / HOOK
+    # Break a function the hook calls only AFTER classification.
+    sitecustomize = tmp_path / "sitecustomize.py"
+    sitecustomize.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(REPO_ROOT / 'hooks')!r})\n"
+        "import campaign_merge_guard_lib as g\n"
+        "def boom(*a, **k):\n"
+        "    raise RuntimeError('injected')\n"
+        "g.read_campaigns = boom\n", encoding="utf-8")
+    env = dict(os.environ, PYTHONPATH=str(tmp_path))
+    payload = json.dumps({"tool_name": "Bash",
+                          "tool_input": {"command": "gh pr merge 887"},
+                          "cwd": str(root)})
+    proc = subprocess.run([sys.executable, str(hook)], input=payload, env=env,
+                          capture_output=True, text=True, timeout=15, cwd=str(root))
+    parsed = parse_hook_output(proc.stdout)
+    assert parsed is not None, f"expected a deny, got stdout={proc.stdout!r}"
+    assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "broker-merge" in parsed["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_f3_a_cd_into_a_campaign_project_is_evaluated_there(tmp_path):
+    """`cd /campaign && gh pr merge 887` runs in /campaign, not in the hook's cwd."""
+    root = _project(tmp_path)
+    _campaign(root, "c1", [{"number": 880, "status": "pr_open", "pr": 887}])
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    assert _decision(f"cd {root} && gh pr merge 887", outside) == "deny"
+
+
+def test_f3_a_bare_merge_from_outside_any_project_still_allows(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    assert _decision("gh pr merge 887", outside) == "allow"
+
+
+def test_f3_an_unresolvable_cd_target_denies(tmp_path):
+    root = _project(tmp_path)
+    _campaign(root, "c1", [{"number": 880, "status": "pr_open", "pr": 887}])
+    assert _decision('cd "$TARGET" && gh pr merge 887', root) == "deny"
+
+
+def test_f4_a_campaign_object_without_an_issues_list_is_unevaluable(tmp_path):
+    """Valid JSON is not valid state; reading it as 'settled' allowed the merge."""
+    root = _project(tmp_path)
+    state_dir = root / "claude_docs" / ".driver-state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "c1.json").write_text(json.dumps({"campaign": "c1"}), encoding="utf-8")
+    assert _decision("gh pr merge 887", root) == "deny"
+
+
+@pytest.mark.parametrize("state,expected", [
+    ({"issues": [{"number": 1, "status": "pr_open"}]}, "active"),
+    ({"issues": [{"number": 1, "status": "merged"}]}, "settled"),
+    ({"issues": []}, "settled"),
+    ({"campaign": "c"}, "invalid"),
+    ({"issues": "nope"}, "invalid"),
+    ({"issues": [None]}, "invalid"),
+    ("not a dict", "invalid"),
+])
+def test_f4_campaign_activity_is_three_valued(state, expected):
+    assert lib.campaign_activity(state) == expected
+
+
+@pytest.mark.parametrize("command,pr", [
+    ("gh pr merge --subject 2026 887", 887),
+    ("gh pr merge -t 2026 887", 887),
+    ("gh pr merge --body 12345 887 --squash", 887),
+    ("gh pr merge --match-head-commit 999 887", 887),
+    ("gh pr merge --subject=2026 887", 887),
+])
+def test_f5_a_flag_value_is_never_mistaken_for_the_pr(command, pr):
+    """The first number after `merge` used to win, so `--subject 2026 887` read PR 2026."""
+    assert lib.parse_merge_command(command)["pr"] == pr
+
+
+def test_f5_a_non_numeric_positional_yields_an_unknown_target():
+    """`gh pr merge my-branch` is a real form; it is unknown, not absent."""
+    got = lib.parse_merge_command("gh pr merge my-feature-branch")
+    assert got is not None and got["pr"] is None
+
+
+@pytest.mark.parametrize("command", [
+    "echo 'note; gh pr merge 887'",
+    'echo "wrap; gh pr merge 887"',
+    "cat <<'EOF'\ngh pr merge 887\nEOF",
+])
+def test_f6_a_separator_inside_quoted_text_is_not_a_separator(tmp_path, command):
+    root = _project(tmp_path)
+    _campaign(root, "c1", [{"number": 880, "status": "pr_open", "pr": 887}])
+    assert _decision(command, root) == "allow"
+
+
+def test_f7_a_missing_command_field_emits_a_diagnostic(tmp_path):
+    root = _project(tmp_path)
+    _stdout, stderr, rc = run_hook(HOOK, {"tool_name": "Bash", "tool_input": {}},
+                                   cwd=root)
+    assert rc == 0
+    assert "campaign-merge-guard" in stderr
+
+
+def test_f8_the_replacement_command_names_the_real_project_root(tmp_path):
+    """A literal `.` is wrong exactly when the call ran in a subdirectory."""
+    root = _project(tmp_path)
+    _campaign(root, "c1", [{"number": 880, "status": "pr_open", "pr": 887}])
+    sub = root / "deep" / "nested"
+    sub.mkdir(parents=True)
+    stdout, _stderr, _rc = _guard("gh pr merge 887", sub)
+    reason = parse_hook_output(stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "--project-root %s" % root in reason
+    assert "--project-root .\n" not in reason
 
 
 # ── registration ──────────────────────────────────────────────────────────

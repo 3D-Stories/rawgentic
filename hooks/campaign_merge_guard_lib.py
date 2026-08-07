@@ -27,7 +27,7 @@ import time
 #: is the drift guard that keeps the copy honest (repo CLAUDE.md §4 mistake 21).
 DISPOSED_STATUSES = frozenset({"merged", "deferred", "abandoned"})
 
-#: Bounded reads (review finding F5). The host's behavior when a PreToolUse hook exceeds
+#: Bounded reads (Step 4 finding F5). The host's behavior when a PreToolUse hook exceeds
 #: its registered timeout is UNPROVEN, so the design removes the dependency instead of
 #: resting on it: the work is capped so the hook always answers first.
 MAX_STATE_BYTES = 1024 * 1024
@@ -41,52 +41,124 @@ DRIVER_STATE_RELPATH = os.path.join("claude_docs", ".driver-state")
 #: nothing else. `gh`, then `pr`, then `merge`, as whole words in order.
 _PREFILTER_RE = re.compile(r"\bgh\b[^\n;|&]*?\bpr\b[^\n;|&]*?\bmerge\b")
 
-#: The classifier. `gh pr merge` as three consecutive tokens, in COMMAND POSITION: the
-#: start of the string or just after a separator (`;` `|` `&` newline, which covers `&&`
-#: and `||`), allowing leading whitespace and `VAR=value` prefixes. So
-#: `cd x && gh pr merge 887` matches, while `echo 'run gh pr merge 887 by hand'` and
-#: `grep -rn 'gh pr merge' docs/` do not — a mention is not an invocation.
+#: The classifier, applied to QUOTE-STRIPPED text (see `parse_merge_command`). `gh pr
+#: merge` as three consecutive tokens in COMMAND POSITION: the start of a segment,
+#: allowing leading whitespace and `VAR=value` prefixes.
 #:
-#: Deliberately NOT matched: `sh -c "gh pr merge …"` and other wrappers. That is the
-#: right trade for this guard's threat model (D187): a false positive blocks unrelated
-#: work in every project on the host, while a false negative only misses a form nobody
-#: reaches by accident — and the guard never claimed to stop a deliberate bypass.
+#: Deliberately NOT matched: `sh -c "gh pr merge …"` and other wrappers. That is the right
+#: trade for this guard's threat model (D187): a false positive blocks unrelated work in
+#: every project on the host, while a false negative only misses a form nobody reaches by
+#: accident — and the guard never claimed to stop a deliberate bypass.
 _MERGE_RE = re.compile(
-    r"(?:^|[;|&\n])\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*gh\s+pr\s+merge\b")
+    r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*gh\s+pr\s+merge\b")
 
-_PR_RE = re.compile(r"\b(\d{1,7})\b")
-_REPO_RE = re.compile(r"--repo(?:=|\s+)([^\s;|&]+)")
+#: Segment separators. Splitting quote-stripped text means a `;` inside a quoted string
+#: can no longer masquerade as one (Step 8a finding F6).
+_SEGMENT_RE = re.compile(r"(?:\|\||&&|[;|&\n])")
+
+#: `cd <literal>` as a whole segment.
+_CD_RE = re.compile(r"^\s*cd\s+(\S+)\s*$")
+
+#: Shell text this module refuses to reason about inside a `cd` target.
+_UNSAFE_CHARS = ("$", "`", "*", "?", "~")
+
+#: `gh pr merge` flags that consume the NEXT token as a value. Without this the first
+#: number anywhere after `merge` was taken as the PR, so `--subject 2026 887` resolved to
+#: PR 2026 (Step 8a finding F5).
+_VALUE_FLAGS = frozenset({
+    "--subject", "-t", "--body", "-b", "--body-file", "-F",
+    "--match-head-commit", "--author-email", "-A", "--repo", "-R",
+})
+_REPO_FLAGS = frozenset({"--repo", "-R"})
+
+
+def _executable_text(command):
+    """`command` with quoted strings and heredoc bodies removed.
+
+    Delegates to `step_state_post.executable_text` — the repo already owns this exact
+    problem ("a command that MENTIONS a needle is not a command that RUNS it", v3.138.1),
+    so this reuses it rather than growing a second copy. On import failure the raw text is
+    returned: this runs before classification, where the policy is fail-open.
+    """
+    try:
+        import step_state_post  # pylint: disable=import-outside-toplevel
+        return step_state_post.executable_text(command)
+    except Exception:  # pylint: disable=broad-except
+        return command
+
+
+def _tokenize(segment):
+    return [t for t in segment.split() if t]
 
 
 def parse_merge_command(command):
-    """Classify *command*. Returns ``{"pr": int|None, "repo": str|None}`` or ``None``.
+    """Classify *command*. Returns a dict or ``None``.
 
     ``None`` means "not a raw `gh pr merge`" and is the answer for essentially every
-    command. A returned dict with ``pr is None`` means the invocation IS a raw merge but
-    its target could not be read — `gh pr merge` with no number merges the current
-    branch's PR, which this hook has no way to resolve.
+    command. Otherwise::
+
+        {"pr": int|None, "repo": str|None, "cd": str|None, "cd_unresolvable": bool}
+
+    ``pr is None`` means the invocation IS a raw merge but its target could not be read —
+    `gh pr merge` with no number merges the current branch's PR, which this hook cannot
+    resolve, so the caller must treat it as an unknown target rather than as "no PR".
     """
     if not isinstance(command, str) or not command:
         return None
     if not _PREFILTER_RE.search(command):
         return None
-    match = _MERGE_RE.search(command)
-    if not match:
+
+    text = _executable_text(command)
+    segments = _SEGMENT_RE.split(text)
+
+    cd_target, cd_unresolvable = None, False
+    merge_tokens = None
+    for segment in segments:
+        cd_match = _CD_RE.match(segment)
+        if cd_match:
+            candidate = cd_match.group(1)
+            if any(ch in candidate for ch in _UNSAFE_CHARS):
+                cd_unresolvable = True
+            else:
+                cd_target = candidate.strip("\"'")
+            continue
+        if _MERGE_RE.match(segment):
+            merge_tokens = _tokenize(segment)
+            break
+
+    if merge_tokens is None:
         return None
 
-    tail = command[match.end():]
-    # Stop at a command separator so `gh pr merge && gh pr view 42` cannot borrow 42.
-    tail = re.split(r"[;|&\n]", tail, maxsplit=1)[0]
+    # Drop everything up to and including the `merge` verb, plus any VAR=value prefixes.
+    try:
+        start = merge_tokens.index("merge") + 1
+    except ValueError:
+        start = len(merge_tokens)
+    args = merge_tokens[start:]
 
-    repo_match = _REPO_RE.search(tail)
-    repo = repo_match.group(1) if repo_match else None
-    if repo:
-        # Never let the repo's own text supply the PR number.
-        tail = tail.replace(repo_match.group(0), " ")
+    pr, repo, index = None, None, 0
+    while index < len(args):
+        token = args[index]
+        if token.startswith("-"):
+            name, _, inline = token.partition("=")
+            if inline:
+                if name in _REPO_FLAGS:
+                    repo = inline
+                index += 1
+                continue
+            if name in _VALUE_FLAGS:
+                if name in _REPO_FLAGS and index + 1 < len(args):
+                    repo = args[index + 1]
+                index += 2
+                continue
+            index += 1
+            continue
+        if pr is None and token.isdigit():
+            pr = int(token)
+        index += 1
 
-    pr_match = _PR_RE.search(tail)
-    pr = int(pr_match.group(1)) if pr_match else None
-    return {"pr": pr, "repo": repo}
+    return {"pr": pr, "repo": repo, "cd": cd_target,
+            "cd_unresolvable": cd_unresolvable}
 
 
 def find_project_root(start_path):
@@ -111,6 +183,24 @@ def find_project_root(start_path):
         current = parent
 
 
+def effective_cwd(target, hook_cwd):
+    """Where the merge segment would actually run (Step 8a finding F3).
+
+    `cd /campaign-project && gh pr merge 887` executes in the campaign project, not in the
+    hook's cwd, so resolving campaign state from `hook_cwd` alone read the wrong project's
+    state — or none at all.
+    """
+    cd_target = (target or {}).get("cd")
+    if not cd_target:
+        return hook_cwd
+    if os.path.isabs(cd_target):
+        return cd_target
+    try:
+        return os.path.normpath(os.path.join(hook_cwd or os.getcwd(), cd_target))
+    except (OSError, ValueError, TypeError):
+        return hook_cwd
+
+
 def configured_repo(project_root):
     """`repo.fullName` from the project's own config, or ``None``.
 
@@ -128,17 +218,27 @@ def configured_repo(project_root):
         return None
 
 
-def _campaign_is_active(state):
-    """Active == at least one child is not yet disposed."""
+def campaign_activity(state):
+    """``"active"`` | ``"settled"`` | ``"invalid"``.
+
+    Three-valued deliberately (Step 8a finding F4). A syntactically valid JSON object whose
+    `issues` field is missing or is not a list is **invalid**, not settled: reading it as
+    "no active children" let a corrupt campaign file allow a raw merge, which is the exact
+    opposite of the fail-closed rule for state that cannot be evaluated. Every real
+    campaign file carries an `issues` list (verified across all five in
+    claude_docs/.driver-state/), so this cannot refuse legitimate state.
+    """
+    if not isinstance(state, dict):
+        return "invalid"
     issues = state.get("issues")
     if not isinstance(issues, list):
-        return False
+        return "invalid"
     for entry in issues:
         if not isinstance(entry, dict):
-            continue
+            return "invalid"
         if entry.get("status") not in DISPOSED_STATUSES:
-            return True
-    return False
+            return "active"
+    return "settled"
 
 
 def read_campaigns(project_root, deadline=None):
@@ -147,7 +247,7 @@ def read_campaigns(project_root, deadline=None):
     Returns ``(active_campaigns, unevaluable)``:
 
     - ``active_campaigns`` — ``[{"campaign": str, "issues": [...]}, …]``
-    - ``unevaluable`` — names of state files that EXIST but could not be read.
+    - ``unevaluable`` — reasons the state set could not be fully evaluated.
 
     A missing directory yields ``([], [])``: absence, not failure. That is deliberately
     the rule `docs/supervision.md` already states — "`ENOENT` under a valid root is the
@@ -165,9 +265,17 @@ def read_campaigns(project_root, deadline=None):
     except (OSError, ValueError):
         return active, ["<driver-state directory unreadable>"]
 
-    for name in names[:MAX_STATE_FILES]:
-        if not name.endswith(".json"):
-            continue
+    # Filter to state files BEFORE applying the cap, and never drop an overflow silently
+    # (Step 8a finding F1): `.lock` siblings live in this directory and used to consume
+    # the budget, and files past the cap vanished with no trace, which allowed the merge.
+    state_files = [n for n in names if n.endswith(".json")]
+    if len(state_files) > MAX_STATE_FILES:
+        unevaluable.append(
+            "<%d campaign files exceed the %d-file read cap>"
+            % (len(state_files), MAX_STATE_FILES))
+        state_files = state_files[:MAX_STATE_FILES]
+
+    for name in state_files:
         if deadline is not None and time.monotonic() > deadline:
             unevaluable.append("<deadline reached before reading %s>" % name)
             break
@@ -183,10 +291,10 @@ def read_campaigns(project_root, deadline=None):
         except (OSError, ValueError, UnicodeDecodeError):
             unevaluable.append(name)
             continue
-        if not isinstance(state, dict):
+        activity = campaign_activity(state)
+        if activity == "invalid":
             unevaluable.append(name)
-            continue
-        if _campaign_is_active(state):
+        elif activity == "active":
             active.append({
                 "campaign": state.get("campaign") or name[:-len(".json")],
                 "issues": [e for e in state.get("issues") or [] if isinstance(e, dict)],
@@ -215,18 +323,22 @@ def decide(target, active, unevaluable, project_repo):
     if target is None:
         return {"action": "allow", "reason": "not a raw gh pr merge"}
 
-    # A foreign repository is not this campaign's business (review finding F3: PR numbers
+    # A foreign repository is not this campaign's business (Step 4 finding F3: PR numbers
     # are repository-scoped, so binding on the number alone denies unrelated work).
     target_repo = target.get("repo")
     if target_repo and project_repo and target_repo != project_repo:
         return {"action": "allow",
                 "reason": "targets %s, not this project's %s" % (target_repo, project_repo)}
 
-    if unevaluable:
+    reasons = list(unevaluable)
+    if target.get("cd_unresolvable"):
+        reasons.append("<the command changes directory to a path this guard cannot "
+                       "resolve, so the campaign state to check is unknown>")
+    if reasons:
         return {
-            "action": "deny", "kind": "unevaluable", "files": list(unevaluable),
-            "reason": "campaign state exists but could not be read: %s"
-                      % ", ".join(str(f) for f in unevaluable),
+            "action": "deny", "kind": "unevaluable", "files": reasons,
+            "reason": "campaign state could not be evaluated: %s"
+                      % ", ".join(str(f) for f in reasons),
         }
 
     if not active:
@@ -250,16 +362,30 @@ def decide(target, active, unevaluable, project_repo):
             "reason": "PR #%d is a child of active campaign %s" % (pr, campaign)}
 
 
-def format_deny(decision):
+def _root_arg(project_root):
+    """`--project-root` value for the replacement command.
+
+    Step 8a finding F8: a literal `.` is wrong whenever the Bash call ran in a
+    subdirectory of the project, which is exactly when the caller most needs the command
+    to work as printed.
+    """
+    if not project_root:
+        return "."
+    return project_root if not re.search(r"[\s'\"$`]", project_root) \
+        else "'%s'" % project_root.replace("'", "'\\''")
+
+
+def format_deny(decision, project_root=None):
     """The AC5 message: never a bare "blocked"."""
     kind = decision.get("kind")
     broker = "python3 hooks/launcher_lib.py broker-merge"
+    root = _root_arg(project_root)
 
     if kind == "campaign":
         pr, issue = decision.get("pr"), decision.get("issue")
         campaign = decision.get("campaign")
-        command = ("  %s --pr %s --issue %s \\\n    --campaign %s --project-root ."
-                   % (broker, pr, issue, campaign))
+        command = ("  %s --pr %s --issue %s \\\n    --campaign %s --project-root %s"
+                   % (broker, pr, issue, campaign, root))
         return (
             "BLOCKED: this PR belongs to an active campaign, so it merges through the "
             "supervised broker.\n\n"
@@ -277,17 +403,18 @@ def format_deny(decision):
             "child.\n\n"
             "Name the PR explicitly if it is unrelated to the campaign, or merge through "
             "the broker:\n\n  %s --pr <pr> --issue <issue> \\\n    --campaign %s "
-            "--project-root .\n"
-            % (decision.get("campaign"), broker, decision.get("campaign")))
+            "--project-root %s\n"
+            % (decision.get("campaign"), broker, decision.get("campaign"), root))
 
     return (
-        "BLOCKED: campaign state exists but could not be read, so this guard cannot "
-        "prove that merging is safe.\n\n"
-        "  Unreadable: %s\n\n"
+        "BLOCKED: campaign state could not be evaluated, so this guard cannot prove that "
+        "merging is safe.\n\n"
+        "  Unevaluable: %s\n\n"
         "This guard fails closed once a command is identified as a raw `gh pr merge` — "
         "the refusal costs you this one command, while an unnoticed bypass costs the "
         "campaign its authority checks, its execute-once claim and its telemetry.\n\n"
         "Fix or remove the unreadable state under claude_docs/.driver-state/, or merge "
         "through the broker:\n\n  %s --pr <pr> --issue <issue> \\\n    --campaign "
-        "<campaign> --project-root .\n"
-        % (", ".join(str(f) for f in decision.get("files") or ["<unknown>"]), broker))
+        "<campaign> --project-root %s\n"
+        % (", ".join(str(f) for f in decision.get("files") or ["<unknown>"]),
+           broker, root))
