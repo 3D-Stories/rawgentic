@@ -1179,6 +1179,30 @@ class TestDispositionLedger:
         assert ".rawgentic-diff-review-" in s11, (
             "the runner result glob must be in the Step 11 1a stale sweep list")
 
+    def test_fuzzy_candidate_layer_present(self):
+        # #892: widened, advisory-only recall on location+category — never the
+        # exact-match auto-dissolve power.
+        s4 = " ".join(self._step4().split())
+        assert "fuzzy_disposition_candidates" in s4
+        assert "possible re-litigation of" in s4
+
+    def test_fuzzy_candidate_never_auto_dissolves(self):
+        s4 = " ".join(self._step4().split())
+        assert "NEVER auto-dissolves the finding" in s4, (
+            "the fuzzy layer must be advisory-only — only a byte-identical "
+            "finding_key match keeps the power to auto-dissolve")
+        assert "only a byte-identical `finding_key` match keeps that power" in s4
+
+    def test_fuzzy_candidate_excludes_adopted(self):
+        # AC(iii): ADOPTED matches keep their existing exact-match-only surfacing;
+        # the fuzzy layer must not touch them.
+        s4 = " ".join(self._step4().split())
+        assert "excluding ADOPTED entries entirely" in s4
+
+    def test_fuzzy_candidate_location_and_category_criteria(self):
+        s4 = " ".join(self._step4().split())
+        assert "same `location` + same `category`" in s4
+
 
 # --- #488: review-wave pipelining (never idle-wait) ---
 
