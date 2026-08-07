@@ -749,6 +749,19 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.139.3 (2026-08-07)
+- **Retired the superseded `epic-run-analysis` workspace skill (#534).** Its plugin-native
+  successor `/rawgentic:epic-post-mortem` (WF19, #508, epic #509) shipped in v3.71.0, and the
+  stopgap's own SKILL.md had carried a SUPERSEDED banner since 2026-07-19 saying final deletion was
+  the owner's call. That call came 2026-08-07. Coverage was confirmed before deleting:
+  epic-post-mortem carries the phase-split and wall-clock reconstruction, and delegates the
+  machinery assessment to WF14 batch mode (#392) rather than duplicating the rubric — so the
+  divergence hunt is covered by delegation, not inline, which is a real difference worth stating.
+  The skill lived at the workspace root (`.claude/skills/epic-run-analysis`), which is not a git
+  repo, so the deletion itself is not in this diff; what is here is the tracker entry. The
+  workspace manual's skill list was updated in place with a pointer to the successor. No
+  workflow-spine change → no diagram REV. Suite 6328→6328.
+
 ### v3.139.2 (2026-08-07)
 - **WAL rotation no longer destroys concurrent sessions' log entries.** `session-start`
   filtered a snapshot of the WAL and `cp`-ed the result back over the live file with **no

@@ -105,7 +105,7 @@ STRUCTURE = {
          "exit": "Superseded stopgaps gone; deploy-verify + skill-usage auditing workspace-wide; "
                  "toolchain preflight surfaces exact remediations.",
          "children": [
-             (534, "MED", "S", "retire epic-run-analysis (now actionable — #508 shipped)"),
+             (534, "MED", "S", "retire epic-run-analysis (DONE 2026-08-07 — workspace skill deleted)"),
              (535, "MED", "S", "rev-diagram snapshot script — fullPage dual-theme gate"),
              (399, "LOW", "S", "admit-to-org-runners auto-infer target group"),
              (536, "MED", "M", "generalize studio-deploy → workspace deploy-verify skill"),
