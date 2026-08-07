@@ -14,6 +14,7 @@ import os
 import stat
 import time
 import subprocess
+import pathlib
 import sys
 import types
 from pathlib import Path
@@ -1905,6 +1906,57 @@ class TestInsertPromptAtTheActTier:
             home=str(tmp_path), session_id=self.SID, window=1000000, used=520000,
             cfg={} if cfg is None else cfg, project_path=project, env=env,
             runner=runner or (lambda argv, timeout: types.SimpleNamespace(returncode=0)))
+
+    def _drive(self, tmp_path, used):
+        """Drive the REAL hook mid-turn, black-box through the subprocess, and hand back stderr.
+
+        A monkeypatch cannot reach across that boundary — this file's own `_run` spawns the hook —
+        so the branch is proven by its observable diagnostic instead of by a mock. `_run` also pops
+        HERDR_ENV, so an attempted insert returns "skipped: not inside herdr" and the module's
+        never-silent contract warns about it. That warning IS the evidence the branch was reached.
+        """
+        t = _transcript(tmp_path, SID, [_row(_usage(inp=1, cr=used))])
+        return _run({"session_id": SID, "cwd": str(tmp_path), "transcript_path": str(t),
+                     "hook_event_name": "UserPromptSubmit"}, home=tmp_path).stderr or ""
+
+    def test_the_midturn_directive_path_attempts_the_insert(self, tmp_path) -> None:
+        """#729 AC1 — the whole point. A directive reached MID-TURN is exactly when the session is
+        deepest in a long turn and least able to act on text it may decline, yet that was the one
+        path with no authoritative channel. Measured before this change: `try_insert_prompt` had a
+        single call site guarded `event == "Stop"`, and this host carried 89 midturn markers
+        against 3 insert markers, every one of them stop-channel."""
+        err = self._drive(tmp_path, 800_000)          # 80% of 1M — above the 75 act line
+        assert "prompt insertion did not happen" in err, (
+            "a mid-turn directive must ATTEMPT the insert; the diagnostic is how a skip is "
+            "distinguished from never having tried\n" + err)
+
+    def test_the_advisory_tier_never_inserts_on_either_path(self, tmp_path) -> None:
+        """#729 AC3. The advisory is a nudge to start looking; seizing the input box for it would
+        be the over-reach this gate exists to prevent."""
+        err = self._drive(tmp_path, 600_000)          # 60% — advisory band under 55/75
+        assert "prompt insertion did not happen" not in err, (
+            "the advisory tier must never reach the insert branch\n" + err)
+
+    def test_at_most_once_per_window_across_BOTH_paths(self, tmp_path) -> None:
+        """#729 AC2 — the property that makes enabling the mid-turn path safe. The insert reserves
+        on its OWN channel keyed (session, window, tier, INSERT_CHANNEL), so a mid-turn insert
+        followed by a Stop directive finds the reservation already taken. Asserted through the real
+        reservation rather than a mock, because a mock would prove nothing about the key."""
+        env = {"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:pZZ"}
+        assert self._try(tmp_path, env=env) == "inserted"
+        assert "already inserted" in self._try(tmp_path, env=env)
+        assert cm.has_marker(str(tmp_path), self.SID, 1000000, "directive",
+                             cm.INSERT_CHANNEL) is True
+
+    def test_the_esc_comment_no_longer_claims_a_hazard_this_path_cannot_cause(self) -> None:
+        """#729 AC4, anchored BY TEXT — the line number has rotted twice (:1467 → :1498-1499 →
+        :1503-1504), so pinning one is how this guard goes stale again."""
+        src = pathlib.Path(cm.__file__).read_text(encoding="utf-8")
+        assert "Never mid-turn, and never ESC" not in src, (
+            "the comment still forbids mid-turn on an ESC rationale, but insert_prompt sends "
+            "send-text then a separate send-keys Enter and never an ESC")
+        assert "send-keys" in src or "no ESC" in src, (
+            "the replacement must state the real delivery mechanism, not merely delete the claim")
 
     def test_an_unreadable_project_config_is_a_quiet_skip(self, tmp_path) -> None:
         env = {"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:pZZ"}

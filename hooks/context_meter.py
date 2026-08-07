@@ -1500,9 +1500,23 @@ def cmd_hook(argv) -> int:
     # arrives as USER input, the one channel treated as authoritative. Additive on purpose: if the
     # insert fails, the text has still been delivered the old way.
     #
-    # `Stop` only. Never mid-turn, and never ESC — at `Stop` the turn has ended and nothing is in
-    # flight, whereas an ESC mid-turn can kill a running suite or a half-finished commit.
-    if event == "Stop" and tier == "directive":
+    # DIRECTIVE tier on EITHER path, mid-turn included (#729). This was `Stop`-only, justified by an
+    # ESC hazard that this code path cannot produce: `launcher_lib.insert_prompt` sends
+    # `herdr pane send-text`, waits, then a SEPARATE `herdr pane send-keys <pane> Enter` — there is
+    # no ESC anywhere on the route, and pasting plus Enter does not interrupt a running turn.
+    # Claude Code queues that input and surfaces it at the next tool-result boundary.
+    #
+    # The gate cost exactly what it was meant to protect. Mid-turn is when a session is deepest in a
+    # long turn and least able to act on text it may DECLINE — measured: the directive at 50.7% in
+    # session 643af1d9 was delivered as injected text and declined, and the handoff happened only
+    # because a human intervened, which is the dependency #718 exists to remove. On this host the
+    # ratio was 89 midturn markers to 3 insert markers, every insert stop-channel.
+    #
+    # Safe to widen because the at-most-once guarantee does not live here: `try_insert_prompt`
+    # reserves on its own (session, window, "directive", INSERT_CHANNEL) key, so a mid-turn insert
+    # followed by a `Stop` directive finds that reservation already taken. The advisory tier still
+    # never reaches this branch.
+    if tier == "directive":
         outcome = try_insert_prompt(home=home, session_id=session_id, window=window, used=used,
                                     cfg=cfg, project_path=project_path, env=env)
         # NEVER SILENT about not having acted (Step-11 diff review, Medium). This module's contract
