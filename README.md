@@ -749,6 +749,28 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.141.5 (2026-08-07)
+- **The context meter now says when it is blind, and its state says what is true NOW (#734, epic
+  #906).** `hooks/context_meter.py` records a diagnostic through `_diagnose`, which is
+  once-per-session, so a session that could take no reading emitted one stderr line and then went
+  quiet — measured at 44 minutes and 368,175 tokens with a single warning fired before any of it.
+  Two additive changes: `blind_streak` counts consecutive checks that took no reading and resets on
+  a successful one, and a second stderr warning fires when it reaches `BLIND_STREAK_WARN` (5), on
+  `==` so it is exactly once per blind episode and re-arms only after a real reading. Both blind
+  kinds count toward the streak, because the issue's own live reproduction was blind via
+  `no_usage_row` rather than `transcript_unresolved`. Separately, `diagnostics_current` is rebuilt
+  every check and persisted next to the append-only `diagnostics` ledger, which nothing ever cleared
+  — reading that ledger as current state is the misreading #734 was originally filed on, and it is
+  what made `session_unbound` appear to persist after a later bind. Two of the issue's own
+  acceptance criteria already held and are now pinned by regression tests rather than changed:
+  resolution was never latched, and `turns` counting prompts rather than tool calls is by design, so
+  AC4 is pinned against `last_check_ts` per the issue's 2026-08-07 revalidation. 9 tests added in
+  `tests/hooks/test_context_meter.py`. Also folded in by owner decision, against the usual one-PR-
+  one-issue convention: `skills/pane-handoff/SKILL.md` now records that a `/goal` arms only when it
+  leads the submitted text, so a hand-carried handoff must print the goal in its own block and say
+  how to send it — the wired path already did this and is unchanged.
+  No workflow-spine change, so no diagram REV. Suite 6393→6402.
+
 ### v3.141.4 (2026-08-07)
 - **#989's send reorder is REVERTED — `/goal` goes last again (epic #906).** #989 moved the goal
   ahead of the resume prompt on the reasoning that a bare slash command pasted into a busy pane is

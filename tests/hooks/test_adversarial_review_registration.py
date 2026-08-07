@@ -54,7 +54,7 @@ def test_marketplace_registers_skill():
 # a scoped local run that skips this file is exactly how the miss reaches CI.
 # Deliberately not naming the retired module here: tests/test_retirement_tripwire.py
 # scans active surfaces for retired vocabulary and flagged the earlier wording.
-EXPECTED_PLUGIN_VERSION = "3.141.4"
+EXPECTED_PLUGIN_VERSION = "3.141.5"
 
 VERSION_SURFACE_FILES = (
     ".claude-plugin/plugin.json",
