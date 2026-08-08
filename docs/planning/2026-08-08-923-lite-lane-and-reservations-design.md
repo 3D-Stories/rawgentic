@@ -685,6 +685,49 @@ field was called required. A legacy invocation would then be refused despite the
 backward-compatibility requirement. The field is nullable, validated as `int | None`, and
 `loopback-status` marks such a reservation `identity: partial` so the gap is visible.
 
+### 2.11 The four ambiguous findings — settled by owner decision D309 (2026-08-08)
+
+Gate pass 2 closed with the design budget exhausted at 2/2 and the ambiguity breaker **NOT clear**,
+so per the run's armed goal it stopped and asked the owner rather than overriding. The owner was
+reached through the two-way bridge (token `RG-402004`) and replied **option 1: accept all four
+recommendations**. The breaker is therefore cleared by DECISION — which is what escalation exists to
+produce — and not by a further review pass.
+
+**1. Call-site return checking is a FOLLOW-UP, not this issue.** `open` then `commit` are adjacent,
+but nothing forces the disposition caller to check that either succeeded, so a caller continuing
+past a non-zero exit begins fix work with no durable round and no debit. Real, and out of scope: it
+touches WF2 and WF3 call sites #1003 was not scoped to edit, and it is mechanical once this contract
+is settled. Recorded as a run-record follow-up, not filed as an issue — the workspace throttle keeps
+a review finding from becoming an issue without the owner opening that door.
+
+**2. BOTH release paths append to `reconciliation_log`.** `loopback-reconcile --release` appended
+and the generic `loopback-release --nonce` did not, with nothing stopping an operator using the
+quiet one. Rather than collapsing the commands, the audit append becomes a property of RELEASING
+wherever it is invoked. A release with no audit entry is the hole. Two entry points are not.
+
+**3. Fail-closed extends to all FOUR state keys, now.** §2.6 defined the malformed refusal for
+`reservations` alone, while the mutators read or append to `rounds`, `settled_commits` and
+`reconciliation_log` too. All four now refuse without rewriting the file. Deferring the last two was
+the cheap option and the wrong one: overwriting `settled_commits` destroys settlement evidence, and
+`reconciliation_log` IS the audit trail.
+
+**4. The post-replace lock case is PROBED, and it HOLDS.** The first probe released every worker at
+one instant, so it showed only that the lock serializes concurrent STARTERS. It said nothing about a
+process arriving AFTER the file was atomically replaced out from under the pathname — which is the
+entire reason `file_lock` locks a SIDECAR (`<path>.lock`) rather than the target, since `flock`
+follows the opened inode and `os.replace` installs a new one.
+
+- 30 workers arriving on a STAGGERED schedule 4 ms apart, each taking the lock, reading, waiting
+  8 ms, incrementing and replacing — so late arrivals appear while the inode is swapped repeatedly.
+- **4 of 4 trials: counter 30/30, zero lost increments, zero errors.**
+- **Control with the lock removed: 4 of 4 trials lost 20 of 30 increments.** The probe detects the
+  failure it tests.
+
+**Both probes together license the promotion.** The lock serializes concurrent starters AND late
+arrivals across repeated inode swaps, so `file_lock` may be relied on as the primary correctness
+mechanism for these counters. Its docstring currently disclaims exactly that, and must be corrected
+in the same PR that lands the code.
+
 ## 3. Part A — the per-class gate matrix
 
 ### 3.1 The matrix
