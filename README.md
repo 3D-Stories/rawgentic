@@ -749,6 +749,21 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.141.10 (2026-08-08)
+- **The WF2 prose corpus now measures WORDS, not only bytes (#899, epic #906).** `tests/test_wf2_prose_budget.py`
+  gains `SKILL_WORD_CEILINGS` and a `word_violations()` helper mirroring the existing byte-budget
+  reporting shape, plus six tests. `skills/implement-feature/SKILL.md` is pinned at 6,764 words
+  (actual 6,442 + 322 allowed headroom) and the guard fails in BOTH directions, so the ceiling must
+  come down as prose shrinks. Proof it bites: against the 6,292 count #899 recorded at `0d2ba0e0`
+  the guard reports `OVER WORD CEILING: SKILL.md is 6442 words — 150 over`, so the exact drift the
+  issue was filed about would have failed CI. AC1's 5,000-word target is NOT met and is reported
+  instead via AC1's own alternative branch: `docs/planning/2026-08-08-899-wf2-word-budget-shortfall.md`
+  measures every block and finds ZERO words free to move — 2,112 are synced by
+  `sync_shared_blocks.py` (one shared with fix-bug, which AC3 protects), 753 are AC2's named blocks,
+  2,718 are cross-step, and six more are global spine content no step file reads. #874 already
+  moved everything step-scoped. Owner decision D304. no workflow-spine change → no diagram REV.
+  Suite 6460→6466.
+
 ### v3.141.9 (2026-08-08)
 - **`goal_armed` no longer destroys a successor it cannot prove is dead (#1000, epic #906).** The
   arm gate gave a queued `/goal` 18 s and then closed the successor pane, and the nudge loop could

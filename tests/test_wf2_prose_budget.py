@@ -374,3 +374,135 @@ def test_live_corpus_has_no_stale_ceilings():
                                       TOTAL_CEILING_BYTES)
          if "STALE" in m]
     assert v == [], "stale ceilings in the live budget:\n" + "\n".join(v)
+
+
+# --- #899: the WORD budget, alongside the byte ceilings -------------------
+#
+# Anthropic's stated guideline for a SKILL.md body is 5,000 WORDS. This file
+# measured BYTES only, so the word guideline was remembered rather than
+# measured — and it had drifted 6_292 -> 6_442 between #874 and #899 with
+# nothing failing. Bytes and words are not interchangeable here: a
+# compression that shortens identifiers drops bytes while leaving the word
+# count (and so the load on the model's context) untouched.
+#
+# WHY THE CEILING IS 6_442 AND NOT 5_000 (#899, owner decision D304).
+# The 5,000 target is unreachable by the means #899's AC1 names — "moving
+# genuinely step-scoped prose into the step files #874 created". Measured at
+# c7eb1fce, every block in SKILL.md is one of:
+#   * SYNCED (2_112 words) -- config-loading, model-routing-resolve,
+#     loop-back-budget, review-severity are GENERATED into SKILL.md by
+#     scripts/sync_shared_blocks.py. Moving one edits that manifest, and
+#     review-severity is shared with fix-bug, which AC3 forbids touching.
+#   * AC2-PROTECTED (753) -- completion-gate, probe-before-design,
+#     early-smoke-install; AC2 names these and re-confirms them cross-step.
+#   * CROSS-STEP (2_718) -- mandatory-steps, step-tracking, happy-path,
+#     constants, references, role, termination-rule, error-protocol,
+#     ambiguity-circuit-breaker, review-pipelining, test-run-discipline,
+#     review-lens-routing. Each is read by SEVERAL steps, so moving any into
+#     one step file breaks the others -- the same argument AC2 makes.
+#   * the remaining 859 are headings and the one-line-per-step spine.
+# Genuinely free to move: ZERO. #874 already moved everything step-scoped.
+#
+# AC1 anticipated exactly this and supplies the alternative in its own text:
+# report the shortfall with the specific blocks and why they cannot move.
+# That report is docs/planning/2026-08-08-899-wf2-word-budget-shortfall.md.
+#
+# So this guard's job is NOT to enforce 5,000 today. It is to stop the drift
+# that went unmeasured: the ceiling is pinned at the measured actual plus the
+# same allowed headroom the byte ceilings use, and the SYMMETRIC stale check
+# means the ceiling must come DOWN as prose shrinks. Lowering it to 5,000 is
+# the follow-on work, not a number to assert before the prose can meet it.
+SKILL_WORD_CEILINGS = {
+    "SKILL.md": 6_764,          # actual 6_442 + headroom 322
+}
+
+STALE_WORD_PCT = 0.05
+STALE_WORD_MIN_WORDS = 64
+
+
+def measured_words() -> dict:
+    """Relative path -> word count for every .md under the skill dir."""
+    return {
+        p.relative_to(SKILL_DIR).as_posix(): len(
+            p.read_text(encoding="utf-8").split()
+        )
+        for p in SKILL_DIR.rglob("*.md")
+    }
+
+
+def word_violations(words: dict, ceilings: dict) -> list:
+    """Word-budget violations, one message per violation.
+
+    Mirrors `budget_violations`' shape deliberately (#899 AC4 says to reuse
+    it): the same UNBUDGETED / STALE BUDGET / OVER / STALE classes, the same
+    "name the path, carry actual + ceiling + delta" contract, and the same
+    never-quote-content rule. Only the budgeted SUBSET is checked -- unlike
+    bytes, where every corpus file carries a ceiling, the word guideline is
+    about the always-loaded SKILL.md body, so an unbudgeted file here is not
+    a violation.
+    """
+    violations = []
+    for path in sorted(ceilings.keys() - words.keys()):
+        violations.append(
+            f"STALE WORD BUDGET: {path} has a word ceiling but no file on disk "
+            f"— a rename or split must update SKILL_WORD_CEILINGS in the same "
+            f"commit (#899)."
+        )
+    for path in sorted(ceilings.keys() & words.keys()):
+        count, ceiling = words[path], ceilings[path]
+        if count > ceiling:
+            violations.append(
+                f"OVER WORD CEILING: {path} is {count} words — "
+                f"{count - ceiling} over its {ceiling}-word ceiling. Trim it, "
+                f"or raise the ceiling in the same commit and say why in the "
+                f"PR (#899)."
+            )
+        else:
+            allowed = allowed_headroom(count, STALE_WORD_PCT, STALE_WORD_MIN_WORDS)
+            excess = ceiling - count - allowed
+            if excess > 0:
+                violations.append(
+                    f"STALE WORD CEILING: {path} is {count} words but its "
+                    f"ceiling is {ceiling} — {ceiling - count} words of "
+                    f"headroom against an allowed {allowed} ({excess} too "
+                    f"much). Lower the ceiling to actual + allowed in the "
+                    f"same commit as the shrink (#899)."
+                )
+    return violations
+
+
+def test_word_clean_budget_yields_no_violations():
+    assert word_violations({"SKILL.md": 100}, {"SKILL.md": 105}) == []
+
+
+def test_word_over_ceiling_names_path_and_delta():
+    (v,) = word_violations({"SKILL.md": 200}, {"SKILL.md": 150})
+    assert v.startswith("OVER WORD CEILING: SKILL.md")
+    assert "200 words" in v and "50 over" in v and "150-word" in v
+
+
+def test_word_stale_ceiling_is_named():
+    (v,) = word_violations({"SKILL.md": 100}, {"SKILL.md": 1_000})
+    assert v.startswith("STALE WORD CEILING: SKILL.md")
+    assert "100 words" in v and "1000" in v
+
+
+def test_word_stale_budget_entry_is_named():
+    (v,) = word_violations({}, {"gone.md": 100})
+    assert v.startswith("STALE WORD BUDGET: gone.md")
+
+
+def test_word_violations_never_quote_file_content():
+    body = "SECRET-CANARY-STRING"
+    for v in word_violations({"SKILL.md": 999}, {"SKILL.md": 1}):
+        assert body not in v
+
+
+def test_skill_body_stays_within_its_word_ceiling():
+    """The live guard: SKILL.md's word count against its pinned ceiling.
+
+    This is the measurement #899 exists to add. It fails in BOTH directions —
+    growth past the ceiling, and a ceiling left stale above a shrink.
+    """
+    violations = word_violations(measured_words(), SKILL_WORD_CEILINGS)
+    assert not violations, "\n".join(violations)
