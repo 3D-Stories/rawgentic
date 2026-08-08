@@ -529,9 +529,27 @@ Rows are WF2 steps; columns are the three classes. **Every cell is filled.** The
 exactly three values and they are defined, not suggestive:
 
 - **FULL** — the step runs as the spine describes it.
-- **COLLAPSED** — the step runs, and produces its output inline in session notes instead of as a
-  separate committed artifact. The gate still executes and still returns a verdict.
+- **COLLAPSED** — the step runs with its ceremony reduced: no multi-approach brainstorm at Step 3,
+  a checklist rather than a full decomposition at Step 5, evidence-only at Step 9. The gate still
+  executes and still returns a verdict. This is the existing small-standard lane's meaning of
+  "collapse", reused rather than reinvented.
 - **n/a** — the step's own condition is unmet (not a class reduction).
+
+**A step row says nothing about WHERE the step's output lands. The artifact row directly beneath it
+says that, and only it does** *(review finding F1, Critical, 2026-08-08)*. The earlier wording
+defined COLLAPSED as "produces its output in session notes instead of a separate committed
+artifact", which made `internal` unimplementable: its Step 3 read COLLAPSED while its artifact row
+read KEEP, and no implementation can satisfy both. The two rows are now strictly orthogonal — the
+step row governs ceremony, the artifact row governs the committed file — so every combination of
+the two is coherent. `internal` collapses Step 3's ceremony AND keeps its committed design doc,
+which is exactly the intended lane and was previously inexpressible.
+
+**Where a COLLAPSED step's output goes when its artifact row reads DROP** *(F2)*: into
+`claude_docs/session_notes.md` under that step's own section, closed by the step's ordinary
+`### WF2 Step <N>: <Name> — DONE (#<issue>: …)` marker, which is already the load-bearing resume
+contract. The consuming gate reads the section between that step's header and its DONE marker. No
+new location, schema or parser is introduced, because the marker grammar already exists and is
+already tested.
 
 There is no `SKIP` value in the vocabulary. That is the mechanism, not a convention: a class cannot
 skip a mandatory step because the matrix has no way to express it.
@@ -541,24 +559,37 @@ skip a mandatory step because the matrix has no way to express it.
 | 1 Receive issue | FULL | FULL | FULL |
 | 2 Analyze codebase | FULL | FULL | FULL |
 | 3 Design (the STEP) | COLLAPSED | COLLAPSED | FULL |
-| &nbsp;&nbsp;↳ separate design-doc ARTIFACT | DROP | KEEP | KEEP |
-| &nbsp;&nbsp;↳ peer consult (OPT-IN) | off | on | on |
-| &nbsp;&nbsp;↳ adversarial-on-design (OPT-IN) | off | off | on |
+| ↳ separate design-doc ARTIFACT | DROP | KEEP | KEEP |
+| ↳ peer consult (OPT-IN) | off | on | on |
+| ↳ adversarial-on-design (OPT-IN) | off | off | on |
 | 4 Design gate (the STEP) | FULL | FULL | FULL |
-| &nbsp;&nbsp;↳ quality-bar rubric | FULL | FULL | FULL |
+| ↳ quality-bar rubric | FULL | FULL | FULL |
 | 5 Implementation plan (the STEP) | COLLAPSED | COLLAPSED | FULL |
-| &nbsp;&nbsp;↳ separate plan-file ARTIFACT | DROP | DROP | KEEP |
+| ↳ separate plan-file ARTIFACT | DROP | DROP | KEEP |
 | 6 Plan drift | COLLAPSED | COLLAPSED | FULL |
 | 7 Branch | FULL | FULL | FULL |
-| 8 Implementation — red-before-green | **FULL** | **FULL** | **FULL** |
-| 8a Per-task review (when high-risk) | **FULL** | **FULL** | **FULL** |
+| 8 Implementation — red-before-green | FULL | FULL | FULL |
+| 8a Per-task review (when high-risk) | FULL | FULL | FULL |
 | 9 Drift gate | COLLAPSED | FULL | FULL |
-| 11 Code review (the STEP) | **FULL** | **FULL** | **FULL** |
-| &nbsp;&nbsp;↳ reviewer COUNT | 1 | 1 | 2 |
-| &nbsp;&nbsp;↳ lenses per reviewer | **ALL 4** | **ALL 4** | **ALL 4** |
-| 11.5 Security scan | **FULL** | **FULL** | **FULL** |
+| 11 Code review (the STEP) | FULL | FULL | FULL |
+| ↳ reviewer COUNT | 1 | 1 | 2 |
+| ↳ lens coverage, union of the wave | ALL 4 | ALL 4 | ALL 4 |
+| 11.5 Security scan | FULL | FULL | FULL |
 | 12 PR | FULL | FULL | FULL |
+| 13 CI | FULL | FULL | FULL |
 | 16 Completion + run-record | FULL | FULL | FULL |
+
+Deliberately not classified, and why:
+- Step 10 — background, never blocks — nothing for a class to scale.
+- Step 14 — owner-gated and capability-gated, not class-gated.
+- Step 15 — owner-gated and capability-gated, not class-gated.
+
+**Why Steps 10, 14 and 15 carry no row** *(F9, 2026-08-08)*. The matrix classifies only steps a
+class could plausibly reduce. Step 10 (memorize) is background and never blocks, so there is
+nothing for a class to scale. Steps 14 (merge/deploy) and 15 (post-deploy) are owner-gated and
+capability-gated, not class-gated — an unattended run stops at the PR whatever the class. Their
+absence is a declared exclusion, not an unclassified surface, and the renderer in §3.1a emits that
+exclusion list alongside the table so the drift test can assert it.
 
 *(Self-review S9: v3's provenance claimed this row-splitting as peer adoption 6, but its body still
 carried the v1 step-only table — the doc claimed an adoption it had not made. A step row and its
@@ -566,18 +597,99 @@ artifact/opt-in rows are now distinct, which is the whole point: a class may dro
 off an OPT-IN, and can never change a step row. Step 4 reads FULL for every class because the STEP
 always runs; what `disposable` drops is the two opt-in sub-rows beneath Step 3, not the gate.)*
 
-The reviewer-COUNT row is the one place a class scales a **demand**, and the lenses row directly
+The reviewer-COUNT row is the one place a class scales a **demand**, and the coverage row directly
 beneath it is why that is safe: **demands scale, lenses never do** (F5's resolution).
 
+**B6, decided (2026-08-08). Coverage is asserted over the UNION of the wave's briefs, never
+per-reviewer.** The earlier wording carried both readings — §3.3 said union while the matrix row said
+"lenses per reviewer: ALL 4" — and an implementer could not tell which the guard asserts. Union is
+the only reading compatible with the shipped spine: `<review-lens-routing>` already assigns Step 11
+Reviewer 1 the `mechanical` + `bug_logic` lenses and Reviewer 2 `architecture` + `security` (#492).
+A per-reviewer reading would make that shipped split fail its own guard. Under union the row is true
+in every column with no second meaning available: `production` covers all four across its two
+briefs, and `disposable` and `internal` have a wave of ONE brief, so the union IS that one brief and
+their single reviewer must carry all four. The row is therefore named *lens coverage, union of the
+wave*. Outside this decision block, which exists to record the rejected reading, no sentence in this
+design states a per-reviewer lens requirement — and the drift test in §6 asserts exactly that, so the
+ambiguity cannot creep back in prose.
+
+**B9, decided (2026-08-08). Rows are typed, and each kind has its own enum.** v4 claimed a
+three-value vocabulary while its own cells also used `DROP`, `KEEP`, `on`, `off`, counts and `ALL 4`.
+Untyped rows weakened the no-`SKIP` argument, because a reader could not tell which enum governed a
+given cell. The four row kinds:
+
+| Row kind | Enum | Example row |
+|---|---|---|
+| **step row** | `FULL` · `COLLAPSED` · `n/a` — and nothing else, which is where the no-`SKIP` guarantee lives | `3 Design (the STEP)` |
+| **artifact row** | `KEEP` · `DROP` | `↳ separate design-doc ARTIFACT` |
+| **opt-in row** | `on` · `off` | `↳ peer consult (OPT-IN)` |
+| **count row** | a positive integer, or the literal `ALL 4` for a coverage count | `↳ reviewer COUNT` |
+
+The no-`SKIP` guarantee is a property of the **step-row enum only**. `DROP` and `off` are legal in
+their own kinds precisely because neither can appear in a step row, so no class can express skipping
+a step. The renderer in §3.1a emits the kind alongside every row, and the drift test compares kind
+and value together.
+
 The four bold rows are the **never-reducible** set: Step 8's red-before-green, Step 8a for any
-`riskLevel: high` task, Step 11, and Step 11.5. They read FULL in every column, and §3.3 makes that
-structural rather than a promise.
+`riskLevel: high` task, Step 11, and Step 11.5. They read FULL in every column.
+
+**What is actually structural, and what is not — stated plainly** *(F6, and §7 carries it as the
+claim most likely to be wrong)*. Two different mechanisms hold these four rows, and only one of them
+is a runtime guarantee:
+
+- **Structural, enforced at runtime:** the step-row ENUM has no `SKIP` value, so no class can
+  *express* skipping a step. The renderer refuses an illegal cell and the drift test refuses a
+  documented one. That makes the four rows unreducible **in the matrix**.
+- **NOT structural — prose plus a drift test:** whether a given run actually EXECUTES Step 8's
+  red-before-green, Step 8a, Step 11 and Step 11.5 is enforced the same way every other WF2
+  mandatory step is enforced, by the spine's prose and its guard tests. `assert_lens_coverage`
+  narrows exactly one failure inside Step 11 — a reviewer dispatched with lenses missing. It does
+  not prove Step 8a ran, and it does not prove Step 11 consumed a verdict.
+
+An earlier revision said §3.3 "makes that structural", which overclaimed: a lens guard cannot make
+a different step run. The matrix removes the ability to *declare* a reduction. Making each step's
+execution independently provable is a larger piece of work than this issue, and it is named here
+rather than implied away.
 
 What a permissive class actually drops is only ever an **artifact** or an **opt-in sub-step**:
 Step 3 writes a design note in session notes rather than a committed `docs/planning/*.md`; Step 4
 runs the in-repo quality-bar rubric but not the opt-in adversarial-on-design or peer consult. The
 gate still runs and can still fail the run. This is exactly the existing small-standard lane's
 meaning of "collapse", reused rather than reinvented.
+
+### 3.1a The renderer — the table above is generated, not typed *(F7)*
+
+AC5 requires the matrix to be rendered FROM code with a drift test comparing every documented cell.
+The previous revision referenced this section twice without writing it, so nothing defined the
+source of truth. It is:
+
+```python
+# hooks/plan_lib.py
+CLASS_MATRIX_EXCLUDED_STEPS = {"10": "background, never blocks",
+                               "14": "owner-gated, not class-gated",
+                               "15": "owner-gated, not class-gated"}
+
+# row id -> (kind, label, {class: value})
+CLASS_MATRIX: dict[str, tuple[str, str, dict[str, str]]] = {...}
+
+def render_class_matrix() -> str:
+    """The markdown table exactly as it appears in the design doc and the skill."""
+```
+
+Row `kind` is one of `step`, `artifact`, `opt_in`, `count` — the four kinds §3.1 defines. The
+renderer validates each row's value against its kind's enum before emitting, so an illegal cell
+fails at render time rather than shipping into prose. `render_class_matrix` emits the table AND the
+excluded-step list, so both are generated from one source.
+
+```
+python3 hooks/plan_lib.py render-class-matrix --project-root .
+```
+
+**The drift test** (`tests/test_class_matrix.py`) slices the table out of BOTH call sites — this
+design doc and the skill prose — by header index, whitespace-normalizes, and asserts equality with
+`render_class_matrix()`. It anchors on one canonical header per file rather than a whole-corpus
+regex, per this repo's drift-guard convention. It also asserts, independently of the text: every
+step row's value is in the step enum, so no class can ever express skipping a step.
 
 ### 3.2 The `disposable` definition of done
 
@@ -586,8 +698,25 @@ A `disposable` run is DONE when all of:
 1. Every red-before-green cycle in the plan has a commit showing the failing test first.
 2. Step 11 returned a verdict from a reviewer carrying **all four lenses** (§3.3), and every
    Critical and High finding is resolved or carries a recorded deferral.
-3. Step 11.5 ran to completion; every blocking finding is resolved, and any absent scanner is
-   recorded as a visible skip in session notes AND the PR body.
+3. Step 11.5 ran to completion, and every blocking finding is resolved. **At least one scanner must
+   have actually executed** *(F4, and #761's known-failure F6)*. An absent scanner is recorded as a
+   visible skip in session notes AND the PR body — but a run where EVERY scanner was absent has
+   scanned nothing, and it does not satisfy this clause. It fails the gate and says so, because a
+   step that is never-reducible cannot be satisfiable by recording that it did not run. The earlier
+   wording allowed exactly that, which is the failure #761's F6 named.
+
+   **"Actually executed" is read off the existing report, not judged** *(F5)*.
+   `hooks/security_scan.py` already returns a per-scanner `skipped[]` over the fixed set
+   `{secrets, sca, sast, iac}`. The clause is satisfied when at least one of those four is NOT in
+   `skipped[]` and the scan returned an exit code — process start alone is not execution, and an
+   unreadable result is not a pass. No new criterion or reporting surface is invented.
+
+   **This cannot make DONE unreachable in this repo**, which the review rightly asked to be shown
+   rather than asserted: `.github/workflows/ci.yml` installs gitleaks, semgrep and osv-scanner, so
+   the secrets, SAST and SCA scanners are present on the CI runner. trivy and pip-audit are
+   deliberately omitted and their absence is the ordinary recorded skip. A project that genuinely
+   has no scanner at all would fail this clause, and that is the intended reading, not a
+   regression — a class may drop an artifact, never a scan.
 4. The full suite passes against the baseline recorded at Step 2, with the delta stated.
 5. A PR exists, and its body carries the class, the matrix row that applied, and the Step-11.5
    skip list if any.
@@ -605,31 +734,110 @@ The failure this guards against is measured, not hypothetical: an earlier draft 
 reviewer "on the security lens" only, silently dropping `mechanical`, `bug_logic` and
 `architecture`.
 
+**B5, decided (2026-08-08). ONE input: the wave's dispatch manifest. Both surfaces are reached
+through it.** v4 gave the function brief STRINGS and the CLI only `--brief`, while the prose also
+required inspecting a manifest and a rendered prompt. Three inputs were implied and none was
+specified, so no implementer could build it. The resolution collapses them to one, because the
+manifest is the only artifact that knows how many reviewers the wave has — and a guard fed loose
+brief files cannot tell a two-reviewer wave from a one-reviewer wave that lost a brief.
+
 ```python
 REVIEW_LENSES = ("mechanical", "bug_logic", "security", "architecture")
 
-def assert_lens_coverage(briefs: list[str]) -> tuple[bool, list[str]]:
-    """Every lens must appear across the dispatched briefs. Returns (ok, missing)."""
+def assert_lens_coverage(manifest: dict, *, project_root: Path) -> tuple[bool, list[str]]:
+    """Every lens must appear across the union of the wave's briefs, on BOTH surfaces.
+
+    Returns (ok, problems). `problems` names each missing lens and the surface it is missing
+    from, so a caller never has to guess which half failed.
+    """
 ```
 
 ```
-python3 hooks/plan_lib.py assert-lens-coverage --brief <f> [--brief <f> ...] --project-root .
+python3 hooks/plan_lib.py assert-lens-coverage --manifest <f> --issue <n> --project-root .
 ```
 
-Exit 0 = every lens covered; exit 1 = at least one missing, and stdout names exactly which. The
-check runs over the **union** of the dispatched briefs, so the two-reviewer production split
-(reviewer 1 mechanical + bug_logic, reviewer 2 architecture + security) passes, and the
-single-reviewer disposable form passes only when that one brief names all four.
+**The manifest shape**, written by Step 11 BEFORE it dispatches:
 
-It inspects **both surfaces** *(A9 — v3's text still described brief-text-only, contradicting this
-design's own adoption 8)*: the structured dispatch manifest's `reviewers[].lenses`, AND the rendered
-prompt, which must carry one machine-delimited section per lens. Either surface missing a lens
-fails. A manifest can claim four lenses while the prompt carries one, and checking only the manifest
-would pass exactly that. This is still weaker than proving the reviewer *applied* a lens — no static
-check can — and §7 says so plainly. What it prevents is the specific measured failure.
+```json
+{"issue": 1002, "step": "11", "task_class": "production",
+ "reviewers": [{"id": "r1", "lenses": ["mechanical", "bug_logic"],
+                "prompt_file": "claude_docs/.wf2-state/1002/step11-r1-prompt.md"},
+               {"id": "r2", "lenses": ["architecture", "security"],
+                "prompt_file": "claude_docs/.wf2-state/1002/step11-r2-prompt.md"}]}
+```
 
-**Wired as a gate, not a helper.** Step 11 calls it before consuming any review result, and a
-non-zero exit is a Step-11 blocker. A guard nobody calls is documentation.
+**The discovery rule**, one per surface, both mechanical:
+
+- **The manifest** lives at `claude_docs/.wf2-state/<issue>/step11_dispatch.json`. That is the same
+  per-issue state directory §3.4 already uses for the class snapshot, so no new location is
+  introduced. The CLI takes `--manifest` explicitly rather than deriving the path, because the gate
+  must fail loudly on a missing manifest instead of silently resolving a default that is not there.
+- **Each rendered prompt** is `reviewers[].prompt_file`, resolved relative to `--project-root`. A
+  path that escapes the project root, or that names a file that does not exist, FAILS the guard. It
+  is never skipped, because an unreadable surface is exactly the state a silent drop produces.
+
+**The manifest must be THIS wave's manifest** *(F5, 2026-08-08)*. A guard that accepts any
+well-formed manifest is defeated by a stale one, another issue's one, or a fabricated one — the
+coverage would pass while the actual wave lost a lens. So before either coverage check runs, the
+guard binds the manifest to the run on three axes, and any mismatch is exit 2:
+
+- `manifest.issue` equals the `--issue` the caller passed.
+- `manifest.task_class` equals the class in the write-once snapshot at
+  `claude_docs/.wf2-state/<issue>/task_class.json` (§3.4). The snapshot is the single source of the
+  class, so a manifest may not restate it differently.
+- `len(manifest.reviewers)` equals the reviewer COUNT the matrix gives that class — 1 for
+  `disposable` and `internal`, 2 for `production` — **and every `id` is unique and every
+  `prompt_file` is unique** *(F2)*. Length alone does not prove count: two duplicate entries would
+  otherwise certify a `production` wave that is really one reviewer.
+
+**Validated bytes are the dispatched bytes** *(F1)*. The three axes above identify the RUN, not the
+payload, so on success the guard writes `claude_docs/.wf2-state/<issue>/step11_lens_ok.json` holding
+a sha256 of the manifest and of each prompt file. Step 11 dispatches exactly those files, and the
+dispatch refuses if any digest no longer matches. Without that, a stale manifest for the same issue
+and class could pass while different prompt bytes went out.
+
+**Then the two coverage checks, both required.** (1) The union of every `reviewers[].lenses` covers
+all four. (2) For each reviewer, its rendered prompt carries one delimited section per lens that
+reviewer claims. Either check failing is a failure, and stdout names the lens and the surface.
+
+**The delimiter grammar, stated so two implementations cannot disagree** *(F6, 2026-08-08)*. A lens
+section opens with a line that is exactly `<!-- lens:<name> -->` and closes with a line that is
+exactly `<!-- /lens:<name> -->`, where `<name>` is one of the four `REVIEW_LENSES` values. The
+rules: the markers must be alone on their line, the open and close names must match, each lens may
+appear **at most once** per prompt file (a duplicate is exit 2, not a pass), sections may not nest,
+and an unclosed section does not count as coverage. **A section whose body is empty or whitespace
+only does not count as coverage either** *(F3)* — four immediately-closed markers would otherwise
+certify a prompt that carries no lens instructions at all, which is the exact silent lens-loss this
+guard exists to stop. Matching is exact and case-sensitive, so no fuzzy heuristic can drift between
+the guard and its drift test. The `<!-- … -->` form is chosen
+because the prompt files are markdown and an HTML comment renders as nothing, so the delimiters
+cannot leak into what the reviewer reads as instructions.
+
+Check 2 exists because a manifest can claim four lenses while the prompt carries one, and checking
+only the manifest would pass exactly that. This is still weaker than proving the reviewer *applied*
+a lens — no static check can — and §7 says so plainly. What it prevents is the specific measured
+failure: a reviewer dispatched on one lens while the record claimed four.
+
+Exit 0 = every lens covered on both surfaces. Exit 1 = at least one problem, named. Exit 2 = the
+manifest is missing or malformed, which is a caller error and never a vacuous pass.
+
+**Wired as a gate, not a helper — and it runs BEFORE the dispatch, not before consuming the result**
+*(F3, 2026-08-08)*. The measured failure is a reviewer DISPATCHED with three lenses silently
+dropped. A check that runs after dispatch detects that failure after the tokens are spent and the
+diff has already gone to a wrongly-configured reviewer, so it prevents nothing. The manifest is
+written before dispatch by construction (§3.3's discovery rule), so the guard has everything it
+needs at the only moment where refusing is still cheap. Step 11 therefore calls it immediately
+after writing the manifest and BEFORE the first reviewer is dispatched. A non-zero exit blocks the
+dispatch. A guard nobody calls is documentation, and a guard called too late is a post-mortem.
+
+**The wiring is prose plus a drift test, and an alternate dispatch path is not fenced out** *(F4)*.
+This repo has exactly one review entry point, `hooks/review_runner.py` (D179), and Step 11 is
+orchestrated by SKILL.md prose the way every other WF2 gate is. So the guard is wired the same way
+every gate here is wired, and a drift test pins the prose that calls it. What that does NOT give is
+a runtime fence: an orchestrator that ignored the prose and called the runner directly would bypass
+the guard, exactly as it could bypass any other WF2 gate today. Closing that would mean moving the
+check inside `review_runner.py` itself, which is a larger change than this issue and would couple
+the runner to per-issue WF2 state. It is named here as a known limit rather than claimed away.
 
 ### 3.4 Who chooses the lane — F7
 

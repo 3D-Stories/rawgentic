@@ -426,6 +426,15 @@ Step 4 self-review → security; Step 8a Reviewer 1 → mechanical, Reviewer 2 (
 hunt) → security; Step 11 Reviewer 1 → mechanical + bug_logic, Reviewer 2 → architecture +
 security (#492). State each pass's lens in its brief as emphasis only — never a verdict
 instruction (`<review-severity>`).
+
+**Coverage is asserted, not assumed (#1002).** Step 11 writes its dispatch manifest to
+`claude_docs/.wf2-state/<issue>/step11_dispatch.json`, runs
+`python3 hooks/plan_lib.py assert-lens-coverage --manifest <that> --issue <n> --project-root .`,
+and dispatches ONLY on exit 0 — a non-zero exit blocks the dispatch, because a check that runs
+after dispatch prevents nothing. Coverage is over the UNION of the wave's briefs, so the
+two-reviewer split above passes and a single-reviewer wave must carry all four. The matrix of what
+each task class runs, the guard's full contract, and the `disposable` definition of done live in
+`references/class-gate-matrix.md`.
 </review-lens-routing>
 
 <early-smoke-install>

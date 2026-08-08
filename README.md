@@ -749,6 +749,20 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.142.0 (2026-08-08)
+- **The per-class gate matrix, the `disposable` definition of done, and a lens guard that runs before dispatch (#1002, epic #906).**
+  `hooks/plan_lib.py` gains `CLASS_MATRIX` as the single source of truth with four TYPED row kinds — step, artifact,
+  opt-in, count — each with its own enum. The no-`SKIP` guarantee now lives in the step-row enum itself rather than in
+  prose: no class can express skipping a mandatory step, and `render_class_matrix()` refuses an illegal cell at render
+  time. `assert_lens_coverage()` asserts all four review lenses across the UNION of a Step-11 wave's briefs (never
+  per-reviewer, which would make the shipped #492 two-reviewer split fail its own guard), checking both the dispatch
+  manifest and each rendered prompt, and it runs BEFORE the first dispatch so it prevents rather than detects. Two new
+  CLI subcommands, `render-class-matrix` and `assert-lens-coverage`. The matrix and the guard contract live in the new
+  `skills/implement-feature/references/class-gate-matrix.md`, kept out of the skill body because #899 had just trimmed
+  it. Design findings B6 and B5 were resolved explicitly and the whole design doc swept so no sentence implies the
+  rejected reading. 35 tests added across `tests/test_class_matrix.py` and `tests/test_lens_guard.py`, incl. a drift
+  test that regenerates every documented cell. No workflow-spine change -> no diagram REV. Suite 6474->6509.
+
 ### v3.141.11 (2026-08-08)
 - **The wired `/goal` send pasted its own slash command, so pane handoffs armed nothing (#1007, epic #906).**
   `build_send_text_goal_argv` built one payload of `/goal ` plus the condition and both call sites sent it as a

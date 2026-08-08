@@ -17,6 +17,7 @@ import fcntl
 import hashlib
 import json as _json
 import os
+import pathlib
 import re
 import subprocess
 import sys
@@ -129,6 +130,282 @@ STEP11_REVIEW_AGENT_COUNT_FULL: Final[int] = 2
 STEP11_REVIEW_AGENT_COUNT_LANE: Final[int] = 1
 WF2_EST_MINUTES_PER_AGENT: Final[int] = _clamp(
     _coerce_int_env("WF2_EST_MINUTES_PER_AGENT", 5), 1, 60)
+
+
+# ---------------------------------------------------------------------------
+# The per-class gate matrix (#1002)
+#
+# What each task class does to each WF2 step. The guarantee is what the vocabulary CANNOT say:
+# the step-row enum has no `SKIP`, so no class can declare that a mandatory step does not run.
+# That is structural, not a promise in prose — `render_class_matrix` refuses an illegal cell and
+# `tests/test_class_matrix.py` asserts the enum itself.
+#
+# Row kinds are separate because conflating two of them produced a Critical at the design gate
+# (2026-08-08): a STEP row governs CEREMONY (brainstorm vs brief note), an ARTIFACT row governs
+# whether a separate file is COMMITTED. They are orthogonal. The earlier design defined COLLAPSED
+# as "no separate committed artifact", which made `internal` unimplementable — its Step-3 row read
+# COLLAPSED while its artifact row read KEEP, and no implementation satisfies both.
+
+CLASS_MATRIX_ROW_KINDS: Final[dict[str, tuple[str, ...]]] = {
+    # The no-SKIP guarantee lives HERE, in this one tuple.
+    "step": ("FULL", "COLLAPSED", "n/a"),
+    "artifact": ("KEEP", "DROP"),
+    "opt_in": ("on", "off"),
+    # `count` is validated by predicate, not membership: a positive integer, or `ALL 4` for a
+    # coverage count. Kept as a kind so a count cell can never land in a step row.
+    "count": (),
+}
+
+CLASS_MATRIX_CLASSES: Final[tuple[str, ...]] = ("disposable", "internal", "production")
+
+#: row id -> (kind, label, {class: value}). Ordered as the rendered table is ordered.
+CLASS_MATRIX: Final[dict[str, tuple[str, str, dict[str, str]]]] = {
+    "1": ("step", "1 Receive issue",
+          {"disposable": "FULL", "internal": "FULL", "production": "FULL"}),
+    "2": ("step", "2 Analyze codebase",
+          {"disposable": "FULL", "internal": "FULL", "production": "FULL"}),
+    "3": ("step", "3 Design (the STEP)",
+          {"disposable": "COLLAPSED", "internal": "COLLAPSED", "production": "FULL"}),
+    "3.artifact": ("artifact", "↳ separate design-doc ARTIFACT",
+                   {"disposable": "DROP", "internal": "KEEP", "production": "KEEP"}),
+    "3.peer": ("opt_in", "↳ peer consult (OPT-IN)",
+               {"disposable": "off", "internal": "on", "production": "on"}),
+    "3.adversarial": ("opt_in", "↳ adversarial-on-design (OPT-IN)",
+                      {"disposable": "off", "internal": "off", "production": "on"}),
+    "4": ("step", "4 Design gate (the STEP)",
+          {"disposable": "FULL", "internal": "FULL", "production": "FULL"}),
+    "4.rubric": ("step", "↳ quality-bar rubric",
+                 {"disposable": "FULL", "internal": "FULL", "production": "FULL"}),
+    "5": ("step", "5 Implementation plan (the STEP)",
+          {"disposable": "COLLAPSED", "internal": "COLLAPSED", "production": "FULL"}),
+    "5.artifact": ("artifact", "↳ separate plan-file ARTIFACT",
+                   {"disposable": "DROP", "internal": "DROP", "production": "KEEP"}),
+    "6": ("step", "6 Plan drift",
+          {"disposable": "COLLAPSED", "internal": "COLLAPSED", "production": "FULL"}),
+    "7": ("step", "7 Branch",
+          {"disposable": "FULL", "internal": "FULL", "production": "FULL"}),
+    "8": ("step", "8 Implementation — red-before-green",
+          {"disposable": "FULL", "internal": "FULL", "production": "FULL"}),
+    "8a": ("step", "8a Per-task review (when high-risk)",
+           {"disposable": "FULL", "internal": "FULL", "production": "FULL"}),
+    "9": ("step", "9 Drift gate",
+          {"disposable": "COLLAPSED", "internal": "FULL", "production": "FULL"}),
+    "11": ("step", "11 Code review (the STEP)",
+           {"disposable": "FULL", "internal": "FULL", "production": "FULL"}),
+    "11.count": ("count", "↳ reviewer COUNT",
+                 {"disposable": "1", "internal": "1", "production": "2"}),
+    "11.lenses": ("count", "↳ lens coverage, union of the wave",
+                  {"disposable": "ALL 4", "internal": "ALL 4", "production": "ALL 4"}),
+    "11.5": ("step", "11.5 Security scan",
+             {"disposable": "FULL", "internal": "FULL", "production": "FULL"}),
+    "12": ("step", "12 PR",
+           {"disposable": "FULL", "internal": "FULL", "production": "FULL"}),
+    "13": ("step", "13 CI",
+           {"disposable": "FULL", "internal": "FULL", "production": "FULL"}),
+    "16": ("step", "16 Completion + run-record",
+           {"disposable": "FULL", "internal": "FULL", "production": "FULL"}),
+}
+
+#: Rows a class may never reduce. They read FULL in every column and the drift test says so.
+CLASS_MATRIX_NEVER_REDUCIBLE: Final[tuple[str, ...]] = ("8", "8a", "11", "11.5")
+
+#: Steps the matrix deliberately does NOT classify, each with the reason. Silence would read as
+#: "unclassified"; naming them makes the exclusion a decision the drift test can check.
+CLASS_MATRIX_EXCLUDED_STEPS: Final[dict[str, str]] = {
+    "10": "background, never blocks — nothing for a class to scale",
+    "14": "owner-gated and capability-gated, not class-gated",
+    "15": "owner-gated and capability-gated, not class-gated",
+}
+
+#: The canonical header the drift test anchors on in every call site. One header in one place,
+#: per this repo's drift-guard convention — never a whole-corpus regex.
+CLASS_MATRIX_DOC_HEADER: Final[str] = "| Row | disposable | internal | production |"
+
+
+REVIEW_LENSES: Final[tuple[str, ...]] = (
+    "mechanical", "bug_logic", "security", "architecture")
+
+
+def _lens_sections(text: str) -> dict[str, str]:
+    """Map lens -> section body for every well-formed section in a rendered prompt.
+
+    The grammar is deliberately rigid so the guard and its tests cannot drift apart: a section
+    opens with a line that is exactly `<!-- lens:<name> -->` and closes with exactly
+    `<!-- /lens:<name> -->`, markers alone on their line, matching names, no nesting. Matching is
+    exact and case-sensitive.
+
+    Raises PlanFormatError when a lens opens more than once — two sections disagreeing about one
+    lens has no defined meaning, so it is a caller error rather than a coverage answer.
+    """
+    found: dict[str, str] = {}
+    open_lens: str | None = None
+    body: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("<!-- lens:") and line.endswith("-->"):
+            name = line[len("<!-- lens:"):-len("-->")].strip()
+            if open_lens is not None:
+                # The previous section never closed. It yields no coverage and is discarded,
+                # which is also how "no nesting" is enforced — an unclosed section simply never
+                # lands in `found`, so a nested pair cannot certify either lens.
+                open_lens = None
+            if name in found:
+                raise PlanFormatError(f"lens {name!r} opens more than once in one prompt")
+            open_lens, body = name, []
+            continue
+        if line.startswith("<!-- /lens:") and line.endswith("-->"):
+            name = line[len("<!-- /lens:"):-len("-->")].strip()
+            if open_lens is None or name != open_lens:
+                # A stray or mismatched close is not coverage. Left unrecorded on purpose.
+                open_lens = None
+                continue
+            found[name] = "\n".join(body)
+            open_lens = None
+            continue
+        if open_lens is not None:
+            body.append(raw)
+    # An unclosed section never lands in `found`, so it is not coverage.
+    return found
+
+
+def _resolve_under(root, rel: str):
+    root = pathlib.Path(root).resolve()
+    target = (root / rel).resolve()
+    if target != root and root not in target.parents:
+        raise PlanFormatError(f"prompt_file {rel!r} resolves outside the project root")
+    return target
+
+
+def assert_lens_coverage(manifest: dict, *, project_root, issue: int) -> tuple[bool, list[str]]:
+    """Every review lens must be covered across the wave, on BOTH surfaces (#1002).
+
+    Returns `(ok, problems)`, where each problem names the lens AND the surface it is missing
+    from, so a caller never has to guess which half failed.
+
+    **Binding runs first, and every binding failure raises rather than returning False.** The two
+    are different answers: a coverage failure means "this wave is under-reviewed", while a binding
+    failure means "this is not this wave's manifest and I cannot answer at all". Collapsing them
+    would let a stale or fabricated manifest read as a mere coverage miss.
+
+    The three binding axes exist because none alone is enough: the issue and class pin WHICH run,
+    and the reviewer-count-plus-uniqueness pins that the wave was not silently shrunk. Array
+    length alone does not prove reviewer count — two duplicate entries are one reviewer.
+    """
+    root = pathlib.Path(project_root)
+    if not isinstance(manifest, dict):
+        raise PlanFormatError("manifest must be a JSON object")
+    if manifest.get("issue") != issue:
+        raise PlanFormatError(
+            f"manifest issue {manifest.get('issue')!r} is not the run's issue {issue!r}")
+
+    snap = root / "claude_docs" / ".wf2-state" / str(issue) / "task_class.json"
+    if not snap.is_file():
+        raise PlanFormatError(f"no task-class snapshot at {snap} — the class is unknown, and "
+                              "guessing it would be a vacuous pass")
+    try:
+        snap_class = _json.loads(snap.read_text(encoding="utf-8")).get("task_class")
+    except (OSError, ValueError) as exc:
+        raise PlanFormatError(f"task-class snapshot is unreadable: {exc}") from exc
+    if manifest.get("task_class") != snap_class:
+        raise PlanFormatError(
+            f"manifest task_class {manifest.get('task_class')!r} disagrees with the write-once "
+            f"snapshot {snap_class!r} — the snapshot is the single source of the class")
+
+    reviewers = manifest.get("reviewers")
+    if not isinstance(reviewers, list) or not reviewers:
+        raise PlanFormatError("manifest carries no reviewers")
+    expected = int(CLASS_MATRIX["11.count"][2][snap_class])
+    if len(reviewers) != expected:
+        raise PlanFormatError(
+            f"reviewer count {len(reviewers)} does not match the {snap_class!r} demand of "
+            f"{expected} — a wave that lost a reviewer must not pass on a shrunken union")
+    ids = [r.get("id") for r in reviewers]
+    files = [r.get("prompt_file") for r in reviewers]
+    if len(set(ids)) != len(ids):
+        raise PlanFormatError("reviewer ids must be unique — duplicates certify one reviewer twice")
+    if len(set(files)) != len(files):
+        raise PlanFormatError("prompt_file paths must be unique — two ids on one brief is one "
+                              "reviewer wearing two hats")
+
+    union: set[str] = set()
+    problems: list[str] = []
+    digests: dict[str, str] = {}
+    for r in reviewers:
+        claimed = [lens for lens in (r.get("lenses") or [])]
+        union.update(claimed)
+        path = _resolve_under(root, str(r.get("prompt_file")))
+        if not path.is_file():
+            raise PlanFormatError(f"rendered prompt {r.get('prompt_file')!r} does not exist — an "
+                                  "unreadable surface is what a silent drop looks like")
+        text = path.read_text(encoding="utf-8")
+        digests[str(r.get("id"))] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        sections = _lens_sections(text)
+        for lens in claimed:
+            body = sections.get(lens)
+            if body is None:
+                problems.append(
+                    f"reviewer {r.get('id')!r} claims lens {lens!r} but its rendered prompt "
+                    "carries no such section")
+            elif not body.strip():
+                problems.append(
+                    f"reviewer {r.get('id')!r} lens {lens!r} section is empty — an empty section "
+                    "carries no instruction and is not coverage")
+
+    for lens in REVIEW_LENSES:
+        if lens not in union:
+            problems.append(f"lens {lens!r} is missing from the union of the wave's briefs")
+
+    if problems:
+        return (False, problems)
+
+    receipt = root / "claude_docs" / ".wf2-state" / str(issue) / "step11_lens_ok.json"
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    receipt.write_text(_json.dumps({
+        "issue": issue,
+        "task_class": snap_class,
+        "manifest_sha256": hashlib.sha256(
+            _json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+        "prompts": digests,
+    }, indent=2) + "\n", encoding="utf-8")
+    return (True, [])
+
+
+def _class_matrix_cell_ok(kind: str, value: str) -> bool:
+    if kind == "count":
+        return value == "ALL 4" or (value.isdigit() and int(value) > 0)
+    return value in CLASS_MATRIX_ROW_KINDS.get(kind, ())
+
+
+def render_class_matrix(matrix: dict | None = None) -> str:
+    """The markdown table exactly as it appears in the design doc and the skill, plus the
+    declared exclusions.
+
+    Every cell is validated against its row kind BEFORE anything is emitted, so an illegal value
+    fails here rather than shipping into prose and being caught in review — or not caught.
+    """
+    rows = CLASS_MATRIX if matrix is None else matrix
+    for row_id, (kind, label, values) in rows.items():
+        if kind not in CLASS_MATRIX_ROW_KINDS:
+            raise PlanFormatError(f"row {row_id!r} has unknown kind {kind!r}")
+        missing = set(CLASS_MATRIX_CLASSES) - set(values)
+        if missing:
+            raise PlanFormatError(f"row {row_id!r} ({label}) has no value for {sorted(missing)}")
+        for cls in CLASS_MATRIX_CLASSES:
+            if not _class_matrix_cell_ok(kind, values[cls]):
+                raise PlanFormatError(
+                    f"row {row_id!r} ({label}) cell {cls}={values[cls]!r} is not legal for a "
+                    f"{kind} row — allowed: {CLASS_MATRIX_ROW_KINDS[kind] or 'a positive integer or ALL 4'}")
+
+    out = [CLASS_MATRIX_DOC_HEADER, "|---|---|---|---|"]
+    for _row_id, (kind, label, values) in rows.items():
+        cells = " | ".join(values[c] for c in CLASS_MATRIX_CLASSES)
+        out.append(f"| {label} | {cells} |")
+    out.append("")
+    out.append("Deliberately not classified, and why:")
+    for step, why in CLASS_MATRIX_EXCLUDED_STEPS.items():
+        out.append(f"- Step {step} — {why}.")
+    return "\n".join(out) + "\n"
 
 
 def estimate_agents(high_risk_tasks: int, *, lane: bool,
@@ -3504,6 +3781,42 @@ def _cmd_check_pr_refs(args) -> int:
     return 1
 
 
+def _cmd_assert_lens_coverage(args) -> int:
+    """0 = covered on both surfaces · 1 = a lens is missing, named · 2 = caller error.
+
+    The three codes are kept distinct because collapsing 2 into 1 would let a malformed or
+    foreign manifest read as an ordinary coverage miss, and a caller could then "fix" it by
+    editing the wrong thing.
+    """
+    try:
+        manifest = _json.loads(pathlib.Path(args.manifest).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"assert-lens-coverage: manifest unreadable: {exc}", file=sys.stderr)
+        return 2
+    try:
+        ok, problems = assert_lens_coverage(
+            manifest, project_root=args.project_root, issue=args.issue)
+    except PlanFormatError as exc:
+        print(f"assert-lens-coverage: {exc}", file=sys.stderr)
+        return 2
+    if ok:
+        print("assert-lens-coverage: all four lenses covered across the wave")
+        return 0
+    for problem in problems:
+        print(problem)
+    return 1
+
+
+def _cmd_render_class_matrix(args) -> int:
+    """Print the matrix. The prose call sites are generated from this, never typed by hand."""
+    try:
+        sys.stdout.write(render_class_matrix())
+    except PlanFormatError as exc:
+        print(f"render-class-matrix: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
     parser = argparse.ArgumentParser(prog="plan_lib")
@@ -3573,6 +3886,21 @@ def main(argv: list[str] | None = None) -> int:
     k.add_argument("--project-root", default=".", dest="project_root",
                    help="--pr-body-file must resolve inside this root")
     k.set_defaults(func=_cmd_check_pr_refs)
+
+    m = sub.add_parser("render-class-matrix",
+                       help="print the per-class gate matrix from its source of truth (#1002)")
+    m.add_argument("--project-root", default=".", dest="project_root")
+    m.set_defaults(func=_cmd_render_class_matrix)
+
+    lc = sub.add_parser("assert-lens-coverage",
+                        help="every review lens covered across the Step-11 wave (#1002)")
+    lc.add_argument("--manifest", required=True,
+                    help="the wave's dispatch manifest, written BEFORE the first dispatch")
+    lc.add_argument("--issue", required=True, type=int,
+                    help="the run's issue — the manifest must name the same one")
+    lc.add_argument("--project-root", default=".", dest="project_root")
+    lc.set_defaults(func=_cmd_assert_lens_coverage)
+
     args = parser.parse_args(argv)
     return args.func(args)
 
