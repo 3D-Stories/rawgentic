@@ -60,11 +60,30 @@ python3 hooks/plan_lib.py review-reopen --state-file claude_docs/.wf2-state/<iss
   --source <design|spec_tighten|tdd|review|review_design> --out <token.json> --project-root .
 ```
 
-The mint itself debits the atomic loop-back budget; exhaustion refuses (exit 3) and the gate
-escalates instead of looping. A tokenless run still reviews, but its result carries
-`diagnostic: true`, and the disposition step MUST refuse to open a fix round on a diagnostic
-result. Transport retries inside one runner invocation never re-debit. A spent or malformed
-token refuses outright.
+**The mint RESERVES, it does not debit (#1003).** It creates an outstanding reservation and moves
+no counter. No capacity refuses (exit 3) and the gate escalates instead of looping. A tokenless run
+still reviews, but its result carries `diagnostic: true`, and the disposition step MUST refuse to
+open a fix round on a diagnostic result. A spent or malformed token refuses outright.
+
+**Disposition then owns the debit, and MUST close the reservation one way or the other.** A
+reservation left open holds capacity for ever, and a round opened without a commit is a free round
+— the exact accounting hole this replaced. So every gate that mints ends on one of two paths, using
+the `nonce` from the token:
+
+```bash
+# The review OPENED a fix round — open the durable round record, then charge. Adjacent, in order.
+python3 hooks/plan_lib.py loopback-open-round --state-file <f> --nonce <n> --actor <gate> --project-root .
+python3 hooks/plan_lib.py loopback-commit     --state-file <f> --nonce <n> --actor <gate> --project-root .
+
+# The review opened NO round (zero findings, or all declined) — release, restoring capacity.
+python3 hooks/plan_lib.py loopback-release --state-file <f> --nonce <n> --actor <gate> \
+  --reason "<why no round opened>" --project-root .
+```
+
+`loopback-commit` refuses without a round record, so it validates that a round opened rather than
+trusting the caller. Both open and commit are idempotent, so a retry after a lost response is safe.
+`loopback-status --state-file <f> --project-root .` lists anything left outstanding.
+Transport retries inside one runner invocation never re-debit, and never re-reserve either: they reuse the same token, so the same nonce settles once.
 
 **The vacuous-result gate — subagent results are hypotheses.** Before consuming ANY subagent
 result (review or gather):

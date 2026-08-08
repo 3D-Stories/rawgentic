@@ -185,8 +185,16 @@ review dispatch once; a second failure follows the ERROR protocol — never a si
 **Actionable vs diagnostic — the reopen choke point (#855).** A review result may open a fix
 round ONLY when the run carried a reopen token minted first via
 `python3 hooks/plan_lib.py review-reopen --state-file claude_docs/.wf3-state/<issue>/loopback_counters.json --source review --out <token.json> --project-root .`
-— the mint debits the loop-back budget (see `LOOPBACK_BUDGET` in `<constants>`); exhaustion
-refuses and the gate escalates. A tokenless result carries `diagnostic: true` and MUST NOT open
+
+**The mint RESERVES, it does not debit (#1003), so disposition MUST close it.** WF3's Step 4
+adversarial sub-step, its Step 9 code review, and its Step 14 completion gate all mint, and each
+ends on one of two paths using the token's `nonce`. A round opened: `loopback-open-round` then
+`loopback-commit`, adjacent and in that order — commit refuses without the round record. No round
+opened: `loopback-release --reason "<why>"`, which restores capacity and writes the audit entry.
+A reservation left open holds capacity for ever, and a round opened without a commit is a free
+round — the accounting hole this replaced. `loopback-status` lists anything outstanding.
+— the mint RESERVES against the loop-back budget (see `LOOPBACK_BUDGET` in `<constants>`) and does
+not debit it. No capacity refuses and the gate escalates. A tokenless result carries `diagnostic: true` and MUST NOT open
 a fix round. A subagent or runner dispatch is never a gate bypass — every mandatory review gate
 runs with identical semantics whether a pass ran inline or through `hooks/review_runner.py`,
 and a review that may open a fix round carries a reopen token minted first.

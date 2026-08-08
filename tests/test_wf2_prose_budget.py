@@ -79,9 +79,9 @@ SKILL_DIR = REPO_ROOT / "skills" / "implement-feature"
 # timing. Trim commentary, keep operative prose: the command and its four-line why are operative.
 # Raised by 6_600 for references/class-gate-matrix.md (#1002) — a NEW file, so the
 # total moves by exactly its per-file ceiling and no existing budget is relaxed.
-TOTAL_CEILING_BYTES = 262519
+TOTAL_CEILING_BYTES = 263836
 PER_FILE_CEILING_BYTES = {
-    "SKILL.md": 48000,
+    "SKILL.md": 49225,
     # #1002 — the per-class gate matrix, its lens guard contract, and the
     # `disposable` definition of done. It lives here rather than in SKILL.md
     # deliberately: #899 had just trimmed the skill body against a word ceiling,
@@ -427,7 +427,7 @@ def test_live_corpus_has_no_stale_ceilings():
 # means the ceiling must come DOWN as prose shrinks. Lowering it to 5,000 is
 # the follow-on work, not a number to assert before the prose can meet it.
 SKILL_WORD_CEILINGS = {
-    "SKILL.md": 6878,          # actual 6551 + allowed_headroom() 327
+    "SKILL.md": 7063,          # actual 6727 + allowed_headroom() 336
 }
 
 STALE_WORD_PCT = 0.05

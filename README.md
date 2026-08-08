@@ -763,7 +763,13 @@ For major changes, please open an issue first to discuss the approach.
   the four malformed collections, and never rewrite the file. Concurrency is MEASURED: 24 processes against a
   capacity of 3 admitted exactly 3 in 5/5 trials, and 30 staggered arrivals across repeated inode swaps lost zero
   increments in 4/4 — both controls failed every trial with the lock removed, so `file_lock`'s docstring no longer
-  disclaims the guarantee this rests on. 26 tests added. No workflow-spine change -> no diagram REV. Suite 6521->6547.
+  disclaims the guarantee this rests on. 26 tests added. The Step-11 review then found a **Critical**: the mint had stopped debiting while NOTHING
+  called `open_fix_round`/`commit_loopback`, so the budget charged nothing at all — worse than the defect. The
+  disposition contract is now wired into `shared/blocks/model-routing-resolve.md` and `skills/fix-bug/SKILL.md`,
+  naming both exit paths. Three more High findings fixed: `consume_loopback` now counts outstanding reservations
+  against capacity (preserving them was not enough); the strict reader validates ENTRY shapes and refuses a `total`
+  that disagrees with its sources instead of repairing it; and the minted token no longer embeds the whole state,
+  which had disclosed every other run's bearer nonce. No workflow-spine change -> no diagram REV. Suite 6521->6547.
 
 ### v3.142.0 (2026-08-08)
 - **The per-class gate matrix, the `disposable` definition of done, and a lens guard that runs before dispatch (#1002, epic #906).**

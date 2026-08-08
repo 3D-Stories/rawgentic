@@ -3302,7 +3302,25 @@ def _strict_loopback_read(path: str) -> tuple[dict | None, str]:
             return (None, f"malformed_{key}")
         if not want_list and not isinstance(state[key], dict):
             return (None, f"malformed_{key}")
-    state["total"] = sum(state[s] for s in _LOOPBACK_SOURCES)
+        # ENTRY shapes too, not just the container (Step-11 review). Validating only the outer
+        # type let `settled_commits[nonce] = "junk"` through, and commit_loopback then returned a
+        # successful `already_committed` for a round it never charged — a silent free round, from
+        # the one collection whose whole job is proving a charge happened.
+        entries = state[key] if want_list else state[key].values()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                return (None, f"malformed_{key}: entry is {type(entry).__name__}, not an object")
+    if "reservations" in state:
+        for nonce, res in state["reservations"].items():
+            if res.get("source") not in _LOOPBACK_SOURCES:
+                return (None, f"malformed_reservations: {nonce} has source {res.get('source')!r}")
+    # `total` is DERIVED, and a disagreement is corruption rather than something to repair. The
+    # lenient reader recomputes silently; here that would let a wrong on-disk total pass unnoticed
+    # and be rewritten as if it had always been right (Step-11 review).
+    derived = sum(state[s] for s in _LOOPBACK_SOURCES)
+    if "total" in state and state["total"] != derived:
+        return (None, f"corrupt_counters: total={state['total']!r} but sources sum to {derived}")
+    state["total"] = derived
     return (state, "")
 
 
@@ -3493,9 +3511,14 @@ def consume_loopback(path: str, source: str) -> tuple[bool, dict]:
         raise ValueError(f"unknown loopback source: {source!r}")
     with file_lock(path):
         state = _read_loopback_state(path)
-        if state[source] >= _LOOPBACK_SOURCE_MAX[source]:
+        # #1003: outstanding reservations occupy capacity. Preserving them through this write is
+        # not enough — a legacy debit that ignored them could push past the cap while they were
+        # held, and they would then commit ON TOP, taking the counters over the limit (Step-11
+        # review). Availability means the same thing to both writers or it means nothing.
+        by_source, total_out = _outstanding_counts(state)
+        if state[source] + by_source[source] >= _LOOPBACK_SOURCE_MAX[source]:
             return False, state
-        if state["total"] >= GLOBAL_LOOPBACK_BUDGET:
+        if state["total"] + total_out >= GLOBAL_LOOPBACK_BUDGET:
             return False, state
         state[source] += 1
         state["total"] = sum(state[s] for s in _LOOPBACK_SOURCES)
@@ -3909,12 +3932,18 @@ def _cmd_review_reopen(args) -> int:
             f"review-reopen: no capacity for source {args.source!r} "
             f"(state: {detail}) — no token minted\n")
         return 3
+    # The token carries THIS reservation's summary, never the whole state (Step-11 review).
+    # `state_after` used to embed every reservation nonce plus its run and session identity, so a
+    # token handed to a reviewer disclosed other runs' bearer nonces — and the lifecycle commands
+    # take a bare nonce, so a recipient could open, commit or release someone else's reservation.
+    counters = {k: state[k] for k in list(_LOOPBACK_SOURCES) + ["total"]} \
+        if isinstance(state, dict) and "total" in state else {}
     token = {
         "version": 1,
         "source": args.source,
         "minted_at": _now_iso(),
         "nonce": nonce,
-        "state_after": state,
+        "counters_after": counters,
     }
     # The reservation is already durable. If this receipt cannot be written, say the nonce out
     # loud rather than leaving an orphan nobody can name.
@@ -3939,6 +3968,12 @@ def _loopback_cli_guard(args) -> str | None:
     if not _contained(args.state_file, root):
         return (f"REFUSED — --state-file resolves outside --project-root: "
                 f"{args.state_file!r}")
+    # Resolve ONCE and hand the mutator the resolved path, so a path component swapped between
+    # the check and the open cannot redirect the write (Step-11 review). This narrows the window
+    # rather than closing it: an attacker who can swap components inside the resolved path at
+    # will is already inside the trust boundary, and this guard is a caller-mistake check, not a
+    # defense against a local adversary. Stated rather than implied.
+    args.state_file = os.path.realpath(args.state_file)
     return None
 
 
