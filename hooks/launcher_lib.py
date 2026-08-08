@@ -211,9 +211,20 @@ GOAL_POLL_DELAY_S = 1.5
 # same budget costing a live session is what this issue exists to end. Do not tighten one without
 # re-reading the other.
 #
-# `_poll_for` bounds this on BOTH axes — attempts x delay for the nominal budget, and
-# POLL_WALL_CLOCK_SLACK x that for the hard wall clock (240 s here), so a slow attempt cannot
-# stretch the wait past its own bound.
+# `_poll_for` bounds this on both axes — attempts x delay for the nominal budget, and
+# POLL_WALL_CLOCK_SLACK x that (240 s here) for the wall clock.
+#
+# BE PRECISE ABOUT WHAT THAT DEADLINE IS, because the first revision of this comment overstated it
+# and the Step-9 review caught the overstatement. `_poll_for` tests the deadline at the TOP of each
+# attempt, before it sleeps and before it calls the predicate. So it bounds the wait BETWEEN
+# attempts, and it cannot interrupt an attempt already in flight: a `read_text` that blocks forever
+# would still block forever. It is a deadline checked between attempts, NOT a hard wall clock.
+#
+# Left as-is deliberately. Making it a true hard bound means running each transcript read in a
+# cancellable worker, which is new machinery on the gate that decides whether a successor is
+# trusted — and the failure it would guard against (a permanently blocking local file read) has
+# never been observed here, while the failure this issue exists to fix has been observed three
+# times. Recorded rather than silently claimed away.
 GOAL_ARM_LONG_POLL_ATTEMPTS = 40
 GOAL_ARM_LONG_POLL_DELAY_S = 3.0
 # #989 follow-up — the settle before the goal send. NOT a gate: it decides when to attempt
@@ -3356,10 +3367,13 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
                 # every non-arm `failed_step`, to the unchanged close below. The predecessor is
                 # never retired until `goal_armed` passes, so a kept pane costs an orphan pane and
                 # never a lost session.
+                # Warn BEFORE writing the receipt, so the receipt can describe what was attempted.
+                _warn_unguarded_successor(out["new_pane"], runner, record)
                 out["cleanup"] = (
                     f"NOT closed {out['new_pane']}: the goal was not confirmed armed within the "
                     f"budget, and the successor could not be proven dead. It may be alive and "
-                    f"working — this is NOT a report that it is healthy. Inspect with "
+                    f"working — this is NOT a report that it is healthy. A stop notice was sent to "
+                    f"it, which is ADVISORY and not enforced. Inspect with "
                     f"'herdr pane read {out['new_pane']}'; close with "
                     f"'herdr pane close {out['new_pane']}'.")
             elif out["new_pane"]:
@@ -3833,12 +3847,23 @@ def _report_possible_orphan(panes_before, runner, anchor_pane: str) -> str | Non
 # so it may be alive and mid-turn — exactly the measured case. `poll_error`: every transcript read
 # raised, so the run learned nothing about the successor at all, and destroying on no evidence is
 # the same mistake in a different costume.
-_ARM_OUTCOMES_KEEPING_THE_PANE = frozenset({"unconfirmed_timeout", "poll_error"})
+# #1000 — the arm failures where the run has NOT established that the successor is dead, and
+# therefore must not destroy it. The rule is one line: **no automatic close without affirmative
+# evidence of death.**
+#
+# `probe_error` is here because of a Step-9 review finding, and the hole it names is worth stating
+# so nobody merges the two values back together. A first revision lumped a FAILED probe in with a
+# session MISMATCH under one `pane_unreachable`, and routed both to `_close_tentative_pane`. But
+# that function probes AGAIN and closes when its own probe succeeds and the session matches — so a
+# single transient probe failure would have destroyed a live successor by way of the retry,
+# reproducing the exact defect #1000 exists to remove. A probe that could not answer is not a
+# verdict.
+_ARM_OUTCOMES_KEEPING_THE_PANE = frozenset({"unconfirmed_timeout", "poll_error", "probe_error"})
 
 
 def _classify_arm_failure(pane: str | None, expected_session: str | None,
                           arm_reads: dict, runner, record) -> str:
-    """Why the arm never confirmed: `poll_error`, `pane_unreachable`, or `unconfirmed_timeout`.
+    """Why the arm never confirmed. One of five values, and only two permit an automatic close.
 
     Before #1000 every one of these collapsed into `failed_step: goal_armed`, and the cleanup then
     closed the pane on all of them identically. That is what destroyed successor `09cf79c9` 3.778 s
@@ -3846,29 +3871,75 @@ def _classify_arm_failure(pane: str | None, expected_session: str | None,
     failure. The gate's verdict is unchanged — this only names the reason, so the caller can tell a
     successor it judged from one it merely never heard from.
 
+    - `poll_error`      every transcript read raised: the run never observed the successor at all.
+    - `pane_absent`     there is no pane, or no session was ever learned to compare against.
+    - `probe_error`     the liveness probe could not answer. NOT a verdict — see the keep set.
+    - `session_mismatch` the probe answered, and the pane hosts somebody else. Affirmative
+                        evidence that our successor is not there.
+    - `unconfirmed_timeout` the probe answered and the pane is still ours: alive, just unproven.
+
     Ordering is deliberate. An unreadable transcript is decided FIRST and without a probe: the poll
     never observed the successor, so no pane state can turn that into a judgement about it.
     """
     if arm_reads.get("ok", 0) == 0 and arm_reads.get("err", 0) > 0:
         return "poll_error"
     if not pane or expected_session is None:
-        # No pane to probe, or the run never learned a session to compare against. Nothing here
-        # can be proven alive, so this keeps today's cleanup path.
-        return "pane_unreachable"
+        return "pane_absent"
     probe = build_pane_get_argv(pane)
     try:
         proc = runner(probe)
     except (OSError, subprocess.SubprocessError, LauncherError) as exc:
         record("arm_liveness_probe", probe, None,
-               note=f"probe raised {exc} — the successor cannot be proven alive")
-        return "pane_unreachable"
+               note=f"probe raised {exc} — cannot judge, so the pane is KEPT")
+        return "probe_error"
     record("arm_liveness_probe", probe, proc)
     if getattr(proc, "returncode", 1) != 0:
-        return "pane_unreachable"
+        return "probe_error"
     live = parse_pane_agent_session(getattr(proc, "stdout", "") or "")
+    if live is None:
+        # Unparseable is indistinguishable from unavailable, and `parse_pane_agent_session`'s own
+        # contract says the caller must never treat None as a pass.
+        return "probe_error"
     # Same ownership basis `_close_tentative_pane` uses: a handle can be reused, so "our session is
     # still on it" is the only evidence that makes keeping the pane meaningful rather than a leak.
-    return "unconfirmed_timeout" if live == expected_session else "pane_unreachable"
+    return "unconfirmed_timeout" if live == expected_session else "session_mismatch"
+
+
+# #1000 Step-9 review, finding 2. Keeping the pane removes the old behaviour's one accidental
+# safety property: closing the successor also STOPPED it. A successor that holds the resume prompt
+# and has no proven guard can keep working, while the predecessor is also alive — two sessions with
+# one queue between them.
+#
+# What is buildable here, and what is not. There is no verified suspend primitive; inventing one on
+# the gate that decides whether a successor is trusted is exactly what the owner declined for the
+# submission-transition watcher. What IS proven is the send-text-then-Enter route the handoff
+# already uses three times. So the successor is TOLD to stop, on that proven route.
+#
+# This is a notice, NOT enforcement, and no caller may read it as one. It is best-effort in every
+# direction: any failure is recorded and never changes the verdict, because a failed warning must
+# not turn an unconfirmed handoff into a different kind of failure.
+_UNGUARDED_SUCCESSOR_NOTICE = (
+    "HANDOFF NOT CONFIRMED. Your predecessor could not verify that your run guard armed, and it "
+    "has NOT been retired — it is still alive and still owns this run. Stop now. Do not start, "
+    "continue, or commit any work from the resume prompt you were sent. Wait for a human to "
+    "confirm which session owns the run.")
+
+
+def _warn_unguarded_successor(pane: str, runner, record) -> None:
+    """Best-effort: tell a kept successor it is not the owner of the run. Never raises."""
+    try:
+        send_text, send_keys = build_send_text_argv(pane=pane, text=_UNGUARDED_SUCCESSOR_NOTICE)
+        for kind, argv in (("warn_unguarded_text", send_text), ("warn_unguarded_keys", send_keys)):
+            proc = runner(argv)
+            ok = getattr(proc, "returncode", 1) == 0
+            record(kind, argv, proc,
+                   note=("stop notice sent — advisory only, the successor is NOT enforced to stop"
+                         if ok else None))
+            if not ok:
+                return
+    except (OSError, subprocess.SubprocessError, LauncherError, ValueError) as exc:
+        record("warn_unguarded_text", [], None,
+               note=f"stop notice could not be sent ({exc}) — the successor was NOT warned")
 
 
 def _close_tentative_pane(pane: str, runner, record, expected_session: str | None = None) -> str:

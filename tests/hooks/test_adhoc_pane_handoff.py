@@ -2661,7 +2661,7 @@ class TestTheArmOutcomeIsClassifiedNotCollapsed:
         """Matrix row 4. Our session is provably gone, so the keep-it rule does not apply."""
         _r, out = self._foreign()
         assert out["failed_step"] == "goal_armed", out["failed_step"]
-        assert out["arm_outcome"] == "pane_unreachable", out.get("arm_outcome")
+        assert out["arm_outcome"] == "session_mismatch", out.get("arm_outcome")
 
     def test_a_foreign_session_is_still_never_closed_by_the_cleanup(self) -> None:
         """`pane_unreachable` routes to today's `_close_tentative_pane`, which is itself
@@ -2730,7 +2730,7 @@ class TestTheArmOutcomeIsClassifiedNotCollapsed:
                            "NOT closed" in str(out["cleanup"] or ""))
         assert rows["armed"] == ("armed", None, True, False), rows
         assert rows["unconfirmed_timeout"] == ("unconfirmed_timeout", "goal_armed", False, True), rows
-        assert rows["pane_unreachable"] == ("pane_unreachable", "goal_armed", False, True), rows
+        assert rows["pane_unreachable"] == ("session_mismatch", "goal_armed", False, True), rows
 
 
 class TestTheLongArmPollIsBoundedOnWallClockToo:
@@ -2767,3 +2767,126 @@ class TestTheLongArmPollIsBoundedOnWallClockToo:
         from ending its prompt turn to submitting its goal."""
         nominal = ll.GOAL_ARM_LONG_POLL_ATTEMPTS * ll.GOAL_ARM_LONG_POLL_DELAY_S
         assert nominal >= 2 * 54.0, nominal
+
+
+class TestAFailedProbeIsNotAVerdict:
+    """#1000 Step-9 review, finding 1 — the hole a first revision of this fix left open.
+
+    That revision lumped a FAILED liveness probe together with a session MISMATCH under one
+    `pane_unreachable`, and routed both to `_close_tentative_pane`. But that function probes AGAIN
+    and closes when its own probe succeeds and the session matches. So one transient probe failure
+    would have destroyed a live successor by way of the retry — reproducing the exact defect this
+    issue exists to remove, from inside its own fix.
+
+    A probe that could not answer is not evidence of death.
+    """
+
+    @staticmethod
+    def _probe_fails_at_classification():
+        """A runner whose `pane get` works at spawn and fails once the arm phase asks."""
+
+        class ProbeFailsLate(Runner):
+            def __init__(self, responses):
+                super().__init__(responses)
+                self.gets = 0
+
+            def __call__(self, argv, timeout=180):
+                if self.key(argv) == "herdr pane get":
+                    self.gets += 1
+                    if self.gets > 1:
+                        self.calls.append(list(argv))
+                        return FakeProc(returncode=1)
+                return super().__call__(argv, timeout)
+
+        r = ProbeFailsLate(_responses(pane_read="scrollback\n"))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_reads=10**6)))
+        return r, out
+
+    def test_a_probe_that_cannot_answer_is_its_own_outcome(self) -> None:
+        _r, out = self._probe_fails_at_classification()
+        assert out["failed_step"] == "goal_armed", out["failed_step"]
+        assert out["arm_outcome"] == "probe_error", out.get("arm_outcome")
+
+    def test_a_probe_that_cannot_answer_never_closes_the_pane(self) -> None:
+        """The regression itself. This is the assertion the review's finding exists for."""
+        r, out = self._probe_fails_at_classification()
+        assert not any(c[:3] == ["herdr", "pane", "close"] for c in r.calls), r.calls
+        assert "NOT closed" in str(out["cleanup"]), out["cleanup"]
+
+    def test_an_unparseable_probe_answer_is_also_not_a_verdict(self) -> None:
+        """`parse_pane_agent_session` returns None for unparseable output, and its own contract
+        says the caller must never read None as a pass. rc 0 with junk is still 'cannot judge'."""
+
+        class ProbeJunkLate(Runner):
+            def __init__(self, responses):
+                super().__init__(responses)
+                self.gets = 0
+
+            def __call__(self, argv, timeout=180):
+                if self.key(argv) == "herdr pane get":
+                    self.gets += 1
+                    if self.gets > 1:
+                        self.calls.append(list(argv))
+                        return FakeProc(0, "not json at all")
+                return super().__call__(argv, timeout)
+
+        r = ProbeJunkLate(_responses(pane_read="scrollback\n"))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_reads=10**6)))
+        assert out["arm_outcome"] == "probe_error", out.get("arm_outcome")
+        assert not any(c[:3] == ["herdr", "pane", "close"] for c in r.calls)
+
+
+class TestAKeptSuccessorIsToldItDoesNotOwnTheRun:
+    """#1000 Step-9 review, finding 2 — keeping the pane removed an accidental safety property.
+
+    Closing the successor also STOPPED it. A kept successor holds the resume prompt and has no
+    proven guard, while the predecessor is also alive. There is no verified suspend primitive, so
+    the successor is TOLD to stop over the send-text route the handoff already uses three times.
+
+    This is a NOTICE, not enforcement, and the tests below pin that distinction in both directions.
+    """
+
+    @staticmethod
+    def _kept():
+        r = Runner(_responses(pane_read="scrollback\n"))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_reads=10**6)))
+        return r, out
+
+    def test_a_kept_successor_is_sent_a_stop_notice(self) -> None:
+        r, out = self._kept()
+        assert out["arm_outcome"] == "unconfirmed_timeout"
+        sent = [t for t in r.sent_text() if "HANDOFF NOT CONFIRMED" in t]
+        assert len(sent) == 1, r.sent_text()
+        assert "Stop now" in sent[0] and "still alive and still owns this run" in sent[0]
+
+    def test_the_receipt_calls_the_notice_advisory_and_not_enforcement(self) -> None:
+        _r, out = self._kept()
+        assert "ADVISORY and not enforced" in str(out["cleanup"]), out["cleanup"]
+
+    def test_a_failed_notice_does_not_change_the_verdict(self) -> None:
+        """A warning that could not be delivered must not turn an unconfirmed arm into some other
+        failure — the operator still needs `goal_armed` and the kept pane."""
+
+        class SendTextFailsAfterGoal(Runner):
+            def __call__(self, argv, timeout=180):
+                if (self.key(argv) == "herdr pane send-text"
+                        and "HANDOFF NOT CONFIRMED" in " ".join(argv)):
+                    self.calls.append(list(argv))
+                    return FakeProc(returncode=1)
+                return super().__call__(argv, timeout)
+
+        r = SendTextFailsAfterGoal(_responses(pane_read="scrollback\n"))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_reads=10**6)))
+        assert out["failed_step"] == "goal_armed"
+        assert out["arm_outcome"] == "unconfirmed_timeout"
+        assert "NOT closed" in str(out["cleanup"])
+
+    def test_a_successful_handoff_is_never_warned(self) -> None:
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, marker_after_nudges=0)))
+        assert out["ok"] is True, out["failed_step"]
+        assert not any("HANDOFF NOT CONFIRMED" in t for t in r.sent_text())

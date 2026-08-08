@@ -757,14 +757,18 @@ For major changes, please open an issue first to discuss the approach.
   printed `Guard is armed.`, and its transcript ends `3.778 s` later with zero `goal_status` rows,
   so every post-mortem of this bug had to reason from a file the bug itself had truncated.
   `hooks/launcher_lib.py` gains `GOAL_ARM_LONG_POLL_ATTEMPTS`/`_DELAY_S` (one further bounded poll,
-  120 s nominal and 240 s hard wall clock, derived from a single measured 54 s submission gap and
-  labelled `n = 1` in its own comment) and an `arm_outcome` field —
-  `armed`/`unconfirmed_timeout`/`pane_unreachable`/`poll_error` — that the cleanup keys on, keeping
-  the pane only where the run genuinely cannot tell. The gate's PASS condition, `failed_step` and
-  `results.goal_armed` are all unchanged. 13 tests added in
-  `tests/hooks/test_adhoc_pane_handoff.py`, and the one prior assertion pinning the old close is
-  deliberately reversed with its two structural guarantees kept.
-  No workflow-spine change → no diagram REV. Suite 6440→6453.
+  120 s nominal against a 240 s deadline checked BETWEEN attempts — not a hard wall clock, which
+  the constant's comment now states rather than claims away — derived from a single measured 54 s
+  submission gap and labelled `n = 1`) and an `arm_outcome` field: `armed`, `unconfirmed_timeout`,
+  `probe_error`, `session_mismatch`, `pane_absent`, `poll_error`. Only the last two of those permit
+  an automatic close, on one rule — no close without affirmative evidence of death. Step-9 review
+  caught the fix reintroducing its own bug: a first revision merged a failed probe with a session
+  mismatch, and the retry inside `_close_tentative_pane` would have killed a live successor anyway.
+  A kept successor is now also sent an advisory stop notice, since closing it used to be what
+  stopped it. The gate's PASS condition, `failed_step` and `results.goal_armed` are all unchanged.
+  20 tests added in `tests/hooks/test_adhoc_pane_handoff.py`, and the one prior assertion pinning
+  the old close is deliberately reversed with its two structural guarantees kept.
+  No workflow-spine change → no diagram REV. Suite 6440→6460.
 
 ### v3.141.8 (2026-08-07)
 - **epic-run Step 3 states the goal cap, reads it from the constant, and says the goal is NOT armed
