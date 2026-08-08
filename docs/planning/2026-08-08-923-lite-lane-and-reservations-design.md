@@ -129,8 +129,9 @@ A reservation has exactly three states. There is no fourth, and deliberately no 
 The third row is the deliberate trade, and it is now *detectable* rather than merely accepted. F3
 says a crash between debit and round-open must not charge for a round that never happened. **We open
 the round first and charge second, always.** Under-charging is visible (`loopback-status` reports
-`opened_uncommitted`, and Step 16's completion gate refuses while the current run owns an
-outstanding reservation — peer R4); over-charging silently destroys budget the owner paid for.
+`opened_uncommitted`, and Step 16's completion gate refuses while ANY outstanding reservation
+exists for the issue — §2.10 A4, which supersedes the earlier current-run-only wording); over-charging
+silently destroys budget the owner paid for.
 Given a choice of which way to be wrong, be wrong in the direction an operator can see.
 
 The `OPENED_UNCOMMITTED` state is **derived, not stored** — it is a reservation joined to a matching
@@ -471,8 +472,9 @@ Two rules that make the ordering hard to get wrong:
    anywhere, not because a caller is expected to do work in the gap.
 2. **The no-round branch must call `release`.** A gate that simply returns without releasing leaks
    a reservation, and that leak is exactly what `loopback-status` exists to surface. Step 16's
-   completion gate refuses while the current run owns an outstanding reservation, so the leak
-   cannot reach a green run silently.
+   completion gate refuses while ANY outstanding reservation exists for the issue (§2.10 A4),
+   so the leak cannot reach a green run silently — including one owned by another run or carrying
+   `run_id: "unknown"`.
 
 ### 2.5 Reconciliation — recoverable, logged, never automatic
 
@@ -520,6 +522,168 @@ the five integer counters. That is pre-existing, is not in this issue's scope, a
 alter behaviour for every run that never touches a reservation.
 
 ---
+
+### 2.9 The open findings against §2, each resolved (2026-08-08, #1003)
+
+**B7 — PROBED, and the invariant HOLDS.** The capacity invariant was asserted, not proven, under
+real multi-PROCESS concurrency. It has now been measured, because a thread test cannot establish
+it: CPython's GIL serializes far more than `flock` does, so a thread test passes whether or not the
+file lock works at all.
+
+- 24 real OS processes, each attempting one capacity-bounded authorization against a cap of 3, all
+  released at the same wall-clock instant, with a deliberate 10 ms window between read and write.
+- **5 of 5 trials admitted exactly 3, and the file held exactly 3.** Zero errors.
+- **Control with the lock removed: 5 of 5 trials admitted all 24 and the file held 1** — 23 lost
+  updates. The probe therefore detects the failure it claims to test, so the positive result is
+  evidence rather than an artifact of a probe that cannot fail.
+
+**The consequence for this design, which is NOT just "the claim stands".** `file_lock`'s own
+docstring says that for the loop-back counters the lock is "a defense-in-depth measure against
+accidental concurrent invocations rather than a **primary correctness mechanism**". This issue makes
+it exactly that primary mechanism. The lock is strong enough to carry the promotion — but the
+docstring must be corrected in this PR, or the code keeps disclaiming the guarantee the design now
+rests on.
+
+**B1 — the mint's two writes are ordered, state file FIRST.** Minting writes the state file and the
+`--out` token as two events, and the ordering decides which way a partial failure fails. Token-first
+can hand a caller a token for a reservation that was never recorded, which dispatches an unreserved
+review — budget spent with no record. State-file-first fails the other way: the reservation exists
+and no token was returned, so the caller cannot proceed and `loopback-reconcile` can see and release
+it. The reservation is the authority; the token is a receipt for it. **If the token write fails, the
+command exits non-zero and names the outstanding nonce** so the operator can release it, rather than
+leaving a silent orphan.
+
+**B2 — release REFUSES a reservation whose round already opened.** `loopback-reconcile --release`
+previously permitted releasing any outstanding reservation, including one whose `rounds` entry
+proves the round opened. That recreates the unbilled-round failure this whole issue exists to close:
+the round happened, the release restores availability, and the budget is never charged. Release now
+refuses with `round_already_opened` when a `rounds` entry exists for the nonce. The only path from
+`opened` is `commit`. Release stays idempotent for the case it does cover — an unknown or
+already-released nonce still returns success.
+
+**B3 — authorization does not trust a repaired counter.** `_read_loopback_state` silently resets a
+corrupt counter to 0 (`hooks/plan_lib.py:2375`, `v = 0  # corruption / version skew — reset`). That
+is tolerable for a reader, and dangerous for THIS formula: a corrupted committed counter reads as 0,
+availability inflates, extra rounds are authorized, and the repaired zero is then persisted —
+destroying spend history. Design v4 excluded the pre-existing behaviour from scope, which left the
+consequence unowned. **`authorize_loopback` therefore performs its own STRICT read and refuses on
+any counter it cannot parse**, returning `corrupt_counters` with the offending key named. It does
+not repair, and it does not write. Fail-closed, because the alternative authorizes spending against
+a number known to be wrong. Every other caller keeps the lenient read unchanged.
+
+**B4 — the completion gate counts every outstanding reservation for the issue, not just this run's.**
+Legacy callers may create reservations with `run_id: "unknown"` (the §2.4 compatibility fallback),
+while the Step-16 gate refused only reservations owned by the CURRENT run — so an unattributable
+reservation leaks budget forever, which is #761's F11 exactly. The gate now refuses on ANY
+outstanding reservation in the state file, and reports the unattributable ones separately by nonce so
+they can be reconciled rather than merely counted. Attribution improves the message; it never
+decides whether the gate fires.
+
+**B10 — containment applies to `--state-file`, the path these commands actually replace.** The rule
+as written guarded `--token`/`--out`, arguments the new subcommands do not take. The externally
+supplied path they DO take is `--state-file`, and it is the file they atomically replace — a far
+better target for a traversal than a token they only read. Every new subcommand therefore refuses a
+`--state-file` resolving outside `--project-root`, before any read or write. `review-reopen` keeps
+its existing `--out` containment as well, because it takes both.
+
+**S11 — `open_fix_round` has ONE definition.** It appeared in both §2.7 and §2.4 and the copies
+disagreed: only one carried the idempotency contract that finding A3 exists to enforce. §2.4 is now
+the single definition, and it carries idempotency — at most one round per nonce, a second call
+returning `(True, "already_opened")`. §2.7 describes the round RECORD and its probe, and defers to
+§2.4 for the function's contract.
+
+**B8 — the durability claim is stated to exactly what was shown, no further.** v4 declared the
+directory fsync `verified via spike` for a spike that never ran. The `fsync_dir=True` parameter
+still ships, because fsyncing the containing directory after `os.replace` is what POSIX requires for
+a rename to survive a crash, and the counters file is precisely where a lost rename costs real
+budget. But the claim is now: **the rename is fsynced; this has NOT been verified by an actual
+power-cut test on this filesystem.** An unrun spike cited as evidence is worse than an honest bound.
+
+### 2.10 Design-gate pass 1, all ten findings resolved (2026-08-08)
+
+Four of these are contradictions §2.9's own fixes introduced. That is precisely the failure mode
+that exhausted #923's gate, so each is resolved by deciding which rule WINS and deleting the loser,
+never by leaving both sentences standing.
+
+**A1 — every existing writer must preserve the four new keys, and there is an inventory.** The state
+file gains `reservations`, `rounds`, `settled_commits` and `reconciliation_log`. `consume_loopback`
+already writes this file and reconstructs only the counters, so on the first legacy write it would
+silently delete every active reservation, every round record and the whole audit trail — restoring
+capacity and destroying billing evidence in one move. **This is the single most dangerous
+interaction in the design.** The complete writer inventory, to be verified by `grep` at
+implementation time and pinned by a test:
+
+| Writer | Fix |
+|---|---|
+| `consume_loopback` | read-modify-write must carry unknown top-level keys through untouched |
+| `authorize_loopback`, `open_fix_round`, `commit_loopback`, `release_loopback` | new; carry-through by construction |
+| `loopback-reconcile` | same carry-through |
+
+The rule is stated positively so it cannot be satisfied by accident: **every writer round-trips the
+whole document and mutates only the keys it owns.** A test writes a state file carrying all four new
+keys plus an unknown fifth, calls `consume_loopback`, and asserts all five survive byte-identical.
+
+**A2 — the WF3 call sites, named.** `skills/fix-bug/references/steps.md` §4 (the quality-gate
+adversarial sub-step, which mints) and §9 (code review, which mints and dispositions), plus WF3's
+Step 14 completion gate. Naming the directory was exactly the "prose instead of an exact call site"
+that #761's constraint C6 forbids, and missing one path can open an unreserved round or leak a
+reservation on a no-round exit.
+
+**A3 — fail-closed on corrupt counters applies to EVERY mutating operation, not just authorize.**
+§2.9's B3 fix covered `authorize_loopback` alone, which left `open_fix_round`, `commit_loopback`,
+`release_loopback` and reconciliation free to read a corrupt counter as 0 and persist that repaired
+zero during their own writes — destroying committed-spend history and re-opening the
+over-authorization hole from the other side. All five mutators now perform the strict read and
+refuse with `corrupt_counters`, naming the key. Only the read-only `loopback_status` keeps the
+lenient read, and it REPORTS the corruption rather than repairing it.
+
+**A4 — B4 wins; the current-run rule is deleted.** §2.9's B4 fix (the Step-16 gate refuses on ANY
+outstanding reservation for the issue) contradicted the older rule stating the gate refuses only
+reservations owned by the CURRENT run. Both cannot ship. **B4 wins**, because the current-run rule
+is the defect: a reservation carrying `run_id: "unknown"` or another run's id would survive a green
+completion and hold capacity for ever, which is #761's F11 verbatim. The older sentence is struck,
+not qualified — a design carrying both readings is what an implementer cannot act on.
+
+**A5 — release checks `settled_commits` FIRST.** A nonce present in `settled_commits` but absent
+from `reservations` has been committed, not released. Reporting `already_released` would tell the
+caller capacity was restored when it was not, masking a real operator error. Precedence is therefore
+explicit: `settled_commits` → `(False, "already_committed")`; outstanding with a `rounds` entry →
+`(False, "round_already_opened")` (B2); outstanding without one → release it; unknown everywhere →
+`(True, "already_released")`.
+
+**A6 — the mint is deliberately NOT idempotent, and the failure direction is named.** If both writes
+succeed but the response is lost, a retried `review-reopen` mints a SECOND reservation and the first
+is orphaned until reconciliation. This is accepted rather than solved, because the alternative —
+making the mint idempotent on a caller-supplied key — adds a key every existing call site would have
+to supply, breaking the hard backward-compatibility requirement. The failure direction is the safe
+one: an orphan reservation makes capacity look SCARCER than it is, so the system under-authorizes.
+It never over-charges and never bills an unopened round. `loopback-status` lists orphans and
+`loopback-release` clears them. **Stated as a bound, not hidden as an assumption.**
+
+**A7 — reconciliation's "inspection" classification is corrected.** The sentence classified any
+invocation without `--release` as inspection, which wrongly included `--commit` — an invocation that
+mutates counters AND appends an audit entry. Inspection means **no mutating flag at all**. A runbook
+following the old sentence would treat a commit reconciliation as a read.
+
+**A8 — the directory fsync is best-effort, logged, and never fatal.** Portability across every
+supported project OS, CI image and filesystem is not proven and is not claimed. The contract:
+`fsync_dir=True` attempts the directory fsync; on `OSError` or an unsupported platform it logs a
+named warning to stderr and the write still SUCCEEDS, because `os.replace` has already given atomic
+visibility and losing that would be a worse failure than losing durability. It is never silently
+downgraded — the warning is the record.
+
+**A9 — `open_fix_round` returns the round id in both cases, and idempotency is not a status string.**
+S11 said a second call returns `(True, "already_opened")` while the declared signature returns a
+round id in that position, so an implementer could not tell which the slot held and a caller could
+not recover the original id after a lost response. Resolved: the signature is
+`(ok: bool, round_id: str, state: dict)` and **a repeat call returns the SAME `round_id`**.
+Idempotency is expressed by the value, not by a sentinel that destroys the value.
+
+**A10 — `issue` is `int | None`.** The compatibility fallback can yield `null` when the issue cannot
+be parsed from the state-file path, while the signature declared `issue: int` and every reservation
+field was called required. A legacy invocation would then be refused despite the hard
+backward-compatibility requirement. The field is nullable, validated as `int | None`, and
+`loopback-status` marks such a reservation `identity: partial` so the gap is visible.
 
 ## 3. Part A — the per-class gate matrix
 
