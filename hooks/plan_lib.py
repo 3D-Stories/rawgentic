@@ -3093,10 +3093,21 @@ def write_review_state(
 def file_lock(path: str):
     """Context manager: hold an exclusive flock on a SIDECAR of `path` (created if absent).
 
-    WF2 is single-writer-per-branch by design (one orchestrator session
-    drives a feature branch at a time), so for the loop-back counters this
-    lock is a defense-in-depth measure against accidental concurrent
-    invocations rather than a primary correctness mechanism.
+    **For the loop-back counters this IS the primary correctness mechanism (#1003), and that is
+    measured rather than assumed.** This docstring previously called it "a defense-in-depth
+    measure against accidental concurrent invocations rather than a primary correctness
+    mechanism". That disclaimer became false when the reservation budget started resting on it,
+    so it was probed both ways before the promotion:
+
+    - 24 real OS processes against a capacity of 3, all released at one instant with a 10 ms
+      window between read and write: 5 of 5 trials admitted exactly 3.
+    - 30 processes arriving 4 ms apart while the file was being replaced repeatedly — the case
+      the sidecar exists for: 4 of 4 trials, zero lost increments.
+    - Both controls with the lock removed failed every trial (24 admitted against a cap of 3;
+      20 of 30 increments lost), so the probes detect the failure they test.
+
+    A thread test could not have shown any of this: CPython's GIL serializes far more than
+    `flock` does, so a thread test passes whether or not the file lock works.
 
     Public since #665: `launcher_lib`'s driver-state read-modify-write needs the
     SAME lock, and a second flock implementation would be exactly the duplication
@@ -3235,6 +3246,253 @@ def build_goal_text(
     )
 
 
+# --- #1003: authorize-without-charging loop-back budget ---------------------
+#
+# The defect this replaces: `review-reopen` debited at MINT time, so asking permission to open a
+# fix round cost the same as opening one. A review returning zero findings — the case the budget
+# exists to protect — billed identically to one that opened a round.
+#
+# Reserve-then-commit. A mint creates an OUTSTANDING reservation and moves no counter; the debit
+# happens when a round actually opens, and the round record is the linearization point proving it
+# did. Both failure directions were weighed: debit-then-refund fails toward DESTROYING budget
+# silently, reserve-then-commit fails toward under-charging, which `loopback_status` surfaces and
+# an operator can fix. Be wrong in the direction someone can see.
+#
+# Concurrency here is measured, not assumed (design §2.9/§2.11): 24 real processes against a
+# capacity of 3 admitted exactly 3 in 5/5 trials, and 30 staggered arrivals across repeated inode
+# swaps lost zero increments in 4/4. Both controls failed every trial with the lock removed.
+
+_RESERVATION_KEYS: Final[tuple[str, ...]] = (
+    "reservations", "rounds", "settled_commits", "reconciliation_log")
+
+
+def _strict_loopback_read(path: str) -> tuple[dict | None, str]:
+    """Read the state FAIL-CLOSED. Returns (state, error) — one of the two is always falsy.
+
+    Deliberately not `_read_loopback_state`. That one repairs a corrupt counter to 0, which is
+    tolerable for a reader and dangerous here: the capacity formula would then authorize against a
+    number known to be wrong, and the repaired zero would be persisted by the next write,
+    destroying committed-spend history.
+
+    Every mutator uses this (owner decision D309 item 3, design §2.10 A3). Covering only
+    `authorize_loopback` left the other four free to persist a repaired zero during their own
+    writes, which is the same hole from the other side.
+    """
+    if not os.path.exists(path):
+        return ({s: 0 for s in _LOOPBACK_SOURCES} | {"total": 0}, "")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            state = _json.load(fh)
+    except (OSError, ValueError) as exc:
+        return (None, f"unreadable_state: {exc}")
+    if not isinstance(state, dict):
+        return (None, "unreadable_state: not an object")
+    for src in _LOOPBACK_SOURCES:
+        v = state.get(src, 0)
+        if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+            return (None, f"corrupt_counters: {src}={v!r}")
+        state[src] = v
+    # All FOUR collections, not just `reservations` — overwriting `settled_commits` destroys
+    # settlement evidence and `reconciliation_log` IS the audit trail.
+    for key in _RESERVATION_KEYS:
+        if key not in state:
+            continue
+        want_list = key == "reconciliation_log"
+        if want_list and not isinstance(state[key], list):
+            return (None, f"malformed_{key}")
+        if not want_list and not isinstance(state[key], dict):
+            return (None, f"malformed_{key}")
+        # ENTRY shapes too, not just the container (Step-11 review). Validating only the outer
+        # type let `settled_commits[nonce] = "junk"` through, and commit_loopback then returned a
+        # successful `already_committed` for a round it never charged — a silent free round, from
+        # the one collection whose whole job is proving a charge happened.
+        entries = state[key] if want_list else state[key].values()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                return (None, f"malformed_{key}: entry is {type(entry).__name__}, not an object")
+    if "reservations" in state:
+        for nonce, res in state["reservations"].items():
+            if res.get("source") not in _LOOPBACK_SOURCES:
+                return (None, f"malformed_reservations: {nonce} has source {res.get('source')!r}")
+    # `total` is DERIVED, and a disagreement is corruption rather than something to repair. The
+    # lenient reader recomputes silently; here that would let a wrong on-disk total pass unnoticed
+    # and be rewritten as if it had always been right (Step-11 review).
+    derived = sum(state[s] for s in _LOOPBACK_SOURCES)
+    if "total" in state and state["total"] != derived:
+        return (None, f"corrupt_counters: total={state['total']!r} but sources sum to {derived}")
+    state["total"] = derived
+    return (state, "")
+
+
+def _issue_from_state_path(path: str) -> int | None:
+    """Parse the issue from a `.wf2-state/<issue>/` path. None when it cannot be parsed.
+
+    Nullable on purpose (design §2.10 A10): the identity args are OPTIONAL for backward
+    compatibility, so a legacy caller whose path does not carry an issue must still be able to
+    mint. Refusing it would break the hard compatibility requirement.
+    """
+    parts = os.path.normpath(path).split(os.sep)
+    for i, part in enumerate(parts):
+        if part in (".wf2-state", ".wf3-state") and i + 1 < len(parts):
+            try:
+                return int(parts[i + 1])
+            except ValueError:
+                return None
+    return None
+
+
+def _new_nonce() -> str:
+    return "lb-" + hashlib.sha256(os.urandom(24)).hexdigest()[:20]
+
+
+def _outstanding_counts(state: dict) -> tuple[dict, int]:
+    res = state.get("reservations") or {}
+    by_source = {s: sum(1 for r in res.values() if r.get("source") == s)
+                 for s in _LOOPBACK_SOURCES}
+    # len(), not a sum over sources: a reservation whose source fell outside _LOOPBACK_SOURCES
+    # would vanish from a per-source sum and inflate global availability. Counting the map cannot
+    # miss one.
+    return (by_source, len(res))
+
+
+def authorize_loopback(path: str, source: str, *, issue: int | None = None,
+                       workflow: str = "unknown", gate: str = "unknown",
+                       run_id: str = "unknown", session_id: str = "unknown",
+                       requested_by: str = "unspecified") -> tuple[bool, str | None, dict]:
+    """Reserve one loop-back WITHOUT debiting. Returns (ok, nonce, state).
+
+    Availability counts committed PLUS outstanding, per-source AND global, so two concurrent
+    authorizations cannot both see the same remaining slot (#761 F4).
+    """
+    if source not in _LOOPBACK_SOURCES:
+        raise ValueError(f"unknown loopback source: {source!r}")
+    with file_lock(path):
+        state, err = _strict_loopback_read(path)
+        if err:
+            return (False, None, {"error": err})
+        by_source, total_out = _outstanding_counts(state)
+        if state[source] + by_source[source] >= _LOOPBACK_SOURCE_MAX[source]:
+            return (False, None, state)
+        if state["total"] + total_out >= GLOBAL_LOOPBACK_BUDGET:
+            return (False, None, state)
+        nonce = _new_nonce()
+        state.setdefault("reservations", {})[nonce] = {
+            "source": source, "issue": issue, "workflow": workflow, "gate": gate,
+            "run_id": run_id, "session_id": session_id, "requested_by": requested_by,
+        }
+        _write_loopback_state(path, state)
+    return (True, nonce, state)
+
+
+def open_fix_round(path: str, nonce: str, *, actor: str) -> tuple[bool, str, dict]:
+    """Durably record that a fix round opened. THE linearization point.
+
+    Returns (ok, round_id, state). IDEMPOTENT, and a repeat call returns the SAME `round_id`
+    rather than a sentinel — a caller that lost the response must be able to recover the id
+    (design §2.10 A9). Opening a round does NOT debit; `commit_loopback` does.
+    """
+    with file_lock(path):
+        state, err = _strict_loopback_read(path)
+        if err:
+            return (False, err, {"error": err})
+        rounds = state.get("rounds") or {}
+        if nonce in rounds:
+            return (True, rounds[nonce]["round_id"], state)
+        if nonce not in (state.get("reservations") or {}):
+            return (False, "unknown_nonce", state)
+        round_id = "r-" + hashlib.sha256(nonce.encode()).hexdigest()[:16]
+        state.setdefault("rounds", {})[nonce] = {"round_id": round_id, "actor": actor}
+        _write_loopback_state(path, state)
+    return (True, round_id, state)
+
+
+def commit_loopback(path: str, nonce: str, *, actor: str,
+                    reason: str = "disposition-open",
+                    expect_issue: int | None = None) -> tuple[bool, str, dict]:
+    """Convert an outstanding reservation into a committed count.
+
+    Refuses unless a matching `rounds` entry exists — commit VALIDATES that a round opened rather
+    than trusting the caller. IDEMPOTENT via `settled_commits`.
+
+    Release forgives an unknown nonce and commit does not, deliberately: if commit forgave one, a
+    bug that lost a nonce would open a fix round for free, which is the accounting hole this
+    closes. `settled_commits` is what keeps a RETRIED commit distinguishable from that bug.
+    """
+    with file_lock(path):
+        state, err = _strict_loopback_read(path)
+        if err:
+            return (False, err, {"error": err})
+        if nonce in (state.get("settled_commits") or {}):
+            return (True, "already_committed", state)
+        res = (state.get("reservations") or {}).get(nonce)
+        if res is None:
+            return (False, "unknown_nonce", state)
+        if nonce not in (state.get("rounds") or {}):
+            return (False, "no_round_record", state)
+        if expect_issue is not None and res.get("issue") != expect_issue:
+            return (False, f"identity mismatch: issue {res.get('issue')!r} != {expect_issue!r}",
+                    state)
+        source = res["source"]
+        state[source] += 1
+        state["total"] = sum(state[s] for s in _LOOPBACK_SOURCES)
+        state.setdefault("settled_commits", {})[nonce] = {"actor": actor, "reason": reason,
+                                                          "source": source}
+        del state["reservations"][nonce]
+        if not state["reservations"]:
+            del state["reservations"]
+        _write_loopback_state(path, state)
+    return (True, "committed", state)
+
+
+def release_loopback(path: str, nonce: str, *, actor: str,
+                     reason: str) -> tuple[bool, str, dict]:
+    """Discard an outstanding reservation, restoring availability.
+
+    Precedence is explicit (design §2.10 A5), because reporting the wrong one masks a real
+    operator error: settled → `already_committed` (capacity was NOT restored); a round already
+    opened → `round_already_opened` (releasing it would recreate the unbilled round this issue
+    closes); outstanding → release; unknown → `already_released`.
+
+    EVERY release appends to `reconciliation_log`, whichever command invoked it (owner decision
+    D309 item 2). The audit append is a property of releasing, not of one entry point.
+    """
+    with file_lock(path):
+        state, err = _strict_loopback_read(path)
+        if err:
+            return (False, err, {"error": err})
+        if nonce in (state.get("settled_commits") or {}):
+            return (False, "already_committed", state)
+        if nonce in (state.get("rounds") or {}):
+            return (False, "round_already_opened", state)
+        if nonce not in (state.get("reservations") or {}):
+            return (True, "already_released", state)
+        del state["reservations"][nonce]
+        if not state["reservations"]:
+            del state["reservations"]
+        state.setdefault("reconciliation_log", []).append(
+            {"nonce": nonce, "actor": actor, "reason": reason, "op": "release"})
+        _write_loopback_state(path, state)
+    return (True, "released", state)
+
+
+def loopback_status(path: str) -> dict:
+    """Read-only. Classifies each reservation and REPORTS corruption rather than repairing it."""
+    state, err = _strict_loopback_read(path)
+    if err:
+        return {"error": err}
+    rounds = state.get("rounds") or {}
+    out = {}
+    for nonce, res in (state.get("reservations") or {}).items():
+        out[nonce] = dict(res)
+        out[nonce]["state"] = "opened_uncommitted" if nonce in rounds else "outstanding"
+        out[nonce]["identity"] = ("partial" if res.get("issue") is None
+                                  or res.get("run_id") == "unknown" else "full")
+    return {"counters": {s: state[s] for s in _LOOPBACK_SOURCES} | {"total": state["total"]},
+            "reservations": out,
+            "settled_commits": len(state.get("settled_commits") or {}),
+            "reconciliation_log": len(state.get("reconciliation_log") or [])}
+
+
 def consume_loopback(path: str, source: str) -> tuple[bool, dict]:
     """Attempt to consume one loop-back from the named source.
 
@@ -3253,9 +3511,14 @@ def consume_loopback(path: str, source: str) -> tuple[bool, dict]:
         raise ValueError(f"unknown loopback source: {source!r}")
     with file_lock(path):
         state = _read_loopback_state(path)
-        if state[source] >= _LOOPBACK_SOURCE_MAX[source]:
+        # #1003: outstanding reservations occupy capacity. Preserving them through this write is
+        # not enough — a legacy debit that ignored them could push past the cap while they were
+        # held, and they would then commit ON TOP, taking the counters over the limit (Step-11
+        # review). Availability means the same thing to both writers or it means nothing.
+        by_source, total_out = _outstanding_counts(state)
+        if state[source] + by_source[source] >= _LOOPBACK_SOURCE_MAX[source]:
             return False, state
-        if state["total"] >= GLOBAL_LOOPBACK_BUDGET:
+        if state["total"] + total_out >= GLOBAL_LOOPBACK_BUDGET:
             return False, state
         state[source] += 1
         state["total"] = sum(state[s] for s in _LOOPBACK_SOURCES)
@@ -3617,14 +3880,29 @@ def _cmd_close_design_gate(args) -> int:
 
 
 def _cmd_review_reopen(args) -> int:
-    """M0a (#866, #855): mint a reopen token, debiting the loop-back budget.
+    """M0a (#866, #855), amended by #1003: mint a reopen token WITHOUT debiting.
 
-    The ONE choke point that authorizes an actionable review round: the review
-    runner requires the minted token file for a non-diagnostic result, and the
-    debit happens HERE at mint time — transport retries reuse the token and
-    never debit again. Fail-closed: an exhausted budget mints nothing (exit 3);
-    an --out path outside --project-root refuses (exit 2). The token write is
-    atomic (atomic_write_text) so a concurrent reader never sees a partial file.
+    The ONE choke point that authorizes an actionable review round: the review runner requires
+    the minted token file for a non-diagnostic result.
+
+    **The debit no longer happens here.** Minting used to call `consume_loopback`, so asking
+    permission to open a fix round cost the same as opening one — a review returning ZERO
+    findings, the case the budget exists to protect, billed identically to one that opened a
+    round. It now creates an OUTSTANDING reservation via `authorize_loopback`, and the debit
+    happens at `commit_loopback` once a round has actually opened.
+
+    Availability still counts committed PLUS outstanding, so this is not a loosening: two
+    concurrent mints cannot both see the same remaining slot.
+
+    Ordering of the two writes is load-bearing (design §2.9 B1). The STATE FILE goes first and
+    the token second, because token-first can hand a caller a receipt for a reservation that was
+    never recorded — an unreserved review, budget spent with no record. State-first fails the
+    other way: the reservation exists, no token was returned, the caller cannot proceed, and
+    `loopback-status` can see it. The reservation is the authority; the token is its receipt.
+
+    Fail-closed: no capacity mints nothing (exit 3); an `--out` or `--state-file` outside
+    `--project-root` refuses (exit 2); a failed token write exits non-zero NAMING the outstanding
+    nonce, so an operator can release it rather than leaving a silent orphan.
     """
     root = os.path.realpath(args.project_root)
     if not _contained(args.out, root):
@@ -3632,24 +3910,121 @@ def _cmd_review_reopen(args) -> int:
             f"review-reopen: REFUSED — --out resolves outside --project-root: "
             f"{args.out!r}\n")
         return 2
-    ok, state = consume_loopback(args.state_file, args.source)
-    if not ok:
+    if not _contained(args.state_file, root):
         sys.stderr.write(
-            f"review-reopen: budget exhausted for source {args.source!r} "
-            f"(state: {_json.dumps(state, sort_keys=True)}) — no token minted\n")
+            f"review-reopen: REFUSED — --state-file resolves outside --project-root: "
+            f"{args.state_file!r}\n")
+        return 2
+    ok, nonce, state = authorize_loopback(
+        args.state_file, args.source,
+        issue=_issue_from_state_path(args.state_file),
+        workflow=getattr(args, "workflow", None) or "unknown",
+        gate=getattr(args, "gate", None) or "unknown",
+        run_id=(getattr(args, "run_id", None) or os.environ.get("CLAUDE_CODE_SESSION_ID")
+                or "unknown"),
+        session_id=(getattr(args, "session_id", None)
+                    or os.environ.get("CLAUDE_CODE_SESSION_ID") or "unknown"),
+        requested_by=getattr(args, "requested_by", None) or "unspecified")
+    if not ok:
+        detail = state.get("error") if isinstance(state, dict) and state.get("error") else \
+            _json.dumps(state, sort_keys=True)
+        sys.stderr.write(
+            f"review-reopen: no capacity for source {args.source!r} "
+            f"(state: {detail}) — no token minted\n")
         return 3
+    # The token carries THIS reservation's summary, never the whole state (Step-11 review).
+    # `state_after` used to embed every reservation nonce plus its run and session identity, so a
+    # token handed to a reviewer disclosed other runs' bearer nonces — and the lifecycle commands
+    # take a bare nonce, so a recipient could open, commit or release someone else's reservation.
+    counters = {k: state[k] for k in list(_LOOPBACK_SOURCES) + ["total"]} \
+        if isinstance(state, dict) and "total" in state else {}
     token = {
         "version": 1,
         "source": args.source,
         "minted_at": _now_iso(),
-        "nonce": os.urandom(16).hex(),
-        "state_after": state,
+        "nonce": nonce,
+        "counters_after": counters,
     }
-    os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
-    atomic_write_text(args.out, _json.dumps(token, sort_keys=True) + "\n")
+    # The reservation is already durable. If this receipt cannot be written, say the nonce out
+    # loud rather than leaving an orphan nobody can name.
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
+        atomic_write_text(args.out, _json.dumps(token, sort_keys=True) + "\n")
+    except OSError as exc:
+        sys.stderr.write(
+            f"review-reopen: reservation {nonce} IS OUTSTANDING but the token write failed "
+            f"({exc}). Release it with: loopback-release --nonce {nonce}\n")
+        return 4
     sys.stdout.write(f"review-reopen: minted {args.out} "
-                     f"(source={args.source}, total={state['total']})\n")
+                     f"(source={args.source}, nonce={nonce}, reserved not debited)\n")
     return 0
+
+
+def _loopback_cli_guard(args) -> str | None:
+    """Shared containment check. The externally supplied path these commands take is
+    `--state-file`, and it is the file they atomically REPLACE — a far better traversal target
+    than a token they only read (design §2.9 B10)."""
+    root = os.path.realpath(args.project_root)
+    if not _contained(args.state_file, root):
+        return (f"REFUSED — --state-file resolves outside --project-root: "
+                f"{args.state_file!r}")
+    # Resolve ONCE and hand the mutator the resolved path, so a path component swapped between
+    # the check and the open cannot redirect the write (Step-11 review). This narrows the window
+    # rather than closing it: an attacker who can swap components inside the resolved path at
+    # will is already inside the trust boundary, and this guard is a caller-mistake check, not a
+    # defense against a local adversary. Stated rather than implied.
+    args.state_file = os.path.realpath(args.state_file)
+    return None
+
+
+def _cmd_loopback_open_round(args) -> int:
+    why = _loopback_cli_guard(args)
+    if why:
+        sys.stderr.write(f"loopback-open-round: {why}\n")
+        return 2
+    ok, round_id, _ = open_fix_round(args.state_file, args.nonce, actor=args.actor)
+    if not ok:
+        sys.stderr.write(f"loopback-open-round: {round_id}\n")
+        return 1
+    sys.stdout.write(f"loopback-open-round: {args.nonce} -> round {round_id}\n")
+    return 0
+
+
+def _cmd_loopback_commit(args) -> int:
+    why = _loopback_cli_guard(args)
+    if why:
+        sys.stderr.write(f"loopback-commit: {why}\n")
+        return 2
+    ok, reason, state = commit_loopback(args.state_file, args.nonce, actor=args.actor)
+    if not ok:
+        sys.stderr.write(f"loopback-commit: {reason}\n")
+        return 1
+    sys.stdout.write(f"loopback-commit: {args.nonce} {reason}\n")
+    return 0
+
+
+def _cmd_loopback_release(args) -> int:
+    why = _loopback_cli_guard(args)
+    if why:
+        sys.stderr.write(f"loopback-release: {why}\n")
+        return 2
+    ok, reason, _ = release_loopback(args.state_file, args.nonce, actor=args.actor,
+                                     reason=args.reason)
+    if not ok:
+        sys.stderr.write(f"loopback-release: {reason}\n")
+        return 1
+    sys.stdout.write(f"loopback-release: {args.nonce} {reason}\n")
+    return 0
+
+
+def _cmd_loopback_status(args) -> int:
+    why = _loopback_cli_guard(args)
+    if why:
+        sys.stderr.write(f"loopback-status: {why}\n")
+        return 2
+    status = loopback_status(args.state_file)
+    sys.stdout.write(_json.dumps(status, indent=2, sort_keys=True) + "\n")
+    return 1 if status.get("error") else 0
 
 
 def _cmd_assert_pr_body(args) -> int:
@@ -4037,6 +4412,20 @@ def main(argv: list[str] | None = None) -> int:
     vr.add_argument("--issue", required=True, type=int)
     vr.add_argument("--project-root", default=".", dest="project_root")
     vr.set_defaults(func=_cmd_verify_lens_receipt)
+
+    for name, fn, extra in (("loopback-open-round", _cmd_loopback_open_round, ()),
+                            ("loopback-commit", _cmd_loopback_commit, ()),
+                            ("loopback-release", _cmd_loopback_release, ("reason",)),
+                            ("loopback-status", _cmd_loopback_status, ("no-nonce",))):
+        sp = sub.add_parser(name, help=f"#1003 reservation lifecycle: {name}")
+        sp.add_argument("--state-file", required=True, dest="state_file")
+        if "no-nonce" not in extra:
+            sp.add_argument("--nonce", required=True)
+            sp.add_argument("--actor", required=True)
+        if "reason" in extra:
+            sp.add_argument("--reason", required=True)
+        sp.add_argument("--project-root", default=".", dest="project_root")
+        sp.set_defaults(func=fn)
 
     args = parser.parse_args(argv)
     return args.func(args)

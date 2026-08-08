@@ -105,7 +105,7 @@ def test_wf3_reviewer_default_matches_shared_source():
 def test_reopen_choke_point_in_shared_source():
     shared = _shared()
     assert "python3 hooks/plan_lib.py review-reopen --state-file" in shared
-    assert "The mint itself debits the atomic loop-back budget" in shared
+    assert "The mint RESERVES, it does not debit" in shared
     assert "`diagnostic: true`" in shared
     assert "MUST refuse to open a fix round on a diagnostic result" in shared
     assert "Transport retries inside one runner invocation never re-debit" in shared
@@ -114,7 +114,7 @@ def test_reopen_choke_point_in_shared_source():
 def test_wf3_block_carries_reopen_choke_point():
     block = _wf3_block()
     assert "review-reopen" in block
-    assert "the mint debits the loop-back budget" in block
+    assert "the mint RESERVES against the loop-back budget" in block
     assert "`diagnostic: true`" in block
 
 

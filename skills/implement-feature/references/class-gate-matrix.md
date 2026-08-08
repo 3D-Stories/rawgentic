@@ -127,3 +127,45 @@ directly would bypass it, as it could bypass any gate here today.
 Not required: a committed design document, a committed plan file, an adversarial-on-design pass, a
 peer consult, or a diagram REV when no spine changed. Items 2 and 3 are the same demands
 `production` makes — **the definition of done differs in artifacts, never in gates.**
+
+
+## The loop-back budget reserves, it does not charge (#1003)
+
+`plan_lib.review-reopen` mints a reopen token by creating an OUTSTANDING reservation through
+`plan_lib.authorize_loopback(...)`. **It does not debit.** A review that returns zero findings —
+the case the budget exists to protect — used to bill exactly as much as one that opened a fix
+round.
+
+The debit happens when a round actually opens:
+
+```bash
+python3 hooks/plan_lib.py loopback-open-round --state-file <f> --nonce <n> --actor <a> --project-root .
+python3 hooks/plan_lib.py loopback-commit     --state-file <f> --nonce <n> --actor <a> --project-root .
+```
+
+`plan_lib.open_fix_round(...)` writes the durable round record that is the linearization point,
+and `plan_lib.commit_loopback(...)` refuses without one — commit VALIDATES that a round opened
+rather than trusting the caller. Both are idempotent: a repeated `open_fix_round` returns the SAME
+round id, and a repeated commit returns `already_committed` without double-charging.
+
+A gate that opens NO round must release, or the reservation leaks:
+
+```bash
+python3 hooks/plan_lib.py loopback-release --state-file <f> --nonce <n> --actor <a> --reason <t> --project-root .
+```
+
+`plan_lib.release_loopback(...)` refuses once a round has opened (`round_already_opened`) — releasing
+then would recreate the unbilled round this whole change closes — and reports `already_committed`
+rather than `already_released` for a settled nonce, because telling a caller capacity was restored
+when it was not masks a real error. Every release appends to the in-file `reconciliation_log`.
+
+`plan_lib.loopback_status(...)` is read-only and classifies each reservation `outstanding` or
+`opened_uncommitted`, reporting corruption rather than repairing it:
+
+```bash
+python3 hooks/plan_lib.py loopback-status --state-file <f> --project-root .
+```
+
+Availability counts committed PLUS outstanding, per-source and global, so two concurrent
+authorizations cannot both see the same remaining slot. That is measured, not assumed — see the
+`file_lock` docstring for the two probes and their controls.
