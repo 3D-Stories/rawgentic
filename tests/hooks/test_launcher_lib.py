@@ -1565,7 +1565,13 @@ class TestBoundedPolling:
         out = ll.perform_handoff(runner=r, **_handoff(
             read_text=Artifacts(transcript=""), sleeper=slept.append))
         assert out["ok"] is False and out["failed_step"] == "goal_armed"
-        assert len(slept) <= ll.GOAL_POLL_ATTEMPTS, "polling must be bounded"
+        # #1000 — the arm phase now polls TWICE: the short budget, then, when that does not arm,
+        # one longer bounded poll (a queued `/goal` submits up to a minute after the send). The
+        # property under test is unchanged — polling must be BOUNDED — so the bound is widened to
+        # both budgets plus the single settle sleep, not removed. Each `_poll_for` sleeps between
+        # attempts, hence `attempts - 1` each.
+        ceiling = 1 + (ll.GOAL_POLL_ATTEMPTS - 1) + (ll.GOAL_ARM_LONG_POLL_ATTEMPTS - 1)
+        assert len(slept) <= ceiling, f"polling must be bounded (slept {len(slept)}x)"
         assert not _predecessor_closed(r)
 
     def test_a_partial_multibyte_read_is_retried_not_fatal(self) -> None:
