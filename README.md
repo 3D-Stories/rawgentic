@@ -749,6 +749,23 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.141.9 (2026-08-08)
+- **`goal_armed` no longer destroys a successor it cannot prove is dead (#1000, epic #906).** The
+  arm gate gave a queued `/goal` 18 s and then closed the successor pane, and the nudge loop could
+  not extend that — a queued command shows no paste affordance, so the recovery declines on round
+  one. Measured on successor `09cf79c9`: the goal submitted at `00:55:20.862Z`, the successor
+  printed `Guard is armed.`, and its transcript ends `3.778 s` later with zero `goal_status` rows,
+  so every post-mortem of this bug had to reason from a file the bug itself had truncated.
+  `hooks/launcher_lib.py` gains `GOAL_ARM_LONG_POLL_ATTEMPTS`/`_DELAY_S` (one further bounded poll,
+  120 s nominal and 240 s hard wall clock, derived from a single measured 54 s submission gap and
+  labelled `n = 1` in its own comment) and an `arm_outcome` field —
+  `armed`/`unconfirmed_timeout`/`pane_unreachable`/`poll_error` — that the cleanup keys on, keeping
+  the pane only where the run genuinely cannot tell. The gate's PASS condition, `failed_step` and
+  `results.goal_armed` are all unchanged. 13 tests added in
+  `tests/hooks/test_adhoc_pane_handoff.py`, and the one prior assertion pinning the old close is
+  deliberately reversed with its two structural guarantees kept.
+  No workflow-spine change → no diagram REV. Suite 6440→6453.
+
 ### v3.141.8 (2026-08-07)
 - **epic-run Step 3 states the goal cap, reads it from the constant, and says the goal is NOT armed
   (#806, epic #906).** Step 3 mandates seven content blocks and had no length cap, which is exactly
