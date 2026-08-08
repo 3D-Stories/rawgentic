@@ -96,8 +96,8 @@ was filed and false by the time it ran**. The right response is the one AC1 itse
 **AC4, in full**, and it is the durable half. `tests/test_wf2_prose_budget.py` gains a word budget
 beside its byte ceilings, reusing the existing violation-reporting shape:
 
-- `SKILL_WORD_CEILINGS` pins `SKILL.md` at **6,764** = actual 6,442 + 322 allowed headroom, matching
-  how the byte ceilings are calibrated.
+- `SKILL_WORD_CEILINGS` pins `SKILL.md` at **6,765** = actual 6,442 + the 323 that `allowed_headroom()` returns,
+  matching how the byte ceilings are calibrated (`ceiling == actual + allowed_headroom()`).
 - `word_violations()` mirrors `budget_violations()`: same classes, same "name the path, carry actual
   + ceiling + delta" contract, same never-quote-content rule.
 - The guard fails in **both** directions — growth past the ceiling, and a ceiling left stale above a

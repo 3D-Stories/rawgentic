@@ -395,11 +395,17 @@ def test_live_corpus_has_no_stale_ceilings():
 #     review-severity is shared with fix-bug, which AC3 forbids touching.
 #   * AC2-PROTECTED (753) -- completion-gate, probe-before-design,
 #     early-smoke-install; AC2 names these and re-confirms them cross-step.
-#   * CROSS-STEP (2_718) -- mandatory-steps, step-tracking, happy-path,
-#     constants, references, role, termination-rule, error-protocol,
-#     ambiguity-circuit-breaker, review-pipelining, test-run-discipline,
-#     review-lens-routing. Each is read by SEVERAL steps, so moving any into
-#     one step file breaks the others -- the same argument AC2 makes.
+#   * CROSS-STEP (972) -- references, role, test-run-discipline, constants,
+#     review-lens-routing, review-pipelining. Each is read by 3-9 step files,
+#     so moving any into one breaks the others -- the same argument AC2 makes.
+#   * GLOBAL SPINE (1_746) -- mandatory-steps, step-tracking, error-protocol,
+#     happy-path, ambiguity-circuit-breaker, termination-rule. These have ZERO
+#     step-file readers, and that is why they cannot move EITHER: a block no
+#     step file references cannot be relocated INTO one, because no step would
+#     then read it. mandatory-steps is the clearest case -- it says which steps
+#     may never be skipped, so filing it under step-08.md hides it from Steps
+#     1-7. (Step-11 R4: an earlier version of this comment called all twelve
+#     "cross-step", which was a false explanation for 1_746 of the words.)
 #   * the remaining 859 are headings and the one-line-per-step spine.
 # Genuinely free to move: ZERO. #874 already moved everything step-scoped.
 #
@@ -413,7 +419,7 @@ def test_live_corpus_has_no_stale_ceilings():
 # means the ceiling must come DOWN as prose shrinks. Lowering it to 5,000 is
 # the follow-on work, not a number to assert before the prose can meet it.
 SKILL_WORD_CEILINGS = {
-    "SKILL.md": 6_764,          # actual 6_442 + headroom 322
+    "SKILL.md": 6_765,          # actual 6_442 + allowed_headroom() 323
 }
 
 STALE_WORD_PCT = 0.05
@@ -434,12 +440,16 @@ def word_violations(words: dict, ceilings: dict) -> list:
     """Word-budget violations, one message per violation.
 
     Mirrors `budget_violations`' shape deliberately (#899 AC4 says to reuse
-    it): the same UNBUDGETED / STALE BUDGET / OVER / STALE classes, the same
-    "name the path, carry actual + ceiling + delta" contract, and the same
-    never-quote-content rule. Only the budgeted SUBSET is checked -- unlike
-    bytes, where every corpus file carries a ceiling, the word guideline is
-    about the always-loaded SKILL.md body, so an unbudgeted file here is not
-    a violation.
+    it): the same "name the path, carry actual + ceiling + delta" contract and
+    the same never-quote-content rule.
+
+    THREE classes, not four (Step-11 R5 -- an earlier docstring claimed the
+    same four and then described the opposite, contradicting its own code):
+    STALE WORD BUDGET, OVER WORD CEILING, STALE WORD CEILING. There is
+    deliberately NO unbudgeted class. Every corpus file carries a BYTE ceiling,
+    so the byte guard must catch a new file; the WORD guideline is about the
+    always-loaded SKILL.md body specifically, so a .md file with no word
+    ceiling is out of scope here rather than a violation.
     """
     violations = []
     for path in sorted(ceilings.keys() - words.keys()):
@@ -492,10 +502,26 @@ def test_word_stale_budget_entry_is_named():
     assert v.startswith("STALE WORD BUDGET: gone.md")
 
 
-def test_word_violations_never_quote_file_content():
-    body = "SECRET-CANARY-STRING"
-    for v in word_violations({"SKILL.md": 999}, {"SKILL.md": 1}):
-        assert body not in v
+def test_word_violations_never_quote_file_content(tmp_path):
+    """Step-11 R3: the first version of this test was VACUOUS.
+
+    It bound a canary to a local and asserted it was absent from messages the
+    canary had never been given to — guaranteed to pass however badly a future
+    reporting path leaked. This version writes the canary into a real .md file,
+    measures THAT directory, and drives the violation path with the resulting
+    counts, so the assertion can actually fail.
+    """
+    canary = "SECRET-CANARY-STRING-do-not-quote-me"
+    (tmp_path / "SKILL.md").write_text(f"{canary} " * 50, encoding="utf-8")
+    words = {
+        p.relative_to(tmp_path).as_posix(): len(p.read_text(encoding="utf-8").split())
+        for p in tmp_path.rglob("*.md")
+    }
+    assert words == {"SKILL.md": 50}, "the fixture must measure as real content"
+    violations = word_violations(words, {"SKILL.md": 1})
+    assert violations, "the fixture must PRODUCE a violation, or nothing is checked"
+    for v in violations:
+        assert canary not in v
 
 
 def test_skill_body_stays_within_its_word_ceiling():

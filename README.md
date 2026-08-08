@@ -752,8 +752,8 @@ For major changes, please open an issue first to discuss the approach.
 ### v3.141.10 (2026-08-08)
 - **The WF2 prose corpus now measures WORDS, not only bytes (#899, epic #906).** `tests/test_wf2_prose_budget.py`
   gains `SKILL_WORD_CEILINGS` and a `word_violations()` helper mirroring the existing byte-budget
-  reporting shape, plus six tests. `skills/implement-feature/SKILL.md` is pinned at 6,764 words
-  (actual 6,442 + 322 allowed headroom) and the guard fails in BOTH directions, so the ceiling must
+  reporting shape, plus six tests. `skills/implement-feature/SKILL.md` is pinned at 6,765 words
+  (actual 6,442 + the 323 `allowed_headroom()` returns) and the guard fails in BOTH directions, so the ceiling must
   come down as prose shrinks. Proof it bites: against the 6,292 count #899 recorded at `0d2ba0e0`
   the guard reports `OVER WORD CEILING: SKILL.md is 6442 words — 150 over`, so the exact drift the
   issue was filed about would have failed CI. AC1's 5,000-word target is NOT met and is reported
