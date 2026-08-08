@@ -14,6 +14,81 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #906 M2 — #806: the goal cap, read from the constant, and no auto-arm · v3.141.8
+
+**Issue:** [#806](https://github.com/3D-Stories/rawgentic/issues/806) ·
+**Design:** brief note, small-standard lane (no separate design doc)
+
+**I blocked this issue on a decision that already existed, and that is the first thing to record.**
+Its AC4 asks epic-run's Step 3 to arm a `/goal` into the operator's own pane and verify it. I posted
+a blocker asking the owner to decide AC4's shape — without having read **item 6 of the epic itself**,
+which had already rescoped the issue to *"goal cap read from the constant + exact-text display; no
+auto-arm"*. Corrected on the issue the same session and the child shipped. The gap is worth naming:
+the revalidation pass audits a child against `main`, never against the epic item that governs it.
+
+**The technical finding survived and became the recorded reason for that rescope.**
+`validate_inserted_prompt` records the #718 measurement that a bare slash command inserted into a
+session with an unmet `/goal` sat queued through five goal-driven turns. Step 3 runs inside the
+operator's own session, mid-turn, so it can neither execute a `/goal` nor verify one it sent — the
+row it would check for cannot appear until the turn doing the checking has ended.
+
+**What shipped.** Step 3 had no length cap at all, while `launcher_lib.GOAL_MAX_CHARS` had enforced
+one all along; a faithful draft on the #756 run reached 5,014 characters and was rejected. Step 3 now
+states the cap bound to that constant, states the drafted condition's character count over the whole
+command, shortens an over-cap draft by pointing at the run-contract file rather than truncating, and
+says the goal is not armed automatically.
+
+**Two things deliberately NOT done, both stated rather than quietly dropped.** AC7 called the *"you
+cannot invoke /goal for them"* sentence stale; on the evidence it is substantially correct for the
+operator's own pane, so it was kept and made precise instead of rewritten into something false. The
+Scope bonus asks to change "version bump ×3 surfaces" to four, citing `hooks/canary.py` — retired in
+#866 M0d. There are three, the skill already said three, and acting on the bonus would have written
+a wrong count.
+
+**What review caught, and it was mine.** The drift guard I shipped **could not fail**: it searched all
+of Step 3 for the constant's value, and Step 3 already contains other figures, so a constant changed
+to one of them would have left a stale instruction green. That is repo mistake #6 and I made it
+anyway. It is now anchored to the cap sentence and was demonstrated to fail on a drifted value.
+Review also found that nothing told Step 3 to STOP until the owner confirms the goal armed — the
+precise risk removing the auto-arm introduces — and that guard-critical terms could move behind a
+mutable file pointer.
+
+Suite 6434→6440, exit 0. Both lint lanes 10.00/10. Security scan clean. 7 drift guards.
+
+---
+
+## Epic #906 M2 — #772: both destructive handoff paths origin-bound · v3.141.7
+
+**Issue:** [#772](https://github.com/3D-Stories/rawgentic/issues/772) ·
+**Design:** brief note, small-standard lane (no separate design doc)
+
+**Measured, and worse than the issue described.** Campaign `handoff` and `mid-child-handoff` both
+derived the successor's guard with `last_unmet_goal_condition`. On a transcript of one real guard
+followed by a forged NESTED row, all three old readers agreed on the forged condition — the derived
+reader returned it, the liveness check passed it, and the newest-guard check matched it. Nothing in
+the chain could dissent, because every link asked the same sentinel-blind question. So the old path
+did not refuse; it would have armed the successor with the forged guard. The denial case is its
+sibling: with an explicit condition, the same forged row refused a handoff whose guard was live.
+
+**The two paths were not equally exposed.** Campaign `handoff` had no check at all. Mid-child already
+re-checked liveness and newest-guard, leaving origin as its only hole. Both now derive through
+`owner_goal_state` and require `LIVE`, with `CLEARED`, `NEVER_ARMED` and `AMBIGUOUS` refusing in
+their own words. AC2's tail-ambiguity refusal falls out of the same call.
+
+**Two things I got wrong, both caught by review.** I deferred the campaign path's explicit-condition
+check claiming it would break the workspace resume launchers — that came from a docstring, not from
+looking, and no launcher passes the flag at all. And my assertion compared `.strip()`ed forms while
+forwarding the operator's variant, so two guards differing by a trailing space compared equal and the
+successor would have been armed with text that was not the owner's verbatim guard.
+
+**What the full suite caught that scoped runs did not.** The parser change — making
+`--goal-condition-from` required — broke 30 tests across three files. Two scoped runs found two of
+those files; only the whole-suite gate found the third.
+
+Suite 6421→6434, exit 0. Both lint lanes 10.00/10. Security scan clean. 13 tests.
+
+---
+
 ## Epic #906 M2 — #864: read-goal-condition reads trusted rows · v3.141.6
 
 **Issue:** [#864](https://github.com/3D-Stories/rawgentic/issues/864) ·
