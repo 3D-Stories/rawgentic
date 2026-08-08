@@ -14,6 +14,86 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #906 M2 (out-of-queue) — #1000: `goal_armed` keeps a successor it cannot prove is dead · v3.141.9
+
+**Issue:** [#1000](https://github.com/3D-Stories/rawgentic/issues/1000) ·
+**Design:** RCA + fix plan, full WF3 spine (no separate design doc)
+
+**Not a queued child.** Epic #906 exists to make the pane-handoff chain boring, and the handoff was
+failing on every attempt while no child covered it. The owner interrupted the #923 run and asked for
+this instead. #923 was paused at a clean seam — no branch, no code, gate still open at `77a3e030` —
+so the cost of the detour was one recorded test baseline.
+
+**The recorded diagnosis was half wrong, and finding that out changed the fix.** The run handoff
+said the successor "was provably fine" and that the `goal_status` row "lands after the budget
+expires". The successor's own transcript says otherwise: `09cf79c9` holds **zero** `goal_status`
+rows. Its `/goal` submitted at `00:55:20.862Z`, it printed `Guard is armed.` at `00:55:24.240Z`, and
+the file ends at `00:55:24.640Z`. The pane was destroyed **3.778 s** after the submission, so the
+proof was never written rather than written late. Every post-mortem of this bug had been reasoning
+from a file the bug itself had truncated.
+
+**Why the wait could not stretch.** The nudge recovery reads the pane and declines when there is no
+unsubmitted-paste affordance. A QUEUED `/goal` shows none — `launcher_lib.py` says so at its own
+loop, and a test has pinned it since #989. So the queued state got exactly one 18 s poll and nothing
+more, against a measured 54 s turn-end-to-submit gap.
+
+**What shipped, and it is two halves that only work together.** `GOAL_ARM_LONG_POLL_ATTEMPTS`/
+`_DELAY_S` add one further bounded poll (120 s nominal, 240 s hard wall clock through the existing
+`POLL_WALL_CLOCK_SLACK`). And `arm_outcome` — `armed`/`unconfirmed_timeout`/`pane_unreachable`/
+`poll_error` — gives the cleanup something honest to key on, so the pane is kept only where the run
+genuinely cannot tell. The gate's PASS condition, `failed_step` and `results.goal_armed` are all
+unchanged.
+
+**The budget is honest about its own weakness.** 120 s is 2x ONE observation. The constant's comment
+says `n = 1` and says it is not a proven ceiling. That is tolerable only because of the other half:
+an imperfect budget now costs an orphan pane instead of a live session.
+
+**The most important finding is that the fix reintroduced its own bug, and review caught it.** The
+Step-9 pass found that a first revision merged a FAILED liveness probe with a session MISMATCH under
+one `pane_unreachable`, and routed both to `_close_tentative_pane` — which probes AGAIN and closes
+when its own probe succeeds. So one transient probe failure would have destroyed a live successor by
+way of the retry, from inside the fix meant to prevent exactly that. The outcome is now split five
+ways on a single rule: **no automatic close without affirmative evidence of death.** Two tests pin
+it, including an unparseable probe answer, since `parse_pane_agent_session` returns `None` there and
+its own contract forbids reading `None` as a pass.
+
+**Keeping the pane removed an accidental safety property, so that was addressed too.** Closing the
+successor also STOPPED it. A kept successor holds the resume prompt with no proven guard while the
+predecessor is alive. There is no verified suspend primitive, and inventing one on this gate is what
+the owner had already declined — so the successor is sent a stop notice over the proven send-text
+route. The receipt calls it ADVISORY and not enforcement, and a test pins that a failed notice never
+changes the verdict.
+
+**Three cross-model passes, fifteen findings, and the budget ran out before the last one.** Pass 1
+fired the ambiguity breaker and went to the owner, who applied all six; two were factual corrections
+to my own RCA — a "same millisecond" claim that was 1 ms apart, and a hypothesis marked REFUTED on a
+mid-turn control that cannot speak for the post-turn case, now UNRESOLVED. Pass 2 was diagnostic by
+construction, and one of its findings sat at confidence 0.79, just under the Medium band that would
+have filtered it; checking it anyway found a real bug — the three handoff CLI serializers use fixed
+key tuples, so `arm_outcome` was invisible at the CLI boundary and the operator would never have seen
+the field this issue exists to give them. Pass 3 was the Step-9 review above, also diagnostic with the
+`review` loop-back budget spent, so its two High findings were escalated to the owner rather than
+silently applied. The owner authorized all three fixes.
+
+**Corrected in the same pass, and stated rather than claimed away.** The comment had called the long
+poll's 240 s a hard wall clock. `_poll_for` tests its deadline at the TOP of each attempt, so it
+bounds the wait BETWEEN attempts and cannot interrupt one in flight. The comment now says so, and
+says why a true hard bound was not built: it needs a cancellable worker on the gate that decides
+whether a successor is trusted, against a failure never observed here.
+
+**Declined, and recorded rather than dropped.** A first phase that watches for the goal to submit
+before starting the arm deadline. There is also no `refused` outcome, because refusal has no
+observable; it is deliberately classified `unconfirmed_timeout`.
+
+**One I caught myself.** A test I wrote asserted `herdr pane teardown` was never called.
+`build_teardown_argv` emits `herdr pane close`. That guard could not have failed — repo mistake #6 —
+and was corrected before the commit.
+
+Suite 6440→6460, exit 0. Both lint lanes 10.00/10. Security scan PASS with one visible skip
+(`iac: not applicable`). 20 tests added.
+
+---
+
 ## Epic #906 M2 — #806: the goal cap, read from the constant, and no auto-arm · v3.141.8
 
 **Issue:** [#806](https://github.com/3D-Stories/rawgentic/issues/806) ·

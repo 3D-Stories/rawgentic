@@ -749,6 +749,27 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.141.9 (2026-08-08)
+- **`goal_armed` no longer destroys a successor it cannot prove is dead (#1000, epic #906).** The
+  arm gate gave a queued `/goal` 18 s and then closed the successor pane, and the nudge loop could
+  not extend that — a queued command shows no paste affordance, so the recovery declines on round
+  one. Measured on successor `09cf79c9`: the goal submitted at `00:55:20.862Z`, the successor
+  printed `Guard is armed.`, and its transcript ends `3.778 s` later with zero `goal_status` rows,
+  so every post-mortem of this bug had to reason from a file the bug itself had truncated.
+  `hooks/launcher_lib.py` gains `GOAL_ARM_LONG_POLL_ATTEMPTS`/`_DELAY_S` (one further bounded poll,
+  120 s nominal against a 240 s deadline checked BETWEEN attempts — not a hard wall clock, which
+  the constant's comment now states rather than claims away — derived from a single measured 54 s
+  submission gap and labelled `n = 1`) and an `arm_outcome` field: `armed`, `unconfirmed_timeout`,
+  `probe_error`, `session_mismatch`, `pane_absent`, `poll_error`. Only the last two of those permit
+  an automatic close, on one rule — no close without affirmative evidence of death. Step-9 review
+  caught the fix reintroducing its own bug: a first revision merged a failed probe with a session
+  mismatch, and the retry inside `_close_tentative_pane` would have killed a live successor anyway.
+  A kept successor is now also sent an advisory stop notice, since closing it used to be what
+  stopped it. The gate's PASS condition, `failed_step` and `results.goal_armed` are all unchanged.
+  20 tests added in `tests/hooks/test_adhoc_pane_handoff.py`, and the one prior assertion pinning
+  the old close is deliberately reversed with its two structural guarantees kept.
+  No workflow-spine change → no diagram REV. Suite 6440→6460.
+
 ### v3.141.8 (2026-08-07)
 - **epic-run Step 3 states the goal cap, reads it from the constant, and says the goal is NOT armed
   (#806, epic #906).** Step 3 mandates seven content blocks and had no length cap, which is exactly

@@ -136,14 +136,21 @@ class Artifacts:
     `goal_row_after_nudges` is the same idea for the GOAL paste (#835). It defaults to 0, so the
     predicate is always true and every test written before it behaves identically; a goal-nudge
     test raises it to express the state the goal recovery exists for.
+
+    `goal_row_after_reads` is the #1000 axis, and it is deliberately NOT the nudge count. The
+    queued state produces no nudges at all — that is the defect — so nudges cannot express "the
+    row arrives later in TIME". Transcript reads can: `_poll_for` reads once per attempt, so the
+    read count IS elapsed polling under the injected sleeper. Defaults to 0, so every test written
+    before it behaves identically.
     """
 
     def __init__(self, runner, *, marker_after_nudges=0, goal_row=GOAL_ROW,
-                 goal_row_after_nudges=0, registry_row=None):
+                 goal_row_after_nudges=0, goal_row_after_reads=0, registry_row=None):
         self.runner = runner
         self.marker_after_nudges = marker_after_nudges
         self.goal_row = goal_row
         self.goal_row_after_nudges = goal_row_after_nudges
+        self.goal_row_after_reads = goal_row_after_reads
         # #800 — which REPRESENTATION the successor writes for `project_path`. Defaults to the
         # workspace-relative row every other test in this file assumes, so their behaviour is
         # unchanged; the absolute variant is the live failure the gate used to refuse.
@@ -160,7 +167,8 @@ class Artifacts:
         text = ""
         if len(self.runner.nudges()) >= self.marker_after_nudges:
             text += RESUME_PROMPT + "\n"
-        if len(self.runner.nudges()) >= self.goal_row_after_nudges:
+        if (len(self.runner.nudges()) >= self.goal_row_after_nudges
+                and n >= self.goal_row_after_reads):
             text += self.goal_row + "\n"
         return text
 
@@ -749,17 +757,26 @@ class TestTheSettleIsNotAGate:
         The #989 revert removed one of the four assertions this once made — "no work reaches an
         unguarded successor" — because the goal goes last again and the prompt is already out.
         The three that remain are the ones that were ever structural.
+
+        #1000 REVERSED the second assertion, deliberately. It used to require the successor pane
+        to be CLOSED, on the reasoning that an unarmed successor is an orphan. Measurement
+        falsified the premise: successor `09cf79c9` had submitted its goal and was mid-turn when
+        that close destroyed it, along with the only transcript that could explain the failure.
+        `goal_armed` failing is not evidence the successor is dead. So the property is now the
+        opposite — the pane is KEPT — while the two that were ever structural are unchanged.
         """
         r = Runner(_responses(pane_read="unrelated scrollback\n"))
         out = ll.perform_handoff(**_handoff(
             r, teardown=True,
             read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=99)))
-        # 1. it fails, and names the gate rather than the settle
+        # 1. it fails, and names the gate rather than the settle — UNCHANGED
         assert out["ok"] is False and out["failed_step"] == "goal_armed"
-        # 2. the successor pane is cleaned up — no orphan
+        # 2. #1000 — the successor pane is KEPT, because the run cannot prove it is dead
+        assert out["arm_outcome"] == "unconfirmed_timeout", out.get("arm_outcome")
         assert out["cleanup"] and "w1:pZZ" in str(out["cleanup"]), out["cleanup"]
-        assert any(c[:3] == ["herdr", "pane", "close"] and c[3] == "w1:pZZ" for c in r.calls)
-        # 3. the PREDECESSOR survives, even though teardown was requested
+        assert not any(c[:3] == ["herdr", "pane", "close"] and c[3] == "w1:pZZ"
+                       for c in r.calls), "an unconfirmed arm must not destroy the successor"
+        # 3. the PREDECESSOR survives, even though teardown was requested — UNCHANGED
         assert not any(c[:3] == ["herdr", "pane", "close"] and c[3] == "w1:p1"
                        for c in r.calls), "the predecessor must never be retired on a failed gate"
 
@@ -2517,3 +2534,359 @@ class TestStep11WaveFixes:
         assert out["failed_step"] == "predecessor_goal_clear"
         assert out["failure_detail"], "a teardown-phase exit must not be bare at the library level"
         assert out["failure_detail"] == out["predecessor_guard"]
+
+
+# ---------------------------------------------------------------------------
+# #1000 — the arm wait ends before the row can exist, and the timeout then
+# destroys a successor the run cannot prove is dead
+# ---------------------------------------------------------------------------
+
+class TestTheArmWaitOutlivesASlowSubmission:
+    """#1000 — a queued `/goal` submits LATE, and the gate must still be waiting when it does.
+
+    The measured failure (successor `09cf79c9`, 2026-08-08): the `/goal` submitted 54 s after the
+    successor's prompt turn ended, the successor printed `Guard is armed.`, and the pane was
+    destroyed 3.778 s later with zero `goal_status` rows ever written.
+
+    The nudge loop cannot cover this. A queued command shows no paste affordance, so
+    `pane_shows_unsubmitted_paste` declines and the loop breaks on round one — leaving exactly one
+    18 s poll (`GOAL_POLL_ATTEMPTS` x `GOAL_POLL_DELAY_S`) against a submission far outside it.
+    """
+
+    def test_a_row_that_lands_past_the_short_budget_still_arms(self) -> None:
+        """Matrix row 1. Today this fails `goal_armed`; the long poll must reach it."""
+        r = Runner(_responses(pane_read="some unrelated scrollback\n"))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_reads=20)))
+        assert out["ok"] is True, out["failed_step"]
+        assert out["results"]["goal_armed"] is True
+        assert out["arm_outcome"] == "armed", out.get("arm_outcome")
+        assert r.nudges() == [], "a queued command still offers nothing for a bare Enter"
+
+    def test_the_long_wait_is_bounded_and_still_fails_closed(self) -> None:
+        """Matrix row 2. Patience is not surrender: a row that never lands still fails."""
+        r = Runner(_responses(pane_read="some unrelated scrollback\n"))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_reads=10**6)))
+        assert out["ok"] is False and out["failed_step"] == "goal_armed"
+        assert out["results"]["goal_armed"] is False, "the PASS condition must not have moved"
+
+
+class TestAnUnconfirmedArmDoesNotDestroyTheSuccessor:
+    """#1000 R2 — the timeout destroyed a live session AND the evidence that would explain it.
+
+    `goal_armed` cannot distinguish a late submission from a refusal, a dead pane or an unreadable
+    transcript, so it must not act as though it can. Where the run cannot prove the successor is
+    dead, the pane is kept and the receipt says exactly that — never that the successor is healthy.
+    """
+
+    def test_the_pane_is_kept_when_the_arm_is_merely_unconfirmed(self) -> None:
+        """Matrix row 3. The whole point of the issue."""
+        r = Runner(_responses(pane_read="some unrelated scrollback\n"))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_reads=10**6)))
+        assert out["failed_step"] == "goal_armed"
+        assert out["arm_outcome"] == "unconfirmed_timeout", out.get("arm_outcome")
+        # `build_teardown_argv` emits `herdr pane close <pane>`, so THAT is the call that must be
+        # absent. Asserting on a name the code never emits would be a guard that cannot fail.
+        assert not any(Runner.key(c) == "herdr pane close" for c in r.calls), \
+            "an unconfirmed arm must never tear the successor down"
+        assert "NOT closed" in str(out["cleanup"]), out["cleanup"]
+
+    def test_the_receipt_names_the_pane_and_how_to_inspect_it(self) -> None:
+        """A kept pane is an orphan unless the operator is told which one and what to run."""
+        r = Runner(_responses(pane_read="some unrelated scrollback\n"))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_reads=10**6)))
+        cleanup = str(out["cleanup"])
+        assert out["new_pane"] and out["new_pane"] in cleanup, cleanup
+        assert "herdr pane read" in cleanup and "herdr pane close" in cleanup, cleanup
+
+    def test_the_receipt_never_claims_the_successor_is_healthy(self) -> None:
+        """The run could not prove the successor is alive. It must not imply that it did."""
+        r = Runner(_responses(pane_read="some unrelated scrollback\n"))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_reads=10**6)))
+        assert out["results"]["goal_armed"] is False
+        assert "could not be proven dead" in str(out["cleanup"]), out["cleanup"]
+
+
+PANE_GET_FOREIGN = json.dumps({"result": {"pane": {
+    "pane_id": "w1:pZZ", "agent_status": "idle",
+    "agent_session": {"agent": "claude", "kind": "id", "source": "herdr:claude",
+                      "value": "somebody-elses-session"}}}})
+
+
+class FlippingGetRunner(Runner):
+    """A runner whose `pane get` starts as OURS and later reports somebody else's session.
+
+    A pane handle can be reused, and the case that matters is a pane that WAS ours at spawn and is
+    not ours by cleanup time. Seeding a foreign session from call one cannot express that: the
+    successor's own id is read from `pane get`, so a foreign value there breaks `project_switched`
+    long before the arm phase and the test would never reach the code it means to exercise.
+    """
+
+    def __init__(self, responses, *, flip_after):
+        super().__init__(responses)
+        self.flip_after = flip_after
+        self.gets = 0
+
+    def __call__(self, argv, timeout=180):
+        if self.key(argv) == "herdr pane get":
+            self.gets += 1
+            if self.gets > self.flip_after:
+                self.calls.append(list(argv))
+                return FakeProc(0, PANE_GET_FOREIGN)
+        return super().__call__(argv, timeout)
+
+
+class TestTheArmOutcomeIsClassifiedNotCollapsed:
+    """#1000 — four different things used to reach `failed_step: goal_armed` identically.
+
+    A late submission, an unreadable transcript, a dead-or-reused pane and a real refusal all land
+    on the same failure. The cleanup then treated them the same way, which is how a live successor
+    was destroyed. `arm_outcome` names which one it was, so the pane decision has something honest
+    to key on. The gate's verdict is untouched: `failed_step` and `results.goal_armed` are the
+    same on every row below as they were before this change.
+    """
+
+    def _foreign(self):
+        """A handoff whose pane was ours at spawn and belongs to somebody else by cleanup."""
+        r = FlippingGetRunner(_responses(pane_read="some unrelated scrollback\n"), flip_after=1)
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_reads=10**6)))
+        return r, out
+
+    def test_a_foreign_session_on_the_pane_is_not_kept(self) -> None:
+        """Matrix row 4. Our session is provably gone, so the keep-it rule does not apply."""
+        _r, out = self._foreign()
+        assert out["failed_step"] == "goal_armed", out["failed_step"]
+        assert out["arm_outcome"] == "session_mismatch", out.get("arm_outcome")
+
+    def test_a_foreign_session_is_still_never_closed_by_the_cleanup(self) -> None:
+        """`pane_unreachable` routes to today's `_close_tentative_pane`, which is itself
+        ownership-gated: it re-probes and REPORTS rather than closing a handle that may have been
+        reused. Asserted here so routing an outcome to that path can never be read as licence to
+        destroy somebody else's pane."""
+        r, out = self._foreign()
+        assert not any(c[:3] == ["herdr", "pane", "close"] for c in r.calls), r.calls
+        assert "NOT closed" in str(out["cleanup"]), out["cleanup"]
+
+    def test_a_transcript_that_never_reads_keeps_the_pane(self) -> None:
+        """Matrix row 5. Every read raised, so the run learned NOTHING about the successor.
+        Destroying on no evidence is the same mistake as destroying on a timeout."""
+        r = Runner(_responses(pane_read="some unrelated scrollback\n"))
+        art = Artifacts(r, marker_after_nudges=0)
+
+        def read_text(path):
+            # Fail ONLY once the goal has gone out. A transcript that raises from the start never
+            # reaches the arm phase at all — it dies at `transcript_baseline_unreadable` — so it
+            # cannot exercise `poll_error`.
+            if any(t.startswith("/goal") for t in r.sent_text()):
+                raise OSError("transcript unreadable during the arm poll")
+            return art(path)
+
+        out = ll.perform_handoff(**_handoff(r, read_text=read_text))
+        assert out["failed_step"] == "goal_armed", out["failed_step"]
+        assert out["arm_outcome"] == "poll_error", out.get("arm_outcome")
+        assert not any(c[:3] == ["herdr", "pane", "close"] for c in r.calls)
+        assert "NOT closed" in str(out["cleanup"]), out["cleanup"]
+
+    def test_a_non_arm_failure_still_closes_the_pane_exactly_as_before(self) -> None:
+        """Matrix row 6. The carve-out is for `goal_armed` alone. Every other failure keeps
+        today's cleanup, or this change would leak a pane on every unrelated fault."""
+        r = Runner(_responses(), fail_on="herdr pane send-text")
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r)))
+        assert out["failed_step"] != "goal_armed", out["failed_step"]
+        assert out["arm_outcome"] is None, "a run that never armed sets no arm outcome"
+        assert "NOT closed" not in str(out["cleanup"] or ""), out["cleanup"]
+
+    def test_the_happy_path_does_no_extra_polling_and_reads_no_pane(self) -> None:
+        """Matrix row 7. The long poll must cost a healthy handoff nothing at all."""
+        slept: list[float] = []
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(
+            r, sleeper=slept.append, read_text=Artifacts(r, marker_after_nudges=0)))
+        assert out["ok"] is True, out["failed_step"]
+        assert out["arm_outcome"] == "armed"
+        assert not any(Runner.key(c) == "herdr pane read" for c in r.calls), \
+            "an arm that confirmed must not trigger the recovery or the liveness probe"
+        assert ll.GOAL_ARM_LONG_POLL_DELAY_S not in slept, \
+            "the long poll must not run when the short one already armed"
+
+    def test_the_receipt_table_is_asserted_per_outcome(self) -> None:
+        """Matrix row 10. The four fields, side by side, so their meanings cannot drift apart."""
+        rows = {}
+        for label, responses, reads in (
+                ("armed", _responses(), 0),
+                ("unconfirmed_timeout", _responses(pane_read="scrollback\n"), 10**6),
+                ("pane_unreachable", "FLIP", 10**6)):
+            r = (FlippingGetRunner(_responses(pane_read="scrollback\n"), flip_after=1)
+                 if responses == "FLIP" else Runner(responses))
+            out = ll.perform_handoff(**_handoff(
+                r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_reads=reads)))
+            rows[label] = (out["arm_outcome"], out["failed_step"],
+                           out["results"].get("goal_armed"),
+                           "NOT closed" in str(out["cleanup"] or ""))
+        assert rows["armed"] == ("armed", None, True, False), rows
+        assert rows["unconfirmed_timeout"] == ("unconfirmed_timeout", "goal_armed", False, True), rows
+        assert rows["pane_unreachable"] == ("session_mismatch", "goal_armed", False, True), rows
+
+
+class TestTheLongArmPollIsBoundedOnWallClockToo:
+    """#1000 — an attempt count is not a time bound when each attempt can block.
+
+    `_poll_for` already enforces both axes; this pins that the LONG budget inherits it, because a
+    120 s nominal wait whose attempts each block would otherwise become an unbounded one.
+    """
+
+    def test_a_slow_poll_stops_at_the_deadline_not_the_attempt_count(self) -> None:
+        clock = {"t": 0.0}
+        attempts = {"n": 0}
+
+        def now():
+            return clock["t"]
+
+        def check():
+            attempts["n"] += 1
+            clock["t"] += 30.0     # each attempt burns far more than its nominal delay
+            return False
+
+        ok = ll._poll_for(check, attempts=ll.GOAL_ARM_LONG_POLL_ATTEMPTS,
+                          delay_s=ll.GOAL_ARM_LONG_POLL_DELAY_S,
+                          sleeper=lambda _s: None, now=now)
+        assert ok is False
+        bound = (ll.GOAL_ARM_LONG_POLL_ATTEMPTS * ll.GOAL_ARM_LONG_POLL_DELAY_S
+                 * ll.POLL_WALL_CLOCK_SLACK)
+        assert clock["t"] <= bound + 30.0, (clock["t"], bound)
+        assert attempts["n"] < ll.GOAL_ARM_LONG_POLL_ATTEMPTS, \
+            "the wall clock, not the attempt count, must be what stopped it"
+
+    def test_the_long_budget_actually_exceeds_the_measured_submission_gap(self) -> None:
+        """The number has to beat the thing it was derived from: successor `09cf79c9` took 54 s
+        from ending its prompt turn to submitting its goal."""
+        nominal = ll.GOAL_ARM_LONG_POLL_ATTEMPTS * ll.GOAL_ARM_LONG_POLL_DELAY_S
+        assert nominal >= 2 * 54.0, nominal
+
+
+class TestAFailedProbeIsNotAVerdict:
+    """#1000 Step-9 review, finding 1 — the hole a first revision of this fix left open.
+
+    That revision lumped a FAILED liveness probe together with a session MISMATCH under one
+    `pane_unreachable`, and routed both to `_close_tentative_pane`. But that function probes AGAIN
+    and closes when its own probe succeeds and the session matches. So one transient probe failure
+    would have destroyed a live successor by way of the retry — reproducing the exact defect this
+    issue exists to remove, from inside its own fix.
+
+    A probe that could not answer is not evidence of death.
+    """
+
+    @staticmethod
+    def _probe_fails_at_classification():
+        """A runner whose `pane get` works at spawn and fails once the arm phase asks."""
+
+        class ProbeFailsLate(Runner):
+            def __init__(self, responses):
+                super().__init__(responses)
+                self.gets = 0
+
+            def __call__(self, argv, timeout=180):
+                if self.key(argv) == "herdr pane get":
+                    self.gets += 1
+                    if self.gets > 1:
+                        self.calls.append(list(argv))
+                        return FakeProc(returncode=1)
+                return super().__call__(argv, timeout)
+
+        r = ProbeFailsLate(_responses(pane_read="scrollback\n"))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_reads=10**6)))
+        return r, out
+
+    def test_a_probe_that_cannot_answer_is_its_own_outcome(self) -> None:
+        _r, out = self._probe_fails_at_classification()
+        assert out["failed_step"] == "goal_armed", out["failed_step"]
+        assert out["arm_outcome"] == "probe_error", out.get("arm_outcome")
+
+    def test_a_probe_that_cannot_answer_never_closes_the_pane(self) -> None:
+        """The regression itself. This is the assertion the review's finding exists for."""
+        r, out = self._probe_fails_at_classification()
+        assert not any(c[:3] == ["herdr", "pane", "close"] for c in r.calls), r.calls
+        assert "NOT closed" in str(out["cleanup"]), out["cleanup"]
+
+    def test_an_unparseable_probe_answer_is_also_not_a_verdict(self) -> None:
+        """`parse_pane_agent_session` returns None for unparseable output, and its own contract
+        says the caller must never read None as a pass. rc 0 with junk is still 'cannot judge'."""
+
+        class ProbeJunkLate(Runner):
+            def __init__(self, responses):
+                super().__init__(responses)
+                self.gets = 0
+
+            def __call__(self, argv, timeout=180):
+                if self.key(argv) == "herdr pane get":
+                    self.gets += 1
+                    if self.gets > 1:
+                        self.calls.append(list(argv))
+                        return FakeProc(0, "not json at all")
+                return super().__call__(argv, timeout)
+
+        r = ProbeJunkLate(_responses(pane_read="scrollback\n"))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_reads=10**6)))
+        assert out["arm_outcome"] == "probe_error", out.get("arm_outcome")
+        assert not any(c[:3] == ["herdr", "pane", "close"] for c in r.calls)
+
+
+class TestAKeptSuccessorIsToldItDoesNotOwnTheRun:
+    """#1000 Step-9 review, finding 2 — keeping the pane removed an accidental safety property.
+
+    Closing the successor also STOPPED it. A kept successor holds the resume prompt and has no
+    proven guard, while the predecessor is also alive. There is no verified suspend primitive, so
+    the successor is TOLD to stop over the send-text route the handoff already uses three times.
+
+    This is a NOTICE, not enforcement, and the tests below pin that distinction in both directions.
+    """
+
+    @staticmethod
+    def _kept():
+        r = Runner(_responses(pane_read="scrollback\n"))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_reads=10**6)))
+        return r, out
+
+    def test_a_kept_successor_is_sent_a_stop_notice(self) -> None:
+        r, out = self._kept()
+        assert out["arm_outcome"] == "unconfirmed_timeout"
+        sent = [t for t in r.sent_text() if "HANDOFF NOT CONFIRMED" in t]
+        assert len(sent) == 1, r.sent_text()
+        assert "Stop now" in sent[0] and "still alive and still owns this run" in sent[0]
+
+    def test_the_receipt_calls_the_notice_advisory_and_not_enforcement(self) -> None:
+        _r, out = self._kept()
+        assert "ADVISORY and not enforced" in str(out["cleanup"]), out["cleanup"]
+
+    def test_a_failed_notice_does_not_change_the_verdict(self) -> None:
+        """A warning that could not be delivered must not turn an unconfirmed arm into some other
+        failure — the operator still needs `goal_armed` and the kept pane."""
+
+        class SendTextFailsAfterGoal(Runner):
+            def __call__(self, argv, timeout=180):
+                if (self.key(argv) == "herdr pane send-text"
+                        and "HANDOFF NOT CONFIRMED" in " ".join(argv)):
+                    self.calls.append(list(argv))
+                    return FakeProc(returncode=1)
+                return super().__call__(argv, timeout)
+
+        r = SendTextFailsAfterGoal(_responses(pane_read="scrollback\n"))
+        out = ll.perform_handoff(**_handoff(
+            r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_reads=10**6)))
+        assert out["failed_step"] == "goal_armed"
+        assert out["arm_outcome"] == "unconfirmed_timeout"
+        assert "NOT closed" in str(out["cleanup"])
+
+    def test_a_successful_handoff_is_never_warned(self) -> None:
+        r = Runner(_responses())
+        out = ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, marker_after_nudges=0)))
+        assert out["ok"] is True, out["failed_step"]
+        assert not any("HANDOFF NOT CONFIRMED" in t for t in r.sent_text())
