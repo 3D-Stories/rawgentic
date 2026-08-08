@@ -249,16 +249,56 @@ class TestStep3StatesTheGoalCap:
         sys.path.insert(0, str(REPO_ROOT / "hooks"))
         import launcher_lib  # noqa: E402
 
+        import re
+
         step3 = self._step3()
         assert "GOAL_MAX_CHARS" in step3, "Step 3 must name the constant it is bound to"
-        assert f"{launcher_lib.GOAL_MAX_CHARS:,}" in step3 or \
-               str(launcher_lib.GOAL_MAX_CHARS) in step3, (
-            f"Step 3's stated cap has drifted from launcher_lib.GOAL_MAX_CHARS "
-            f"({launcher_lib.GOAL_MAX_CHARS})")
+        # ANCHORED to the one sentence that states the cap, not searched across all of Step 3.
+        # Step-11 review caught the first version being unable to fail: it looked for the number
+        # anywhere in the section, and Step 3 already contains other figures (the measured 5,014
+        # and 3,007 character counts). Changing the constant to one of those would have left a
+        # stale instruction with a green guard — the whole-corpus substring defect this repo
+        # records as mistake #6.
+        m = re.search(r"`launcher_lib\.GOAL_MAX_CHARS`\s*=\s*([\d,]+)\s*characters", step3)
+        assert m, ("Step 3 must state the cap in the form "
+                   "'`launcher_lib.GOAL_MAX_CHARS` = <number> characters' so a guard can anchor "
+                   "to it")
+        stated = int(m.group(1).replace(",", ""))
+        assert stated == launcher_lib.GOAL_MAX_CHARS, (
+            f"Step 3 states a cap of {stated} but launcher_lib.GOAL_MAX_CHARS is "
+            f"{launcher_lib.GOAL_MAX_CHARS}")
 
     def test_the_draft_length_is_stated_to_the_owner(self):
-        """AC2 — the owner should not have to count it themselves."""
-        assert "wc -c" in self._step3() or "character count" in self._step3()
+        """AC2 — the owner should not have to count it themselves.
+
+        And it must measure the WHOLE command: Step-11 review caught the cap being defined over
+        `/goal ` plus the condition while the count instruction measured only the condition, so a
+        draft six characters under the line would be reported as fitting and then rejected.
+        """
+        step3 = self._step3()
+        assert "character count" in step3 or "wc -c" in step3
+        assert "WHOLE command" in step3 and "/goal " in step3
+
+    def test_step_3_stops_until_the_owner_confirms_the_goal_armed(self):
+        """Step-11 review, High: without this the run proceeds UNGUARDED.
+
+        The rescope removed the auto-arm, which introduces one manual step. Nothing said to wait
+        for it, so a driver could print the block and walk straight into the first child with no
+        definition of done and no merge authorization in force.
+        """
+        step3 = self._step3()
+        assert "Then STOP" in step3
+        assert "until the owner confirms the goal is armed" in step3
+
+    def test_only_explanatory_detail_may_move_behind_a_pointer(self):
+        """Step-11 review, High: a referenced file is mutable after arming.
+
+        Shortening by pointing is right for checklists. Moving a merge authorization or a stop
+        condition there would let the effective guard change without the owner re-arming it.
+        """
+        step3 = self._step3()
+        assert "Only EXPLANATORY detail may move" in step3
+        assert "merge authorization" in step3 and "stays inline" in step3
 
     def test_over_cap_shortens_by_pointing_not_by_truncating(self):
         """AC3 — truncation mid-sentence silently drops the end of a guard.
@@ -280,6 +320,15 @@ class TestStep3StatesTheGoalCap:
         verify its own guard. Saying so keeps a future reader from re-litigating it.
         """
         step3 = self._step3()
+        # DECLINED, with reason, from Step-11 review: it asked for a BEHAVIOURAL test proving
+        # `/goal` inertness rather than a prose guard. That test cannot exist here — proving it
+        # means inserting a slash command into a live session and watching it not execute, which
+        # is neither hermetic nor safe in CI, and would disturb a real run guard. The evidence is
+        # the #718 measurement already in the repo. What this guard CAN do, and now does, is
+        # require the prose to CITE that measurement, so the claim stays traceable to evidence
+        # instead of floating free.
+        assert "validate_inserted_prompt" in step3 and "#718" in step3, (
+            "the no-auto-arm claim must cite the measurement it rests on")
         assert "cannot invoke /goal for them" in step3, (
             "the sentence is substantially CORRECT for the operator's own pane and must not be "
             "rewritten to imply Step 3 can arm the current session's goal")

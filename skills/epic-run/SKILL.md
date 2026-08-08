@@ -126,14 +126,22 @@ characters while model-drafted successor goals ballooned to 4,000–5,400. Step 
 path, which is exactly that pattern. Measured on the epic #756 run (2026-08-01): a faithful draft of
 the blocks above reached **5,014 characters** and the owner rejected it.
 
-**State the count before you hand the block over.** `wc -c` on the drafted condition, said out loud
-to the owner, so they are not left to count it. A draft that is over cap is a draft you have not
-finished.
+**State the count before you hand the block over.** Measure the WHOLE command — `/goal ` plus the
+condition — because that is what the cap covers, so the condition's own budget is
+`GOAL_MAX_CHARS - len("/goal ")`. Say the number out loud to the owner rather than leaving them to
+count it. A draft that is over cap is a draft you have not finished.
 
 **When it is over cap, shorten by POINTING — never by truncating.** Move the detail into the
 run-contract file and reference that file from the condition. The rewrite that worked on #756
 reached 3,007 characters by replacing the inline per-child checklist with a pointer to
-`projects/rawgentic/CLAUDE.md` §5. Truncating mid-sentence is the one thing never to do: the same
+`projects/rawgentic/CLAUDE.md` §5.
+
+**Only EXPLANATORY detail may move.** A merge authorization, an exclusion, a stop condition, the
+queue order, or anything else the guard is meant to ENFORCE stays inline in the text the owner
+arms. A referenced file is mutable after arming, so delegating a guard-critical term through one
+means the effective guard can change without the owner ever re-arming it — which would quietly
+widen exactly the authority this condition exists to bound. Checklists and contracts a reader
+consults are fine to point at; permissions and prohibitions are not. Truncating mid-sentence is the one thing never to do: the same
 run's hand-pasted goal lost its trailing clause, and what went missing was the instruction not to
 start two other children — the guard's most important stop, silently absent.
 
@@ -156,6 +164,12 @@ must not be rewritten to say otherwise. What `launcher_lib` genuinely can do is 
 So print the block, state its character count, and say plainly that it is **not armed
 automatically** and the owner must verify it took. Reporting a goal as set when nothing armed it is
 the failure this wording exists to prevent.
+
+**Then STOP.** Do not proceed to Step 3b, and do not begin any child, until the owner confirms the
+goal is armed. Without that confirmation the run has no definition of done and no merge
+authorization, so continuing means running an epic unguarded — the precise failure the guard
+exists to prevent, reached by skipping the one manual step this rescope introduces. Advancing on the
+assumption that a printed block was submitted is the same mistake as reporting it armed.
 
 ## Step 3b: Put up the run task list (#517)
 

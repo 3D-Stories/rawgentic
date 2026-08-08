@@ -770,7 +770,15 @@ For major changes, please open an issue first to discuss the approach.
   precise rather than rewritten. The issue's bonus — change "version bump ×3 surfaces" to four — is
   DECLINED: `hooks/canary.py` was retired in #866 M0d, there are three surfaces, and the skill
   already says three. 4 drift guards added in `tests/test_epic_run_clarity.py`.
-  No workflow-spine change, so no diagram REV. Suite 6434→6438.
+  Step-11 review then found five more. Four fixed: nothing told Step 3 to STOP until the owner
+  confirms the goal armed, so the run could proceed unguarded — the precise risk the rescope
+  introduces; guard-critical terms could move behind a mutable file pointer, so only EXPLANATORY
+  detail may move now and permissions stay inline; the cap is defined over `/goal ` plus the
+  condition while the count instruction measured only the condition; and the drift guard could not
+  fail, because it searched all of Step 3 for the number and Step 3 already contains other figures
+  — it is now anchored to the cap sentence and was DEMONSTRATED to fail on a drifted value. 7 drift
+  guards added.
+  No workflow-spine change, so no diagram REV. Suite 6434→6440.
 
 ### v3.141.7 (2026-08-07)
 - **Both destructive handoff paths derive the successor's guard from trusted rows only (#772, epic
