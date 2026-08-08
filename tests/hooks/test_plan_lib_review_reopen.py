@@ -43,7 +43,17 @@ def _mint_args(tmp_path, source="review", state=None, out=None):
 
 # --- happy path ---
 
-def test_mint_writes_token_and_debits(tmp_path):
+def test_mint_writes_token_and_RESERVES_without_debiting(tmp_path):
+    """#1003 INVERTED this test, and the inversion is the whole issue.
+
+    It previously asserted the mint DEBITS (`state["review"] == 1`). That was the defect: asking
+    permission to open a fix round cost the same as opening one, so a review returning zero
+    findings billed identically to one that opened a round. The mint now creates an OUTSTANDING
+    reservation and moves no counter; `commit_loopback` debits once a round has actually opened.
+
+    Capacity still counts committed PLUS outstanding, so this is not a loosening — the
+    reservation occupies the slot exactly as a debit would, and `loopback-status` can see it.
+    """
     args, state_file, out_file = _mint_args(tmp_path)
     result = _run(args)
     assert result.returncode == 0, result.stderr
@@ -54,8 +64,9 @@ def test_mint_writes_token_and_debits(tmp_path):
     assert token["minted_at"].endswith("Z")
     assert "consumed_at" not in token
     state = json.loads(Path(state_file).read_text())
-    assert state["review"] == 1
-    assert state["total"] == 1
+    assert state["review"] == 0, "minting must NOT debit"
+    assert state["total"] == 0
+    assert token["nonce"] in state["reservations"], "the reservation is the authority"
 
 
 def test_mint_reports_token_path_on_stdout(tmp_path):

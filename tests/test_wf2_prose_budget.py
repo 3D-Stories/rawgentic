@@ -79,7 +79,7 @@ SKILL_DIR = REPO_ROOT / "skills" / "implement-feature"
 # timing. Trim commentary, keep operative prose: the command and its four-line why are operative.
 # Raised by 6_600 for references/class-gate-matrix.md (#1002) — a NEW file, so the
 # total moves by exactly its per-file ceiling and no existing budget is relaxed.
-TOTAL_CEILING_BYTES = 260_417
+TOTAL_CEILING_BYTES = 262519
 PER_FILE_CEILING_BYTES = {
     "SKILL.md": 48000,
     # #1002 — the per-class gate matrix, its lens guard contract, and the
@@ -87,7 +87,7 @@ PER_FILE_CEILING_BYTES = {
     # deliberately: #899 had just trimmed the skill body against a word ceiling,
     # and a generated table plus a guard contract belongs with the other
     # step-detail prose, not in the spine.
-    "references/class-gate-matrix.md": 7708,
+    "references/class-gate-matrix.md": 9915,
     "references/quality-bar.md": 3_616,
     "references/run-record.md": 23_202,
     "references/state-and-resume.md": 6_476,

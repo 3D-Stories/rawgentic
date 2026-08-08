@@ -749,6 +749,22 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.143.0 (2026-08-08)
+- **The loop-back budget reserves instead of charging, so a clean review costs nothing (#1003, epic #906).**
+  `review-reopen` called `consume_loopback` at MINT time, so asking permission to open a fix round spent the same
+  budget as opening one — a review returning ZERO findings, the case the budget exists to protect, billed identically
+  to one that opened a round. It now creates an OUTSTANDING reservation via `authorize_loopback`, and the debit
+  happens at `commit_loopback` once `open_fix_round` has written the durable round record that is the linearization
+  point. Commit refuses without one, so it VALIDATES that a round opened rather than trusting the caller. Both are
+  idempotent — a repeat `open_fix_round` returns the SAME round id rather than a sentinel, and a repeat commit
+  returns `already_committed` without double-charging. Release refuses once a round has opened, which is the
+  unbilled-round hole, and reports `already_committed` rather than `already_released` for a settled nonce. Every
+  release appends to the in-file `reconciliation_log`. All five mutators fail closed on a corrupt counter or any of
+  the four malformed collections, and never rewrite the file. Concurrency is MEASURED: 24 processes against a
+  capacity of 3 admitted exactly 3 in 5/5 trials, and 30 staggered arrivals across repeated inode swaps lost zero
+  increments in 4/4 — both controls failed every trial with the lock removed, so `file_lock`'s docstring no longer
+  disclaims the guarantee this rests on. 26 tests added. No workflow-spine change -> no diagram REV. Suite 6521->6547.
+
 ### v3.142.0 (2026-08-08)
 - **The per-class gate matrix, the `disposable` definition of done, and a lens guard that runs before dispatch (#1002, epic #906).**
   `hooks/plan_lib.py` gains `CLASS_MATRIX` as the single source of truth with four TYPED row kinds — step, artifact,
