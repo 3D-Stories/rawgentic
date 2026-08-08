@@ -749,6 +749,37 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.141.8 (2026-08-07)
+- **epic-run Step 3 states the goal cap, reads it from the constant, and says the goal is NOT armed
+  (#806, epic #906).** Step 3 mandates seven content blocks and had no length cap, which is exactly
+  the pattern `skills/pane-handoff/SKILL.md` warns about — owner goals run 1,200–2,000 characters
+  while model-drafted successor goals ballooned to 4,000–5,400. Measured on the epic #756 run: a
+  faithful draft reached 5,014 characters and the owner rejected it. The cap has existed as
+  `launcher_lib.GOAL_MAX_CHARS` all along; Step 3 simply did not know about it. It now states the
+  cap bound to that constant (a drift guard asserts the prose and the Python agree, per the repo's
+  mirrored-constant convention), states the drafted condition's actual character count to the owner
+  before handing it over, and shortens an over-cap draft by moving detail into the run-contract file
+  and pointing at it — never by truncating, because the same #756 run's hand-pasted goal lost its
+  trailing clause and what went missing was the instruction not to start two other children.
+  **Scoped by epic #906 item 6 to cap and exact-text display, NO auto-arm**, and the reason is
+  measured: `validate_inserted_prompt` records the #718 finding that a bare slash command inserted
+  into a session with an unmet `/goal` sat queued through five goal-driven turns, and Step 3 runs
+  inside the operator's own session mid-turn, so it can neither execute a `/goal` nor verify one it
+  sent. The issue's AC7 called the existing *"you cannot invoke /goal for them"* sentence stale; on
+  that evidence it is substantially CORRECT for the operator's own pane, so it was kept and made
+  precise rather than rewritten. The issue's bonus — change "version bump ×3 surfaces" to four — is
+  DECLINED: `hooks/canary.py` was retired in #866 M0d, there are three surfaces, and the skill
+  already says three. 4 drift guards added in `tests/test_epic_run_clarity.py`.
+  Step-11 review then found five more. Four fixed: nothing told Step 3 to STOP until the owner
+  confirms the goal armed, so the run could proceed unguarded — the precise risk the rescope
+  introduces; guard-critical terms could move behind a mutable file pointer, so only EXPLANATORY
+  detail may move now and permissions stay inline; the cap is defined over `/goal ` plus the
+  condition while the count instruction measured only the condition; and the drift guard could not
+  fail, because it searched all of Step 3 for the number and Step 3 already contains other figures
+  — it is now anchored to the cap sentence and was DEMONSTRATED to fail on a drifted value. 7 drift
+  guards added.
+  No workflow-spine change, so no diagram REV. Suite 6434→6440.
+
 ### v3.141.7 (2026-08-07)
 - **Both destructive handoff paths derive the successor's guard from trusted rows only (#772, epic
   #906).** Campaign `handoff` and `mid-child-handoff` both derived it with
