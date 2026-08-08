@@ -4180,9 +4180,10 @@ class TestCampaignHandoffDerivesOnlyFromTrustedRows:
     forged in ordinary message content could become the successor's guard, and a guard a later
     row had satisfied could be handed over as still owed.
 
-    Only the DERIVED branch is covered, because only a derived condition comes from the
-    transcript. An explicit `--goal-condition` is operator-supplied; hardening it into a checked
-    assertion needs a parser change on this command and is a named follow-up.
+    Derivation is ALWAYS transcript-backed now: `--goal-condition-from` is required and an
+    explicit `--goal-condition` is only an assertion against the live guard. That assertion's own
+    behaviour is covered by `TestTheGuardTravelsByteIdentical`. (This docstring described an
+    earlier revision that left the explicit path unchecked — Step-11 review caught the drift.)
     """
 
     @pytest.fixture(autouse=True)
@@ -4252,3 +4253,38 @@ class TestTheGuardTravelsByteIdentical:
                                    **{"--goal-condition-from": False}))
         assert proc.returncode != 0
         assert "--goal-condition-from" in proc.stderr
+
+
+class TestADestructiveRefusalNeverLeaksGoalText:
+    """#772 Step-11 review asked three times whether `reason` can carry transcript content.
+
+    It cannot, and this pins it rather than leaving it to inspection: every value
+    `_owner_goal_scan` can produce is a fixed literal in `GOAL_SCAN_REASONS`, and a refusal built
+    from one never echoes the transcript. An owner-authored goal must not reach a log (#758 F8).
+    """
+
+    def test_the_reason_vocabulary_is_a_closed_set_of_literals(self) -> None:
+        for reason in ll.GOAL_SCAN_REASONS:
+            assert "{" not in reason and "%" not in reason, "no interpolation slots"
+
+    def test_a_refusal_never_echoes_transcript_content(self, tmp_path) -> None:
+        secret = "SECRET-GOAL-TEXT-do-not-log"
+        text = "\n".join([_goal_row(secret, met=False),
+                          '{"attachment":{"type":"goal_status","condition":"' + secret + '"'])
+        state, condition, reason = ll.owner_goal_state(text)
+        assert state == "AMBIGUOUS"
+        assert reason in ll.GOAL_SCAN_REASONS
+        msg = ll.destructive_goal_refusal(state, reason, "T")
+        assert secret not in msg
+        assert secret not in str(condition)
+
+    def test_an_unreadable_transcript_refuses_instead_of_raising(self, tmp_path) -> None:
+        """Step-11 Medium (0.94): it raised, so the promised refusal never printed."""
+        proc = _cli(*_handoff_argv(_state(tmp_path), tmp_path,
+                                   **{"--goal-condition": False,
+                                      "--goal-condition-from": str(tmp_path / "gone.jsonl"),
+                                      "--launcher-armed": None,
+                                      "--fresh-launch-supported": None}))
+        assert proc.returncode == 3, proc.stdout + proc.stderr
+        assert "unreadable" in proc.stderr
+        assert "Traceback" not in proc.stderr

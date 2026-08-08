@@ -1482,6 +1482,19 @@ GOAL_STATE_NEVER_ARMED = "NEVER_ARMED"
 GOAL_STATE_AMBIGUOUS = "AMBIGUOUS"
 
 
+# The CLOSED set of `reason` values `_owner_goal_scan` can produce. It is a closed set on
+# purpose: `reason` is interpolated into an operator-facing refusal, and an owner-authored goal
+# must never reach a log (#758 F8). Every member is a fixed literal with no interpolation of
+# transcript content, and `test_a_refusal_never_echoes_transcript_content` pins that. Adding a
+# member means adding it here and to that test — cross-model review asked three times whether
+# this boundary held, which is the signal to make the contract explicit rather than re-derivable.
+GOAL_SCAN_REASONS = (
+    "an unparseable goal_status-bearing line (torn write?)",
+    "a trusted-origin goal_status row that fails validation",
+    "an unparseable final transcript line (torn write?)",
+)
+
+
 def destructive_goal_refusal(state: str, reason: str | None, whose: str) -> str:
     """#772 — why a destructive path refused to derive a guard, in the state's own terms.
 
@@ -6570,8 +6583,16 @@ def _cmd_handoff(args) -> int:
     # `goal_state` and `goal_reason` are named apart from the driver `state` and the
     # `fresh_session_available` `reason` deliberately — the first draft of this block shadowed
     # `state` and would have handed the goal verdict to every later use of the campaign state.
-    with open(args.goal_condition_from, encoding="utf-8") as fh:
-        goal_state, live_condition, goal_reason = owner_goal_state(fh.read())
+    # A transcript this command cannot READ is the same answer as one it cannot trust: AMBIGUOUS.
+    # Step-11 review caught it raising instead — the promised state-specific refusal never
+    # printed, so the operator got a traceback where the retry guidance should have been. Same
+    # defect #864 fixed for the read-only CLI, and it was not carried here.
+    try:
+        with open(args.goal_condition_from, encoding="utf-8") as fh:
+            goal_state, live_condition, goal_reason = owner_goal_state(fh.read())
+    except (OSError, UnicodeError) as exc:
+        goal_state, live_condition = GOAL_STATE_AMBIGUOUS, None
+        goal_reason = f"unreadable ({type(exc).__name__})"
     if goal_state != GOAL_STATE_LIVE:
         print(destructive_goal_refusal(goal_state, goal_reason, "the predecessor transcript"),
               file=sys.stderr)
@@ -7085,8 +7106,15 @@ def _cmd_mid_child_handoff(args) -> int:
     # regression test had fabricated an argparse state the CLI cannot produce, which is exactly the
     # test-asserts-the-implementation defect this epic keeps hitting. The transcript is now
     # REQUIRED for this command, and `--goal-condition` is an optional assertion checked against it.
-    with open(args.goal_condition_from, encoding="utf-8") as fh:
-        transcript_text = fh.read()
+    # See the campaign path: unreadable is AMBIGUOUS, never a traceback (#772 Step-11).
+    try:
+        with open(args.goal_condition_from, encoding="utf-8") as fh:
+            transcript_text = fh.read()
+    except (OSError, UnicodeError) as exc:
+        print(destructive_goal_refusal(GOAL_STATE_AMBIGUOUS,
+                                       f"unreadable ({type(exc).__name__})",
+                                       "this session's transcript"), file=sys.stderr)
+        return 3
     # #772 — ORIGIN, which is the half the two checks below never covered. They ask whether the
     # condition is still in force and whether it is the newest guard, and both answer from
     # sentinel-INSENSITIVE readers. So a goal_status object forged in ordinary message content
@@ -7363,10 +7391,14 @@ def main(argv: list[str] | None = None) -> int:
     # checked against nothing at all. `--goal-condition` is now an ASSERTION verified against the
     # live guard, never an alternative source of one.
     #
-    # Verified safe before changing rather than assumed: `grep -rn goal-condition --include='*.sh'`
-    # across this workspace finds no launcher passing either flag, so no caller breaks. An earlier
-    # revision of this change deferred the fix on the belief that the `*-resume.sh` launchers
-    # passed `--goal-condition`; that came from a docstring, not from looking.
+    # AUDITED SCOPE, stated precisely because the first version of this note overstated it. The
+    # claim "no caller breaks" was originally backed by a `--include='*.sh'` grep, which Step-11
+    # review correctly refused as too narrow. Re-run across EVERY surface in the workspace: within
+    # this repository no non-test invocation passes `--goal-condition` to `handoff` at all. The
+    # only hits live in a separate project copy and in a stale build worktree, neither of which
+    # calls this CLI. A downstream caller outside this workspace would break, and that is what the
+    # changelog entry says. An earlier revision deferred this fix entirely on the belief that the
+    # `*-resume.sh` launchers passed the flag — that came from a docstring, not from looking.
     p_ho.add_argument("--goal-condition",
                       help="OPTIONAL assertion: must equal the live guard byte-for-byte")
     p_ho.add_argument("--goal-condition-from", required=True,

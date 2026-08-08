@@ -782,7 +782,12 @@ For major changes, please open an issue first to discuss the approach.
   was armed with text that was not the guard verbatim. Comparison is now byte-exact and the
   TRUSTED text is what travels. 10 tests added; three test files' handoff argv builders updated
   for the required transcript.
-  No workflow-spine change, so no diagram REV. Suite 6421→6431.
+  Step-11 review then found three more, all fixed: an unreadable transcript raised instead of
+  refusing (the same defect #864 fixed for the read-only CLI, not carried here), the `reason`
+  vocabulary is now a closed set pinned by a no-leak test rather than left to inspection, and the
+  audited-scope claim behind the CLI change was re-run across every surface rather than only shell
+  files. 13 tests added.
+  No workflow-spine change, so no diagram REV. Suite 6421→6434.
 
 ### v3.141.6 (2026-08-07)
 - **`read-goal-condition` reads trusted rows and reports which not-live state it found (#864, epic
