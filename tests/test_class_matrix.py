@@ -189,3 +189,28 @@ def test_no_call_site_states_a_per_reviewer_lens_requirement(rel: Path) -> None:
     marker = "**B6, decided"
     normative = text.split(marker)[0] if marker in text else text
     assert "lenses per reviewer" not in normative, f"{rel} still states the per-reviewer reading"
+
+
+# ---------------------------------------------------------------------------
+# AC coverage for the two prose deliverables (#1002 AC2 and AC6)
+
+_MATRIX_DOC = Path("skills/implement-feature/references/class-gate-matrix.md")
+
+
+def test_the_disposable_definition_of_done_is_written_and_names_its_gates() -> None:
+    """AC2. The clause that matters is item 3: 'visible skips' letting `disposable` finish with
+    nothing scanned is #761's known-failure F6, so a definition of done that omits it is the
+    defect the AC exists to prevent."""
+    text = (REPO_ROOT / _MATRIX_DOC).read_text(encoding="utf-8")
+    assert "definition of done" in text.lower()
+    assert "at least one scanner actually executed" in text
+    assert "differs in artifacts, never in gates" in text
+
+
+def test_the_class_comes_from_exactly_one_artifact() -> None:
+    """AC6 / #761 F7: the lane must be reproducible and auditable, which needs a single actor
+    controlling the opt-in. The doc must state that the write-once snapshot IS that actor."""
+    text = (REPO_ROOT / _MATRIX_DOC).read_text(encoding="utf-8")
+    assert "task_class.json" in text
+    assert "exactly one place" in text
+    assert "no config key overrides it mid-run" in text.replace("\n", " ")
