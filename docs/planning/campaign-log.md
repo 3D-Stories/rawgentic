@@ -14,6 +14,127 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #906 M2 — #899: the WF2 prose corpus measures WORDS, not only bytes · v3.141.10
+
+**Issue:** [#899](https://github.com/3D-Stories/rawgentic/issues/899) ·
+**PR:** [#1005](https://github.com/3D-Stories/rawgentic/pull/1005) · merge `042555bb` ·
+**Design:** `docs/planning/2026-08-08-899-wf2-word-budget-shortfall.md`
+
+**The guard measured the wrong unit, and nothing noticed for two issues.**
+`tests/test_wf2_prose_budget.py` tracked BYTES only, so Anthropic's 5,000-word SKILL.md guideline
+was remembered rather than measured. It drifted **6,292 → 6,442 words** between #874 and #899 with
+every test green. Bytes and words are not interchangeable here: shortening identifiers drops bytes
+while leaving the word count — and so the load on the model's context — untouched.
+
+**Proof the new guard bites, run before shipping.** Against the 6,292 count #899's body recorded at
+`0d2ba0e0`, `word_violations()` reports `OVER WORD CEILING: SKILL.md is 6442 words — 150 over its
+6292-word ceiling`. The exact drift the issue was filed about would have failed CI had the guard
+existed at #874. It fails in BOTH directions, so the ceiling must come down as prose shrinks.
+
+**AC1's 5,000-word target is NOT met, and that is the reported outcome, not a miss.** AC1 supplies
+its own alternative — report the shortfall with the blocks that would have to move and why they
+cannot — and the measurement found **zero words free to move**: 2,112 synced by
+`sync_shared_blocks.py` (one shared with fix-bug, which AC3 protects), 753 in AC2's named blocks,
+972 cross-step with 3–9 step-file readers each, and 1,746 in six blocks with **zero** step-file
+readers. Those last cannot move for the opposite reason: a block no step file references cannot be
+relocated INTO one, because no step would then read it. #874 already moved everything step-scoped.
+Owner decision **D304**.
+
+**Step 11 found the canary test was vacuous.** It bound a canary string to a local and asserted its
+absence from messages the canary had never been given to — guaranteed to pass however badly a
+future reporting path leaked. Rewritten to write the canary into a real file and drive the real
+path; verified by breaking the helper, at which point the test fails as it should.
+
+Suite 6460 → **6466**, exit 0. Both lint lanes 10.00/10. Security scan PASS (`iac` skipped, not
+applicable). Lane: small-standard. Loop-backs 0/3. no workflow-spine change → no diagram REV.
+
+---
+
+## Epic #906 M2 — #923: split at an exhausted design gate into #1002 + #1003 · docs-only
+
+**Issue:** [#923](https://github.com/3D-Stories/rawgentic/issues/923) — CLOSED not-planned ·
+**PR:** [#1004](https://github.com/3D-Stories/rawgentic/pull/1004) · merge `c7eb1fce` ·
+**Design:** `docs/planning/2026-08-08-923-lite-lane-and-reservations-design.md` (v4, 816 lines) ·
+**Hosted:** https://rawgentic-design-923.vercel.app/
+
+**No code shipped, and the reason is the interesting part.** The WF2 Step-4 design gate ran three
+passes and produced **30 findings** — 8, then 12, then 10. Every High that was checked verified
+against the real files. The `design` loop-back source exhausted at **2/2** (global 2/3) and pass 3's
+ambiguity breaker came back **NOT CLEAR**, so the #798 budget-exhausted self-close did not apply and
+Step 4's escalate rule fired.
+
+**The deciding signal was not the count.** Four of pass 3's findings were contradictions introduced
+by pass 2's own fixes: a per-reviewer lens row that contradicted the union-based lens rule two
+sections later, and a path-containment fix that guarded an argument those commands do not take. One
+gate carrying two independent subsystems had begun generating contradictions faster than it closed
+them.
+
+Owner decision **D303** split it, the same resolution that produced #923 out of #761 — which itself
+took six design revisions and two owner interventions. **#1002** takes the lane matrix; **#1003**
+takes the reservation budget. Both carry design v4 and all 30 findings.
+
+**Two probe results worth not re-deriving.** There is no durable "round opened" record in this repo:
+`review_log.jsonl` records that a review RAN and its verdict, `dispositions.jsonl` is per-finding,
+and neither is a linearization point — the cross-model peer's own most-likely-wrong claim assumed
+one existed, and tracing refuted it. And #761's design doc claims its Revision-4 material is
+"recoverable from this file's git history"; it is not — that path has exactly one commit, the
+shipped Revision 7. Owner decision **D302** settled the token lifecycle: the new subcommands take
+`--nonce`, never the token file, because `consume_reopen_token` stamps `consumed_at` and
+`load_reopen_token` refuses any token carrying it.
+
+---
+
+## Epic #906 M2 — #835: recover an unsubmitted goal paste inside send 3 · v3.139.4
+
+**Issue:** [#835](https://github.com/3D-Stories/rawgentic/issues/835) ·
+**PR:** [#985](https://github.com/3D-Stories/rawgentic/pull/985) · merge `0401086a`
+
+The `/goal` send had no unsubmitted-paste recovery, so a goal could sit pasted-but-unsubmitted
+exactly as #700 had already found for the prompt. Extends the #700 Enter-nudge pattern to send 3.
+
+**The design doc proposed something else, and that gap outlived the issue.**
+`docs/planning/2026-08-02-835-goal-delivery-at-launch.md` root-caused the failure as a race between
+the bracketed paste and the Enter, and proposed reusing the measured `INSERT_SUBMIT_DELAY_S = 1.5`
+between the goal's paste and its Enter. What shipped was the nudge recovery instead. Verified at
+`ee38c542`: `INSERT_SUBMIT_DELAY_S` is used only inside `insert_prompt`, and SEND 3's loop still
+sends paste and Enter back-to-back. The design's core proposal remains unimplemented in the path
+that kept failing — recorded here rather than left to be rediscovered a fourth time.
+
+---
+
+## Epic #906 M2 — #797: meter thresholds to 55/75 + a rolling summary of elided decisions · v3.140.0
+
+**Issue:** [#797](https://github.com/3D-Stories/rawgentic/issues/797) ·
+**PR:** [#986](https://github.com/3D-Stories/rawgentic/pull/986) · merge `4c56eda0`
+
+Reworks the context meter to the D177 spec and closes a quieter hole beside it.
+
+**The decision store is never trimmed, but the session-start injection is bounded** — it takes only
+the newest N. So everything older was not summarized, it was **silently dropped** from a successor's
+view. The issue asked for "a rolling compacted summary + the last N entries verbatim"; the second
+half already existed and the first did not. `summarize_elided()` renders one bounded block naming
+the count, the id span, and what was cut, so a successor can tell that history exists rather than
+inferring its absence.
+
+---
+
+## Epic #906 M2 — #729: the DIRECTIVE tier inserts mid-turn, not only at Stop · v3.141.0
+
+**Issue:** [#729](https://github.com/3D-Stories/rawgentic/issues/729) ·
+**PR:** [#987](https://github.com/3D-Stories/rawgentic/pull/987) · merge `97724372`
+
+The #718 prompt-insert is the one channel that delivers a handoff directive as authoritative USER
+input rather than injected text a model may decline. It was gated on `event == "Stop"`, so a session
+reaching the directive tier **mid-turn** never received it — and mid-turn is exactly when a session
+is deepest in a long turn and least able to act on text it can refuse.
+
+The gate's stated justification did not apply to the mechanism as built, which is why this shipped
+as the RESIDUAL of #729 rather than its original scope: mid-turn delivery was already demonstrably
+working on this host (111 midturn markers measured), so what remained was the acknowledgement half —
+record the insert, watch for successor evidence, re-fire if none appears.
+
+---
+
 ## Epic #906 M2 (out-of-queue) — #1000: `goal_armed` keeps a successor it cannot prove is dead · v3.141.9
 
 **Issue:** [#1000](https://github.com/3D-Stories/rawgentic/issues/1000) ·
