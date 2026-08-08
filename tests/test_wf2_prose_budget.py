@@ -374,3 +374,161 @@ def test_live_corpus_has_no_stale_ceilings():
                                       TOTAL_CEILING_BYTES)
          if "STALE" in m]
     assert v == [], "stale ceilings in the live budget:\n" + "\n".join(v)
+
+
+# --- #899: the WORD budget, alongside the byte ceilings -------------------
+#
+# Anthropic's stated guideline for a SKILL.md body is 5,000 WORDS. This file
+# measured BYTES only, so the word guideline was remembered rather than
+# measured — and it had drifted 6_292 -> 6_442 between #874 and #899 with
+# nothing failing. Bytes and words are not interchangeable here: a
+# compression that shortens identifiers drops bytes while leaving the word
+# count (and so the load on the model's context) untouched.
+#
+# WHY THE CEILING IS 6_442 AND NOT 5_000 (#899, owner decision D304).
+# The 5,000 target is unreachable by the means #899's AC1 names — "moving
+# genuinely step-scoped prose into the step files #874 created". Measured at
+# c7eb1fce, every block in SKILL.md is one of:
+#   * SYNCED (2_112 words) -- config-loading, model-routing-resolve,
+#     loop-back-budget, review-severity are GENERATED into SKILL.md by
+#     scripts/sync_shared_blocks.py. Moving one edits that manifest, and
+#     review-severity is shared with fix-bug, which AC3 forbids touching.
+#   * AC2-PROTECTED (753) -- completion-gate, probe-before-design,
+#     early-smoke-install; AC2 names these and re-confirms them cross-step.
+#   * CROSS-STEP (972) -- references, role, test-run-discipline, constants,
+#     review-lens-routing, review-pipelining. Each is read by 3-9 step files,
+#     so moving any into one breaks the others -- the same argument AC2 makes.
+#   * GLOBAL SPINE (1_746) -- mandatory-steps, step-tracking, error-protocol,
+#     happy-path, ambiguity-circuit-breaker, termination-rule. These have ZERO
+#     step-file readers, and that is why they cannot move EITHER: a block no
+#     step file references cannot be relocated INTO one, because no step would
+#     then read it. mandatory-steps is the clearest case -- it says which steps
+#     may never be skipped, so filing it under step-08.md hides it from Steps
+#     1-7. (Step-11 R4: an earlier version of this comment called all twelve
+#     "cross-step", which was a false explanation for 1_746 of the words.)
+#   * the remaining 859 are headings and the one-line-per-step spine.
+# Genuinely free to move: ZERO. #874 already moved everything step-scoped.
+#
+# AC1 anticipated exactly this and supplies the alternative in its own text:
+# report the shortfall with the specific blocks and why they cannot move.
+# That report is docs/planning/2026-08-08-899-wf2-word-budget-shortfall.md.
+#
+# So this guard's job is NOT to enforce 5,000 today. It is to stop the drift
+# that went unmeasured: the ceiling is pinned at the measured actual plus the
+# same allowed headroom the byte ceilings use, and the SYMMETRIC stale check
+# means the ceiling must come DOWN as prose shrinks. Lowering it to 5,000 is
+# the follow-on work, not a number to assert before the prose can meet it.
+SKILL_WORD_CEILINGS = {
+    "SKILL.md": 6_765,          # actual 6_442 + allowed_headroom() 323
+}
+
+STALE_WORD_PCT = 0.05
+STALE_WORD_MIN_WORDS = 64
+
+
+def measured_words() -> dict:
+    """Relative path -> word count for every .md under the skill dir."""
+    return {
+        p.relative_to(SKILL_DIR).as_posix(): len(
+            p.read_text(encoding="utf-8").split()
+        )
+        for p in SKILL_DIR.rglob("*.md")
+    }
+
+
+def word_violations(words: dict, ceilings: dict) -> list:
+    """Word-budget violations, one message per violation.
+
+    Mirrors `budget_violations`' shape deliberately (#899 AC4 says to reuse
+    it): the same "name the path, carry actual + ceiling + delta" contract and
+    the same never-quote-content rule.
+
+    THREE classes, not four (Step-11 R5 -- an earlier docstring claimed the
+    same four and then described the opposite, contradicting its own code):
+    STALE WORD BUDGET, OVER WORD CEILING, STALE WORD CEILING. There is
+    deliberately NO unbudgeted class. Every corpus file carries a BYTE ceiling,
+    so the byte guard must catch a new file; the WORD guideline is about the
+    always-loaded SKILL.md body specifically, so a .md file with no word
+    ceiling is out of scope here rather than a violation.
+    """
+    violations = []
+    for path in sorted(ceilings.keys() - words.keys()):
+        violations.append(
+            f"STALE WORD BUDGET: {path} has a word ceiling but no file on disk "
+            f"— a rename or split must update SKILL_WORD_CEILINGS in the same "
+            f"commit (#899)."
+        )
+    for path in sorted(ceilings.keys() & words.keys()):
+        count, ceiling = words[path], ceilings[path]
+        if count > ceiling:
+            violations.append(
+                f"OVER WORD CEILING: {path} is {count} words — "
+                f"{count - ceiling} over its {ceiling}-word ceiling. Trim it, "
+                f"or raise the ceiling in the same commit and say why in the "
+                f"PR (#899)."
+            )
+        else:
+            allowed = allowed_headroom(count, STALE_WORD_PCT, STALE_WORD_MIN_WORDS)
+            excess = ceiling - count - allowed
+            if excess > 0:
+                violations.append(
+                    f"STALE WORD CEILING: {path} is {count} words but its "
+                    f"ceiling is {ceiling} — {ceiling - count} words of "
+                    f"headroom against an allowed {allowed} ({excess} too "
+                    f"much). Lower the ceiling to actual + allowed in the "
+                    f"same commit as the shrink (#899)."
+                )
+    return violations
+
+
+def test_word_clean_budget_yields_no_violations():
+    assert word_violations({"SKILL.md": 100}, {"SKILL.md": 105}) == []
+
+
+def test_word_over_ceiling_names_path_and_delta():
+    (v,) = word_violations({"SKILL.md": 200}, {"SKILL.md": 150})
+    assert v.startswith("OVER WORD CEILING: SKILL.md")
+    assert "200 words" in v and "50 over" in v and "150-word" in v
+
+
+def test_word_stale_ceiling_is_named():
+    (v,) = word_violations({"SKILL.md": 100}, {"SKILL.md": 1_000})
+    assert v.startswith("STALE WORD CEILING: SKILL.md")
+    assert "100 words" in v and "1000" in v
+
+
+def test_word_stale_budget_entry_is_named():
+    (v,) = word_violations({}, {"gone.md": 100})
+    assert v.startswith("STALE WORD BUDGET: gone.md")
+
+
+def test_word_violations_never_quote_file_content(tmp_path):
+    """Step-11 R3: the first version of this test was VACUOUS.
+
+    It bound a canary to a local and asserted it was absent from messages the
+    canary had never been given to — guaranteed to pass however badly a future
+    reporting path leaked. This version writes the canary into a real .md file,
+    measures THAT directory, and drives the violation path with the resulting
+    counts, so the assertion can actually fail.
+    """
+    canary = "SECRET-CANARY-STRING-do-not-quote-me"
+    (tmp_path / "SKILL.md").write_text(f"{canary} " * 50, encoding="utf-8")
+    words = {
+        p.relative_to(tmp_path).as_posix(): len(p.read_text(encoding="utf-8").split())
+        for p in tmp_path.rglob("*.md")
+    }
+    assert words == {"SKILL.md": 50}, "the fixture must measure as real content"
+    violations = word_violations(words, {"SKILL.md": 1})
+    assert violations, "the fixture must PRODUCE a violation, or nothing is checked"
+    for v in violations:
+        assert canary not in v
+
+
+def test_skill_body_stays_within_its_word_ceiling():
+    """The live guard: SKILL.md's word count against its pinned ceiling.
+
+    This is the measurement #899 exists to add. It fails in BOTH directions —
+    growth past the ceiling, and a ceiling left stale above a shrink.
+    """
+    violations = word_violations(measured_words(), SKILL_WORD_CEILINGS)
+    assert not violations, "\n".join(violations)
