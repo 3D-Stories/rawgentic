@@ -431,7 +431,8 @@ instruction (`<review-severity>`).
 `claude_docs/.wf2-state/<issue>/step11_dispatch.json`, runs
 `python3 hooks/plan_lib.py assert-lens-coverage --manifest <that> --issue <n> --project-root .`,
 and dispatches ONLY on exit 0 — a non-zero exit blocks the dispatch, because a check that runs
-after dispatch prevents nothing. Coverage is over the UNION of the wave's briefs, so the
+after dispatch prevents nothing. Immediately before dispatching it runs `verify-lens-receipt`, so
+a prompt edited between authorization and dispatch is caught rather than sent. Coverage is over the UNION of the wave's briefs, so the
 two-reviewer split above passes and a single-reviewer wave must carry all four. The matrix of what
 each task class runs, the guard's full contract, and the `disposable` definition of done live in
 `references/class-gate-matrix.md`.

@@ -206,6 +206,13 @@ CLASS_MATRIX: Final[dict[str, tuple[str, str, dict[str, str]]]] = {
            {"disposable": "FULL", "internal": "FULL", "production": "FULL"}),
 }
 
+#: Rows whose own condition can genuinely be unmet, so `n/a` is a legal value there. Every other
+#: row must carry a real value: `n/a` on a mandatory step would be skipping it by another name,
+#: which is the one thing the step-row enum exists to make inexpressible. The set is EMPTY today —
+#: every row in the matrix runs for every class — and it exists so that adding a conditional row
+#: later is a deliberate, reviewable act rather than a silent widening of the enum.
+CLASS_MATRIX_CONDITIONAL_ROWS: Final[frozenset[str]] = frozenset()
+
 #: Rows a class may never reduce. They read FULL in every column and the drift test says so.
 CLASS_MATRIX_NEVER_REDUCIBLE: Final[tuple[str, ...]] = ("8", "8a", "11", "11.5")
 
@@ -226,6 +233,14 @@ REVIEW_LENSES: Final[tuple[str, ...]] = (
     "mechanical", "bug_logic", "security", "architecture")
 
 
+#: A lens section must carry at least this many non-whitespace characters to count as coverage.
+#: Review finding (2026-08-08): without a floor, a section holding a single stray character
+#: certified the lens. This does NOT make the check semantic — no static check can prove a
+#: reviewer applied a lens, and the skill prose says so — but it stops a marker with nothing
+#: behind it from passing as an instruction.
+LENS_SECTION_MIN_CHARS: Final[int] = 40
+
+
 def _lens_sections(text: str) -> dict[str, str]:
     """Map lens -> section body for every well-formed section in a rendered prompt.
 
@@ -238,19 +253,27 @@ def _lens_sections(text: str) -> dict[str, str]:
     lens has no defined meaning, so it is a caller error rather than a coverage answer.
     """
     found: dict[str, str] = {}
+    #: Every name that has EVER opened in this file, closed or not. `found` alone is not enough:
+    #: a second `<!-- lens:x -->` before the first one closes would miss a `name in found` test,
+    #: and a nested open would void the outer section and then legitimately close the inner one.
+    #: Both were live escapes in the first revision (review finding, 2026-08-08).
+    opened: set[str] = set()
+    #: Names voided by a nesting error. They can never count, even if a later close matches.
+    voided: set[str] = set()
     open_lens: str | None = None
     body: list[str] = []
     for raw in text.splitlines():
         line = raw.strip()
         if line.startswith("<!-- lens:") and line.endswith("-->"):
             name = line[len("<!-- lens:"):-len("-->")].strip()
-            if open_lens is not None:
-                # The previous section never closed. It yields no coverage and is discarded,
-                # which is also how "no nesting" is enforced — an unclosed section simply never
-                # lands in `found`, so a nested pair cannot certify either lens.
-                open_lens = None
-            if name in found:
+            if name in opened:
                 raise PlanFormatError(f"lens {name!r} opens more than once in one prompt")
+            if open_lens is not None:
+                # Nesting. BOTH names are void: the outer never closed, and the inner opened
+                # inside a malformed section, so neither can be trusted as coverage.
+                voided.add(open_lens)
+                voided.add(name)
+            opened.add(name)
             open_lens, body = name, []
             continue
         if line.startswith("<!-- /lens:") and line.endswith("-->"):
@@ -259,13 +282,14 @@ def _lens_sections(text: str) -> dict[str, str]:
                 # A stray or mismatched close is not coverage. Left unrecorded on purpose.
                 open_lens = None
                 continue
-            found[name] = "\n".join(body)
+            if name not in voided:
+                found[name] = "\n".join(body)
             open_lens = None
             continue
         if open_lens is not None:
             body.append(raw)
-    # An unclosed section never lands in `found`, so it is not coverage.
-    return found
+    # An unclosed section never lands in `found`, so it is not coverage. Neither does a voided one.
+    return {k: v for k, v in found.items() if k not in voided}
 
 
 def _resolve_under(root, rel: str):
@@ -319,13 +343,29 @@ def assert_lens_coverage(manifest: dict, *, project_root, issue: int) -> tuple[b
         raise PlanFormatError(
             f"reviewer count {len(reviewers)} does not match the {snap_class!r} demand of "
             f"{expected} — a wave that lost a reviewer must not pass on a shrunken union")
-    ids = [r.get("id") for r in reviewers]
-    files = [r.get("prompt_file") for r in reviewers]
+    if manifest.get("step") != "11":
+        raise PlanFormatError(
+            f"manifest step {manifest.get('step')!r} is not '11' — this guard binds the Step-11 "
+            "wave and must not certify some other step's dispatch")
+
+    # Bind to the DIFF, not just the issue. Without this a manifest from an earlier review round
+    # of the same issue and class passes unchanged, and stale prompts get dispatched against a
+    # diff they were never written for (review finding, 2026-08-08).
+    head = _current_head_sha(root)
+    if head is not None and manifest.get("head_sha") != head:
+        raise PlanFormatError(
+            f"manifest head_sha {manifest.get('head_sha')!r} is not the current HEAD {head!r} — "
+            "a manifest from an earlier wave must not certify this one")
+
+    # Normalized identities, not raw JSON values: `brief.md` and `./brief.md` are one file, and
+    # ids 1 and \"1\" collide once the receipt stringifies them (review finding, 2026-08-08).
+    ids = [str(r.get("id")) for r in reviewers]
+    files = [str(_resolve_under(root, str(r.get("prompt_file")))) for r in reviewers]
     if len(set(ids)) != len(ids):
         raise PlanFormatError("reviewer ids must be unique — duplicates certify one reviewer twice")
     if len(set(files)) != len(files):
-        raise PlanFormatError("prompt_file paths must be unique — two ids on one brief is one "
-                              "reviewer wearing two hats")
+        raise PlanFormatError("prompt_file paths must be unique after resolution — two ids on one "
+                              "brief is one reviewer wearing two hats")
 
     union: set[str] = set()
     problems: list[str] = []
@@ -346,10 +386,12 @@ def assert_lens_coverage(manifest: dict, *, project_root, issue: int) -> tuple[b
                 problems.append(
                     f"reviewer {r.get('id')!r} claims lens {lens!r} but its rendered prompt "
                     "carries no such section")
-            elif not body.strip():
+            elif len(body.split()) == 0 or len("".join(body.split())) < LENS_SECTION_MIN_CHARS:
                 problems.append(
-                    f"reviewer {r.get('id')!r} lens {lens!r} section is empty — an empty section "
-                    "carries no instruction and is not coverage")
+                    f"reviewer {r.get('id')!r} lens {lens!r} section carries "
+                    f"{len(''.join(body.split()))} non-whitespace characters, under the "
+                    f"{LENS_SECTION_MIN_CHARS} required — a marker with nothing behind it is not "
+                    "an instruction")
 
     for lens in REVIEW_LENSES:
         if lens not in union:
@@ -371,10 +413,81 @@ def assert_lens_coverage(manifest: dict, *, project_root, issue: int) -> tuple[b
     return (True, [])
 
 
-def _class_matrix_cell_ok(kind: str, value: str) -> bool:
+def _current_head_sha(root) -> str | None:
+    """The checkout's HEAD, or None when git cannot answer.
+
+    Fail-OPEN on an unusable git (no repo, git missing): this is a binding refinement, and a
+    guard that cannot run at all is worse than one that binds on the other axes. The axes that
+    do not depend on git — issue, class snapshot, reviewer count, uniqueness — still apply.
+    """
+    try:
+        proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(root),
+                              capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
+
+
+def verify_lens_receipt(manifest: dict, *, project_root, issue: int) -> tuple[bool, list[str]]:
+    """Re-check that the bytes authorized by `assert_lens_coverage` are still the bytes on disk.
+
+    Without this the receipt is decoration: the guard hashes the manifest and every prompt, and
+    then nothing ever compares those digests, so a prompt edited between the check and the
+    dispatch goes out unchallenged (review finding, 2026-08-08). Step 11 calls this immediately
+    before dispatching, and a False return blocks the dispatch exactly as a failed guard does.
+
+    Deliberately separate from `assert_lens_coverage` rather than folded into it: the point is
+    that time passes between authorizing and dispatching, so the comparison has to happen at the
+    later moment to mean anything.
+    """
+    root = pathlib.Path(project_root)
+    receipt_path = root / "claude_docs" / ".wf2-state" / str(issue) / "step11_lens_ok.json"
+    if not receipt_path.is_file():
+        return (False, ["no lens receipt — the coverage guard has not authorized this wave"])
+    try:
+        receipt = _json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return (False, [f"lens receipt is unreadable: {exc}"])
+
+    problems: list[str] = []
+    live_manifest = hashlib.sha256(
+        _json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    if receipt.get("manifest_sha256") != live_manifest:
+        problems.append("the manifest changed after the coverage guard authorized it")
+
+    recorded = receipt.get("prompts") or {}
+    for r in manifest.get("reviewers") or []:
+        rid = str(r.get("id"))
+        try:
+            path = _resolve_under(root, str(r.get("prompt_file")))
+        except PlanFormatError as exc:
+            problems.append(f"reviewer {rid!r}: {exc}")
+            continue
+        if not path.is_file():
+            problems.append(f"reviewer {rid!r}: rendered prompt disappeared after authorization")
+            continue
+        live = hashlib.sha256(path.read_bytes()).hexdigest()
+        if recorded.get(rid) != live:
+            problems.append(f"reviewer {rid!r}: rendered prompt changed after authorization")
+    if set(recorded) != {str(r.get("id")) for r in (manifest.get("reviewers") or [])}:
+        problems.append("the wave's reviewer set changed after authorization")
+    return (not problems, problems)
+
+
+def _class_matrix_cell_ok(kind: str, value: str, *, row_id: str = "") -> bool:
     if kind == "count":
         return value == "ALL 4" or (value.isdigit() and int(value) > 0)
-    return value in CLASS_MATRIX_ROW_KINDS.get(kind, ())
+    if value not in CLASS_MATRIX_ROW_KINDS.get(kind, ()):
+        return False
+    # `n/a` means "this step's own condition is unmet", never "this class opted out". Without
+    # this restriction the no-SKIP guarantee was bypassable in one move: a class could mark a
+    # mandatory step `n/a` and skip it without ever writing the word SKIP (review finding,
+    # 2026-08-08). So `n/a` is legal ONLY on rows whose condition can genuinely be unmet.
+    if value == "n/a" and row_id not in CLASS_MATRIX_CONDITIONAL_ROWS:
+        return False
+    return True
 
 
 def render_class_matrix(matrix: dict | None = None) -> str:
@@ -392,7 +505,7 @@ def render_class_matrix(matrix: dict | None = None) -> str:
         if missing:
             raise PlanFormatError(f"row {row_id!r} ({label}) has no value for {sorted(missing)}")
         for cls in CLASS_MATRIX_CLASSES:
-            if not _class_matrix_cell_ok(kind, values[cls]):
+            if not _class_matrix_cell_ok(kind, values[cls], row_id=row_id):
                 raise PlanFormatError(
                     f"row {row_id!r} ({label}) cell {cls}={values[cls]!r} is not legal for a "
                     f"{kind} row — allowed: {CLASS_MATRIX_ROW_KINDS[kind] or 'a positive integer or ALL 4'}")
@@ -3807,6 +3920,23 @@ def _cmd_assert_lens_coverage(args) -> int:
     return 1
 
 
+def _cmd_verify_lens_receipt(args) -> int:
+    """0 = the authorized bytes are still on disk · 1 = they changed · 2 = caller error."""
+    try:
+        manifest = _json.loads(pathlib.Path(args.manifest).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"verify-lens-receipt: manifest unreadable: {exc}", file=sys.stderr)
+        return 2
+    ok, problems = verify_lens_receipt(
+        manifest, project_root=args.project_root, issue=args.issue)
+    if ok:
+        print("verify-lens-receipt: authorized bytes unchanged")
+        return 0
+    for problem in problems:
+        print(problem)
+    return 1
+
+
 def _cmd_render_class_matrix(args) -> int:
     """Print the matrix. The prose call sites are generated from this, never typed by hand."""
     try:
@@ -3900,6 +4030,13 @@ def main(argv: list[str] | None = None) -> int:
                     help="the run's issue — the manifest must name the same one")
     lc.add_argument("--project-root", default=".", dest="project_root")
     lc.set_defaults(func=_cmd_assert_lens_coverage)
+
+    vr = sub.add_parser("verify-lens-receipt",
+                        help="the authorized bytes are still the bytes about to be dispatched")
+    vr.add_argument("--manifest", required=True)
+    vr.add_argument("--issue", required=True, type=int)
+    vr.add_argument("--project-root", default=".", dest="project_root")
+    vr.set_defaults(func=_cmd_verify_lens_receipt)
 
     args = parser.parse_args(argv)
     return args.func(args)

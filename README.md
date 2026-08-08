@@ -760,8 +760,12 @@ For major changes, please open an issue first to discuss the approach.
   CLI subcommands, `render-class-matrix` and `assert-lens-coverage`. The matrix and the guard contract live in the new
   `skills/implement-feature/references/class-gate-matrix.md`, kept out of the skill body because #899 had just trimmed
   it. Design findings B6 and B5 were resolved explicitly and the whole design doc swept so no sentence implies the
-  rejected reading. 35 tests added across `tests/test_class_matrix.py` and `tests/test_lens_guard.py`, incl. a drift
-  test that regenerates every documented cell. No workflow-spine change -> no diagram REV. Suite 6474->6509.
+  rejected reading. 47 tests added across `tests/test_class_matrix.py` and `tests/test_lens_guard.py`, incl. a drift
+  test that regenerates every documented cell. The Step-11 review found six real defects in the guard —
+  `n/a` was a one-move bypass of the no-`SKIP` guarantee, a stale manifest from an earlier wave passed,
+  raw-string uniqueness let `brief.md` and `./brief.md` count twice, a one-character lens section
+  certified the lens, nested and duplicate sections could still count, and the digest receipt was written
+  but never compared — all six are fixed and pinned, incl. a new `verify-lens-receipt` subcommand. No workflow-spine change -> no diagram REV. Suite 6474->6521.
 
 ### v3.141.11 (2026-08-08)
 - **The wired `/goal` send pasted its own slash command, so pane handoffs armed nothing (#1007, epic #906).**

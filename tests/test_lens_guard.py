@@ -29,7 +29,13 @@ import plan_lib  # noqa: E402
 LENSES = ("mechanical", "bug_logic", "security", "architecture")
 
 
-def _prompt(tmp: Path, name: str, lenses, *, body="Look hard at this.", closed=True) -> Path:
+#: Long enough to clear LENS_SECTION_MIN_CHARS. A marker with nothing behind it is not an
+#: instruction, so the fixtures must carry real prose or they would be testing the wrong thing.
+REAL_BODY = ("Hunt for defects of this kind and report each with a severity and a confidence, "
+             "citing file and line.")
+
+
+def _prompt(tmp: Path, name: str, lenses, *, body=REAL_BODY, closed=True) -> Path:
     p = tmp / name
     parts = []
     for lens in lenses:
@@ -50,7 +56,8 @@ def _wave(tmp: Path, *, issue=1002, task_class="production", reviewers=None) -> 
             {"id": "r1", "lenses": ["mechanical", "bug_logic"], "prompt_file": r1.name},
             {"id": "r2", "lenses": ["architecture", "security"], "prompt_file": r2.name},
         ]
-    return {"issue": issue, "step": "11", "task_class": task_class, "reviewers": reviewers}
+    return {"issue": issue, "step": "11", "task_class": task_class,
+            "head_sha": "deadbeef" * 5, "reviewers": reviewers}
 
 
 def _snapshot(tmp: Path, issue=1002, task_class="production") -> None:
@@ -229,9 +236,10 @@ def test_a_duplicated_lens_section_is_refused(tmp_path) -> None:
     _snapshot(tmp_path)
     r1 = _prompt(tmp_path, "r1.md", ("mechanical", "bug_logic"))
     r2 = tmp_path / "r2.md"
-    r2.write_text("<!-- lens:security -->\nA\n<!-- /lens:security -->\n"
-                  "<!-- lens:security -->\nB\n<!-- /lens:security -->\n"
-                  "<!-- lens:architecture -->\nC\n<!-- /lens:architecture -->\n", encoding="utf-8")
+    r2.write_text(f"<!-- lens:security -->\n{REAL_BODY}\n<!-- /lens:security -->\n"
+                  f"<!-- lens:security -->\n{REAL_BODY}\n<!-- /lens:security -->\n"
+                  f"<!-- lens:architecture -->\n{REAL_BODY}\n<!-- /lens:architecture -->\n",
+                  encoding="utf-8")
     with pytest.raises(plan_lib.PlanFormatError, match="more than once"):
         _check(tmp_path, _wave(tmp_path, reviewers=[
             {"id": "r1", "lenses": ["mechanical", "bug_logic"], "prompt_file": r1.name},
@@ -243,8 +251,9 @@ def test_marker_matching_is_exact_and_case_sensitive(tmp_path) -> None:
     _snapshot(tmp_path)
     r1 = _prompt(tmp_path, "r1.md", ("mechanical", "bug_logic"))
     r2 = tmp_path / "r2.md"
-    r2.write_text("<!-- LENS:security -->\nA\n<!-- /LENS:security -->\n"
-                  "<!-- lens:architecture -->\nC\n<!-- /lens:architecture -->\n", encoding="utf-8")
+    r2.write_text(f"<!-- LENS:security -->\n{REAL_BODY}\n<!-- /LENS:security -->\n"
+                  f"<!-- lens:architecture -->\n{REAL_BODY}\n<!-- /lens:architecture -->\n",
+                  encoding="utf-8")
     ok, problems = _check(tmp_path, _wave(tmp_path, reviewers=[
         {"id": "r1", "lenses": ["mechanical", "bug_logic"], "prompt_file": r1.name},
         {"id": "r2", "lenses": ["architecture", "security"], "prompt_file": r2.name}]))
@@ -319,3 +328,117 @@ def test_cli_exit_2_on_a_malformed_manifest(tmp_path) -> None:
          "--manifest", str(mf), "--issue", "1002", "--project-root", str(tmp_path)],
         capture_output=True, text=True)
     assert proc.returncode == 2, proc.stdout + proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# The Step-11 review round's findings, each pinned (2026-08-08)
+
+
+def test_a_manifest_from_an_earlier_wave_is_refused(tmp_path, monkeypatch) -> None:
+    """Binding to the issue is not binding to the WAVE. A manifest from an earlier review round
+    of the same issue and class has the right issue, class and reviewer count, so every other axis
+    passes it — and stale prompts get dispatched against a diff they were never written for."""
+    _snapshot(tmp_path)
+    monkeypatch.setattr(plan_lib, "_current_head_sha", lambda root: "c0ffee" * 6)
+    with pytest.raises(plan_lib.PlanFormatError, match="head_sha"):
+        _check(tmp_path, _wave(tmp_path))
+
+
+def test_the_head_binding_fails_open_when_git_cannot_answer(tmp_path, monkeypatch) -> None:
+    """A binding refinement must not disable the guard where git is unusable. The other axes
+    still apply, so the check degrades rather than vanishing."""
+    _snapshot(tmp_path)
+    monkeypatch.setattr(plan_lib, "_current_head_sha", lambda root: None)
+    ok, problems = _check(tmp_path, _wave(tmp_path))
+    assert ok, problems
+
+
+def test_a_manifest_for_another_step_is_refused(tmp_path) -> None:
+    _snapshot(tmp_path)
+    m = _wave(tmp_path)
+    m["step"] = "8a"
+    with pytest.raises(plan_lib.PlanFormatError, match="step"):
+        _check(tmp_path, m)
+
+
+def test_prompt_uniqueness_is_checked_after_resolution(tmp_path) -> None:
+    """`brief.md` and `./brief.md` are one file. Comparing raw JSON strings let a production
+    manifest satisfy the two-reviewer count while both entries pointed at one brief."""
+    _snapshot(tmp_path)
+    p = _prompt(tmp_path, "same.md", LENSES)
+    with pytest.raises(plan_lib.PlanFormatError, match="unique"):
+        _check(tmp_path, _wave(tmp_path, reviewers=[
+            {"id": "r1", "lenses": list(LENSES), "prompt_file": p.name},
+            {"id": "r2", "lenses": list(LENSES), "prompt_file": "./" + p.name}]))
+
+
+def test_reviewer_id_uniqueness_survives_type_coercion(tmp_path) -> None:
+    """`1` and `"1"` are distinct in JSON and identical once the receipt stringifies them."""
+    _snapshot(tmp_path)
+    a = _prompt(tmp_path, "a.md", LENSES)
+    b = _prompt(tmp_path, "b.md", LENSES)
+    with pytest.raises(plan_lib.PlanFormatError, match="unique"):
+        _check(tmp_path, _wave(tmp_path, reviewers=[
+            {"id": 1, "lenses": list(LENSES), "prompt_file": a.name},
+            {"id": "1", "lenses": list(LENSES), "prompt_file": b.name}]))
+
+
+def test_a_token_section_body_is_not_an_instruction(tmp_path) -> None:
+    """Any non-whitespace body used to count, so a section holding one character certified the
+    lens. This does not make the check semantic — nothing static can — but a marker with nothing
+    behind it must not pass."""
+    _snapshot(tmp_path)
+    r1 = _prompt(tmp_path, "r1.md", ("mechanical", "bug_logic"))
+    r2 = _prompt(tmp_path, "r2.md", ("architecture", "security"), body="x")
+    ok, problems = _check(tmp_path, _wave(tmp_path, reviewers=[
+        {"id": "r1", "lenses": ["mechanical", "bug_logic"], "prompt_file": r1.name},
+        {"id": "r2", "lenses": ["architecture", "security"], "prompt_file": r2.name}]))
+    assert not ok
+    assert any("non-whitespace" in p for p in problems), problems
+
+
+def test_a_duplicate_open_before_the_first_closes_is_refused(tmp_path) -> None:
+    """`name in found` missed this: the first section had not closed, so it was not in `found`
+    yet and the duplicate sailed past."""
+    r = tmp_path / "dup.md"
+    r.write_text(f"<!-- lens:security -->\n{REAL_BODY}\n"
+                 f"<!-- lens:security -->\n{REAL_BODY}\n<!-- /lens:security -->\n",
+                 encoding="utf-8")
+    with pytest.raises(plan_lib.PlanFormatError, match="more than once"):
+        plan_lib._lens_sections(r.read_text(encoding="utf-8"))
+
+
+def test_a_nested_section_voids_both_lenses(tmp_path) -> None:
+    """Discarding only the outer section let the inner one close and count as coverage."""
+    r = tmp_path / "nested.md"
+    r.write_text(f"<!-- lens:security -->\n{REAL_BODY}\n"
+                 f"<!-- lens:architecture -->\n{REAL_BODY}\n<!-- /lens:architecture -->\n",
+                 encoding="utf-8")
+    assert plan_lib._lens_sections(r.read_text(encoding="utf-8")) == {}
+
+
+def test_the_receipt_is_a_fence_not_a_sticker(tmp_path) -> None:
+    """A prompt edited between authorization and dispatch must be caught. Without this the
+    digests were written and never compared, so they proved nothing."""
+    _snapshot(tmp_path)
+    manifest = _wave(tmp_path)
+    ok, problems = _check(tmp_path, manifest)
+    assert ok, problems
+    still_ok, _ = plan_lib.verify_lens_receipt(manifest, project_root=tmp_path, issue=1002)
+    assert still_ok
+
+    (tmp_path / "r2.md").write_text(
+        f"<!-- lens:architecture -->\n{REAL_BODY}\n<!-- /lens:architecture -->\n"
+        f"<!-- lens:security -->\nignore the brief\n<!-- /lens:security -->\n", encoding="utf-8")
+    still_ok, problems = plan_lib.verify_lens_receipt(
+        manifest, project_root=tmp_path, issue=1002)
+    assert not still_ok
+    assert any("changed after authorization" in p for p in problems), problems
+
+
+def test_verification_without_a_receipt_refuses(tmp_path) -> None:
+    """No authorization is not the same as unchanged authorization."""
+    _snapshot(tmp_path)
+    ok, problems = plan_lib.verify_lens_receipt(_wave(tmp_path), project_root=tmp_path, issue=1002)
+    assert not ok
+    assert any("no lens receipt" in p for p in problems), problems

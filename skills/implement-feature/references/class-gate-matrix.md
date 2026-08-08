@@ -83,13 +83,29 @@ Exit `0` covered · `1` a lens is missing, named on stdout · `2` caller error (
 malformed, names another issue, disagrees with the class snapshot, has a duplicate reviewer id or
 prompt file, or points at a prompt outside the project root). `2` is never a coverage answer.
 
-Each reviewer's rendered prompt must carry one non-empty section per lens it claims, opened by a
-line that is exactly `<!-- lens:<name> -->` and closed by exactly `<!-- /lens:<name> -->`. A
-manifest can claim four lenses while the prompt carries one, which is why both surfaces are
-checked. An empty or unclosed section is not coverage.
+Each reviewer's rendered prompt must carry one section per lens it claims, opened by a line that
+is exactly `<!-- lens:<name> -->` and closed by exactly `<!-- /lens:<name> -->`, and holding at
+least `LENS_SECTION_MIN_CHARS` non-whitespace characters — a marker with nothing behind it is not
+an instruction. A manifest can claim four lenses while the prompt carries one, which is why both
+surfaces are checked. An unclosed, nested or duplicated section is not coverage.
+
+The manifest must also name `step: "11"` and the `head_sha` it was written against. Binding to
+the issue alone does not bind to a WAVE: a manifest from an earlier review round of the same issue
+and class passes every other axis, and its stale prompts would go out against a diff they were
+never written for.
 
 On success the guard writes `step11_lens_ok.json` holding a sha256 of the manifest and of each
-prompt, so the bytes that were validated are the bytes that get dispatched.
+prompt. Immediately before dispatching, Step 11 runs:
+
+```bash
+python3 hooks/plan_lib.py verify-lens-receipt \
+  --manifest claude_docs/.wf2-state/<issue>/step11_dispatch.json \
+  --issue <issue> --project-root .
+```
+
+Exit `0` the authorized bytes are unchanged · `1` a prompt or the manifest changed after
+authorization, so the dispatch is blocked · `2` caller error. The CLI wraps `plan_lib.verify_lens_receipt(...)`. Without this second call the
+digests would be written and never compared — a hash nobody checks proves nothing.
 
 **Its limit, stated rather than implied.** This proves a lens was ASKED for. No static check can
 prove a reviewer applied one. And the guard is wired by this prose plus a drift test, exactly like
