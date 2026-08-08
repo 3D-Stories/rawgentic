@@ -1919,6 +1919,62 @@ def fold_dispositions(entries: list[dict]) -> list[dict]:
     return list(folded.values())
 
 
+def fuzzy_disposition_candidates(finding: dict, folded_entries: list[dict]) -> list[dict]:
+    """Non-exact candidate match for the #393 join backstop (#892).
+
+    Reviewers rephrase every pass, so the byte-identical join (`compute_finding_key`)
+    rarely re-fires on genuine re-litigation. This layer widens recall on the two
+    STABLE fields — `location` and `category` — against DECLINED/DISSOLVED ledger
+    entries only: an ADOPTED match already resurfaces via the exact-match
+    "possible failed remediation" path and is untouched here. A match is ADVISORY
+    ONLY: the caller reports it as "possible re-litigation of <id>" for orchestrator
+    adjudication, and the finding is NEVER removed or altered by this function — only
+    a byte-identical `finding_key` match keeps the power to auto-dissolve.
+
+    Excludes any entry whose `finding_key` exactly equals `finding`'s own computed
+    key — that identity is the existing exact-match join's job (already dissolved
+    and removed, or exempted), so surfacing it here would be a redundant, confusing
+    self-reference. The exclusion is PER-ENTRY: a different ledger entry at the same
+    location+category still surfaces even when one exact match is excluded.
+
+    The exact key is computed AFTER stripping any valid `REOPENS <id>:` prefix from
+    `finding`'s description, via `strip_reopens` — mirroring the existing exact-match
+    join's own key computation (#892 Step-11 review, gpt-5.6-sol, confidence 0.96: a
+    finding that VALIDLY reopens ledger entry X has the same stripped key as X under
+    the exact join; without this mirroring, this function would hash the un-stripped
+    text, compute a different key, and incorrectly re-flag X as a fuzzy candidate of
+    itself). The caller may pass either the raw, un-stripped finding or an
+    already-stripped one — stripping a description with no `REOPENS` prefix is a
+    no-op passthrough (`strip_reopens`'s own contract).
+
+    Requires a non-empty `location` on BOTH sides and an exact `category` match
+    (case-sensitive — the schema's category vocabulary is a fixed, consistently-cased
+    enum, so no normalization is needed). An empty/missing `location` on either side
+    excludes that comparison entirely — a location-less pair is too broad a key to
+    compare safely and must never produce a false match on category alone.
+
+    Trust boundary: `folded_entries` is expected to already be
+    `fold_dispositions(read_dispositions(...)[0])` output — validated by
+    `read_dispositions`' tolerant reader, so no re-validation happens here (the same
+    boundary `compute_finding_key`/`strip_reopens` assume for `finding`).
+
+    Returns candidates in `folded_entries` order (already last-write-wins).
+    """
+    location = finding.get("location") or ""
+    category = finding.get("category")
+    if not location or not category:
+        return []
+    _, stripped_description = strip_reopens(finding.get("description", ""))
+    exact_key = compute_finding_key({**finding, "description": stripped_description})
+    return [
+        entry for entry in folded_entries
+        if entry["disposition"] in ("declined", "dissolved")
+        and entry["finding_key"] != exact_key
+        and (entry["finding"].get("location") or "") == location
+        and entry["finding"].get("category") == category
+    ]
+
+
 def strip_reopens(description: str) -> tuple[str | None, str]:
     """Parse an optional leading 'REOPENS <id>:' prefix from a finding description.
 

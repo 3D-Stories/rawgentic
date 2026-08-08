@@ -135,7 +135,11 @@ marker `failed (ledger integrity)`. Omitting the flag is byte-identical pass-1
 behavior. At the join, WF2 applies a backstop over returned findings: a
 finding_key match (computed after `strip_reopens`) against DECLINED/DISSOLVED
 auto-dissolves as re-litigation; against ADOPTED it surfaces as
-`possible failed remediation`.
+`possible failed remediation`. A widened, advisory-only layer (#892,
+`plan_lib.fuzzy_disposition_candidates`) additionally flags a finding sharing
+just the `location` + `category` of a DECLINED/DISSOLVED entry as `possible
+re-litigation of <id>` — this never auto-dissolves; only the byte-identical
+match above keeps that power.
 
 Injection analysis: the ledger travels the orchestrator channel; entries are
 fenced, declared context-never-instructions, and artifact text claiming
