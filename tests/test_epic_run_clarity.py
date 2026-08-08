@@ -224,3 +224,63 @@ class TestCampaignMergesGoThroughTheBroker:
         drive = _section(_text(), "## Step 4:", "## Step 5:")
         assert "refused, nothing merged" in drive
         assert "never route around it" in drive
+
+
+class TestStep3StatesTheGoalCap:
+    """#806 (rescoped by epic #906 item 6: cap + exact-text display, NO auto-arm).
+
+    Step 3 is a model-DRAFTING path with no length cap, which is precisely the pattern
+    `skills/pane-handoff/SKILL.md` warns about: owner goals run 1,200-2,000 chars while
+    model-drafted successor goals ballooned to 4,000-5,400. The cap already exists as a constant;
+    Step 3 simply did not know about it. Measured on the epic #756 run: a faithful draft reached
+    5,014 characters and the owner rejected it.
+    """
+
+    def _step3(self) -> str:
+        return _section(_text(), "## Step 3:", "## Step 3b:")
+
+    def test_the_stated_cap_matches_the_constant(self):
+        """AC1 — read from `launcher_lib.GOAL_MAX_CHARS`, never a second hard-coded 4000.
+
+        This is the repo's mirrored-constant convention (mistake #21): the number may appear in
+        prose, but a guard asserts it equals the Python source of truth, so the two cannot drift.
+        """
+        import sys
+        sys.path.insert(0, str(REPO_ROOT / "hooks"))
+        import launcher_lib  # noqa: E402
+
+        step3 = self._step3()
+        assert "GOAL_MAX_CHARS" in step3, "Step 3 must name the constant it is bound to"
+        assert f"{launcher_lib.GOAL_MAX_CHARS:,}" in step3 or \
+               str(launcher_lib.GOAL_MAX_CHARS) in step3, (
+            f"Step 3's stated cap has drifted from launcher_lib.GOAL_MAX_CHARS "
+            f"({launcher_lib.GOAL_MAX_CHARS})")
+
+    def test_the_draft_length_is_stated_to_the_owner(self):
+        """AC2 — the owner should not have to count it themselves."""
+        assert "wc -c" in self._step3() or "character count" in self._step3()
+
+    def test_over_cap_shortens_by_pointing_not_by_truncating(self):
+        """AC3 — truncation mid-sentence silently drops the end of a guard.
+
+        The measured harm: an over-long goal lost the clause that said do NOT start two other
+        children, so the run would have been guarded by a condition missing its most important
+        stop.
+        """
+        step3 = self._step3()
+        assert "never by truncating" in step3 or "never truncate" in step3
+        assert "run-contract file" in step3 or "run contract file" in step3
+
+    def test_the_no_auto_arm_rescope_is_explicit(self):
+        """Epic #906 item 6 rescoped this to NO auto-arm, and the reason is measured.
+
+        A bare slash command inserted into a session with an unmet `/goal` is inert —
+        `validate_inserted_prompt` records `/tasklist` sitting queued through five goal-driven
+        turns. Step 3 runs inside the operator's own session, mid-turn, so it cannot arm and then
+        verify its own guard. Saying so keeps a future reader from re-litigating it.
+        """
+        step3 = self._step3()
+        assert "cannot invoke /goal for them" in step3, (
+            "the sentence is substantially CORRECT for the operator's own pane and must not be "
+            "rewritten to imply Step 3 can arm the current session's goal")
+        assert "not armed automatically" in step3 or "must verify" in step3

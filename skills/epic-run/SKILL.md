@@ -113,6 +113,50 @@ it is session-level). The condition must contain, explicitly:
   excluded from trimming, the durable store is the one that gets injected and the
   one `--overturnable` is enforced in.
 
+### The 4,000-character cap, and how to stay under it (#806)
+
+**The cap is `launcher_lib.GOAL_MAX_CHARS` = 4,000 characters**, and it covers the WHOLE command
+including the `/goal ` prefix — so a 4,000-character condition does not itself fit. Read it from
+that constant rather than trusting this sentence; a drift guard asserts the two agree
+(`tests/test_epic_run_clarity.py::TestStep3StatesTheGoalCap`).
+
+This is not a preference. `hooks/launcher_lib.py` has enforced it all along, and
+`skills/pane-handoff/SKILL.md` names the failure it exists for: owner goals run 1,200–2,000
+characters while model-drafted successor goals ballooned to 4,000–5,400. Step 3 is a model-drafting
+path, which is exactly that pattern. Measured on the epic #756 run (2026-08-01): a faithful draft of
+the blocks above reached **5,014 characters** and the owner rejected it.
+
+**State the count before you hand the block over.** `wc -c` on the drafted condition, said out loud
+to the owner, so they are not left to count it. A draft that is over cap is a draft you have not
+finished.
+
+**When it is over cap, shorten by POINTING — never by truncating.** Move the detail into the
+run-contract file and reference that file from the condition. The rewrite that worked on #756
+reached 3,007 characters by replacing the inline per-child checklist with a pointer to
+`projects/rawgentic/CLAUDE.md` §5. Truncating mid-sentence is the one thing never to do: the same
+run's hand-pasted goal lost its trailing clause, and what went missing was the instruction not to
+start two other children — the guard's most important stop, silently absent.
+
+If anything downstream reports `truncated`, surface it. `goal_text()` returns that flag rather than
+discarding it, and a silently shortened goal guards less than the owner supplied.
+
+### Do NOT arm the goal yourself — hand it over and say it is unarmed
+
+Epic #906 item 6 rescoped this step to **cap and exact-text display, no auto-arm**, and the reason is
+measured rather than stylistic. `validate_inserted_prompt` (`hooks/launcher_lib.py`) records the
+#718 finding that **a bare slash command is inert**: inserted into a session with an unmet `/goal`,
+`/tasklist` sat queued through five goal-driven turns. Step 3 runs inside the operator's OWN session,
+mid-turn, so it can neither execute a `/goal` nor verify one it sent — the row it would check for
+cannot appear until the turn doing the checking has ended.
+
+The sentence above — *you cannot invoke /goal for them* — is therefore correct for THIS pane, and
+must not be rewritten to say otherwise. What `launcher_lib` genuinely can do is arm a goal in a
+**different** pane (a fresh successor), gated and verified; that is `pane-handoff`, not this step.
+
+So print the block, state its character count, and say plainly that it is **not armed
+automatically** and the owner must verify it took. Reporting a goal as set when nothing armed it is
+the failure this wording exists to prevent.
+
 ## Step 3b: Put up the run task list (#517)
 
 The operator gets an on-screen checklist of the whole run — filed from live
