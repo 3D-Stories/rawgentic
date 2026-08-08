@@ -758,8 +758,8 @@ For major changes, please open an issue first to discuss the approach.
   time, and 483 chars never collapsed at all — which is why short test conditions hid it. The builder now returns
   the sends as a list (`/goal ` alone, then the condition) and both loops in `hooks/launcher_lib.py` iterate every
   send with per-send failure handling; `skills/pane-handoff/SKILL.md` loses its false claim that the wired path
-  needed no change. 7 tests added, incl. a caller-loop abort test and a drift guard on the corrected sentence.
-  No workflow-spine change -> no diagram REV. Suite 6466->6473.
+  needed no change. 8 tests added, incl. two caller-loop abort tests and a drift guard on the corrected sentence.
+  No workflow-spine change -> no diagram REV. Suite 6466->6474.
 
 ### v3.141.10 (2026-08-08)
 - **The WF2 prose corpus now measures WORDS, not only bytes (#899, epic #906).** `tests/test_wf2_prose_budget.py`

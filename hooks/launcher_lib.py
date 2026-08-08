@@ -3230,6 +3230,15 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         # is still recorded and still aborts the sequence on its own failure: a dropped prefix
         # leaves the box holding a bare paste, so pressing on to the Enter would submit the goal
         # as chat and the run would look armed while it was not.
+        #
+        # KNOWN RESIDUE, accepted by owner decision 2026-08-08 (#1007 Step-9 review). When the
+        # prefix send succeeds and the condition send does NOT, this pane is left holding a bare
+        # `/goal ` in its input box, and anything typed there later would join onto it. It is not
+        # cleared here on purpose: every key that clears the box (ctrl+c, esc) also interrupts the
+        # pane's running turn, so tidying up would cost a healthy successor its in-flight work to
+        # remove a prefix nobody may ever type after. The residue only arises inside a handoff that
+        # has already failed loudly, and the abort order below is pinned by test so it cannot
+        # silently become "send the Enter anyway".
         prefix_argv, text_argv = send_argvs
         for kind, argv in (("send_goal_prefix", prefix_argv), ("send_text", text_argv),
                            ("send_keys", keys_argv)):
@@ -5149,6 +5158,10 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
         # it from the successor's transcript would arm the predecessor with the wrong guard, and
         # a capped one silently truncated).
         rearm_baseline = _baseline(read_text, pred_transcript)
+        # Same two-send shape and the same accepted residue as the first-arm loop above (#1007).
+        # It matters more here, because this pane is the LIVE predecessor rather than a fresh
+        # successor — but the compensating key would interrupt that predecessor's own turn, which
+        # is the outcome this whole branch exists to avoid.
         rearm_sends, rearm_keys, truncated = build_send_text_goal_argv(
             pane=anchor_pane, goal_condition=position["goal_condition"])
         rearm_prefix, rearm_text = rearm_sends

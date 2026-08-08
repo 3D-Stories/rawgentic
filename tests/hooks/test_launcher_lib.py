@@ -1973,6 +1973,35 @@ class TestTheThreeSendsAreOrderedAndGated:
         assert GOAL_CONDITION not in sent, "the condition was sent after the prefix failed"
         assert not _predecessor_closed(r)
 
+    def test_a_failed_condition_send_aborts_before_the_enter(self) -> None:
+        """The other half of the split's failure handling, and the pin behind an accepted residue.
+
+        Owner decision 2026-08-08 (#1007 Step-9 review): when the prefix lands and the condition
+        does not, the pane keeps a bare `/goal ` in its input box and it is NOT cleared, because
+        every key that clears the box also interrupts the pane's running turn. What must never
+        drift is the abort itself — sending the Enter anyway would submit a bare `/goal ` as the
+        whole command.
+        """
+
+        class ConditionFails(Runner):
+            def __call__(self, argv, timeout=180):
+                if argv[:3] == ["herdr", "pane", "send-text"] and argv[4] == GOAL_CONDITION:
+                    self.calls.append(list(argv))
+                    return FakeProc(returncode=1)
+                return super().__call__(argv, timeout=timeout)
+
+        r = ConditionFails({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["ok"] is False
+        assert out["failed_step"] == "send_text", out.get("failed_step")
+        sent = [c[4] for c in r.calls if c[:3] == ["herdr", "pane", "send-text"]]
+        assert sent[-2:] == ["/goal ", GOAL_CONDITION], sent
+        goal_enters = [c for c in r.calls
+                       if c[:3] == ["herdr", "pane", "send-keys"] and c[4] == "Enter"]
+        assert len(goal_enters) == 2, \
+            "only the bind and the resume prompt may have been submitted, never the goal"
+        assert not _predecessor_closed(r)
+
     def test_the_bind_is_its_own_send_carrying_the_project(self) -> None:
         """A bare `/rawgentic:switch` enters the switch skill's LIST MODE and waits for a human
         (#682), so the argument is the whole point of sending it at all."""
