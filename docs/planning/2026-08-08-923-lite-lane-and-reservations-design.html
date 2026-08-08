@@ -1,0 +1,778 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>#923 — the WF2-lite lane for disposable work, and a loop-back budget that charges for rounds instead of reviews</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-design{background:radial-gradient(1200px 600px at 50% -10%,rgba(124,156,255,.10),transparent 60%),var(--bg)}
+.tpl-design .wrap{max-width:1080px;padding:0 clamp(16px,4vw,32px) 64px}
+.tpl-design header{padding:clamp(24px,4vw,56px) 0 12px;border-bottom:none;margin-bottom:18px}
+.tpl-design h1{font-size:clamp(26px,3.4vw,40px)}
+.tpl-design h2{font-size:20.8px;margin:1.9em 0 .6em}
+
+/* #76 — the frame's companions only. Two rules, deliberately few.
+   An earlier draft of this PR also added a two-column `.dz-options` grid "so the wide measure
+   pays for itself". Both wrong: the grid was DEAD (the `.dz-options` rule further down sets
+   `display:block` at equal specificity and later source order), and it contradicted a decision
+   this file already records — cards stack FULL WIDTH because "a trade-off you have to READ is
+   not a 220px tile". The width pays for itself inside each card, where the for/against grid is
+   two columns and needs the room. Deleted rather than reconciled. */
+.tpl-design h1{line-height:1.2;max-width:22ch}
+.tpl-design header .eyebrow{font-size:11px;letter-spacing:.14em}
+.tpl-design .dz-lead{background:var(--surface);border:1px solid var(--line);
+border-left:4px solid var(--accent);border-radius:12px;padding:4px 20px 14px;margin:6px 0 26px}
+.tpl-design .dz-lead>p:first-child{font-size:17.5px;line-height:1.55;color:var(--ink);font-weight:550}
+/* Option cards. Stacked full-width, because a trade-off you have to READ is not a 220px tile;
+   the shared layer's flex row is overridden here at higher specificity. */
+.tpl-design .dz-options{margin:22px 0;display:block;counter-reset:dz-opt}
+.tpl-design .dz-options .blk-opt{counter-increment:dz-opt;display:grid;gap:10px 14px;
+grid-template-columns:1fr 1fr;grid-template-areas:"head head" "pro con";
+background:var(--surface);border:1px solid var(--line);border-radius:14px;
+padding:16px 18px;margin:0 0 16px;flex:none}
+.tpl-design .dz-options .blk-opt>.blk-title{grid-area:head;display:flex;gap:12px;
+align-items:baseline;font-size:19px;letter-spacing:-.01em;margin:0}
+.tpl-design .dz-options .blk-opt>.blk-title::before{content:counter(dz-opt,decimal-leading-zero);
+font:700 22px/1.1 ui-monospace,Menlo,Consolas,monospace;color:var(--accent);flex:none}
+.tpl-design .dz-options .blk-for{grid-area:pro;background:var(--req-c-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+.tpl-design .dz-options .blk-against{grid-area:con;background:var(--sev-high-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+/* #134 SETTLED THE FOLLOW-UP THIS COMMENT USED TO NAME. It said these labels were CSS-generated
+   content, so not dependable semantic markup, that the reference uses real DOM text
+   (`<h4>Pros</h4>`), and that making it semantic "means changing the renderer, which moves every
+   style's bytes and so cannot ride in a per-template PR". That is exactly what #134 did: `_options`
+   now emits a real `.blk-lbl` element, every rich style's bytes moved, and `plain` did not.
+   So this is no longer a `::before` at all — it RESTYLES the markup label the renderer emits.
+   Only the typography is set here; the colours come from the shared layer, which reaches this
+   template because the wrapper carries both `blk-options` and `dz-options`. `text-transform`
+   keeps the visible form FOR/AGAINST while the accessible name stays the emitted "For"/"Against".
+   The space the renderer emits after the label collapses harmlessly against a block. */
+.tpl-design .dz-options .blk-lbl{display:block;font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;text-transform:uppercase}
+/* Restated at (0,4,0): the card rule above is (0,3,0) and was silently beating the shared
+   `.blk-options .is-chosen` (0,2,0), so the chosen card lost its accent border. Measured. */
+.tpl-design .dz-options .blk-opt.is-chosen{border-color:var(--accent);border-width:2px}
+.tpl-design .dz-options .blk-opt.is-rejected{opacity:.72}
+.tpl-design .dz-options .is-chosen>.blk-title::after{content:"CHOSEN";font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent);
+border:1px solid var(--accent);border-radius:999px;padding:1px 8px;margin-left:auto;flex:none}
+@media(max-width:640px){.tpl-design .dz-options .blk-opt{grid-template-columns:1fr;
+grid-template-areas:"head" "pro" "con"}}
+/* A today/proposed pair is TWO ROOTS in one `nodes compare` block, so the
+   grid goes on the top-level list. Two separate fences cannot pair — each is
+   its own wrapper with a single child. */
+@media(min-width:720px){.tpl-design .dz-compare>ul{grid-template-columns:1fr 1fr}}
+.tpl-design .dz-compare{background:var(--code);border-radius:12px;padding:10px 14px}
+/* The verdict band — `.recommend` in the reference. A gradient wash rather than a flat fill, so
+   the decision reads as the page's conclusion and not as one more callout. */
+.tpl-design .dz-decision{margin:24px 0 8px}
+.tpl-design .dz-decision>.blk-callout{border:1px solid var(--accent);border-left-width:1px;
+border-radius:14px;padding:16px 18px;
+background:linear-gradient(180deg,var(--accent-soft),transparent)}
+.tpl-design .dz-decision>.blk-callout>.blk-title::before{content:"DECISION";display:block;
+font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent)}
+/* Trade-off table. Styled, deliberately NOT markered: a markdown table emits a bare <table> with
+   no hook, and `section_class` is not a table marker — using it would flip `design` into
+   sectioned rendering and demote its h2s. */
+.tpl-design table{border-collapse:collapse;width:100%;margin:14px 0}
+.tpl-design thead th{font:700 11px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);
+border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
+.tpl-design tbody td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.tpl-design tbody tr:nth-child(even){background:var(--code)}
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+
+/* An ordinary fenced listing, in a box with its language and a copy button. RICH ONLY —
+   `plain` carries no template CSS by definition and stays a bare <pre>. The box owns the
+   border, radius and ground that `pre` supplies on its own elsewhere, so the bar and the
+   listing share one outline instead of stacking two. */
+.doc-code{margin:0 0 14px;border:1px solid var(--line);border-radius:10px;
+background:var(--code);overflow:hidden}
+.doc-code-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;
+padding:5px 8px 5px 14px;border-bottom:1px solid var(--line)}
+.doc-code-lang{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3);
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.doc-code-copy{flex:none;font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-2);background:var(--surface);border:1px solid var(--line);border-radius:6px;
+padding:3px 10px;cursor:pointer}
+.doc-code-copy:hover{color:var(--accent);border-color:var(--accent)}
+.doc-code-copy:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.doc-code-copy[data-state=ok]{color:var(--accent);border-color:var(--accent)}
+.doc-code-copy[data-state=fail]{color:var(--ink-2);border-color:var(--ink-3)}
+.doc-code>pre{margin:0;border:0;border-radius:0;background:none}
+/* Paper cannot take a copy. Printing the control would print a button that does nothing. */
+@media print{.doc-code-copy{display:none}}
+
+:root{--accent:#f2a65e;}
+:root[data-theme=dark]{--accent:#f2a65e;}
+:root[data-theme=light]{--accent:#a26211;}
+@media print{:root,:root[data-theme=dark]{--accent:#a26211;}}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-07 23:19 MDT</div>
+<h1>#923 — the WF2-lite lane for disposable work, and a loop-back budget that charges for rounds instead of reviews</h1>
+<p class="sub">Design v4 — split into #1002 and #1003 at an exhausted design gate (D303)</p>
+</header>
+<main>
+<div class="dz-lead"><p><strong>Status:</strong> design v4, WF2 Step 3 pass 3 (v1 blind draft → v2 peer synthesis → v3 applied pass-1&#x27;s 6 High + 2 Medium → v4 applies pass-2&#x27;s merged 8 High + 4 Medium, incl. owner decision D302) · <strong>Issue:</strong> #923 (epic #906 M2) · <strong>Date:</strong> 2026-08-08 <strong>Head:</strong> <code>ee38c542</code> (v3.141.9) · <strong>Baseline:</strong> 6460 passed, 0 failed, exit 0</p></div>
+<h2>Peer consult provenance (WF13, backend <code>gpt</code>, reviewer <code>gpt-5.6-sol</code>)</h2>
+<p>Drafted v1 blind first, per the blindness rule; the peer proposal was read only afterwards (<code>.rawgentic-peer-result-923.json</code>, status <code>success</code>, <code>diagnostic: true</code>, attempts 1).</p>
+<p><strong>Independent convergence</strong> — both designs reached, separately: reservations live in <code>loopback_counters.json</code> (one file, one lock, because the invariant spans counters and reservations); <strong>open the round first, commit second</strong>, because debit-then-refund fails toward destroying budget; availability counts committed <strong>plus</strong> outstanding against BOTH caps; no automatic time-based expiry and no GC; <code>os.replace</code> for the write; reconciliation is explicit and operator-driven.</p>
+<p><strong>Adopted from the peer, replacing my v1:</strong></p>
+<ol>
+<li><strong>A <code>settled_commits</code> ledger</strong>, making a retried commit idempotent. v1 §7 named the strict</li>
+</ol>
+<p>   unknown-nonce refusal as <em>the claim I would most expect to be wrong</em>; the peer independently    proposed the ledger as its v1. Two designs converging on the problem and one solving it is    enough evidence to adopt it now rather than defer.</p>
+<ol start="2">
+<li><strong>A durable round record as the linearization point</strong> — commit VALIDATES that a round opened</li>
+</ol>
+<p>   instead of trusting the caller&#x27;s assertion. See §2.7: this required a feasibility probe, and the    peer&#x27;s own stated weakest claim turned out to be refuted.</p>
+<ol start="3">
+<li><strong>Richer reservation identity</strong> (<code>workflow</code>, <code>run_id</code>, <code>session_id</code>, <code>requested_by</code>) beyond</li>
+</ol>
+<p>   F11&#x27;s <code>issue</code>/<code>gate</code>/<code>run</code>.</p>
+<ol start="4">
+<li><strong>fsync the containing DIRECTORY</strong> after <code>os.replace</code> — atomic visibility is not durability;</li>
+</ol>
+<p>   also constraint <strong>C2</strong> from #761&#x27;s D204 fold. <strong>Adopted with a correction (see §2.4):</strong> the    repo&#x27;s <code>atomic_write_lib.atomic_write_text</code> fsyncs the temp file only, so this ships as a new    OPTIONAL <code>fsync_dir=False</code> parameter on that shared helper rather than as a property that    already existed.</p>
+<ol start="5">
+<li><strong>The <code>reconciliation_log</code> lives inside the state file</strong>, not a sibling <code>.jsonl</code> — consistent</li>
+</ol>
+<p>   with the same one-file-one-lock reasoning both designs used for reservations.</p>
+<ol start="6">
+<li><strong>Splitting each step&#x27;s ARTIFACT and OPT-IN sub-steps into their own matrix rows.</strong> My v1 folded</li>
+</ol>
+<p>   them into one COLLAPSED value per step, which blurs exactly the distinction the issue insists on    (&quot;what a permissive class may drop is an artifact or an opt-in sub-step — never a step&quot;).</p>
+<ol start="7">
+<li><strong>A drift test that renders the matrix FROM <code>plan_lib</code> and compares every documented cell</strong></li>
+</ol>
+<p>   (peer R8). This repo already trusts drift guards over prose; the matrix must be one.</p>
+<ol start="8">
+<li><strong>The lens guard inspects the rendered prompt as well as the manifest</strong> (peer R9) — a manifest</li>
+</ol>
+<p>   can claim four lenses while the prompt carries one.</p>
+<p><strong>Kept from v1 against the peer:</strong> the three-value core vocabulary stays small (the peer&#x27;s six values collapse to three once artifacts and opt-ins are their own rows); the <code>disposable</code> class keeps Step 4 at its collapsed rubric-only form rather than FULL, because the issue&#x27;s own text names the adversarial-on-design and peer consult as the droppable opt-ins there.</p>
+<hr>
+<h2>0. What the prior work actually left behind — read this first</h2>
+<p>#923 says to start from <code>docs/planning/2026-08-04-761-proportionality-contract-design.md</code> and &quot;not repeat&quot; it. That doc&#x27;s handover section (lines 447-452) says the inherited material is &quot;recoverable from this file&#x27;s git history and <code>claude_docs/.wf2-state/761/s4-adv-r4.json</code>&quot;.</p>
+<p><strong>The git-history half is false.</strong> <code>git log --all --follow</code> over that path returns exactly ONE commit — <code>1a03b9cb</code> (2026-08-05, PR #926) — and that commit IS Revision 7, the shipped version. Revisions 1-6 lived in the working tree and were never committed. The per-class ceremony matrix, the <code>disposable</code> definition of done, the reservation state machine, its schema validation, the atomicity contract, its seven tests, the recovery surface, the cross-version concurrency bound and the D202 author-permission check are <strong>not in git anywhere</strong>.</p>
+<p>What survives is <code>s4-adv-r4.json</code>: 11 findings that are the <strong>critique</strong> of Revision 4, not the design. So this design is written fresh. The 11 findings are treated as known-failure constraints, and the three that govern this issue&#x27;s two halves are carried explicitly below (F3, F4, F11 for Part B; F5, F6, F7 for Part A).</p>
+<p>This section exists so the next reader does not spend an hour looking for a document that is gone.</p>
+<hr>
+<h2>1. The problem, stated as two independent defects</h2>
+<p><strong>Defect B — the budget charges for the wrong event.</strong> <code>_cmd_review_reopen</code> calls <code>consume_loopback</code> at MINT time (<code>plan_lib.py:3229</code>), so asking for permission to open a fix round spends the same budget as actually opening one. A review that returns zero findings — the case the budget exists to protect — bills identically to a review that opens a round. With <code>GLOBAL_LOOPBACK_BUDGET = 3</code> and <code>design</code> capped at 2, two clean reviews can exhaust a gate&#x27;s entire design budget without a single line of code having changed.</p>
+<p><strong>Defect A — the task class has no teeth.</strong> #761 shipped the class (<code>disposable | internal | production</code>), resolved once and snapshotted write-once, but nothing reads it to change what a run demands. There is no matrix, no definition of done for the cheap lane, and no guard preventing the cheap lane from quietly becoming a cheap <em>review</em>.</p>
+<p>The two halves share one property that makes them one issue: <strong>both are places where &quot;less ceremony&quot; can silently become &quot;less safety&quot;</strong>, and both are fixed by making the reduction structural rather than documentary.</p>
+<hr>
+<h2>2. Part B — reserve, then debit when the round opens</h2>
+<h3>2.1 The state machine</h3>
+<p>A reservation has exactly three states. There is no fourth, and deliberately no timer.</p>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">code</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>                 review-reopen --source S
+   (none) ───────────────────────────────────────▶ OUTSTANDING
+                 mints nonce, writes reservation      │
+                 NO counter moves                     │
+                                                      │
+       disposition opens a round (§2.8)                │  disposition opens NO round
+         1. loopback-open-round --nonce N             │   loopback-release --nonce N --reason R
+         2. loopback-commit     --nonce N             │
+            (adjacent, nothing between)               │
+                    ┌─────────────────────────────────┴──────────────────────────┐
+                    ▼                                                            ▼
+               COMMITTED                                                     RELEASED
+    counters[S] += 1, total recomputed,                       reservation deleted, no counter moves,
+    reservation deleted, settled_commits[nonce] set,          empty collections pruned (§2.2b),
+    empty collections pruned — ONE locked write               availability restored</code></pre></div>
+<p><strong>Crash analysis, gap by gap.</strong> This is the part F3 was raised against, so every gap is named:</p>
+<table>
+<thead><tr><th>Crash point</th><th>On-disk state</th><th>Consequence</th><th>How it is cleared</th></tr></thead>
+<tbody>
+<tr><td>after mint, before disposition</td><td><code>OUTSTANDING</code></td><td>budget reserved, not spent; availability correctly reduced</td><td><code>loopback-reconcile</code> (§2.5)</td></tr>
+<tr><td>during <code>open-round</code>, mid-lock</td><td>unchanged (atomic replace — §2.4)</td><td>no round record; nothing charged</td><td>re-run; the reservation is still valid</td></tr>
+<tr><td>after <code>open-round</code>, before <code>commit</code></td><td><code>OPENED_UNCOMMITTED</code> (derived: reservation + matching <code>rounds</code> entry)</td><td><strong>under-charged</strong> — the round is real but unbilled</td><td><code>loopback-status</code> classifies it; reconciliation commits it</td></tr>
+<tr><td>during <code>commit</code>, mid-lock</td><td>wholly outstanding OR wholly committed, never between</td><td>either state is consistent</td><td>re-run <code>commit</code> with the same nonce</td></tr>
+<tr><td>after <code>commit</code> writes, before its response</td><td><code>COMMITTED</code> + <code>settled_commits</code> entry</td><td>correct</td><td>a retry returns <code>(True, &quot;already_committed&quot;)</code></td></tr>
+<tr><td>during <code>release</code>, mid-lock</td><td>still <code>OUTSTANDING</code></td><td>nothing lost</td><td>re-run; release is idempotent (§2.3)</td></tr>
+</tbody>
+</table>
+<p>The third row is the deliberate trade, and it is now <em>detectable</em> rather than merely accepted. F3 says a crash between debit and round-open must not charge for a round that never happened. <strong>We open the round first and charge second, always.</strong> Under-charging is visible (<code>loopback-status</code> reports <code>opened_uncommitted</code>, and Step 16&#x27;s completion gate refuses while the current run owns an outstanding reservation — peer R4); over-charging silently destroys budget the owner paid for. Given a choice of which way to be wrong, be wrong in the direction an operator can see.</p>
+<p>The <code>OPENED_UNCOMMITTED</code> state is <strong>derived, not stored</strong> — it is a reservation joined to a matching <code>rounds</code> entry. Storing it would create a fourth write that could itself crash halfway.</p>
+<h3>2.7 The round record — a probe, and a refuted assumption</h3>
+<p>The peer&#x27;s design has <code>commit</code> validate a <strong>canonical round record</strong> with <code>state: &quot;open&quot;</code>, and names as its own most-likely-wrong claim: <em>&quot;the existing workflow can define round-open as one durable canonical record.&quot;</em></p>
+<p><strong>Probed at <code>ee38c542</code>. The assumption is REFUTED — no such record exists today.</strong> What exists:</p>
+<ul>
+<li><code>claude_docs/.wf2-state/&lt;issue&gt;/review_log.jsonl</code>, written by <code>plan_lib.append_review_log</code></li>
+</ul>
+<p>  (<code>:1374</code>). An entry records that a review <em>ran</em> and its verdict:   <code>{&quot;task_id&quot;:&quot;T1&quot;,&quot;sha&quot;:&quot;e1cb5cda&quot;,&quot;reviewers&quot;:[...],&quot;verdict&quot;:&quot;applied&quot;,&quot;findings&quot;:{...},&quot;ts&quot;:...}</code>.</p>
+<ul>
+<li><code>claude_docs/.wf2-state/&lt;issue&gt;/dispositions.jsonl</code> — one record per FINDING</li>
+</ul>
+<p>  (<code>{&quot;schema_version&quot;:1,&quot;id&quot;:&quot;d-761-5-1-62ee&quot;,&quot;issue&quot;:761,&quot;pass&quot;:5,&quot;gate&quot;:&quot;4&quot;,&quot;finding&quot;:{...}}</code>).</p>
+<p>Neither is a round-open linearization point. <code>review_log</code> is written <em>after</em> a verdict exists, and <code>dispositions</code> is per-finding. Building <code>commit</code> on either would mean inferring &quot;a round opened&quot; from an artifact that means something else.</p>
+<p><strong>So #923 creates the record</strong>, because without a durable artifact the AC&#x27;s ordering requirement — &quot;the debit must not commit before the round actually opens&quot; — is a convention rather than a guarantee, and a convention cannot be tested. It is deliberately minimal: one JSON object written under the SAME lock and the same atomic replace as everything else, in the same state file.</p>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">python</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>def open_fix_round(path: str, nonce: str, *, actor: str) -&gt; tuple[bool, str, dict]:
+    &quot;&quot;&quot;Durably record that a fix round opened. THE linearization point.
+    IDEMPOTENT: a nonce that already has a `rounds` entry returns that SAME
+    round_id and writes nothing.&quot;&quot;&quot;</code></pre></div>
+<p><em>(A3 — a hole the self-review missed.)</em> Without that idempotency, a write that succeeds while its response is lost lets a retry mint a SECOND <code>round_id</code> for one nonce; <code>commit_loopback</code> then refuses because more than one round matches, and the real round becomes permanently uncommittable and unbilled. The rule is therefore: <strong>at most one <code>rounds</code> entry per nonce, enforced on write.</strong> A second call is a lookup, not an insert. Test 12 covers it.</p>
+<p><code>rounds</code> is a fourth top-level key mapping <code>round_id</code> → <code>{nonce, issue, workflow, gate, run_id, session_id, state: &quot;open&quot;, opened_at}</code>. <code>commit_loopback</code> then refuses unless exactly one <code>rounds</code> entry matches the nonce AND every immutable identity field agrees (peer R7). The ordering is enforced by data, not by hope: there is no way to commit a nonce whose round record is absent.</p>
+<p>Scope note, stated rather than buried: this is one function, one key, and one validation clause more than v1 had. It is in scope because it is the only thing that makes the AC&#x27;s central ordering claim verifiable.</p>
+<h3>2.2 The data shape</h3>
+<p><code>loopback_counters.json</code> gains FOUR new top-level keys. No migration, and this is not an assumption — see §5.</p>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">json</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>{
+  &quot;design&quot;: 1, &quot;tdd&quot;: 0, &quot;review&quot;: 0, &quot;review_design&quot;: 0, &quot;spec_tighten&quot;: 0, &quot;total&quot;: 1,
+  &quot;reservations&quot;: {
+    &quot;e3b0c44298fc1c14&quot;: {
+      &quot;source&quot;: &quot;design&quot;, &quot;issue&quot;: 923, &quot;workflow&quot;: &quot;WF2&quot;, &quot;gate&quot;: &quot;4&quot;,
+      &quot;run_id&quot;: &quot;2e336392-7c84-4a2e-b8e9-bab4961c11b7&quot;,
+      &quot;session_id&quot;: &quot;2e336392-7c84-4a2e-b8e9-bab4961c11b7&quot;,
+      &quot;requested_by&quot;: &quot;wf2-step-04&quot;, &quot;created_at&quot;: &quot;2026-08-08T04:41:00Z&quot;
+    }
+  },
+  &quot;rounds&quot;: {
+    &quot;r-923-4-a91c&quot;: {
+      &quot;nonce&quot;: &quot;e3b0c44298fc1c14&quot;, &quot;issue&quot;: 923, &quot;workflow&quot;: &quot;WF2&quot;, &quot;gate&quot;: &quot;4&quot;,
+      &quot;run_id&quot;: &quot;2e336392-...&quot;, &quot;session_id&quot;: &quot;2e336392-...&quot;,
+      &quot;state&quot;: &quot;open&quot;, &quot;opened_at&quot;: &quot;2026-08-08T04:44:00Z&quot;
+    }
+  },
+  &quot;settled_commits&quot;: {
+    &quot;d41d8cd98f00b204&quot;: {
+      &quot;source&quot;: &quot;design&quot;, &quot;issue&quot;: 923, &quot;gate&quot;: &quot;4&quot;, &quot;round_id&quot;: &quot;r-923-4-77b2&quot;,
+      &quot;run_id&quot;: &quot;2e336392-...&quot;, &quot;committed_at&quot;: &quot;2026-08-08T04:12:00Z&quot;
+    }
+  },
+  &quot;reconciliation_log&quot;: [
+    {&quot;event_id&quot;: &quot;8f14e45fceea167a&quot;, &quot;nonce&quot;: &quot;abc123...&quot;, &quot;action&quot;: &quot;release&quot;,
+     &quot;actor&quot;: &quot;operator:chris&quot;, &quot;reason&quot;: &quot;run 51f74d5b died mid-gate&quot;, &quot;round_id&quot;: null,
+     &quot;at&quot;: &quot;2026-08-08T04:50:00Z&quot;}
+  ]
+}</code></pre></div>
+<p><code>reservations</code>, <code>rounds</code> and <code>settled_commits</code> are maps keyed by nonce / round_id / nonce. Maps, not lists, because every operation is a lookup by key and a map makes double-insert structurally impossible.</p>
+<p><strong>Every reservation field is required.</strong> <code>source</code>, <code>issue</code>, <code>gate</code>, <code>run_id</code> cover F11&#x27;s demand — a record that cannot be attributed cannot be reconciled by anyone — and <code>workflow</code>, <code>session_id</code>, <code>requested_by</code> come from the peer, so a reservation names the workflow and the actor as well as the run. <code>created_at</code> is recorded for the operator and is <strong>never read by any decision</strong>; that is what makes automatic time-based expiry impossible by construction rather than by policy. A field nothing branches on cannot silently restore budget.</p>
+<h3>2.2a The token shape — v2 shipped one the runner REFUSES</h3>
+<p><em>(Self-review S4 — the most serious finding of pass 1.)</em> v2 adopted the peer&#x27;s token verbatim: <code>{&quot;schema_version&quot;: 2, &quot;kind&quot;: &quot;review_reopen_reservation&quot;, &quot;nonce&quot;: ..., &quot;reserved_at&quot;: ...}</code>. Read at <code>review_runner.py:184-213</code>, <code>load_reopen_token</code> requires:</p>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">python</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>if data.get(&quot;version&quot;) != 1:                      # -&gt; &quot;unsupported version None&quot;
+    return None, f&quot;reopen token {path!r}: unsupported version {data.get(&#x27;version&#x27;)!r}&quot;
+for key in (&quot;source&quot;, &quot;nonce&quot;, &quot;minted_at&quot;):      # each a non-empty string
+    ...
+if data.get(&quot;consumed_at&quot;):                       # a spent token is refused
+    ...</code></pre></div>
+<p>The v2 token has no <code>version</code> and no <code>minted_at</code>, so the runner would refuse it outright — while this design&#x27;s own text claimed &quot;the runner&#x27;s dispatch-time <code>diagnostic</code> contract is untouched&quot;. That claim was false as drafted.</p>
+<p><strong>The shipped token keeps every field the runner reads, verbatim, and ADDS the identity fields alongside them:</strong></p>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">json</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>{
+  &quot;version&quot;: 1,
+  &quot;source&quot;: &quot;design&quot;,
+  &quot;nonce&quot;: &quot;e3b0c44298fc1c14&quot;,
+  &quot;minted_at&quot;: &quot;2026-08-08T04:41:00Z&quot;,
+  &quot;issue&quot;: 923, &quot;workflow&quot;: &quot;WF2&quot;, &quot;gate&quot;: &quot;4&quot;,
+  &quot;run_id&quot;: &quot;2e336392-...&quot;, &quot;session_id&quot;: &quot;2e336392-...&quot;, &quot;requested_by&quot;: &quot;wf2-step-04&quot;
+}</code></pre></div>
+<p><code>version</code> stays <code>1</code> because it names the shape the RUNNER validates, and that shape is unchanged — additive fields do not bump it. <code>consumed_at</code> is still absent at mint and is still what marks a token spent. Re-probing <code>load_reopen_token</code> against a real minted token is <strong>task 2 of the plan</strong>, so this fix is verified rather than asserted.</p>
+<h3>2.2c The nonce is the key — NOT the token file (owner decision D302)</h3>
+<p><em>(Adversarial A8, and the finding that tripped the ambiguity breaker.)</em> Verified at <code>ee38c542</code>: <code>review_runner.consume_reopen_token</code> (<code>:214-224</code>) stamps <code>consumed_at</code> on the token after an actionable success, and <code>load_reopen_token</code> (<code>:184-213</code>) REFUSES any token carrying <code>consumed_at</code> (&quot;already spent&quot;). v3 handed that same token file to <code>loopback-open-round</code> and <code>loopback-commit</code> AFTER the runner had run — so with the existing loader those commands would have refused every token that actually did its job. That function&#x27;s docstring also encodes the contract this issue overturns: <em>&quot;the debit happened at mint time in plan_lib review-reopen&quot;</em>.</p>
+<p><strong>Resolved by the owner (D302): the new commands take <code>--nonce</code> and never re-load the token file.</strong> The runner&#x27;s <code>consumed_at</code> stamp is then irrelevant to them, <code>review_runner</code> keeps its behaviour byte-for-byte — which is what the AC&#x27;s &quot;the runner&#x27;s dispatch-time <code>diagnostic</code> contract is untouched&quot; actually requires — and only that one stale docstring line is corrected in this PR. Nothing is lost: the reservation record in the state file, not the token, was always the identity authority. Rejected: a second spent-tolerant loader (two loaders, one file format, guaranteed drift), and redesigning the token lifecycle (would need the protective AC relaxed). <strong>Undo:</strong> revert the subcommands to <code>--token</code> and add the spent-tolerant loader; no data migration, because the state file already holds identity.</p>
+<h3>2.2b Empty collections are pruned — AC7&#x27;s headline test demands it</h3>
+<p><em>(Self-review S5.)</em> AC7&#x27;s first test is &quot;a zero-finding review leaving the counters <strong>byte-identical</strong>&quot;. Under v2, <code>authorize</code> wrote <code>&quot;reservations&quot;: {...}</code> and <code>release</code> emptied it, so a file that started with no <code>reservations</code> key came back carrying <code>&quot;reservations&quot;: {}</code> — different bytes, and the AC&#x27;s own test would fail against the design meant to satisfy it.</p>
+<p><strong>Invariant:</strong> <code>release_loopback</code> and <code>commit_loopback</code> DELETE <code>reservations</code>, <code>rounds</code> and <code>settled_commits</code> from the state dict when they become empty, so an <code>authorize → release</code> round-trip over a pre-existing file is genuinely byte-identical. <code>reconciliation_log</code> is the one exception — it is an audit trail, and an entry there is a deliberate record that something happened, so a run that required an operator release is <em>supposed</em> to differ.</p>
+<p><code>settled_commits</code> is what makes a retried <code>commit</code> idempotent: a nonce present there returns <code>(True, &quot;already_committed&quot;)</code> without incrementing again, so a caller that crashes after a successful commit and retries gets the truthful answer instead of v1&#x27;s indistinguishable refusal. It grows for the life of the issue and is <strong>never garbage-collected automatically</strong> (peer R3) — <code>loopback-status</code> reports its size, and archival happens only when the whole issue state is closed.</p>
+<p>The nonce is 16 hex chars from <code>secrets.token_hex(8)</code>. It is an identifier, not a capability: the counters file already lives inside the repo&#x27;s own state dir, so its job is collision-avoidance and attribution, not secrecy.</p>
+<h3>2.3 The capacity formula — F4, in one expression</h3>
+<p>Availability is checked against committed <strong>plus outstanding</strong>, per-source AND global. Both clauses, every time, at mint:</p>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">python</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>outstanding_by_source[s] = sum(1 for r in reservations.values() if r[&quot;source&quot;] == s)
+outstanding_total        = len(reservations)
+
+source_ok = counters[s] + outstanding_by_source[s] &lt;  _LOOPBACK_SOURCE_MAX[s]
+global_ok  = counters[&quot;total&quot;] + outstanding_total  &lt;  GLOBAL_LOOPBACK_BUDGET
+authorize  = source_ok and global_ok</code></pre></div>
+<p><code>outstanding_total</code> is <code>len(reservations)</code> rather than a sum over sources deliberately: a reservation whose <code>source</code> somehow fell outside <code>_LOOPBACK_SOURCES</code> would vanish from a per-source sum and inflate global availability. Counting the map&#x27;s length cannot miss one. (Schema validation refuses such a record at write time; this is the belt to that braces.)</p>
+<p>Note the strict <code>&lt;</code>. <code>consume_loopback</code> today tests <code>&gt;=</code> on the post-state; here we are asking whether one MORE would fit, so the comparison is against the cap directly.</p>
+<h3>2.4 The surface added to <code>hooks/plan_lib.py</code></h3>
+<p>Three new functions and two new CLI subcommands. <code>plan_lib.py</code> stays the single choke point, as the AC requires, and <code>review_runner.py</code>&#x27;s dispatch-time <code>diagnostic</code> contract is untouched.</p>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">python</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>def authorize_loopback(path: str, source: str, *, issue: int, workflow: str, gate: str,
+                       run_id: str, session_id: str,
+                       requested_by: str) -&gt; tuple[bool, str | None, dict]:
+    &quot;&quot;&quot;Reserve one loop-back WITHOUT debiting. Returns (ok, nonce, state).&quot;&quot;&quot;
+
+def open_fix_round(path: str, nonce: str, *, actor: str) -&gt; tuple[bool, str, dict]:
+    &quot;&quot;&quot;Durably record that a fix round opened. THE linearization point (§2.7).&quot;&quot;&quot;
+
+def commit_loopback(path: str, nonce: str, *, actor: str,
+                    reason: str = &quot;disposition-open&quot;) -&gt; tuple[bool, str, dict]:
+    &quot;&quot;&quot;Convert an outstanding reservation into a committed count. Refuses unless a
+    matching `rounds` entry exists and every identity field agrees. IDEMPOTENT via
+    `settled_commits`: a nonce already committed returns (True, &quot;already_committed&quot;).&quot;&quot;&quot;
+
+def release_loopback(path: str, nonce: str, *, actor: str,
+                     reason: str) -&gt; tuple[bool, str, dict]:
+    &quot;&quot;&quot;Discard an outstanding reservation, restoring availability. IDEMPOTENT:
+    an unknown nonce returns (True, &quot;already_released&quot;, state).&quot;&quot;&quot;
+
+def loopback_status(path: str) -&gt; dict:
+    &quot;&quot;&quot;Read-only. Classifies each reservation outstanding | opened_uncommitted,
+    and reports settled_commits size (peer R3).&quot;&quot;&quot;</code></pre></div>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">code</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code># UNCHANGED required args; the six identity args are all OPTIONAL (self-review S3)
+python3 hooks/plan_lib.py review-reopen     --state-file &lt;f&gt; --source &lt;S&gt; --out &lt;token.json&gt; \
+        --project-root . [--issue &lt;n&gt;] [--workflow WF2] [--gate &lt;id&gt;] [--run-id &lt;r&gt;] \
+        [--session-id &lt;s&gt;] [--requested-by &lt;a&gt;]
+# --nonce, never the token file (D302, owner decision — see §2.2c); --project-root on ALL (A7)
+python3 hooks/plan_lib.py loopback-open-round --state-file &lt;f&gt; --nonce &lt;n&gt; --actor &lt;a&gt; --project-root .
+python3 hooks/plan_lib.py loopback-commit     --state-file &lt;f&gt; --nonce &lt;n&gt; --actor &lt;a&gt; --project-root .
+python3 hooks/plan_lib.py loopback-release    --state-file &lt;f&gt; --nonce &lt;n&gt; --actor &lt;a&gt; --reason &lt;t&gt; --project-root .
+python3 hooks/plan_lib.py loopback-status     --state-file &lt;f&gt; --project-root .</code></pre></div>
+<p><strong>Backward compatibility is a hard requirement, not a nicety.</strong> <em>(Self-review S3.)</em> v2 made the six identity args required. Read at <code>plan_lib.py:3537-3546</code>, today&#x27;s parser requires only <code>--state-file</code>, <code>--source</code>, <code>--out</code>, <code>--project-root</code> — and the invocation printed in <code>SKILL.md</code>&#x27;s <code>&lt;model-routing-resolve&gt;</code> block passes exactly those four. Making the new args required would break every existing call site the moment this merges. They are therefore <strong>optional</strong>, and each has a defined fallback:</p>
+<table>
+<thead><tr><th>arg</th><th>fallback when omitted</th></tr></thead>
+<tbody>
+<tr><td><code>--issue</code></td><td>parsed from the <code>--state-file</code> path (<code>.wf2-state/&lt;issue&gt;/</code>), else <code>null</code></td></tr>
+<tr><td><code>--workflow</code></td><td><code>&quot;unknown&quot;</code></td></tr>
+<tr><td><code>--gate</code></td><td><code>&quot;unknown&quot;</code></td></tr>
+<tr><td><code>--run-id</code> / <code>--session-id</code></td><td><code>$CLAUDE_CODE_SESSION_ID</code> if set, else <code>&quot;unknown&quot;</code></td></tr>
+<tr><td><code>--requested-by</code></td><td><code>&quot;unspecified&quot;</code></td></tr>
+</tbody>
+</table>
+<p>A reservation carrying <code>unknown</code> fields is still reconcilable by nonce and still counts against capacity; it is merely less attributable, and <code>loopback-status</code> marks it <code>identity: partial</code> so the gap is visible rather than silent. Call sites are updated to pass the real values <strong>in this same PR</strong> (§2.8), so <code>unknown</code> is the compatibility floor, not the expected state.</p>
+<p>Every mutating call takes <code>file_lock(path)</code> for its whole read-modify-write, exactly as <code>consume_loopback</code> does. Within the lock: read, validate, decide, mutate, <strong>recompute <code>total</code> from the per-source values</strong>, write. The <code>total</code> recompute is not optional and not implicit — it is the same invariant <code>consume_loopback</code> maintains (<code>state[&quot;total&quot;] = sum(state[s] for s in _LOOPBACK_SOURCES)</code>), and omitting it would let a committed count and its total disagree on disk until the next read repaired it. <em>(Self-review S8.)</em></p>
+<p><strong>The write routes through <code>hooks/atomic_write_lib.atomic_write_text(..., fsync=True)</code>. It does NOT reimplement tmp+replace.</strong> <em>(Self-review S1.)</em> That module&#x27;s own docstring is explicit: &quot;Every python hook that atomically writes a file routes through <code>atomic_write_text</code>; do not reimplement mkstemp/os.replace inline (that is exactly the duplication this module removed — nine divergent copies, three of them weaker).&quot; v2 of this design proposed exactly that reimplementation and would have made the tenth copy.</p>
+<p><strong>The directory-fsync fork, resolved rather than assumed.</strong> <em>(Self-review S2.)</em> v2 adopted a containing-directory fsync from the peer (also #761 constraint C2). Read at <code>ee38c542</code>, <code>atomic_write_text</code> fsyncs the <strong>temp file</strong> (<code>f.flush(); os.fsync(f.fileno())</code>) and then <code>os.replace</code> — there is <strong>no</strong> directory fsync, so the property v2 claimed did not exist. Two ways out; taking the first:</p>
+<ol>
+<li><strong>Add an OPTIONAL <code>fsync_dir=False</code> parameter to <code>atomic_write_text</code></strong> and pass <code>True</code> from the</li>
+</ol>
+<p>   loop-back writes only. Additive and default-off, so every one of the module&#x27;s existing call    sites keeps byte-identical behaviour, and the blast radius is one new branch guarded by a    default-false flag.</p>
+<ol start="2">
+<li>Drop the claim and state the durability bound as &quot;atomic visibility, not crash durability&quot;.</li>
+</ol>
+<p>(1) wins because the counters file is exactly the artifact where a lost rename costs real budget, and because (2) would leave this design asserting a weaker guarantee than the constraint it inherited. The cost is honest and named: one shared helper gains one optional parameter, and its existing tests must show the default path unchanged.</p>
+<p><strong>Path containment.</strong> <em>(Self-review S7.)</em> Every new subcommand applies the same refusal <code>_cmd_review_reopen</code> already applies at <code>plan_lib.py:3242</code> — a <code>--token</code>/<code>--out</code> that resolves outside <code>--project-root</code> is refused before any read or write. The new commands do not relax it and do not invent a second rule.</p>
+<p><code>commit</code> and <code>release</code> are called by <strong>disposition</strong>, never by <code>review_runner</code>. That is the AC&#x27;s &quot;disposition owns the debit, not runner success&quot; made structural: the runner has no CLI path to either.</p>
+<p><strong>Identity is re-checked on every operation</strong> (peer R7): a token replayed against a different issue, gate, run or round is refused with a named mismatch rather than silently accepted.</p>
+<p><strong>The release/commit asymmetry, now resolved rather than merely admitted.</strong> Release returns success for an unknown nonce, exactly as the AC requires. Commit refuses an unknown nonce — if it did not, a bug that lost a nonce would open a fix round for free, which is the accounting hole this issue closes. In v1 that made a retried commit-after-success indistinguishable from a genuine bug, and v1 §7 named it as its weakest point. <strong><code>settled_commits</code> removes the ambiguity:</strong> a nonce found there returns <code>(True, &quot;already_committed&quot;)</code>; a nonce found nowhere returns <code>(False, &quot;unknown_nonce&quot;)</code>. The two cases are now distinct in the data, not left to the caller to infer.</p>
+<h3>2.8 The exact call sites — named, not described</h3>
+<p><em>(Self-review S6; #761&#x27;s D204 constraint C6 was exactly &quot;cite an exact direct call site, not prose&quot;.)</em> v2 specified functions and a CLI but never said who calls them or when, which left the under-charge window (§2.1 row 3) as a sequence any caller could get wrong with nothing naming the right order.</p>
+<p>Every gate that can open a fix round follows the same three-phase shape. The files are the WF2 step references in <code>skills/implement-feature/references/</code>:</p>
+<table>
+<thead><tr><th>Phase</th><th>Command</th><th>Call site</th><th>When</th></tr></thead>
+<tbody>
+<tr><td>authorize</td><td><code>review-reopen</code></td><td><code>step-04.md</code> item 7 · <code>step-06.md</code> · <code>step-08a.md</code> · <code>step-09.md</code> · <code>step-11.md</code></td><td>before dispatching a review that MAY open a round</td></tr>
+<tr><td>open</td><td><code>loopback-open-round</code></td><td>the same step&#x27;s <strong>disposition</strong> branch</td><td>the instant the gate decides a fix round opens — before any fix work</td></tr>
+<tr><td>commit</td><td><code>loopback-commit</code></td><td>the same disposition branch, immediately after <code>open</code> returns</td><td>—</td></tr>
+<tr><td>release</td><td><code>loopback-release</code></td><td>the same step&#x27;s <strong>no-round</strong> branch</td><td>the gate decided no round opens (including a zero-finding review)</td></tr>
+</tbody>
+</table>
+<p>WF3&#x27;s equivalents (<code>skills/fix-bug/</code>) take the same shape and are updated in the same PR.</p>
+<p>Two rules that make the ordering hard to get wrong:</p>
+<ol>
+<li><strong><code>open</code> and <code>commit</code> are adjacent, always.</strong> No review dispatch, no file edit, and no other</li>
+</ol>
+<p>   gate logic sits between them. The window in §2.1 row 3 exists because a process can die    anywhere, not because a caller is expected to do work in the gap.</p>
+<ol start="2">
+<li><strong>The no-round branch must call <code>release</code>.</strong> A gate that simply returns without releasing leaks</li>
+</ol>
+<p>   a reservation, and that leak is exactly what <code>loopback-status</code> exists to surface. Step 16&#x27;s    completion gate refuses while the current run owns an outstanding reservation, so the leak    cannot reach a green run silently.</p>
+<h3>2.5 Reconciliation — recoverable, logged, never automatic</h3>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">code</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>python3 hooks/plan_lib.py loopback-reconcile --state-file &lt;f&gt; --project-root . \
+        [--commit &lt;nonce&gt; --actor &lt;a&gt; --reason &lt;text&gt; | --release &lt;nonce&gt; --actor &lt;a&gt; --reason &lt;text&gt;]</code></pre></div>
+<p>*(A1: v3&#x27;s crash table said reconciliation COMMITS an <code>opened_uncommitted</code> round while this CLI offered only inspect and release — so the only recovery available restored capacity for a round that really had opened, after which the nonce could never be committed and the round completed unbilled. <code>--commit</code> is the missing half, and it validates the <code>rounds</code> entry exactly as <code>loopback-commit</code> does.)*</p>
+<p>With no <code>--release</code>, it is <strong>read-only</strong>: it prints every outstanding reservation with its <code>issue</code>/<code>gate</code>/<code>run</code>/<code>created_at</code> and the resulting availability, and exits 0. That is the &quot;logged&quot; half — an operator can always see what is holding budget and who created it.</p>
+<p>With <code>--release &lt;nonce&gt;</code> it releases, and with <code>--commit &lt;nonce&gt;</code> it commits (A1), each under the lock, appending its audit entry to the <strong>in-file</strong> <code>reconciliation_log</code> (§2.2) in the SAME locked write. *(A6: v3 still named a sibling <code>reservation_log.jsonl</code> here, contradicting §2.2&#x27;s schema. There is one audit store, inside the state file, so release and its evidence are atomic together.)*</p>
+<p><strong>No timer, no sweep, no <code>--release-all-older-than</code>.</strong> The AC prohibits automatic time-based expiry because it would silently restore spent budget, and the prohibition is enforced by there being no code path that reads <code>created_at</code> to make a decision. An operator releasing a stale reservation is making a judgment and leaving a record; a cron job doing it is erasing evidence.</p>
+<h3>2.6 The malformed-map contract</h3>
+<p>A <code>reservations</code> value that is not a dict, or any record that fails schema validation, makes <code>authorize_loopback</code> <strong>refuse without rewriting the file</strong>:</p>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">python</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>ok, nonce, state = authorize_loopback(...)   # -&gt; (False, None, {&quot;error&quot;: &quot;malformed_reservations&quot;, ...})</code></pre></div>
+<p>The refusal is loud (CLI exit 4, message on stderr naming the offending nonce and field) and the file is left byte-identical for an operator to inspect. This is the direct answer to &quot;must refuse authorization without rewriting the file, with a real error surface&quot; — a validator that repaired the file would destroy the evidence of how it got corrupted.</p>
+<p>Deliberately NOT extended: <code>_read_loopback_state</code>&#x27;s existing &quot;corruption resets to 0&quot; behaviour for the five integer counters. That is pre-existing, is not in this issue&#x27;s scope, and changing it would alter behaviour for every run that never touches a reservation.</p>
+<hr>
+<h2>3. Part A — the per-class gate matrix</h2>
+<h3>3.1 The matrix</h3>
+<p>Rows are WF2 steps; columns are the three classes. <strong>Every cell is filled.</strong> The vocabulary is exactly three values and they are defined, not suggestive:</p>
+<ul>
+<li><strong>FULL</strong> — the step runs as the spine describes it.</li>
+<li><strong>COLLAPSED</strong> — the step runs, and produces its output inline in session notes instead of as a</li>
+</ul>
+<p>  separate committed artifact. The gate still executes and still returns a verdict.</p>
+<ul>
+<li><strong>n/a</strong> — the step&#x27;s own condition is unmet (not a class reduction).</li>
+</ul>
+<p>There is no <code>SKIP</code> value in the vocabulary. That is the mechanism, not a convention: a class cannot skip a mandatory step because the matrix has no way to express it.</p>
+<table>
+<thead><tr><th>Row</th><th>disposable</th><th>internal</th><th>production</th></tr></thead>
+<tbody>
+<tr><td>1 Receive issue</td><td>FULL</td><td>FULL</td><td>FULL</td></tr>
+<tr><td>2 Analyze codebase</td><td>FULL</td><td>FULL</td><td>FULL</td></tr>
+<tr><td>3 Design (the STEP)</td><td>COLLAPSED</td><td>COLLAPSED</td><td>FULL</td></tr>
+<tr><td>&amp;nbsp;&amp;nbsp;↳ separate design-doc ARTIFACT</td><td>DROP</td><td>KEEP</td><td>KEEP</td></tr>
+<tr><td>&amp;nbsp;&amp;nbsp;↳ peer consult (OPT-IN)</td><td>off</td><td>on</td><td>on</td></tr>
+<tr><td>&amp;nbsp;&amp;nbsp;↳ adversarial-on-design (OPT-IN)</td><td>off</td><td>off</td><td>on</td></tr>
+<tr><td>4 Design gate (the STEP)</td><td>FULL</td><td>FULL</td><td>FULL</td></tr>
+<tr><td>&amp;nbsp;&amp;nbsp;↳ quality-bar rubric</td><td>FULL</td><td>FULL</td><td>FULL</td></tr>
+<tr><td>5 Implementation plan (the STEP)</td><td>COLLAPSED</td><td>COLLAPSED</td><td>FULL</td></tr>
+<tr><td>&amp;nbsp;&amp;nbsp;↳ separate plan-file ARTIFACT</td><td>DROP</td><td>DROP</td><td>KEEP</td></tr>
+<tr><td>6 Plan drift</td><td>COLLAPSED</td><td>COLLAPSED</td><td>FULL</td></tr>
+<tr><td>7 Branch</td><td>FULL</td><td>FULL</td><td>FULL</td></tr>
+<tr><td>8 Implementation — red-before-green</td><td><strong>FULL</strong></td><td><strong>FULL</strong></td><td><strong>FULL</strong></td></tr>
+<tr><td>8a Per-task review (when high-risk)</td><td><strong>FULL</strong></td><td><strong>FULL</strong></td><td><strong>FULL</strong></td></tr>
+<tr><td>9 Drift gate</td><td>COLLAPSED</td><td>FULL</td><td>FULL</td></tr>
+<tr><td>11 Code review (the STEP)</td><td><strong>FULL</strong></td><td><strong>FULL</strong></td><td><strong>FULL</strong></td></tr>
+<tr><td>&amp;nbsp;&amp;nbsp;↳ reviewer COUNT</td><td>1</td><td>1</td><td>2</td></tr>
+<tr><td>&amp;nbsp;&amp;nbsp;↳ lenses per reviewer</td><td><strong>ALL 4</strong></td><td><strong>ALL 4</strong></td><td><strong>ALL 4</strong></td></tr>
+<tr><td>11.5 Security scan</td><td><strong>FULL</strong></td><td><strong>FULL</strong></td><td><strong>FULL</strong></td></tr>
+<tr><td>12 PR</td><td>FULL</td><td>FULL</td><td>FULL</td></tr>
+<tr><td>16 Completion + run-record</td><td>FULL</td><td>FULL</td><td>FULL</td></tr>
+</tbody>
+</table>
+<p>*(Self-review S9: v3&#x27;s provenance claimed this row-splitting as peer adoption 6, but its body still carried the v1 step-only table — the doc claimed an adoption it had not made. A step row and its artifact/opt-in rows are now distinct, which is the whole point: a class may drop an ARTIFACT or turn off an OPT-IN, and can never change a step row. Step 4 reads FULL for every class because the STEP always runs; what <code>disposable</code> drops is the two opt-in sub-rows beneath Step 3, not the gate.)*</p>
+<p>The reviewer-COUNT row is the one place a class scales a <strong>demand</strong>, and the lenses row directly beneath it is why that is safe: <strong>demands scale, lenses never do</strong> (F5&#x27;s resolution).</p>
+<p>The four bold rows are the <strong>never-reducible</strong> set: Step 8&#x27;s red-before-green, Step 8a for any <code>riskLevel: high</code> task, Step 11, and Step 11.5. They read FULL in every column, and §3.3 makes that structural rather than a promise.</p>
+<p>What a permissive class actually drops is only ever an <strong>artifact</strong> or an <strong>opt-in sub-step</strong>: Step 3 writes a design note in session notes rather than a committed <code>docs/planning/*.md</code>; Step 4 runs the in-repo quality-bar rubric but not the opt-in adversarial-on-design or peer consult. The gate still runs and can still fail the run. This is exactly the existing small-standard lane&#x27;s meaning of &quot;collapse&quot;, reused rather than reinvented.</p>
+<h3>3.2 The <code>disposable</code> definition of done</h3>
+<p>A <code>disposable</code> run is DONE when all of:</p>
+<ol>
+<li>Every red-before-green cycle in the plan has a commit showing the failing test first.</li>
+<li>Step 11 returned a verdict from a reviewer carrying <strong>all four lenses</strong> (§3.3), and every</li>
+</ol>
+<p>   Critical and High finding is resolved or carries a recorded deferral.</p>
+<ol start="3">
+<li>Step 11.5 ran to completion; every blocking finding is resolved, and any absent scanner is</li>
+</ol>
+<p>   recorded as a visible skip in session notes AND the PR body.</p>
+<ol start="4">
+<li>The full suite passes against the baseline recorded at Step 2, with the delta stated.</li>
+<li>A PR exists, and its body carries the class, the matrix row that applied, and the Step-11.5</li>
+</ol>
+<p>   skip list if any.</p>
+<ol start="6">
+<li>The Step-16 run-record persisted with rc 0.</li>
+</ol>
+<p>What is NOT required: a committed design document, a committed implementation-plan file, an adversarial-on-design pass, a peer consult, or a workflow-diagram REV entry when no spine changed.</p>
+<p>Note items 2 and 3 are the same demands <code>production</code> makes. That is the point: <strong>the definition of done differs in artifacts, never in gates.</strong></p>
+<h3>3.3 The lens guard — what makes it structural</h3>
+<p>The failure this guards against is measured, not hypothetical: an earlier draft dispatched a lane reviewer &quot;on the security lens&quot; only, silently dropping <code>mechanical</code>, <code>bug_logic</code> and <code>architecture</code>.</p>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">python</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>REVIEW_LENSES = (&quot;mechanical&quot;, &quot;bug_logic&quot;, &quot;security&quot;, &quot;architecture&quot;)
+
+def assert_lens_coverage(briefs: list[str]) -&gt; tuple[bool, list[str]]:
+    &quot;&quot;&quot;Every lens must appear across the dispatched briefs. Returns (ok, missing).&quot;&quot;&quot;</code></pre></div>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">code</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>python3 hooks/plan_lib.py assert-lens-coverage --brief &lt;f&gt; [--brief &lt;f&gt; ...] --project-root .</code></pre></div>
+<p>Exit 0 = every lens covered; exit 1 = at least one missing, and stdout names exactly which. The check runs over the <strong>union</strong> of the dispatched briefs, so the two-reviewer production split (reviewer 1 mechanical + bug_logic, reviewer 2 architecture + security) passes, and the single-reviewer disposable form passes only when that one brief names all four.</p>
+<p>It inspects <strong>both surfaces</strong> <em>(A9 — v3&#x27;s text still described brief-text-only, contradicting this design&#x27;s own adoption 8)</em>: the structured dispatch manifest&#x27;s <code>reviewers[].lenses</code>, AND the rendered prompt, which must carry one machine-delimited section per lens. Either surface missing a lens fails. A manifest can claim four lenses while the prompt carries one, and checking only the manifest would pass exactly that. This is still weaker than proving the reviewer <em>applied</em> a lens — no static check can — and §7 says so plainly. What it prevents is the specific measured failure.</p>
+<p><strong>Wired as a gate, not a helper.</strong> Step 11 calls it before consuming any review result, and a non-zero exit is a Step-11 blocker. A guard nobody calls is documentation.</p>
+<h3>3.4 Who chooses the lane — F7</h3>
+<p>Nobody chooses it per-gate. The class comes from exactly one place: the write-once snapshot at <code>claude_docs/.wf2-state/&lt;issue&gt;/task_class.json</code>, already shipped by #761 and already immutable for the life of the issue. Every gate reads the snapshot; no gate takes a class argument, and no config key can override it mid-run. Reproducible (the same issue always resolves the same way) and auditable (the snapshot records <code>provenance</code> and any <code>diagnostic</code>).</p>
+<hr>
+<h3>3.5 Acceptance-criteria traceability <em>(self-review S10)</em></h3>
+<table>
+<thead><tr><th>AC</th><th>Where it is satisfied</th></tr></thead>
+<tbody>
+<tr><td>AC1 — normative per-class matrix, every value defined, no class skips a mandatory step</td><td>§3.1 (the table + the three-value vocabulary with no <code>SKIP</code>), pinned by test 11</td></tr>
+<tr><td>AC2 — <code>disposable</code> definition of done</td><td>§3.2</td></tr>
+<tr><td>AC3 — lane&#x27;s single reviewer carries the full lens set, a guard asserts it</td><td>§3.1 lenses row, §3.3 <code>assert_lens_coverage</code> (manifest + rendered prompt), test 10</td></tr>
+<tr><td>AC4 — <code>review-reopen</code> authorizes without debiting; debit only when a round opens</td><td>§2.1 state machine, §2.4 <code>authorize_loopback</code>/<code>commit_loopback</code>, §2.8 call sites</td></tr>
+<tr><td>AC5 — the atomicity contract, all seven clauses</td><td>lock §2.4 · capacity §2.3 · disposition-owns-debit §2.8 · no-debit-before-open §2.1+§2.7 · idempotent release §2.4 · recoverable, no auto-expiry §2.5 · malformed refuses without rewriting §2.6</td></tr>
+<tr><td>AC7 — the seven tests</td><td>§6 tests 1-7; tests 8-13 are additions this design adds beyond the AC</td></tr>
+</tbody>
+</table>
+<h2>4. Alternatives weighed and rejected</h2>
+<ul>
+<li><strong>Debit at mint, refund on no-round (Part B).</strong> Simpler — no new state, one new &quot;refund&quot; call.</li>
+</ul>
+<p>  Rejected: a crash between the review returning and the refund landing leaves the budget   permanently spent, which is the exact failure mode the AC exists to remove. Reserve-then-commit   fails toward under-charging; debit-then-refund fails toward over-charging.</p>
+<ul>
+<li><strong>A separate <code>reservations.json</code> file (Part B).</strong> Cleaner separation. Rejected: two files cannot</li>
+</ul>
+<p>  be updated under one lock without a second lock and an ordering rule, and the invariant that   matters — committed + outstanding ≤ cap — spans both. One file, one lock, one invariant.</p>
+<ul>
+<li><strong>A <code>SKIP</code> value in the matrix with a documented never-skip list (Part A).</strong> Rejected: this is</li>
+</ul>
+<p>  precisely F6&#x27;s failure — &quot;visible skips&quot; made it expressible to declare a disposable run done   without Step 11.5. Removing the vocabulary is stronger than adding a rule about it.</p>
+<ul>
+<li><strong>Per-class reviewer COUNT reduction (Part A).</strong> Rejected as F5: the previous matrix cut</li>
+</ul>
+<p>  disposable review from two agents to one while claiming review is never reducible. This design   keeps the single-reviewer form for the cheap lane but requires that one reviewer to carry all   four lenses, enforced by §3.3 — demands scale, lenses do not.</p>
+<hr>
+<h2>5. Platform / external dependencies</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: an unknown top-level key round-tripping through <code>plan_lib._read_loopback_state</code> →</li>
+</ul>
+<p>  <code>_write_loopback_state</code> without a schema migration   feasibility: verified via existing-call-site — <code>_read_loopback_state</code> (<code>hooks/plan_lib.py:1976</code>)   normalizes ONLY the five names in <code>_LOOPBACK_SOURCES</code> plus <code>total</code> and returns the decoded dict   otherwise untouched; <code>_write_loopback_state</code> (<code>:1993</code>) re-serializes that whole dict with   <code>_json.dump(..., sort_keys=True)</code>. No key filter exists on either side, so a <code>reservations</code> key   survives a read/write cycle. Read at <code>ee38c542</code>.   failure: fail-loud   surface: AC7&#x27;s &quot;a zero-finding review leaves the counters byte-identical&quot; test reads the file   before and after and compares bytes, so a dropped or reordered key fails that test by name.</p>
+<ul>
+<li>api: <code>os.replace</code> for the atomic counters write (§2.6 hardening)</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — the same temp-then-replace pattern is already used   in this repo for state writes under lock; <code>os.replace</code> is atomic within a filesystem on POSIX.   failure: fail-loud   surface: a failed replace raises <code>OSError</code> inside <code>file_lock</code>, which propagates out of the CLI as   a non-zero exit; no partial file is ever visible to a reader.</p>
+<ul>
+<li>api: <code>os.fsync</code> on a DIRECTORY file descriptor (the <code>fsync_dir=True</code> path, §2.4)</li>
+</ul>
+<p>  feasibility: verified via spike — REQUIRED before implementation, and it is task 3 of the plan.   The exact shipped invocation is <code>fd = os.open(dirname, os.O_RDONLY); os.fsync(fd); os.close(fd)</code>   on this host&#x27;s real filesystem AND in CI (ubuntu-latest, the <code>test</code> lane). No in-repo call site   exists today — <code>atomic_write_lib</code> fsyncs the temp FILE only — so an existing-call-site claim would   be false. <em>(A10: v3 asserted the durability property with no declaration at all.)</em>   failure: fail-loud   surface: the <code>OSError</code> propagates out of <code>atomic_write_text</code> inside <code>file_lock</code>, so the CLI exits   non-zero and no partial state is visible. On a filesystem where directory fsync is unsupported,   that exit IS the surface — the design does not silently degrade to a weaker durability promise.</p>
+<ul>
+<li>api: <code>secrets.token_hex</code> for the reservation nonce</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — Python standard library, already used in-repo for   non-secret identifiers.   failure: fail-loud   surface: n/a — a failure raises at mint, before any state change.</p>
+<hr>
+<h2>6. Tests (AC7&#x27;s seven, plus three)</h2>
+<p>Every one is <code>tests/hooks/test_plan_lib_reservations.py</code>, black-box through the module under a <code>tmp_path</code> state file, per this repo&#x27;s testing philosophy.</p>
+<ol>
+<li><strong>Zero-finding review leaves counters byte-identical</strong> — authorize, then release; read the file&#x27;s</li>
+</ol>
+<p>   bytes before authorize and after release; assert equality. Covers the headline AC.</p>
+<ol start="2">
+<li><strong>Two concurrent authorizes with one slot left, exactly one wins</strong> — real threads against one</li>
+</ol>
+<p>   <code>file_lock</code>; assert exactly one <code>ok=True</code> and that committed+outstanding never exceeds the cap.</p>
+<ol start="3">
+<li><strong>Idempotent double-release</strong> — release twice; both return <code>(True, ...)</code>, second is</li>
+</ol>
+<p>   <code>&quot;already_released&quot;</code>.</p>
+<ol start="4">
+<li><strong>Refused unknown-nonce debit</strong> — debit a nonce that was never minted → `(False,</li>
+</ol>
+<p>   &quot;unknown_nonce&quot;)`, counters unchanged.</p>
+<ol start="5">
+<li><strong>Crash between mint and disposition leaves the reservation outstanding</strong> — simulate by never</li>
+</ol>
+<p>   calling debit/release; assert the reservation is still present, availability is reduced, and    <code>reopen-reconcile</code> reports it.</p>
+<ol start="6">
+<li><strong>Release restores availability</strong> — fill to cap with reservations, release one, assert one more</li>
+</ol>
+<p>   authorize now succeeds.</p>
+<ol start="7">
+<li><strong>Each malformed shape refuses without rewriting</strong> — parametrized over: <code>reservations</code> not a</li>
+</ol>
+<p>   dict; a record not a dict; each required field missing; <code>source</code> not in <code>_LOOPBACK_SOURCES</code>.    Assert refusal, the named error, AND that the file&#x27;s bytes are unchanged.</p>
+<ol start="8">
+<li><strong>Global cap binds across sources (F4)</strong> — outstanding reservations in three different sources</li>
+</ol>
+<p>   with the global cap at 3; assert a fourth authorize in a source with per-source room still    refuses on the global clause.</p>
+<ol start="9">
+<li><strong>Commit moves exactly one counter</strong> — authorize <code>design</code>, <strong><code>open_fix_round</code></strong>, THEN commit;</li>
+</ol>
+<p>   assert <code>design</code> +1, <code>total</code> recomputed, reservation gone, <code>settled_commits</code> set, other sources    untouched. <em>(A5: v3 wrote &quot;authorize, debit&quot; and skipped the round-open entirely — a test that    contradicted the ordering contract the whole design exists to enforce.)</em></p>
+<ol start="10">
+<li><strong>Lens guard</strong> — a manifest+prompt naming all four lenses passes; one naming only <code>security</code></li>
+</ol>
+<p>    fails and names the three missing (§3.3).</p>
+<ol start="11">
+<li><strong>Matrix drift</strong> <em>(A2)</em> — render the matrix FROM <code>plan_lib.CLASS_GATE_MATRIX</code> and compare every</li>
+</ol>
+<p>    documented cell in this doc and in the skill prose; a deliberately altered doc cell fails it.     v3 promised this pin in its adoption list and never put it in the test list, so the claim that     every cell was pinned was false.</p>
+<ol start="12">
+<li><strong><code>open_fix_round</code> retry is idempotent</strong> <em>(A3)</em> — call it twice for one nonce; assert exactly</li>
+</ol>
+<p>    ONE <code>rounds</code> entry and the same <code>round_id</code> returned both times.</p>
+<ol start="13">
+<li><strong>Legacy counters file</strong> <em>(§7 task 1)</em> — a dict with none of the four new keys reads clean and</li>
+</ol>
+<p>    the capacity formula returns numbers, never a <code>TypeError</code>.</p>
+<hr>
+<h2>7. Risks, and the claim I would most expect to be wrong</h2>
+<p><strong>v1&#x27;s weakest claim is now resolved, so a different one takes its place.</strong> v1 named the strict unknown-nonce refusal; <code>settled_commits</code> (§2.4) removes that ambiguity, and the peer reaching the same fix independently is what promoted it from &quot;deferred to v2&quot; to shipped.</p>
+<p><strong>The claim I would now most expect to be wrong: that adding four top-level keys to <code>loopback_counters.json</code> is genuinely migration-free for files already on disk.</strong> §5 proves an unknown key round-trips through <code>_read_loopback_state</code> → <code>_write_loopback_state</code>, which I read at <code>ee38c542</code> — but every existing counters file in <code>claude_docs/.wf2-state/*/</code> predates this schema and has none of the four keys. My design says &quot;absent means empty collection&quot;, which is the peer&#x27;s rule too, and that is easy to write and easy to get subtly wrong: a <code>None</code> reaching <code>len(reservations)</code> in the capacity formula would raise inside a lock, and a run would then fail at a gate rather than at a validator. <strong>What would confirm or refute it:</strong> run the new <code>loopback_status</code> and <code>authorize_loopback</code> against every existing file under <code>claude_docs/.wf2-state/*/loopback_counters.json</code> (there are several from #761, #855, #880, #927, #944, #947) before writing any new code, and assert each returns a clean empty-collection reading rather than an exception. That is a five-minute probe and it is task 1 of the plan.</p>
+<p>Secondary risks:</p>
+<ol>
+<li><strong>The lens guard checks text, not behaviour.</strong> Inspecting the manifest AND the rendered prompt</li>
+</ol>
+<p>   (peer R9) is stronger than v1&#x27;s brief-text check, but neither proves a reviewer <em>applied</em> a lens.    It prevents the measured failure — a dispatch that names one lens and drops three — and nothing    more. Stated here rather than left for a reviewer to find.</p>
+<ol start="2">
+<li><strong>Under-charging remains possible</strong> (§2.1 row 3): a round that opens without its commit landing</li>
+</ol>
+<p>   is unbilled. Deliberate. Now detectable via <code>opened_uncommitted</code> and the Step-16 completion    refusal, where v1 only had reconciliation reporting.</p>
+<ol start="3">
+<li><strong>The matrix is only as strong as its readers.</strong> Removing <code>SKIP</code> from the vocabulary makes the</li>
+</ol>
+<p>   never-reducible rows inexpressible, and the §6 drift test pins every documented cell to the code    — but a gate that simply never consults the policy is unaffected by either. Step 11&#x27;s lens guard    and Step 16&#x27;s completion guard are the two places non-consultation fails loudly; the rest rely    on the steps already being mandatory in the spine.</p>
+<ol start="4">
+<li>**Concurrency is proven for threads, not processes — and A4 says disclosing that is not the</li>
+</ol>
+<p>   same as proving it.<strong> The reviewer is right: matching an existing unverified bound does not    establish feasibility, and this is the design&#x27;s central invariant. </strong>Therefore task 4 of the plan    is a real multi-PROCESS probe** — N <code>python3</code> processes racing <code>authorize_loopback</code> on one state    file with a single slot left, asserting exactly one wins and committed+outstanding never exceeds    the cap. If <code>file_lock</code> turns out to be process-local or advisory in a way that does not hold,    that is a blocking finding against this design, not a footnote. The original wording of this    risk is kept below because it remains the honest bound UNTIL that probe runs.    Original bound: Test 2 uses real threads against one    <code>file_lock</code>. True multi-process contention — two <code>claude</code> processes in an epic run — is not    exercised. The existing <code>consume_loopback</code> has exactly the same bound, so this is not a    regression, but &quot;two concurrent authorizations cannot both see the same remaining budget&quot; is    demonstrated at the thread level only.</p>
+<ol start="5">
+<li><strong><code>settled_commits</code> grows unboundedly</strong> for the life of an issue (peer R3). Reported by</li>
+</ol>
+<p>   <code>loopback-status</code>, never auto-collected, because a collector is a code path that can delete    evidence of a spend.</p>
+<hr>
+<h2>8. PR shape</h2>
+<p><strong>One PR, <code>Closes #923</code>.</strong> The two halves touch one file (<code>hooks/plan_lib.py</code>) plus their tests and the skill prose; splitting would put the matrix in one PR and the guard that enforces it in another. Estimated change: ~350 lines of implementation and ~400 of tests, under the 500-line multi-PR threshold for implementation.</p>
+<p>Version: <strong>minor</strong> (<code>feat</code>) — new CLI subcommands and new behaviour. Three version surfaces plus the README changelog entry with its diagram decision and suite delta.</p>
+<p><strong>Diagram decision:</strong> the WF2 spine&#x27;s step sequence, gates and loop-backs are unchanged — this adds accounting under an existing gate and a matrix describing existing steps. <strong>No workflow-spine change → no diagram REV.</strong></p>
+
+</main>
+<footer>Last updated: 2026-08-07 23:19 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+<script>
+(function(){
+var boxes=document.querySelectorAll('.doc-code');
+if(!boxes.length)return;
+function fallback(text){
+var ta=document.createElement('textarea');
+ta.value=text;ta.setAttribute('readonly','');
+ta.style.position='fixed';ta.style.top='-1000px';ta.style.opacity='0';
+document.body.appendChild(ta);ta.select();
+var ok=false;
+try{ok=document.execCommand('copy');}catch(e){ok=false;}
+document.body.removeChild(ta);
+return ok;
+}
+function flash(btn,label,state){
+btn.textContent=label;
+btn.setAttribute('data-state',state);
+window.clearTimeout(btn.getAttribute('data-timer'));
+btn.setAttribute('data-timer',window.setTimeout(function(){
+btn.textContent='Copy';btn.removeAttribute('data-state');},2000));
+}
+Array.prototype.forEach.call(boxes,function(box){
+var btn=box.querySelector('.doc-code-copy');
+var code=box.querySelector('code');
+if(!btn||!code)return;
+btn.hidden=false;
+btn.addEventListener('click',function(){
+var text=code.textContent;
+function done(ok){flash(btn,ok?'Copied':'Press Ctrl+C',ok?'ok':'fail');}
+if(navigator.clipboard&&window.isSecureContext){
+navigator.clipboard.writeText(text).then(function(){done(true);},
+function(){done(fallback(text));});
+}else{done(fallback(text));}
+});
+});
+})();
+</script>
+</body>
+</html>
