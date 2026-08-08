@@ -749,6 +749,46 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.141.7 (2026-08-07)
+- **Both destructive handoff paths derive the successor's guard from trusted rows only (#772, epic
+  #906).** Campaign `handoff` and `mid-child-handoff` both derived it with
+  `last_unmet_goal_condition`, which recurses into arbitrary message content, keys only on
+  `type == "goal_status"`, and treats the last `met: false` row as live regardless of anything
+  after it. A goal carries the run's scoped merge authorization, so the blast radius is a successor
+  armed with authority nobody granted. The two paths were not equally exposed and the issue body
+  understates the gap: campaign `handoff` had **no** check at all — not origin, not liveness, not
+  newest-guard — while mid-child already re-checked the latter two, leaving origin as its only hole.
+  Both now derive through `owner_goal_state` and require `LIVE`; `CLEARED`, `NEVER_ARMED` and
+  `AMBIGUOUS` each refuse with their own message, because they mean different things to whoever has
+  to act. AC2's tail-ambiguity refusal falls out of the same call, which also closes — for these two
+  paths — the High finding #864 deferred here. **Measured while implementing, and worse than the
+  issue describes:** on a transcript of one real guard followed by a forged NESTED row, all three
+  old readers agreed on the forged condition, so the derived path did not refuse — it would have
+  armed the successor with the forged guard; the same forged row made the explicit-condition path
+  refuse a genuinely live guard instead. One forgery, injection one way and denial the other, both
+  now closed and both pinned. Mid-child's `goal_currently_unmet` and `latest_goal_status_condition`
+  checks are REPLACED rather than kept, because a LIVE verdict is strictly stronger than both
+  together; all three lenient helpers stay for observability callers with docstrings saying they
+  must never be used on a path that arms, retires or clears anything. SCOPE: only the DERIVED
+  condition changed — an explicit `--goal-condition` on the campaign path is operator-supplied, and
+  checking it needs a parser change on a CLI the workspace resume launchers invoke, so that is a
+  `live_owner_goal` is deliberately untouched: one of its call sites reads this session's own
+  actively-written transcript, where a torn tail is ordinary. Step-8a review then refused the
+  first revision on two counts, both fixed: the campaign path's explicit `--goal-condition` still
+  bypassed the trusted state entirely — deferring that did not close it, and a repo-wide grep
+  showed no launcher passes the flag, so `--goal-condition-from` is now REQUIRED and the explicit
+  value is only an assertion; and the assertion compared `.strip()`ed forms while forwarding the
+  OPERATOR's variant, so two conditions differing by whitespace compared equal and the successor
+  was armed with text that was not the guard verbatim. Comparison is now byte-exact and the
+  TRUSTED text is what travels. 10 tests added; three test files' handoff argv builders updated
+  for the required transcript.
+  Step-11 review then found three more, all fixed: an unreadable transcript raised instead of
+  refusing (the same defect #864 fixed for the read-only CLI, not carried here), the `reason`
+  vocabulary is now a closed set pinned by a no-leak test rather than left to inspection, and the
+  audited-scope claim behind the CLI change was re-run across every surface rather than only shell
+  files. 13 tests added.
+  No workflow-spine change, so no diagram REV. Suite 6421→6434.
+
 ### v3.141.6 (2026-08-07)
 - **`read-goal-condition` reads trusted rows and reports which not-live state it found (#864, epic
   #906).** The CLI dispatched `last_unmet_goal_condition`, the historical reader: it recurses into
