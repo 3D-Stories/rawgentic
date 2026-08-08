@@ -257,10 +257,14 @@ class TestPromptNudge:
         r = Runner(_responses())
         ll.perform_handoff(**_handoff(r, read_text=Artifacts(r, marker_after_nudges=1)))
         texts = r.sent_text()
-        assert len(texts) == 3
+        # FOUR sends, not three, since #1007: the goal's command travels separately from its
+        # condition. The count is still exact on purpose — that is what stops a future recovery
+        # inserting a send of its own.
+        assert len(texts) == 4
         assert texts[0].startswith(ll._driver_lib().BIND_DIRECTIVE)
         assert texts[1] == RESUME_PROMPT
-        assert texts[2].startswith("/goal")
+        assert texts[2] == "/goal "
+        assert texts[3] == GOAL_CONDITION
 
     def test_a_failed_nudge_send_is_its_own_failure_not_poll_exhaustion(self) -> None:
         """Review finding: a broken `send-keys` must not be reported as `prompt_landed` timing out.
@@ -328,9 +332,13 @@ class TestGoalNudge:
             r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=2)))
         assert out["ok"] is True, out["failed_step"]
         assert len(r.nudges()) == 2
-        goal_sends = [t for t in r.sent_text() if t.startswith("/goal")]
-        assert len(goal_sends) == 1, "the goal text was sent more than once"
-        assert goal_sends[0].count(GOAL_CONDITION) == 1
+        sent = r.sent_text()
+        # The goal travels as two sends since #1007 (`/goal ` then the condition), so "sent once"
+        # is counted over the whole send list rather than off a single payload.
+        assert [t for t in sent if t == "/goal "] == ["/goal "], \
+            "the `/goal ` command was sent more than once"
+        assert sum(t.count(GOAL_CONDITION) for t in sent) == 1, \
+            "the goal text was sent more than once"
 
     def test_nudging_is_bounded_and_then_fails_closed(self) -> None:
         """AC6: exhausting the rounds still fails the gate, and the predecessor still survives."""
@@ -411,10 +419,14 @@ class TestGoalNudge:
         ll.perform_handoff(**_handoff(
             r, read_text=Artifacts(r, marker_after_nudges=0, goal_row_after_nudges=1)))
         texts = r.sent_text()
-        assert len(texts) == 3
+        # FOUR sends, not three, since #1007: the goal's command travels separately from its
+        # condition. The count is still exact on purpose — that is what stops a future recovery
+        # inserting a send of its own.
+        assert len(texts) == 4
         assert texts[0].startswith(ll._driver_lib().BIND_DIRECTIVE)
         assert texts[1] == RESUME_PROMPT
-        assert texts[2].startswith("/goal")
+        assert texts[2] == "/goal "
+        assert texts[3] == GOAL_CONDITION
 
 
 class TestGoalNudgeSafety:

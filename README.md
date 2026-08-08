@@ -749,6 +749,18 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
+### v3.141.11 (2026-08-08)
+- **The wired `/goal` send pasted its own slash command, so pane handoffs armed nothing (#1007, epic #906).**
+  `build_send_text_goal_argv` built one payload of `/goal ` plus the condition and both call sites sent it as a
+  single paste; Claude Code collapses a large paste into a `[Pasted text #N]` chip, so the command was swallowed
+  and the successor ran an autonomous handoff unguarded while every step reported success. Measured on a
+  throwaway pane: 3,574 chars collapsed and armed nothing, the same condition split across two sends armed first
+  time, and 483 chars never collapsed at all — which is why short test conditions hid it. The builder now returns
+  the sends as a list (`/goal ` alone, then the condition) and both loops in `hooks/launcher_lib.py` iterate every
+  send with per-send failure handling; `skills/pane-handoff/SKILL.md` loses its false claim that the wired path
+  needed no change. 7 tests added, incl. a caller-loop abort test and a drift guard on the corrected sentence.
+  No workflow-spine change -> no diagram REV. Suite 6466->6473.
+
 ### v3.141.10 (2026-08-08)
 - **The WF2 prose corpus now measures WORDS, not only bytes (#899, epic #906).** `tests/test_wf2_prose_budget.py`
   gains `SKILL_WORD_CEILINGS` and a `word_violations()` helper mirroring the existing byte-budget
