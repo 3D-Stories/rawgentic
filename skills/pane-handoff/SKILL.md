@@ -176,26 +176,41 @@ owner is away, never a change embedded inside a >500-character paste — and onl
 `--goal-rewrite-approved '<the owner's verbatim answer>'`, which rides the output JSON as the
 audit record. Multiline is fine — put it in a file and pass the path.
 
-**A `/goal` arms only when it STARTS the text that gets submitted (measured 2026-08-07).** The
-command already respects this: it sends `/goal <condition>` as its own paste with nothing in front
-of it, and it refuses to send the goal at all until `prompt_landed` has proven the resume prompt
-already submitted — which is why `--prompt-marker` is `required=True` rather than optional
-("a skipped check is not a gate", `hooks/launcher_lib.py`). So nothing here needs changing for the
-wired path.
+**A slash command runs only when it leads the SUBMISSION — and being its own paste is NOT leading
+it (#1007, measured 2026-08-08).** Claude Code collapses a large bracketed paste into one
+`[Pasted text #N]` chip. A goal sent as a single `/goal <condition>` payload therefore has its own
+prefix collapsed INTO the chip: no slash command is text at the start of the box, the Enter submits
+an ordinary message, and the successor runs unguarded while every step reports success. This page
+previously said the wired path "sends `/goal <condition>` as its own paste with nothing in front of
+it" and therefore needed no change. That was the bug, described as the fix.
 
-It is the **hand-carried** path that breaks, and it broke twice on 2026-08-07. The owner pasted ONE
-block holding the resume prompt and the goal together: no goal armed, nothing warned, and the
+The measurement, on a throwaway pane: a 3,574-character condition sent as ONE payload rendered as
+`❯ [Pasted text #1 +20 lines]` and armed nothing; the SAME condition sent as `/goal ` and then a
+separate paste rendered as `❯ /goal [Pasted text #2 +20 lines]`, and its Enter armed the guard first
+time. At 483 characters the single payload did NOT collapse, which is why the defect hid for so
+long and why a short test condition proves nothing here.
+
+So the wired path delivers the goal as **two** sends — `/goal ` alone, then the condition — before
+the one submit key (`build_send_text_goal_argv`, `hooks/launcher_lib.py`; the primitives themselves
+are documented in `docs/runbooks/herdr.md` §7.1.2). Each send is recorded and aborts the sequence on
+its own failure, because a dropped prefix leaves the box holding a bare paste. The ordering rule is
+unchanged: the goal still goes LAST, and the command still refuses to send it until `prompt_landed`
+has proven the resume prompt already submitted — which is why `--prompt-marker` is `required=True`
+rather than optional ("a skipped check is not a gate", `hooks/launcher_lib.py`).
+
+The **hand-carried** path breaks the same way, and it broke twice on 2026-08-07. The owner pasted
+ONE block holding the resume prompt and the goal together: no goal armed, nothing warned, and the
 successor ran unguarded while looking guarded. Typing `/goal` first and pasting the condition after
 it armed first time. So whenever you hand a HUMAN a goal to carry — a herdr-less fallback, a
 `/clear` resume, any block the owner pastes themselves — print the goal in its own block AND say how
 to send it:
 
 > Submit this on its own, AFTER the resume prompt. Type `/goal` first, then paste the condition.
-> A `/goal` that is not the first thing you send does not arm.
+> The prompt box must read `/goal [Pasted text #N]`. A `/goal` buried inside the paste does not arm.
 
-This is the same defect as the bare-`/tasklist` finding above, seen from the other side: that one is
-a slash command inert at the END of a prompt, this one is a slash command inert in the MIDDLE of a
-paste. One rule covers both — a slash command runs only when it leads the submission.
+This is the same defect as the bare-`/tasklist` finding above, seen from a third side: that one is a
+slash command inert at the END of a prompt, the hand-carried one is inert in the MIDDLE of a paste,
+and this one was inert because the whole submission — prefix included — became one paste.
 
 **Where it runs.** Read your own binding rather than guessing:
 

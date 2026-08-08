@@ -624,15 +624,36 @@ def build_send_text_argv(*, pane: str, text: str) -> tuple[list[str], list[str]]
             ["herdr", "pane", "send-keys", pane, "Enter"])
 
 
-def build_send_text_goal_argv(*, pane: str, goal_condition: str) -> tuple[list[str], list[str], bool]:
-    """The proven goal-arming route. Returns (send_text_argv, send_keys_argv, truncated).
+def build_send_text_goal_argv(
+        *, pane: str, goal_condition: str) -> tuple[list[list[str]], list[str], bool]:
+    """The proven goal-arming route. Returns (send_text_argvs, send_keys_argv, truncated).
 
-    `truncated` is returned rather than discarded: a silently shortened goal would guard less
-    than the operator supplied, which the earlier revision did and the review caught.
+    **The command is its own send, and that is the whole point (#1007).** Claude Code collapses a
+    large bracketed paste into one `[Pasted text #N]` chip. Sent as ONE payload, the `/goal `
+    prefix is collapsed with the condition, so no slash command is ever text at the start of the
+    input box: the Enter submits an ordinary message, nothing arms, and the successor runs an
+    autonomous handoff unguarded while every step here reports success.
+
+    Measured 2026-08-08 on a throwaway pane: a 3,574-char condition sent combined rendered as
+    `[Pasted text #1 +20 lines]` and armed nothing; the same condition sent as `/goal ` and then a
+    separate paste rendered as `/goal [Pasted text #2 +20 lines]`, and its Enter armed the guard
+    first time. At 483 characters the combined shape did NOT collapse — the defect is length-gated,
+    which is why short conditions masked it for so long. Two consecutive `send-text` calls
+    concatenate in the input line, which is what makes the split safe.
+
+    A LIST rather than a pair of named returns, deliberately: a caller iterating it cannot silently
+    drop the prefix send, and dropping it is precisely the failure this shape exists to prevent.
+
+    Truncation is unchanged and still caps the WHOLE command including the prefix, because the
+    condition segment is `armed_condition`'s output and
+    `_GOAL_PREFIX + armed_condition(c)[0] == goal_text(c)[0]` for every input. `truncated` is
+    returned rather than discarded: a silently shortened goal would guard less than the operator
+    supplied, which the earlier revision did and the review caught.
     """
-    text, truncated = goal_text(goal_condition)
-    send_text, send_keys = build_send_text_argv(pane=pane, text=text)
-    return (send_text, send_keys, truncated)
+    condition, truncated = armed_condition(goal_condition)
+    prefix_argv, _ = build_send_text_argv(pane=pane, text=_GOAL_PREFIX)
+    condition_argv, send_keys = build_send_text_argv(pane=pane, text=condition)
+    return ([prefix_argv, condition_argv], send_keys, truncated)
 
 
 def build_fallback_launch_argv(*, prompt: str, permission_mode: str,
@@ -3202,10 +3223,25 @@ def perform_handoff(*, anchor_pane: str, cwd: str, project_root: str, name: str,
         # passes, so an unguarded successor never costs the run its predecessor. The residual
         # unguarded window is between send 2 and the row below, and it is bounded by exactly the
         # thing that closes it.
-        text_argv, keys_argv, truncated = build_send_text_goal_argv(
+        send_argvs, keys_argv, truncated = build_send_text_goal_argv(
             pane=new_pane, goal_condition=goal_condition)
         out["truncated"] = truncated
-        for kind, argv in (("send_text", text_argv), ("send_keys", keys_argv)):
+        # The command travels as its own send (#1007) — see `build_send_text_goal_argv`. Each send
+        # is still recorded and still aborts the sequence on its own failure: a dropped prefix
+        # leaves the box holding a bare paste, so pressing on to the Enter would submit the goal
+        # as chat and the run would look armed while it was not.
+        #
+        # KNOWN RESIDUE, accepted by owner decision 2026-08-08 (#1007 Step-9 review). When the
+        # prefix send succeeds and the condition send does NOT, this pane is left holding a bare
+        # `/goal ` in its input box, and anything typed there later would join onto it. It is not
+        # cleared here on purpose: every key that clears the box (ctrl+c, esc) also interrupts the
+        # pane's running turn, so tidying up would cost a healthy successor its in-flight work to
+        # remove a prefix nobody may ever type after. The residue only arises inside a handoff that
+        # has already failed loudly, and the abort order below is pinned by test so it cannot
+        # silently become "send the Enter anyway".
+        prefix_argv, text_argv = send_argvs
+        for kind, argv in (("send_goal_prefix", prefix_argv), ("send_text", text_argv),
+                           ("send_keys", keys_argv)):
             proc = runner(argv)
             record(kind, argv, proc,
                    note="goal TRUNCATED" if truncated and kind == "send_text" else None)
@@ -5122,10 +5158,16 @@ def retire_predecessor(*, driver_state_path: str, session_id: str, anchor_pane: 
         # it from the successor's transcript would arm the predecessor with the wrong guard, and
         # a capped one silently truncated).
         rearm_baseline = _baseline(read_text, pred_transcript)
-        rearm_text, rearm_keys, truncated = build_send_text_goal_argv(
+        # Same two-send shape and the same accepted residue as the first-arm loop above (#1007).
+        # It matters more here, because this pane is the LIVE predecessor rather than a fresh
+        # successor — but the compensating key would interrupt that predecessor's own turn, which
+        # is the outcome this whole branch exists to avoid.
+        rearm_sends, rearm_keys, truncated = build_send_text_goal_argv(
             pane=anchor_pane, goal_condition=position["goal_condition"])
+        rearm_prefix, rearm_text = rearm_sends
         rearm_sent = True
-        for kind, argv in (("rearm_text", rearm_text), ("rearm_keys", rearm_keys)):
+        for kind, argv in (("rearm_goal_prefix", rearm_prefix), ("rearm_text", rearm_text),
+                           ("rearm_keys", rearm_keys)):
             proc, refusal_why, _kind = _destructive_call(
                 argv, kind, note="goal TRUNCATED" if truncated else None)
             if refusal_why is not None or proc is None \
